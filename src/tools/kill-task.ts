@@ -11,7 +11,14 @@ export function registerKillTask(server: McpServer, client: WiroClient): void {
     },
     async ({ tasktoken }) => {
       try {
-        await client.killTask(tasktoken);
+        const result = await client.killTask(tasktoken);
+        if (result.result === false) {
+          const msg = (result.errors as Array<{ message: string }>)?.map(e => e.message).join(', ') || 'Kill failed';
+          return {
+            content: [{ type: 'text' as const, text: `## Error\n\n${msg}` }],
+            isError: true,
+          };
+        }
         return {
           content: [{ type: 'text' as const, text: `Task killed successfully.` }],
         };

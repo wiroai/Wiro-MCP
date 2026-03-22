@@ -11,7 +11,14 @@ export function registerCancelTask(server: McpServer, client: WiroClient): void 
     },
     async ({ tasktoken }) => {
       try {
-        await client.cancelTask(tasktoken);
+        const result = await client.cancelTask(tasktoken);
+        if (result.result === false) {
+          const msg = (result.errors as Array<{ message: string }>)?.map(e => e.message).join(', ') || 'Cancel failed';
+          return {
+            content: [{ type: 'text' as const, text: `## Error\n\n${msg}` }],
+            isError: true,
+          };
+        }
         return {
           content: [{ type: 'text' as const, text: `Task cancelled successfully.` }],
         };
