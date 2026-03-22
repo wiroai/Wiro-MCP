@@ -1,0 +1,64 @@
+{
+  "name": "@wiro-ai/wiro-mcp",
+  "version": "1.0.0",
+  "description": "Official MCP server for Wiro AI — run 70+ AI models from Cursor, Claude, Windsurf, and any MCP-compatible AI assistant",
+  "type": "module",
+  "main": "dist/server.js",
+  "types": "dist/server.d.ts",
+  "bin": {
+    "wiro-mcp-server": "dist/index.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/server.d.ts",
+      "default": "./dist/server.js"
+    },
+    "./client": {
+      "types": "./dist/client.d.ts",
+      "default": "./dist/client.js"
+    },
+    "./tools": {
+      "types": "./dist/tools/index.d.ts",
+      "default": "./dist/tools/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist",
+    "prepublishOnly": "npm run clean && npm run build"
+  },
+  "keywords": [
+    "wiro",
+    "ai",
+    "mcp",
+    "model-context-protocol",
+    "cursor",
+    "claude",
+    "windsurf",
+    "image-generation",
+    "video-generation",
+    "llm"
+  ],
+  "author": "Wiro AI",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/wiroai/Wiro-MCP.git"
+  },
+  "homepage": "https://wiro.ai",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "@types/node": "^22.0.0"
+  }
+}
