@@ -10,7 +10,7 @@
 [![MCP](https://img.shields.io/badge/MCP-compatible-333?style=for-the-badge)](https://modelcontextprotocol.io/)
 [![MIT](https://img.shields.io/badge/license-MIT-6f42c1?style=for-the-badge)](./LICENSE)
 
-[Official MCP Server](https://wiro.ai/docs#/mcp) · [Self-Hosted MCP](https://wiro.ai/docs#/mcp-self-hosted) · [Models](https://wiro.ai/models) · [Dashboard](https://wiro.ai/panel) · [Docs](https://wiro.ai/docs)
+[Official MCP Server](https://wiro.ai/docs/wiro-mcp-server) · [Self-Hosted MCP](https://wiro.ai/docs/mcp-self-hosted) · [Models](https://wiro.ai/models) · [Dashboard](https://wiro.ai/panel) · [Docs](https://wiro.ai/docs)
 
 <img src="https://wiro.ai/images/koala/accent-heavy-koala.png" alt="Wiro Koala mascot" width="60" />
 
@@ -132,17 +132,17 @@ WIRO_API_KEY=your-api-key
 
 ## Hosted MCP Server
 
-Wiro also provides a hosted MCP server at `https://mcp.wiro.ai/v1` that requires no local installation. See the [MCP Server documentation](https://wiro.ai/docs#/mcp) for setup instructions.
+Wiro also provides a hosted MCP server at `https://mcp.wiro.ai/v1` that requires no local installation. See the [MCP Server documentation](https://wiro.ai/docs/wiro-mcp-server) for setup instructions.
 
 ## Documentation
 
-- [MCP Server (Hosted)](https://wiro.ai/docs#/mcp) — setup guides for Cursor, Claude Code, Claude Desktop, Windsurf
-- [Self-Hosted MCP](https://wiro.ai/docs#/mcp-self-hosted) — run locally with npx, environment variables, library usage
-- [Authentication](https://wiro.ai/docs#/authentication) — signature-based vs API Key Only
-- [Run a Model](https://wiro.ai/docs#/run-a-model) — how the Run endpoint works
-- [Tasks](https://wiro.ai/docs#/tasks) — task lifecycle, statuses, determining success
-- [Concurrency Limits](https://wiro.ai/docs#/concurrency-limits) — concurrent task limits based on balance
-- [Error Reference](https://wiro.ai/docs#/error-reference) — error codes and handling
+- [MCP Server (Hosted)](https://wiro.ai/docs/wiro-mcp-server) — setup guides for Cursor, Claude Code, Claude Desktop, Windsurf
+- [Self-Hosted MCP](https://wiro.ai/docs/mcp-self-hosted) — run locally with npx, environment variables, library usage
+- [Authentication](https://wiro.ai/docs/authentication) — signature-based vs API Key Only
+- [Run a Model](https://wiro.ai/docs/run-a-model) — how the Run endpoint works
+- [Tasks](https://wiro.ai/docs/tasks) — task lifecycle, statuses, determining success
+- [Concurrency Limits](https://wiro.ai/docs/concurrency-limits) — concurrent task limits based on balance
+- [Error Reference](https://wiro.ai/docs/error-reference) — error codes and handling
 
 ## Using as a Library
 
