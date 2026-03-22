@@ -7,7 +7,7 @@
 **Official [MCP](https://modelcontextprotocol.io/) server for [Wiro AI](https://wiro.ai/)** — access all AI models on Wiro from Cursor, Claude, Windsurf, and any MCP-compatible AI assistant.
 
 [![npm](https://img.shields.io/badge/npm-@wiro--ai/wiro--mcp-00c38c?style=for-the-badge&logo=npm&logoColor=white)](https://www.npmjs.com/package/@wiro-ai/wiro-mcp)
-[![MCP](https://img.shields.io/badge/MCP-compatible-333?style=for-the-badge&logo=data:image/svg+xml;base64,&logoColor=white)](https://modelcontextprotocol.io/)
+[![MCP](https://img.shields.io/badge/MCP-compatible-333?style=for-the-badge)](https://modelcontextprotocol.io/)
 [![MIT](https://img.shields.io/badge/license-MIT-6f42c1?style=for-the-badge)](./LICENSE)
 
 [Official MCP Server](https://wiro.ai/docs#/mcp) · [Self-Hosted MCP](https://wiro.ai/docs#/mcp-self-hosted) · [Models](https://wiro.ai/models) · [Dashboard](https://wiro.ai/panel) · [Docs](https://wiro.ai/docs)
