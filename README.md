@@ -10,7 +10,7 @@
 [![MCP](https://img.shields.io/badge/MCP-compatible-333?style=for-the-badge&logo=data:image/svg+xml;base64,&logoColor=white)](https://modelcontextprotocol.io/)
 [![MIT](https://img.shields.io/badge/license-MIT-6f42c1?style=for-the-badge)](./LICENSE)
 
-[Hosted MCP](https://wiro.ai/docs#/mcp) · [Models](https://wiro.ai/models) · [Dashboard](https://wiro.ai/panel) · [Docs](https://wiro.ai/docs)
+[Official MCP Server](https://wiro.ai/docs#/mcp) · [Self-Hosted MCP](https://wiro.ai/docs#/mcp-self-hosted) · [Models](https://wiro.ai/models) · [Dashboard](https://wiro.ai/panel) · [Docs](https://wiro.ai/docs)
 
 <img src="https://wiro.ai/images/koala/accent-heavy-koala.png" alt="Wiro Koala mascot" width="60" />
 
