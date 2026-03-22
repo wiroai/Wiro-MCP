@@ -118,12 +118,17 @@ WIRO_API_KEY=your-api-key
 
 | Tool | Description |
 |------|-------------|
-| `search_models` | Search and browse all AI models on Wiro by keyword or category |
-| `get_model_schema` | Get full parameter schema for any model |
+| `search_models` | Search and browse AI models by keyword, category, or owner |
+| `get_model_schema` | Get full parameter schema and pricing for any model |
+| `recommend_model` | Describe what you want to build, get model recommendations by relevance |
+| `explore` | Browse curated models organized by category — no parameters needed |
 | `run_model` | Run any model — wait for result or get task token |
 | `get_task` | Check task status, outputs, and cost |
+| `get_task_price` | Get the cost of a completed task |
 | `cancel_task` | Cancel a queued task |
 | `kill_task` | Kill a running task |
+| `upload_file` | Upload a file from URL for use as model input |
+| `search_docs` | Search the Wiro documentation for guides and API references |
 
 ## Hosted MCP Server
 
@@ -154,7 +159,7 @@ const server = createMcpServer(client);
 
 | Export | Description |
 |--------|-------------|
-| `createMcpServer(client)` | Creates an McpServer with all 6 tools registered |
+| `createMcpServer(client)` | Creates an McpServer with all 11 tools registered |
 | `WiroClient` | API client with both auth types |
 | `registerTools(server, client)` | Register tools on an existing McpServer |
 

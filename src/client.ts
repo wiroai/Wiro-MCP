@@ -5,6 +5,8 @@ import type {
   TaskDetailResponse,
   ToolListResponse,
   ToolDetailResponse,
+  ExploreResponse,
+  FileUploadResponse,
 } from './types.js';
 import { TERMINAL_STATUSES } from './types.js';
 
@@ -69,14 +71,22 @@ export class WiroClient {
   }
 
   async searchModels(params: SearchModelsParams = {}): Promise<ToolListResponse> {
-    return this.request<ToolListResponse>('/Tool/List', {
+    const body: Record<string, unknown> = {
       start: String(params.start ?? 0),
       limit: String(params.limit ?? 20),
       search: params.search ?? '',
       categories: params.categories ?? [],
+      sort: params.sort ?? 'relevance',
       hideworkflows: true,
       summary: true,
-    });
+    };
+    if (params.slugowner) body.slugowner = params.slugowner;
+    if (params.order) body.order = params.order;
+    return this.request<ToolListResponse>('/Tool/List', body);
+  }
+
+  async explore(): Promise<ExploreResponse> {
+    return this.request<ExploreResponse>('/Tool/Explore', {});
   }
 
   async getModelSchema(model: string): Promise<ToolDetailResponse> {
@@ -116,6 +126,42 @@ export class WiroClient {
 
   async killTask(tasktoken: string): Promise<Record<string, unknown>> {
     return this.request('/Task/Kill', { tasktoken });
+  }
+
+  async uploadFile(fileUrl: string, fileName?: string): Promise<FileUploadResponse> {
+    const fileResponse = await fetch(fileUrl);
+    if (!fileResponse.ok) {
+      throw new Error(`Failed to download file from ${fileUrl}: ${fileResponse.status}`);
+    }
+
+    const blob = await fileResponse.blob();
+    const resolvedName = fileName
+      ?? fileUrl.split('/').pop()?.split('?')[0]
+      ?? 'upload';
+
+    const formData = new FormData();
+    formData.append('file', blob, resolvedName);
+
+    const url = `${this.baseUrl}/File/Upload`;
+    const headers = this.getAuthHeaders();
+    delete headers['Content-Type'];
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: formData,
+    });
+
+    const text = await response.text();
+    if (!response.ok) {
+      throw new Error(`Wiro API error ${response.status}: ${text}`);
+    }
+
+    try {
+      return JSON.parse(text) as FileUploadResponse;
+    } catch {
+      throw new Error(`Invalid JSON response: ${text}`);
+    }
   }
 
   async waitForTask(tasktoken: string, timeoutMs = DEFAULT_TIMEOUT): Promise<TaskDetailResponse> {

@@ -41,11 +41,11 @@ export function formatTaskResult(task: Task): string {
   return lines.join('\n');
 }
 
-export function formatModelList(models: ToolListItem[]): string {
+export function formatModelList(models: ToolListItem[], header?: string): string {
   if (models.length === 0) return 'No models found.';
 
   const lines: string[] = [];
-  lines.push(`## Models (${models.length} results)`);
+  lines.push(header ?? `## Models (${models.length} results)`);
   lines.push('');
 
   for (const model of models) {
@@ -55,6 +55,8 @@ export function formatModelList(models: ToolListItem[]): string {
     lines.push(`- **Model:** \`${slug}\``);
     if (cats) lines.push(`- **Categories:** ${cats}`);
     if (model.seodescription) lines.push(`- **Description:** ${model.seodescription}`);
+    const pricing = formatPricing(model);
+    if (pricing) lines.push(`- **Pricing:** ${pricing}`);
     lines.push('');
   }
 
@@ -71,6 +73,12 @@ export function formatModelSchema(model: ToolListItem): string {
   const cats = model.categories?.filter(c => c !== 'tool').join(', ') || '';
   if (cats) lines.push(`**Categories:** ${cats}`);
   lines.push('');
+
+  const pricingSection = formatPricingDetailed(model);
+  if (pricingSection) {
+    lines.push(pricingSection);
+    lines.push('');
+  }
 
   if (model.parameters && model.parameters.length > 0) {
     lines.push('### Parameters');
@@ -112,7 +120,130 @@ export function formatModelSchema(model: ToolListItem): string {
   return lines.join('\n');
 }
 
-function formatSize(sizeStr: string): string {
+const PRICE_METHOD_LABELS: Record<string, string> = {
+  cpr: 'per request',
+  cps: 'per second',
+  cpo: 'per output',
+  cpt: 'per token',
+  'cp-pixel': 'per pixel',
+  'cp-audiosecondslength': 'per audio second',
+  'cp-promptlength': 'per character',
+  'cp-outputVideoLength': 'per video second',
+  'cp-realtimeturn': 'per turn',
+  'cp-readoutput': 'model-reported',
+};
+
+function formatPricingDetailed(model: ToolListItem): string | null {
+  const dynamicResult = formatDynamicPriceDetailed(model.dynamicprice);
+  if (dynamicResult) return dynamicResult;
+
+  const cps = parseFloat(model.cps ?? '0');
+  const approx = parseFloat(model.approximatelycost ?? '0');
+  if (approx > 0 || cps > 0) {
+    const lines: string[] = ['### Pricing'];
+    if (cps > 0) lines.push(`- **Rate:** $${formatPrice(cps)} / per second`);
+    if (approx > 0) lines.push(`- **Estimated cost:** ~$${formatPrice(approx)} per run`);
+    return lines.join('\n');
+  }
+  return null;
+}
+
+function formatDynamicPriceDetailed(dynamicprice?: string): string | null {
+  if (!dynamicprice) return null;
+  try {
+    const parsed: Array<{ price: number; priceMethod: string; inputs?: Record<string, string> }> =
+      typeof dynamicprice === 'string' ? JSON.parse(dynamicprice) : dynamicprice;
+    if (!Array.isArray(parsed) || parsed.length === 0) return null;
+
+    const method = parsed[0].priceMethod;
+    const methodLabel = PRICE_METHOD_LABELS[method] ?? method;
+    const lines: string[] = [`### Pricing (${methodLabel})`];
+
+    if (parsed.length === 1 && (!parsed[0].inputs || Object.keys(parsed[0].inputs).length === 0)) {
+      lines.push(`$${formatPrice(parsed[0].price)} / ${methodLabel}`);
+      return lines.join('\n');
+    }
+
+    const inputKeys = new Set<string>();
+    for (const p of parsed) {
+      if (p.inputs) {
+        for (const k of Object.keys(p.inputs)) inputKeys.add(k);
+      }
+    }
+    const keys = [...inputKeys];
+
+    if (keys.length > 0) {
+      lines.push(`| ${keys.join(' | ')} | Price |`);
+      lines.push(`| ${keys.map(() => '---').join(' | ')} | --- |`);
+      for (const p of parsed) {
+        const values = keys.map(k => {
+          const v = p.inputs?.[k] ?? '-';
+          return v.startsWith('QUANTITY:') ? `qty: ${v.split(':')[1]}` : v;
+        });
+        lines.push(`| ${values.join(' | ')} | $${formatPrice(p.price)} |`);
+      }
+    } else {
+      for (const p of parsed) {
+        lines.push(`- $${formatPrice(p.price)} / ${PRICE_METHOD_LABELS[p.priceMethod] ?? p.priceMethod}`);
+      }
+    }
+
+    return lines.join('\n');
+  } catch {
+    return null;
+  }
+}
+
+function formatPricing(model: ToolListItem): string | null {
+  const dynamicResult = formatDynamicPrice(model.dynamicprice);
+  if (dynamicResult) return dynamicResult;
+
+  const cps = parseFloat(model.cps ?? '0');
+  const approx = parseFloat(model.approximatelycost ?? '0');
+  if (approx > 0) {
+    return `~$${formatPrice(approx)} per run (estimated)`;
+  }
+  if (cps > 0) {
+    return `$${formatPrice(cps)} / per second`;
+  }
+  return null;
+}
+
+function formatDynamicPrice(dynamicprice?: string): string | null {
+  if (!dynamicprice) return null;
+  try {
+    const parsed: Array<{ price: number; priceMethod: string; inputs?: Record<string, string> }> =
+      typeof dynamicprice === 'string' ? JSON.parse(dynamicprice) : dynamicprice;
+    if (!Array.isArray(parsed) || parsed.length === 0) return null;
+
+    const uniquePrices = new Map<string, { price: number; label: string }>();
+    for (const p of parsed) {
+      const label = PRICE_METHOD_LABELS[p.priceMethod] ?? p.priceMethod;
+      const key = `${p.price}-${label}`;
+      if (!uniquePrices.has(key)) {
+        uniquePrices.set(key, { price: p.price, label });
+      }
+    }
+
+    const entries = [...uniquePrices.values()].sort((a, b) => a.price - b.price);
+    if (entries.length === 1) {
+      const e = entries[0];
+      return `$${formatPrice(e.price)} / ${e.label}`;
+    }
+
+    const min = entries[0];
+    const max = entries[entries.length - 1];
+    return `$${formatPrice(min.price)} – $${formatPrice(max.price)} / ${min.label}`;
+  } catch {
+    return null;
+  }
+}
+
+function formatPrice(price: number): string {
+  return parseFloat(price.toFixed(6)).toString();
+}
+
+export function formatSize(sizeStr: string): string {
   const bytes = parseInt(sizeStr, 10);
   if (isNaN(bytes)) return sizeStr;
   if (bytes < 1024) return `${bytes} B`;

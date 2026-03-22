@@ -6,8 +6,11 @@ export interface WiroCredentials {
 export interface SearchModelsParams {
   search?: string;
   categories?: string[];
+  slugowner?: string;
   start?: number;
   limit?: number;
+  sort?: string;
+  order?: string;
 }
 
 export interface RunModelResult {
@@ -84,6 +87,8 @@ export interface ToolListItem {
   tags?: string[];
   marketplace?: number;
   dynamicprice?: string;
+  cps?: string;
+  approximatelycost?: string;
   seotitle?: string;
   taskstat?: {
     runcount: number;
@@ -104,6 +109,47 @@ export interface ToolDetailResponse {
   result: boolean;
   errors: Array<{ message: string }>;
   tool: ToolListItem[];
+}
+
+export interface ExploreItem {
+  id: string;
+  cleanslugowner: string;
+  cleanslugproject: string;
+  image: string;
+  description: string;
+  categories: string[];
+  commentcount: string;
+  ratedusercount: string;
+  averagepoint: string;
+  discount?: number | string | null;
+}
+
+export interface ExploreCategory {
+  id: string;
+  title: string;
+  tools: ExploreItem[];
+  url?: string;
+  total?: number;
+}
+
+export interface ExploreResponse {
+  result: boolean;
+  errors: Array<{ message: string }>;
+  explore: ExploreCategory[];
+}
+
+export interface FileUploadItem {
+  id: string;
+  name: string;
+  contenttype: string;
+  size: string;
+  url: string;
+}
+
+export interface FileUploadResponse {
+  result: boolean;
+  errors: Array<{ code: number; message: string }>;
+  list: FileUploadItem[];
 }
 
 export const TERMINAL_STATUSES = [
