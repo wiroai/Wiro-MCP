@@ -4,9 +4,9 @@
 
 # Wiro MCP Server
 
-**Official [MCP](https://modelcontextprotocol.io/) server for [Wiro AI](https://wiro.ai/)** — run **70+ AI models** from Cursor, Claude, Windsurf, and any MCP-compatible AI assistant.
+**Official [MCP](https://modelcontextprotocol.io/) server for [Wiro AI](https://wiro.ai/)** — access all AI models on Wiro from Cursor, Claude, Windsurf, and any MCP-compatible AI assistant.
 
-[![npm](https://img.shields.io/badge/npm-@wiroai/wiro--mcp-00c38c?style=for-the-badge&logo=npm&logoColor=white)](https://www.npmjs.com/package/@wiro-ai/wiro-mcp)
+[![npm](https://img.shields.io/badge/npm-@wiro--ai/wiro--mcp-00c38c?style=for-the-badge&logo=npm&logoColor=white)](https://www.npmjs.com/package/@wiro-ai/wiro-mcp)
 [![MCP](https://img.shields.io/badge/MCP-compatible-333?style=for-the-badge&logo=data:image/svg+xml;base64,&logoColor=white)](https://modelcontextprotocol.io/)
 [![MIT](https://img.shields.io/badge/license-MIT-6f42c1?style=for-the-badge)](./LICENSE)
 
@@ -118,7 +118,7 @@ WIRO_API_KEY=your-api-key
 
 | Tool | Description |
 |------|-------------|
-| `search_models` | Search and browse 70+ AI models by keyword or category |
+| `search_models` | Search and browse all AI models on Wiro by keyword or category |
 | `get_model_schema` | Get full parameter schema for any model |
 | `run_model` | Run any model — wait for result or get task token |
 | `get_task` | Check task status, outputs, and cost |
@@ -127,7 +127,17 @@ WIRO_API_KEY=your-api-key
 
 ## Hosted MCP Server
 
-Wiro also provides a hosted MCP server at `https://mcp.wiro.ai/v1` that requires no local installation. See the [MCP documentation](https://wiro.ai/docs#/mcp) for setup instructions.
+Wiro also provides a hosted MCP server at `https://mcp.wiro.ai/v1` that requires no local installation. See the [MCP Server documentation](https://wiro.ai/docs#/mcp) for setup instructions.
+
+## Documentation
+
+- [MCP Server (Hosted)](https://wiro.ai/docs#/mcp) — setup guides for Cursor, Claude Code, Claude Desktop, Windsurf
+- [Self-Hosted MCP](https://wiro.ai/docs#/mcp-self-hosted) — run locally with npx, environment variables, library usage
+- [Authentication](https://wiro.ai/docs#/authentication) — signature-based vs API Key Only
+- [Run a Model](https://wiro.ai/docs#/run-a-model) — how the Run endpoint works
+- [Tasks](https://wiro.ai/docs#/tasks) — task lifecycle, statuses, determining success
+- [Concurrency Limits](https://wiro.ai/docs#/concurrency-limits) — concurrent task limits based on balance
+- [Error Reference](https://wiro.ai/docs#/error-reference) — error codes and handling
 
 ## Using as a Library
 
