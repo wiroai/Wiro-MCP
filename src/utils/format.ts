@@ -119,6 +119,9 @@ export function formatModelSchema(model: ToolListItem): string {
         if (param.description && param.description !== param.label) lines.push(`  ${param.description}`);
         if (param.placeholder) lines.push(`  Example: \`${param.placeholder}\``);
         if (param.note) lines.push(`  ${param.note}`);
+        if (param.type === 'fileinput') lines.push(`  Pass a URL directly (e.g. \`${param.id}: "https://..."\`) or use \`${param.id}Url\` for the URL field.`);
+        if (param.type === 'multifileinput') lines.push(`  Pass URLs via \`${param.id}Url\` (comma-separated) or upload files in \`${param.id}\`.`);
+        if (param.type === 'combinefileinput') lines.push(`  Pass an array of URLs directly: \`${param.id}: ["https://...", "https://..."]\`. No upload needed.`);
 
         if (param.options?.length) {
           const optionValues = param.options.map(o => `\`${o.value}\``).join(', ');

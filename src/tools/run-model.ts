@@ -12,7 +12,7 @@ export function registerRunModel(server: McpServer, client: WiroClient): void {
     'With wait=false, returns the task token immediately for async monitoring.',
     {
       model: z.string().describe('Model slug in "owner/model" format, e.g. "openai/sora-2", "google/nano-banana-pro"'),
-      params: z.record(z.string(), z.unknown()).describe('Model-specific parameters as key-value pairs. Use get_model_schema to discover available parameters. Common: prompt, negativePrompt, width, height, aspectRatio'),
+      params: z.record(z.string(), z.unknown()).describe('Model-specific parameters as key-value pairs. Use get_model_schema to discover available parameters. For file parameters (fileinput, multifileinput, combinefileinput), pass URLs directly — no upload needed. For combinefileinput, pass an array of URLs.'),
       wait: z.boolean().default(true).describe('If true, poll until completion and return result. If false, return task token immediately.'),
       timeout_seconds: z.number().int().min(10).max(600).default(120).describe('Max seconds to wait for completion (only when wait=true)'),
     },

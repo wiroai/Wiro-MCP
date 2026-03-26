@@ -6,7 +6,7 @@ import { formatSize } from '../utils/format.js';
 export function registerUploadFile(server: McpServer, client: WiroClient): void {
   server.tool(
     'upload_file',
-    'Upload a file from a URL to Wiro for use as model input. Returns a Wiro file URL that can be passed to any model parameter that accepts a file (e.g. inputImage, inputAudio).',
+    'Upload a file from a URL to Wiro for use as model input. Note: most models accept direct URLs in file parameters (e.g. inputImage, inputImageUrl) without uploading first. Only use this when the model requires a Wiro-hosted file or when you need to reuse the same file across multiple runs.',
     {
       url: z.string().url().describe('URL of the file to upload (image, audio, video, document)'),
       file_name: z.string().optional().describe('Custom filename for the upload. If not provided, derived from the URL.'),

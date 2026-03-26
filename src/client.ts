@@ -10,6 +10,17 @@ import type {
 } from './types.js';
 import { TERMINAL_STATUSES } from './types.js';
 
+export type {
+  SearchModelsParams,
+  RunModelResult,
+  TaskDetailResponse,
+  ToolListResponse,
+  ToolDetailResponse,
+  ExploreResponse,
+  FileUploadResponse,
+} from './types.js';
+export type { Task, TaskOutput, TaskOutputRawContent, ToolListItem, ToolParameterGroup, ToolParameterItem } from './types.js';
+
 const DEFAULT_BASE_URL = 'https://api.wiro.ai/v1';
 const DEFAULT_POLL_INTERVAL = 3000;
 const DEFAULT_TIMEOUT = 120000;
