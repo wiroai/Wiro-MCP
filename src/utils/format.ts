@@ -6,6 +6,9 @@ export function formatTaskResult(task: Task): string {
   lines.push('');
   lines.push(`**Status:** ${task.status}`);
   lines.push(`**Task ID:** ${task.id}`);
+  if (task.modelslugowner && task.modelslugproject) {
+    lines.push(`**Model:** \`${task.modelslugowner}/${task.modelslugproject}\``);
+  }
 
   if (task.pexit === '0') {
     lines.push(`**Result:** Success`);
@@ -33,8 +36,26 @@ export function formatTaskResult(task: Task): string {
     lines.push('### Outputs');
     lines.push('');
     for (const output of task.outputs) {
-      lines.push(`- **${output.name}** (${output.contenttype}, ${formatSize(output.size)})`);
-      lines.push(`  ${output.url}`);
+      if (output.contenttype === 'raw' && output.content) {
+        if (output.content.thinking?.length) {
+          lines.push('**Thinking:**');
+          for (const t of output.content.thinking) {
+            lines.push(t);
+          }
+          lines.push('');
+        }
+        if (output.content.answer?.length) {
+          lines.push('**Answer:**');
+          for (const a of output.content.answer) {
+            lines.push(a);
+          }
+        } else if (output.content.raw) {
+          lines.push(output.content.raw);
+        }
+      } else if (output.url) {
+        lines.push(`- **${output.name}** (${output.contenttype}, ${formatSize(output.size ?? '0')})`);
+        lines.push(`  ${output.url}`);
+      }
     }
   }
 
@@ -95,6 +116,8 @@ export function formatModelSchema(model: ToolListItem): string {
         const defaultVal = param.default ? ` (default: \`${param.default}\`)` : '';
         lines.push(`- **\`${param.id}\`** (${param.type})${required}${defaultVal}`);
         if (param.label) lines.push(`  ${param.label}`);
+        if (param.description && param.description !== param.label) lines.push(`  ${param.description}`);
+        if (param.placeholder) lines.push(`  Example: \`${param.placeholder}\``);
         if (param.note) lines.push(`  ${param.note}`);
 
         if (param.options?.length) {
@@ -141,7 +164,7 @@ function formatPricingDetailed(model: ToolListItem): string | null {
   const approx = parseFloat(model.approximatelycost ?? '0');
   if (approx > 0 || cps > 0) {
     const lines: string[] = ['### Pricing'];
-    if (cps > 0) lines.push(`- **Rate:** $${formatPrice(cps)} / per second`);
+    if (cps > 0) lines.push(`- **Rate:** $${formatPrice(cps)} per second`);
     if (approx > 0) lines.push(`- **Estimated cost:** ~$${formatPrice(approx)} per run`);
     return lines.join('\n');
   }
@@ -204,7 +227,7 @@ function formatPricing(model: ToolListItem): string | null {
     return `~$${formatPrice(approx)} per run (estimated)`;
   }
   if (cps > 0) {
-    return `$${formatPrice(cps)} / per second`;
+    return `$${formatPrice(cps)} per second`;
   }
   return null;
 }

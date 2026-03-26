@@ -19,7 +19,7 @@ export function registerSearchDocs(server: McpServer): void {
         const content = await response.text();
 
         const sections = splitSections(content);
-        const keywords = query.toLowerCase().split(/\s+/).filter(k => k.length > 2);
+        const keywords = query.toLowerCase().split(/\s+/).filter(k => k.length > 1);
         const scored = sections.map(s => ({
           ...s,
           score: scoreSection(s, keywords),

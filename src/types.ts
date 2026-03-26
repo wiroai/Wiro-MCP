@@ -20,11 +20,19 @@ export interface RunModelResult {
   socketaccesstoken: string;
 }
 
+export interface TaskOutputRawContent {
+  prompt?: string;
+  raw?: string;
+  thinking?: string[];
+  answer?: string[];
+}
+
 export interface TaskOutput {
-  name: string;
+  name?: string;
   contenttype: string;
-  size: string;
-  url: string;
+  size?: string;
+  url?: string;
+  content?: TaskOutputRawContent;
 }
 
 export interface Task {
@@ -40,6 +48,8 @@ export interface Task {
   totalcost: string;
   outputs: TaskOutput[];
   modeldescription?: string;
+  modelslugowner?: string;
+  modelslugproject?: string;
 }
 
 export interface TaskDetailResponse {
