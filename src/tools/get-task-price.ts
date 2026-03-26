@@ -33,6 +33,9 @@ export function registerGetTaskPrice(server: McpServer, client: WiroClient): voi
         lines.push('## Task Price');
         lines.push('');
         lines.push(`**Task ID:** ${task.id}`);
+        if (task.modelslugowner && task.modelslugproject) {
+          lines.push(`**Model:** \`${task.modelslugowner}/${task.modelslugproject}\``);
+        }
         lines.push(`**Status:** ${task.status}`);
 
         if (task.pexit === '0') {

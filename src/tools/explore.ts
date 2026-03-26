@@ -48,7 +48,7 @@ function formatExplore(categories: ExploreCategory[]): string {
     for (const tool of cat.tools) {
       const slug = `${tool.cleanslugowner}/${tool.cleanslugproject}`;
       const cats = tool.categories?.filter(c => c !== 'tool').join(', ') || '';
-      const rating = parseFloat(tool.averagepoint) > 0 ? ` ⭐ ${tool.averagepoint}` : '';
+      const rating = parseFloat(tool.averagepoint) > 0 ? ` (${tool.averagepoint}/5)` : '';
       lines.push(`- **\`${slug}\`**${rating}`);
       if (cats) lines.push(`  Categories: ${cats}`);
       if (tool.description) lines.push(`  ${tool.description}`);
