@@ -10,7 +10,11 @@ export function formatTaskResult(task: Task): string {
     lines.push(`**Model:** \`${task.modelslugowner}/${task.modelslugproject}\``);
   }
 
-  if (task.pexit === '0') {
+  if (task.status === 'task_cancel') {
+    lines.push(`**Result:** Cancelled`);
+  } else if (task.status === 'task_error') {
+    lines.push(`**Result:** Failed before model execution`);
+  } else if (task.pexit === '0') {
     lines.push(`**Result:** Success`);
   } else if (task.pexit) {
     lines.push(`**Result:** Failed (exit code: ${task.pexit})`);
@@ -29,6 +33,13 @@ export function formatTaskResult(task: Task): string {
     lines.push('### Response');
     lines.push('');
     lines.push(task.debugoutput);
+  }
+
+  if (task.debugerror) {
+    lines.push('');
+    lines.push('### Error');
+    lines.push('');
+    lines.push(task.debugerror);
   }
 
   if (task.outputs?.length > 0) {
@@ -53,12 +64,52 @@ export function formatTaskResult(task: Task): string {
           lines.push(output.content.raw);
         }
       } else if (output.url) {
-        lines.push(`- **${output.name}** (${output.contenttype}, ${formatSize(output.size ?? '0')})`);
-        lines.push(`  ${output.url}`);
+        const name = escapeMarkdownLabel(output.name || 'Output');
+        const contentType = output.contenttype || 'application/octet-stream';
+        const metadata = `${contentType}, ${formatSize(output.size ?? '0')}`;
+        if (contentType.startsWith('image/')) {
+          lines.push(`**${name}** (${metadata})`);
+          lines.push(`![${escapeMarkdownAlt(output.name || 'Generated image')}](${output.url})`);
+          lines.push(`[Open image](${output.url})`);
+        } else {
+          lines.push(`- [${name}](${output.url}) (${metadata})`);
+        }
       }
     }
   }
 
+  return lines.join('\n');
+}
+
+export function formatTaskSubmitted(taskid: string, tasktoken: string): string {
+  return `## Task Submitted\n\n`
+    + `**Task ID:** ${taskid}\n`
+    + `**Task Token:** ${tasktoken}\n\n`
+    + 'Use `wait_for_task` with this token to wait for the result. '
+    + 'Do not submit the model again for the same request.';
+}
+
+export function formatTaskPending(params: {
+  taskid?: string;
+  tasktoken?: string;
+  status?: string;
+  timeoutSeconds?: number;
+  reason?: string;
+}): string {
+  const lines = ['## Task Still Running', ''];
+  if (params.taskid) lines.push(`**Task ID:** ${params.taskid}`);
+  if (params.tasktoken) lines.push(`**Task Token:** ${params.tasktoken}`);
+  if (params.status) lines.push(`**Last Status:** ${params.status}`);
+  if (params.timeoutSeconds) {
+    lines.push(`**Waited:** ${params.timeoutSeconds}s`);
+  }
+  if (params.reason) {
+    lines.push('');
+    lines.push(params.reason);
+  }
+  lines.push('');
+  lines.push('The task is still active and may still be billed when it completes.');
+  lines.push('Call `wait_for_task` with the same task token or task ID now. Do not call `run_model` again.');
   return lines.join('\n');
 }
 
@@ -275,4 +326,12 @@ export function formatSize(sizeStr: string): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function escapeMarkdownLabel(value: string): string {
+  return value.replace(/([\\[\]])/g, '\\$1');
+}
+
+function escapeMarkdownAlt(value: string): string {
+  return value.replace(/([\\[\]])/g, '\\$1');
 }

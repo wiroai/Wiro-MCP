@@ -122,13 +122,18 @@ WIRO_API_KEY=your-api-key
 | `get_model_schema` | Get full parameter schema and pricing for any model |
 | `recommend_model` | Describe what you want to build, get model recommendations by relevance |
 | `explore` | Browse curated models organized by category — no parameters needed |
-| `run_model` | Run any model — wait for result or get task token |
-| `get_task` | Check task status, outputs, and cost |
+| `run_model` | Run any model — waits up to 45s by default, then returns a recoverable task token |
+| `wait_for_task` | Continue waiting for an existing task without submitting or billing a duplicate run |
+| `get_task` | Check task status immediately or wait up to 45s with `wait_seconds` |
 | `get_task_price` | Get the cost of a completed task |
 | `cancel_task` | Cancel a queued task |
 | `kill_task` | Kill a running task |
 | `upload_file` | Upload a file from URL for use as model input |
 | `search_docs` | Search the Wiro documentation for guides and API references |
+
+For long generations, `run_model` returns the existing task ID and token when its
+wait budget expires. The assistant must continue with `wait_for_task`; retrying
+`run_model` creates a separate billable task.
 
 ## Hosted MCP Server
 
@@ -149,7 +154,8 @@ Wiro also provides a hosted MCP server at `https://mcp.wiro.ai/v1` that requires
 This package exports its core components for use in custom MCP servers:
 
 ```typescript
-import { createMcpServer, WiroClient } from '@wiro-ai/wiro-mcp';
+import { WiroClient } from '@wiro-ai/wiro-mcp/client';
+import { createMcpServer } from '@wiro-ai/wiro-mcp/server';
 
 const client = new WiroClient('your-api-key', 'your-api-secret');
 const server = createMcpServer(client);
@@ -159,7 +165,7 @@ const server = createMcpServer(client);
 
 | Export | Description |
 |--------|-------------|
-| `createMcpServer(client)` | Creates an McpServer with all 11 tools registered |
+| `createMcpServer(client)` | Creates an McpServer with all 12 tools registered |
 | `WiroClient` | API client with both auth types |
 | `registerTools(server, client)` | Register tools on an existing McpServer |
 

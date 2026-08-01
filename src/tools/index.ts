@@ -3,6 +3,7 @@ import type { WiroClient } from '../client.js';
 import { registerSearchModels } from './search-models.js';
 import { registerGetModelSchema } from './get-model-schema.js';
 import { registerRunModel } from './run-model.js';
+import { registerWaitForTask } from './wait-for-task.js';
 import { registerGetTask } from './get-task.js';
 import { registerGetTaskPrice } from './get-task-price.js';
 import { registerCancelTask } from './cancel-task.js';
@@ -18,6 +19,7 @@ export function registerTools(server: McpServer, client: WiroClient): void {
   registerRecommendModel(server, client);
   registerExplore(server, client);
   registerRunModel(server, client);
+  registerWaitForTask(server, client);
   registerGetTask(server, client);
   registerGetTaskPrice(server, client);
   registerCancelTask(server, client);
@@ -32,6 +34,7 @@ export {
   registerRecommendModel,
   registerExplore,
   registerRunModel,
+  registerWaitForTask,
   registerGetTask,
   registerGetTaskPrice,
   registerCancelTask,

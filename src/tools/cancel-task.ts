@@ -7,11 +7,22 @@ export function registerCancelTask(server: McpServer, client: WiroClient): void 
     'cancel_task',
     'Cancel a task that is still in the queue (before worker assignment). Tasks already running cannot be cancelled — use kill_task instead.',
     {
-      tasktoken: z.string().describe('The task token to cancel'),
+      tasktoken: z.string().optional().describe('The task token returned from run_model'),
+      taskid: z.string().optional().describe('The task ID (alternative to tasktoken)'),
     },
-    async ({ tasktoken }) => {
+    async ({ tasktoken, taskid }, extra) => {
       try {
-        const result = await client.cancelTask(tasktoken);
+        if (!tasktoken && !taskid) {
+          return {
+            content: [{ type: 'text' as const, text: '## Error\n\nEither `tasktoken` or `taskid` is required.' }],
+            isError: true,
+          };
+        }
+
+        const result = await client.cancelTask(
+          { tasktoken, taskid },
+          extra.signal,
+        );
         if (result.result === false) {
           const msg = (result.errors as Array<{ message: string }>)?.map(e => e.message).join(', ') || 'Cancel failed';
           return {

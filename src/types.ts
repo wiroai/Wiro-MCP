@@ -42,6 +42,7 @@ export interface Task {
   status: string;
   pexit: string;
   debugoutput: string;
+  debugerror?: string;
   starttime: string;
   endtime: string;
   elapsedseconds: string;
@@ -165,4 +166,7 @@ export interface FileUploadResponse {
 export const TERMINAL_STATUSES = [
   'task_postprocess_end',
   'task_cancel',
+  // Task/Detail returns this DB status for fatal pre-execution failures.
+  // It is distinct from the non-terminal `task_error` websocket log event.
+  'task_error',
 ] as const;
