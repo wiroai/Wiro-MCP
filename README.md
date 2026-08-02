@@ -185,6 +185,13 @@ All tools publish typed MCP input and output schemas. Successful calls return
 `structuredContent` for reliable chaining, concise text `content` for clients
 that only render text, and MCP resource links for generated media.
 
+Completed media responses also include an assistant-audience delivery
+instruction. Some MCP clients expose a `resource_link` as tool metadata instead
+of previewing it inside the tool card, so the assistant is explicitly told to
+render images and preserve clickable media links in its user-facing response.
+The standard resource link and full-resolution URL remain available to every
+client; no base64 media payload is required.
+
 Task responses use the stable states `submitted`, `running`, `completed`,
 `failed`, and `cancelled`. When more work is required, the response includes an
 executable `nextAction`:

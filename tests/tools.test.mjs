@@ -161,6 +161,11 @@ test('all 13 tools advertise output schemas and annotations', async () => {
       assert.equal(typeof tool.annotations?.idempotentHint, 'boolean');
       assert.equal(typeof tool.annotations?.openWorldHint, 'boolean');
     }
+
+    for (const name of ['run_model', 'get_task', 'wait_for_task']) {
+      const tool = result.tools.find(candidate => candidate.name === name);
+      assert.match(tool?.description ?? '', /present every returned media resource/i);
+    }
   });
 });
 
@@ -202,5 +207,8 @@ test('list_tasks returns structured history and chains into get_task', async () 
     assert.equal(detail.structuredContent.state, 'completed');
     assert.equal(detail.structuredContent.outputs[0].url, 'https://cdn.example/result.png');
     assert.equal(detail.content.some(block => block.type === 'resource_link'), true);
+    assert.equal(detail.content.some(block => block.type === 'text'
+      && block.annotations?.audience?.includes('assistant')
+      && /Present every generated media output/.test(block.text)), true);
   });
 });

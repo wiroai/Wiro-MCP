@@ -22,7 +22,9 @@ export function registerWaitForTask(server: McpServer, client: WiroClient): void
       title: 'Wait for a Wiro task',
       description: 'Wait for an existing Wiro task without submitting a new '
         + 'model run. If it is still running, repeat the exact `nextAction` '
-        + 'returned by this tool. Never call `run_model` again for the same task.',
+        + 'returned by this tool. Never call `run_model` again for the same task. '
+        + 'When it completes, present every returned media resource in the '
+        + 'user-facing response instead of reporting only task metadata.',
       inputSchema: {
         tasktoken: z.string().optional().describe('The task token returned from run_model.'),
         taskid: z.string().optional().describe('The task ID (alternative to tasktoken).'),

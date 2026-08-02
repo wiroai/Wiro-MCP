@@ -27,7 +27,9 @@ export function registerRunModel(server: McpServer, client: WiroClient): void {
         + '3D, and more. Call `get_model_schema` first. With `wait=true` this '
         + 'performs a bounded wait; when the response contains '
         + '`nextAction.tool = "wait_for_task"`, call that tool with the exact '
-        + 'arguments returned. Never call `run_model` again for the same request.',
+        + 'arguments returned. Never call `run_model` again for the same request. '
+        + 'When the task completes, present every returned media resource in the '
+        + 'user-facing response instead of reporting only task metadata.',
       inputSchema: {
         model: z.string().describe('Model slug in "owner/model" format, e.g. "openai/sora-2", "google/nano-banana-pro"'),
         params: z.record(z.string(), z.unknown()).describe('Model-specific parameters as key-value pairs. Use get_model_schema to discover available parameters. For file parameters (fileinput, multifileinput, combinefileinput), pass URLs directly — no upload needed. For combinefileinput, pass an array of URLs.'),
