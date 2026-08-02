@@ -58,6 +58,7 @@ Then set environment variables `WIRO_API_KEY` and `WIRO_API_SECRET`.
 {
   "mcpServers": {
     "wiro": {
+      "type": "stdio",
       "command": "npx",
       "args": ["-y", "@wiro-ai/wiro-mcp"],
       "env": {
