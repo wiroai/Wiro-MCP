@@ -8,16 +8,34 @@ import {
   formatTaskPending,
   formatTaskResult,
 } from '../utils/format.js';
+import {
+  createTaskContent,
+  toPendingTaskResult,
+  toStructuredTaskResult,
+} from '../utils/structured.js';
+import { taskResultOutputSchema } from './schemas.js';
 
 export function registerGetTask(server: McpServer, client: WiroClient): void {
-  server.tool(
+  server.registerTool(
     'get_task',
-    'Get the current status and output of a task. By default this is an immediate one-time check; set `wait_seconds` for a short bounded wait, or use `wait_for_task` for resumable long generations. Returns status, outputs, cost, and elapsed time. Check pexit for success ("0") or failure.',
     {
-      tasktoken: z.string().optional().describe('The task token returned from run_model'),
-      taskid: z.string().optional().describe('The task ID (alternative to tasktoken)'),
-      wait_seconds: z.number().int().min(0).max(45).default(0)
-        .describe('Optional bounded wait before returning (0-45 seconds, default 0)'),
+      title: 'Get a Wiro task',
+      description: 'Get the current status and output of one task. By default '
+        + 'this is an immediate check. For an active task, follow the returned '
+        + '`nextAction` instead of submitting another run.',
+      inputSchema: {
+        tasktoken: z.string().optional().describe('The task token returned from run_model.'),
+        taskid: z.string().optional().describe('The task ID (alternative to tasktoken).'),
+        wait_seconds: z.number().int().min(0).max(45).default(0)
+          .describe('Optional bounded wait before returning (0-45 seconds, default 0).'),
+      },
+      outputSchema: taskResultOutputSchema,
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
     },
     async ({ tasktoken, taskid, wait_seconds }, extra) => {
       try {
@@ -72,7 +90,11 @@ export function registerGetTask(server: McpServer, client: WiroClient): void {
         }
 
         return {
-          content: [{ type: 'text' as const, text: formatTaskResult(task) }],
+          content: createTaskContent(formatTaskResult(task), task),
+          structuredContent: toStructuredTaskResult(task, {
+            taskid,
+            tasktoken,
+          }),
         };
       } catch (error) {
         if (error instanceof TaskWaitTimeoutError) {
@@ -87,6 +109,9 @@ export function registerGetTask(server: McpServer, client: WiroClient): void {
                 timeoutSeconds: wait_seconds,
               }),
             }],
+            structuredContent: lastTask
+              ? toStructuredTaskResult(lastTask, { taskid, tasktoken })
+              : toPendingTaskResult({ taskid, tasktoken }),
           };
         }
 

@@ -113,6 +113,48 @@ export function formatTaskPending(params: {
   return lines.join('\n');
 }
 
+export function formatTaskList(
+  tasks: Task[],
+  total: number,
+  start = 0,
+): string {
+  if (tasks.length === 0) {
+    return '## Task History\n\nNo model generation tasks found.';
+  }
+
+  const lines = [
+    `## Task History (${total} total)`,
+    '',
+    `Showing ${start + 1}-${start + tasks.length}.`,
+    '',
+  ];
+
+  for (const task of tasks) {
+    const model = task.modelslugowner && task.modelslugproject
+      ? `${task.modelslugowner}/${task.modelslugproject}`
+      : 'unknown model';
+    lines.push(`### Task ${task.id}`);
+    lines.push(`- **Model:** \`${model}\``);
+    lines.push(`- **Status:** ${task.status}`);
+    if (task.starttime) lines.push(`- **Started:** ${task.starttime}`);
+    if (task.elapsedseconds) lines.push(`- **Duration:** ${task.elapsedseconds}s`);
+    if (task.totalcost && task.totalcost !== '0') {
+      lines.push(`- **Cost:** $${task.totalcost}`);
+    }
+
+    const outputLinks = (task.outputs ?? [])
+      .filter(output => output.url)
+      .slice(0, 3);
+    for (const output of outputLinks) {
+      lines.push(`- **Output:** [${escapeMarkdownLabel(output.name || 'Open result')}](${output.url})`);
+    }
+    lines.push(`- **Details:** call \`get_task\` with \`taskid: "${task.id}"\``);
+    lines.push('');
+  }
+
+  return lines.join('\n');
+}
+
 export function formatModelList(models: ToolListItem[], header?: string): string {
   if (models.length === 0) return 'No models found.';
 
@@ -271,7 +313,7 @@ function formatDynamicPriceDetailed(dynamicprice?: string): string | null {
   }
 }
 
-function formatPricing(model: ToolListItem): string | null {
+export function formatPricing(model: ToolListItem): string | null {
   const dynamicResult = formatDynamicPrice(model.dynamicprice);
   if (dynamicResult) return dynamicResult;
 

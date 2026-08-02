@@ -8,19 +8,34 @@ import {
   formatTaskPending,
   formatTaskResult,
 } from '../utils/format.js';
+import {
+  createTaskContent,
+  toPendingTaskResult,
+  toStructuredTaskResult,
+} from '../utils/structured.js';
+import { taskResultOutputSchema } from './schemas.js';
 
 export function registerWaitForTask(server: McpServer, client: WiroClient): void {
-  server.tool(
+  server.registerTool(
     'wait_for_task',
-    'Wait for an existing Wiro task without submitting a new model run. '
-      + 'Returns the final output if the task completes within the wait budget. '
-      + 'If it is still running, call this tool again with the same identifier. '
-      + 'Never call `run_model` again for the same task.',
     {
-      tasktoken: z.string().optional().describe('The task token returned from run_model'),
-      taskid: z.string().optional().describe('The task ID (alternative to tasktoken)'),
-      timeout_seconds: z.number().int().min(10).max(600).default(45)
-        .describe('Max seconds to wait. The 45s default is safe for clients with a 60s tool timeout.'),
+      title: 'Wait for a Wiro task',
+      description: 'Wait for an existing Wiro task without submitting a new '
+        + 'model run. If it is still running, repeat the exact `nextAction` '
+        + 'returned by this tool. Never call `run_model` again for the same task.',
+      inputSchema: {
+        tasktoken: z.string().optional().describe('The task token returned from run_model.'),
+        taskid: z.string().optional().describe('The task ID (alternative to tasktoken).'),
+        timeout_seconds: z.number().int().min(10).max(600).default(45)
+          .describe('Maximum seconds to wait. The 45-second default is safe for clients with a 60-second tool timeout.'),
+      },
+      outputSchema: taskResultOutputSchema,
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
     },
     async ({ tasktoken, taskid, timeout_seconds }, extra) => {
       if (!tasktoken && !taskid) {
@@ -60,6 +75,7 @@ export function registerWaitForTask(server: McpServer, client: WiroClient): void
 
         const task = detail.tasklist?.[0];
         if (!task) {
+          const reason = 'The status endpoint returned no task data.';
           return {
             content: [{
               type: 'text' as const,
@@ -67,14 +83,23 @@ export function registerWaitForTask(server: McpServer, client: WiroClient): void
                 taskid,
                 tasktoken,
                 timeoutSeconds: timeout_seconds,
-                reason: 'The status endpoint returned no task data.',
+                reason,
               }),
             }],
+            structuredContent: toPendingTaskResult({
+              taskid,
+              tasktoken,
+              reason,
+            }),
           };
         }
 
         return {
-          content: [{ type: 'text' as const, text: formatTaskResult(task) }],
+          content: createTaskContent(formatTaskResult(task), task),
+          structuredContent: toStructuredTaskResult(task, {
+            taskid,
+            tasktoken,
+          }),
         };
       } catch (error) {
         if (error instanceof TaskWaitTimeoutError) {
@@ -89,6 +114,12 @@ export function registerWaitForTask(server: McpServer, client: WiroClient): void
                 timeoutSeconds: timeout_seconds,
               }),
             }],
+            structuredContent: lastTask
+              ? toStructuredTaskResult(lastTask, { taskid, tasktoken })
+              : toPendingTaskResult({
+                taskid,
+                tasktoken,
+              }),
           };
         }
 

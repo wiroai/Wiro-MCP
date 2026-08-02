@@ -1,12 +1,25 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { WiroClient } from '../client.js';
 import type { ExploreCategory } from '../types.js';
+import { toStructuredExplore } from '../utils/structured.js';
+import { exploreOutputSchema } from './schemas.js';
 
 export function registerExplore(server: McpServer, client: WiroClient): void {
-  server.tool(
+  server.registerTool(
     'explore',
-    'Browse curated AI models on Wiro, organized by category. Returns featured and popular models grouped into sections like "Recently Added", "Image Generation", "Video", etc. No parameters needed — just call it to see what\'s available.',
-    {},
+    {
+      title: 'Explore Wiro models',
+      description: 'Browse curated Wiro models grouped by category. Choose a '
+        + 'model and call `get_model_schema` before `run_model`.',
+      inputSchema: {},
+      outputSchema: exploreOutputSchema,
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
+    },
     async () => {
       try {
         const result = await client.explore();
@@ -14,6 +27,7 @@ export function registerExplore(server: McpServer, client: WiroClient): void {
         if (!result.result || !result.explore?.length) {
           return {
             content: [{ type: 'text' as const, text: 'No explore data available.' }],
+            structuredContent: { categories: [] },
           };
         }
 
@@ -21,6 +35,7 @@ export function registerExplore(server: McpServer, client: WiroClient): void {
 
         return {
           content: [{ type: 'text' as const, text }],
+          structuredContent: toStructuredExplore(result.explore),
         };
       } catch (error) {
         return {

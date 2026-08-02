@@ -13,6 +13,12 @@ export interface SearchModelsParams {
   order?: string;
 }
 
+export interface ListTasksParams {
+  start?: number;
+  limit?: number;
+  model?: string;
+}
+
 export interface RunModelResult {
   result: boolean;
   errors: Array<{ message: string }>;
@@ -59,6 +65,8 @@ export interface TaskDetailResponse {
   total: string;
   tasklist: Task[];
 }
+
+export type TaskListResponse = TaskDetailResponse;
 
 export interface ToolParameterItem {
   id: string;

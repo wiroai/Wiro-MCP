@@ -1,14 +1,26 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import { docsSearchOutputSchema } from './schemas.js';
 
 const DOCS_URL = 'https://wiro.ai/docs/llms.txt';
 
 export function registerSearchDocs(server: McpServer): void {
-  server.tool(
+  server.registerTool(
     'search_docs',
-    'Search the Wiro documentation for guides, API references, examples, and how-to information. Returns relevant sections from the docs.',
     {
-      query: z.string().describe('What you\'re looking for, e.g. "how to upload a file", "websocket", "authentication", "LLM streaming"'),
+      title: 'Search Wiro documentation',
+      description: 'Search official Wiro guides, API references, examples, and '
+        + 'how-to documentation.',
+      inputSchema: {
+        query: z.string().describe('What you are looking for, e.g. "how to upload a file", "websocket", "authentication", or "LLM streaming".'),
+      },
+      outputSchema: docsSearchOutputSchema,
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
     },
     async ({ query }) => {
       try {
@@ -35,11 +47,16 @@ export function registerSearchDocs(server: McpServer): void {
               type: 'text' as const,
               text: `No documentation found matching "${query}".\n\nFull documentation: https://wiro.ai/docs`,
             }],
+            structuredContent: {
+              query,
+              matches: [],
+              docsUrl: 'https://wiro.ai/docs',
+            },
           };
         }
 
-        const result = matches
-          .slice(0, 5)
+        const topMatches = matches.slice(0, 5);
+        const result = topMatches
           .map(m => m.text)
           .join('\n\n---\n\n');
 
@@ -48,6 +65,14 @@ export function registerSearchDocs(server: McpServer): void {
             type: 'text' as const,
             text: `## Documentation Results for "${query}"\n\n${result}\n\n---\n*Full documentation: https://wiro.ai/docs*`,
           }],
+          structuredContent: {
+            query,
+            matches: topMatches.map(match => ({
+              title: match.title,
+              text: match.text,
+            })),
+            docsUrl: 'https://wiro.ai/docs',
+          },
         };
       } catch (error) {
         return {

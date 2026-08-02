@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import test from 'node:test';
 import {
   TaskWaitTimeoutError,
@@ -164,5 +165,89 @@ test('killTask maps a task token to socketaccesstoken', { concurrency: false }, 
     assert.deepEqual(requestBody, { socketaccesstoken: 'task-token' });
   } finally {
     globalThis.fetch = originalFetch;
+  }
+});
+
+test('listTasks scopes by auth without sending uuid', { concurrency: false }, async () => {
+  const originalFetch = globalThis.fetch;
+  let request;
+  globalThis.fetch = async (url, init) => {
+    request = {
+      url: String(url),
+      body: JSON.parse(String(init?.body)),
+    };
+    return jsonResponse({
+      result: true,
+      errors: [],
+      total: '0',
+      tasklist: [],
+    });
+  };
+
+  try {
+    const client = new WiroClient('api-key');
+    await client.listTasks({
+      start: 20,
+      limit: 5,
+      model: 'flux',
+    });
+
+    assert.equal(request.url.endsWith('/Task/List'), true);
+    assert.deepEqual(request.body, {
+      type: 'model',
+      sort: 'id',
+      order: 'DESC',
+      start: '20',
+      limit: '5',
+      modelName: 'flux',
+    });
+    assert.equal(Object.hasOwn(request.body, 'uuid'), false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('trusted proxy context signs the caller IP and API path', { concurrency: false }, async () => {
+  const originalFetch = globalThis.fetch;
+  const originalNow = Date.now;
+  const sharedSecret = 's'.repeat(32);
+  let headers;
+  Date.now = () => 1_800_000_000_000;
+  globalThis.fetch = async (_url, init) => {
+    headers = init?.headers;
+    return jsonResponse(detail('task_postprocess_end', { pexit: '0' }));
+  };
+
+  try {
+    const client = new WiroClient(
+      'api-key',
+      undefined,
+      'http://localhost:1453/v1',
+      {
+        trustedProxy: {
+          clientIp: '203.0.113.8',
+          sharedSecret,
+        },
+      },
+    );
+    await client.getTask({ taskid: '123' });
+
+    const payload = [
+      '1800000000000',
+      '203.0.113.8',
+      'api-key',
+      '/v1/Task/Detail',
+    ].join('\n');
+    const expected = crypto
+      .createHmac('sha256', sharedSecret)
+      .update(payload)
+      .digest('hex');
+
+    assert.equal(headers['x-wiro-proxy-client-ip'], '203.0.113.8');
+    assert.equal(headers['x-wiro-proxy-timestamp'], '1800000000000');
+    assert.equal(headers['x-wiro-proxy-signature'], expected);
+  } finally {
+    globalThis.fetch = originalFetch;
+    Date.now = originalNow;
   }
 });

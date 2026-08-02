@@ -1,6 +1,6 @@
 {
   "name": "@wiro-ai/wiro-mcp",
-  "version": "1.1.5",
+  "version": "1.2.0",
   "description": "Official MCP server for Wiro AI — access all AI models on Wiro from Cursor, Claude, Windsurf, and any MCP-compatible AI assistant",
   "type": "module",
   "main": "dist/server.js",
@@ -10,6 +10,10 @@
   },
   "exports": {
     ".": {
+      "types": "./dist/server.d.ts",
+      "default": "./dist/server.js"
+    },
+    "./server": {
       "types": "./dist/server.d.ts",
       "default": "./dist/server.js"
     },
@@ -40,6 +44,8 @@
     "cursor",
     "claude",
     "windsurf",
+    "openclaw",
+    "hermes",
     "image-generation",
     "video-generation",
     "llm"
@@ -52,14 +58,14 @@
   },
   "homepage": "https://wiro.ai",
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=20.0.0"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.12.0",
-    "zod": "^3.23.0"
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
-    "typescript": "^5.7.0",
-    "@types/node": "^22.0.0"
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
   }
 }

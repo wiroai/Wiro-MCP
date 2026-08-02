@@ -18,6 +18,9 @@
 
 ## Quick Start
 
+Local `npx` and library usage require Node.js 20 or later. The hosted MCP
+endpoint does not require a local Node.js installation.
+
 ### 1. Get API Keys
 
 Sign up at [wiro.ai](https://wiro.ai/) and create a project at [wiro.ai/panel/project/new](https://wiro.ai/panel/project/new) to get your API key and secret.
@@ -83,6 +86,44 @@ Then set environment variables `WIRO_API_KEY` and `WIRO_API_SECRET`.
 }
 ```
 
+**OpenClaw** — configure a remote server under `mcp.servers`:
+
+```json
+{
+  "mcp": {
+    "servers": {
+      "wiro": {
+        "url": "https://mcp.wiro.ai/v1",
+        "transport": "streamable-http",
+        "connectionTimeoutMs": 10000,
+        "headers": {
+          "Authorization": "Bearer ${WIRO_MCP_AUTH}"
+        }
+      }
+    }
+  }
+}
+```
+
+Set `WIRO_MCP_AUTH` in OpenClaw's environment, then verify with
+`openclaw mcp doctor wiro --probe`. On older OpenClaw releases without that
+probe command, use `openclaw mcp show wiro`, restart OpenClaw, and run
+`/tools verbose`.
+
+**Hermes** — add to `~/.hermes/config.yaml`:
+
+```yaml
+mcp_servers:
+  wiro:
+    url: "https://mcp.wiro.ai/v1"
+    headers:
+      Authorization: "Bearer ${WIRO_MCP_AUTH}"
+    timeout: 60
+    connect_timeout: 10
+```
+
+Store `WIRO_MCP_AUTH` in `~/.hermes/.env`, then run `/reload-mcp` and `/tools`.
+
 ### 3. Start Using
 
 Ask your AI assistant:
@@ -92,6 +133,7 @@ Ask your AI assistant:
 - *"Show me the parameters for openai/sora-2"*
 - *"Create a 5-second video with Kling V3 — a drone shot over mountains"*
 - *"Check the status of my last task"*
+- *"Show my latest productions and open the newest result"*
 
 ## Authentication
 
@@ -125,6 +167,7 @@ WIRO_API_KEY=your-api-key
 | `run_model` | Run any model — waits up to 45s by default, then returns a recoverable task token |
 | `wait_for_task` | Continue waiting for an existing task without submitting or billing a duplicate run |
 | `get_task` | Check task status immediately or wait up to 45s with `wait_seconds` |
+| `list_tasks` | Browse authenticated task history across conversations, then continue with `get_task` |
 | `get_task_price` | Get the cost of a completed task |
 | `cancel_task` | Cancel a queued task |
 | `kill_task` | Kill a running task |
@@ -135,13 +178,46 @@ For long generations, `run_model` returns the existing task ID and token when it
 wait budget expires. The assistant must continue with `wait_for_task`; retrying
 `run_model` creates a separate billable task.
 
+### LLM-friendly responses
+
+All tools publish typed MCP input and output schemas. Successful calls return
+`structuredContent` for reliable chaining, concise text `content` for clients
+that only render text, and MCP resource links for generated media.
+
+Task responses use the stable states `submitted`, `running`, `completed`,
+`failed`, and `cancelled`. When more work is required, the response includes an
+executable `nextAction`:
+
+```json
+{
+  "state": "running",
+  "task": {
+    "id": "123",
+    "token": "task-token",
+    "status": "task_start"
+  },
+  "outputs": [],
+  "nextAction": {
+    "tool": "wait_for_task",
+    "arguments": { "tasktoken": "task-token" },
+    "reason": "Continue this exact task. Do not call run_model again."
+  }
+}
+```
+
+Generation chain:
+`search_models → get_model_schema → run_model → wait_for_task`
+
+Cross-conversation history:
+`list_tasks → get_task`
+
 ## Hosted MCP Server
 
 Wiro also provides a hosted MCP server at `https://mcp.wiro.ai/v1` that requires no local installation. See the [MCP Server documentation](https://wiro.ai/docs/wiro-mcp-server) for setup instructions.
 
 ## Documentation
 
-- [MCP Server (Hosted)](https://wiro.ai/docs/wiro-mcp-server) — setup guides for Cursor, Claude Code, Claude Desktop, Windsurf
+- [MCP Server (Hosted)](https://wiro.ai/docs/wiro-mcp-server) — setup guides for Cursor, Claude Code, Claude Desktop, Windsurf, OpenClaw, and Hermes
 - [Self-Hosted MCP](https://wiro.ai/docs/mcp-self-hosted) — run locally with npx, environment variables, library usage
 - [Authentication](https://wiro.ai/docs/authentication) — signature-based vs API Key Only
 - [Run a Model](https://wiro.ai/docs/run-a-model) — how the Run endpoint works
@@ -165,7 +241,7 @@ const server = createMcpServer(client);
 
 | Export | Description |
 |--------|-------------|
-| `createMcpServer(client)` | Creates an McpServer with all 12 tools registered |
+| `createMcpServer(client)` | Creates an McpServer with all 13 tools registered |
 | `WiroClient` | API client with both auth types |
 | `registerTools(server, client)` | Register tools on an existing McpServer |
 

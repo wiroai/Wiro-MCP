@@ -1,8 +1,11 @@
 import crypto from 'node:crypto';
+import net from 'node:net';
 import type {
+  ListTasksParams,
   SearchModelsParams,
   RunModelResult,
   TaskDetailResponse,
+  TaskListResponse,
   ToolListResponse,
   ToolDetailResponse,
   ExploreResponse,
@@ -12,9 +15,11 @@ import type {
 import { TERMINAL_STATUSES } from './types.js';
 
 export type {
+  ListTasksParams,
   SearchModelsParams,
   RunModelResult,
   TaskDetailResponse,
+  TaskListResponse,
   ToolListResponse,
   ToolDetailResponse,
   ExploreResponse,
@@ -42,6 +47,15 @@ export interface WaitForTaskOptions {
   ) => void | Promise<void>;
   pollIntervalMs?: number;
   maxConsecutiveErrors?: number;
+}
+
+export interface TrustedProxyContext {
+  clientIp: string;
+  sharedSecret: string;
+}
+
+export interface WiroClientOptions {
+  trustedProxy?: TrustedProxyContext;
 }
 
 export class WiroApiError extends Error {
@@ -86,17 +100,32 @@ export class WiroClient {
   private readonly apiKey: string;
   private readonly apiSecret?: string;
   private readonly baseUrl: string;
+  private readonly trustedProxy?: TrustedProxyContext;
   public readonly authType: 'signature' | 'apikey-only';
 
-  constructor(apiKey: string, apiSecret?: string, baseUrl?: string) {
+  constructor(
+    apiKey: string,
+    apiSecret?: string,
+    baseUrl?: string,
+    options: WiroClientOptions = {},
+  ) {
     if (!apiKey) throw new Error('WIRO_API_KEY is required');
+    if (options.trustedProxy) {
+      if (net.isIP(options.trustedProxy.clientIp) === 0) {
+        throw new Error('trustedProxy.clientIp must be a valid IPv4 or IPv6 address');
+      }
+      if (options.trustedProxy.sharedSecret.length < 32) {
+        throw new Error('trustedProxy.sharedSecret must be at least 32 characters');
+      }
+    }
     this.apiKey = apiKey;
     this.apiSecret = apiSecret;
     this.baseUrl = baseUrl ?? DEFAULT_BASE_URL;
+    this.trustedProxy = options.trustedProxy;
     this.authType = apiSecret ? 'signature' : 'apikey-only';
   }
 
-  private getAuthHeaders(): Record<string, string> {
+  private getAuthHeaders(pathname: string): Record<string, string> {
     const headers: Record<string, string> = {
       'x-api-key': this.apiKey,
       'Content-Type': 'application/json',
@@ -112,6 +141,22 @@ export class WiroClient {
       headers['x-nonce'] = nonce;
     }
 
+    if (this.trustedProxy) {
+      const timestamp = Date.now().toString();
+      const payload = [
+        timestamp,
+        this.trustedProxy.clientIp,
+        this.apiKey,
+        pathname,
+      ].join('\n');
+      headers['x-wiro-proxy-client-ip'] = this.trustedProxy.clientIp;
+      headers['x-wiro-proxy-timestamp'] = timestamp;
+      headers['x-wiro-proxy-signature'] = crypto
+        .createHmac('sha256', this.trustedProxy.sharedSecret)
+        .update(payload)
+        .digest('hex');
+    }
+
     return headers;
   }
 
@@ -121,7 +166,7 @@ export class WiroClient {
     signal?: AbortSignal,
   ): Promise<T> {
     const url = `${this.baseUrl}${path}`;
-    const headers = this.getAuthHeaders();
+    const headers = this.getAuthHeaders(new URL(url).pathname);
 
     const response = await fetch(url, {
       method: 'POST',
@@ -201,6 +246,21 @@ export class WiroClient {
     return this.request<TaskDetailResponse>('/Task/Detail', body, signal);
   }
 
+  async listTasks(
+    params: ListTasksParams = {},
+    signal?: AbortSignal,
+  ): Promise<TaskListResponse> {
+    const body: Record<string, unknown> = {
+      type: 'model',
+      sort: 'id',
+      order: 'DESC',
+      start: String(params.start ?? 0),
+      limit: String(params.limit ?? 20),
+    };
+    if (params.model) body.modelName = params.model;
+    return this.request<TaskListResponse>('/Task/List', body, signal);
+  }
+
   async cancelTask(
     task: string | TaskReference,
     signal?: AbortSignal,
@@ -253,7 +313,7 @@ export class WiroClient {
     formData.append('file', blob, resolvedName);
 
     const url = `${this.baseUrl}/File/Upload`;
-    const headers = this.getAuthHeaders();
+    const headers = this.getAuthHeaders(new URL(url).pathname);
     delete headers['Content-Type'];
 
     const response = await fetch(url, {

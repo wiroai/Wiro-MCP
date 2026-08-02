@@ -11,20 +11,36 @@ import {
   formatTaskResult,
   formatTaskSubmitted,
 } from '../utils/format.js';
+import {
+  createTaskContent,
+  toPendingTaskResult,
+  toStructuredTaskResult,
+} from '../utils/structured.js';
+import { taskResultOutputSchema } from './schemas.js';
 
 export function registerRunModel(server: McpServer, client: WiroClient): void {
-  server.tool(
+  server.registerTool(
     'run_model',
-    'Run any AI model on Wiro. Supports image generation, video generation, LLMs, audio, 3D, and more.\n\n' +
-    'Use `get_model_schema` first to discover available parameters.\n\n' +
-    'With wait=true (default), polls until completion and returns the result.\n' +
-    'With wait=false, returns the task token immediately for `wait_for_task` or a one-time `get_task` check.\n' +
-    'If the wait budget expires, the task is still running: continue with `wait_for_task`. Never submit the same run again.',
     {
-      model: z.string().describe('Model slug in "owner/model" format, e.g. "openai/sora-2", "google/nano-banana-pro"'),
-      params: z.record(z.string(), z.unknown()).describe('Model-specific parameters as key-value pairs. Use get_model_schema to discover available parameters. For file parameters (fileinput, multifileinput, combinefileinput), pass URLs directly — no upload needed. For combinefileinput, pass an array of URLs.'),
-      wait: z.boolean().default(true).describe('If true, poll until completion and return result. If false, return task token immediately.'),
-      timeout_seconds: z.number().int().min(10).max(600).default(45).describe('Max seconds to wait for completion (only when wait=true). The 45s default is safe for clients with a 60s tool timeout.'),
+      title: 'Run a Wiro model',
+      description: 'Run any AI model on Wiro. Supports image, video, text, audio, '
+        + '3D, and more. Call `get_model_schema` first. With `wait=true` this '
+        + 'performs a bounded wait; when the response contains '
+        + '`nextAction.tool = "wait_for_task"`, call that tool with the exact '
+        + 'arguments returned. Never call `run_model` again for the same request.',
+      inputSchema: {
+        model: z.string().describe('Model slug in "owner/model" format, e.g. "openai/sora-2", "google/nano-banana-pro"'),
+        params: z.record(z.string(), z.unknown()).describe('Model-specific parameters as key-value pairs. Use get_model_schema to discover available parameters. For file parameters (fileinput, multifileinput, combinefileinput), pass URLs directly — no upload needed. For combinefileinput, pass an array of URLs.'),
+        wait: z.boolean().default(true).describe('If true, poll until completion and return the result. If false, return the task identifiers immediately.'),
+        timeout_seconds: z.number().int().min(10).max(600).default(45).describe('Maximum seconds to wait when wait=true. The 45-second default is safe for clients with a 60-second tool timeout.'),
+      },
+      outputSchema: taskResultOutputSchema,
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
     },
     async ({ model, params, wait, timeout_seconds }, extra) => {
       let runResult: RunModelResult | undefined;
@@ -49,6 +65,11 @@ export function registerRunModel(server: McpServer, client: WiroClient): void {
                 runResult.socketaccesstoken,
               ),
             }],
+            structuredContent: toPendingTaskResult({
+              taskid: runResult.taskid,
+              tasktoken: runResult.socketaccesstoken,
+              model,
+            }),
           };
         }
 
@@ -78,6 +99,7 @@ export function registerRunModel(server: McpServer, client: WiroClient): void {
 
         const task = detail.tasklist?.[0];
         if (!task) {
+          const reason = 'The status endpoint returned no task data.';
           return {
             content: [{
               type: 'text' as const,
@@ -85,14 +107,25 @@ export function registerRunModel(server: McpServer, client: WiroClient): void {
                 taskid: runResult.taskid,
                 tasktoken: runResult.socketaccesstoken,
                 timeoutSeconds: timeout_seconds,
-                reason: 'The status endpoint returned no task data.',
+                reason,
               }),
             }],
+            structuredContent: toPendingTaskResult({
+              taskid: runResult.taskid,
+              tasktoken: runResult.socketaccesstoken,
+              model,
+              reason,
+            }),
           };
         }
 
         return {
-          content: [{ type: 'text' as const, text: formatTaskResult(task) }],
+          content: createTaskContent(formatTaskResult(task), task),
+          structuredContent: toStructuredTaskResult(task, {
+            taskid: runResult.taskid,
+            tasktoken: runResult.socketaccesstoken,
+            model,
+          }),
         };
       } catch (error) {
         if (runResult?.result && runResult.socketaccesstoken) {
@@ -104,6 +137,19 @@ export function registerRunModel(server: McpServer, client: WiroClient): void {
           const reason = error instanceof TaskWaitTimeoutError
             ? undefined
             : 'Task submission succeeded, but status monitoring was interrupted.';
+          const structured = lastTask
+            ? toStructuredTaskResult(lastTask, {
+              taskid: runResult.taskid,
+              tasktoken: runResult.socketaccesstoken,
+              model,
+            })
+            : toPendingTaskResult({
+              taskid: runResult.taskid,
+              tasktoken: runResult.socketaccesstoken,
+              model,
+              reason,
+            });
+          if (reason) structured.error = reason;
 
           return {
             content: [{
@@ -118,6 +164,7 @@ export function registerRunModel(server: McpServer, client: WiroClient): void {
                 reason,
               }),
             }],
+            structuredContent: structured,
           };
         }
 

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  formatTaskList,
   formatTaskPending,
   formatTaskResult,
 } from '../dist/utils/format.js';
@@ -61,4 +62,32 @@ test('formatTaskPending tells the assistant to resume instead of rerun', () => {
   assert.match(text, /wait_for_task/);
   assert.match(text, /Do not call `run_model` again/);
   assert.match(text, /task-token/);
+});
+
+test('formatTaskList keeps history concise and points to get_task', () => {
+  const text = formatTaskList([{
+    id: '123',
+    socketaccesstoken: 'task-token',
+    parameters: { prompt: 'must not be rendered' },
+    status: 'task_postprocess_end',
+    pexit: '0',
+    debugoutput: 'must not be rendered',
+    starttime: '2026-08-01T10:00:00Z',
+    endtime: '2026-08-01T10:00:04Z',
+    elapsedseconds: '4',
+    totalcost: '0.01',
+    modelslugowner: 'owner',
+    modelslugproject: 'model',
+    outputs: [{
+      name: 'result.png',
+      contenttype: 'image/png',
+      size: '2048',
+      url: 'https://cdn.example/result.png',
+    }],
+  }], 1, 0);
+
+  assert.match(text, /Task History \(1 total\)/);
+  assert.match(text, /owner\/model/);
+  assert.match(text, /get_task/);
+  assert.doesNotMatch(text, /must not be rendered/);
 });

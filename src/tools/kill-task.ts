@@ -1,14 +1,27 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { WiroClient } from '../client.js';
+import { taskActionOutputSchema } from './schemas.js';
 
 export function registerKillTask(server: McpServer, client: WiroClient): void {
-  server.tool(
+  server.registerTool(
     'kill_task',
-    'Kill a task that is currently running (after worker assignment). For queued tasks, use cancel_task instead.',
     {
-      tasktoken: z.string().optional().describe('The task token returned from run_model'),
-      taskid: z.string().optional().describe('The task ID (alternative to tasktoken)'),
+      title: 'Kill a running Wiro task',
+      description: 'Stop a task that is already running. This changes remote '
+        + 'state and can discard in-progress work. Use `cancel_task` for a '
+        + 'task that is still queued.',
+      inputSchema: {
+        tasktoken: z.string().optional().describe('The task token returned from run_model.'),
+        taskid: z.string().optional().describe('The task ID (alternative to tasktoken).'),
+      },
+      outputSchema: taskActionOutputSchema,
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
     },
     async ({ tasktoken, taskid }, extra) => {
       try {
@@ -32,6 +45,15 @@ export function registerKillTask(server: McpServer, client: WiroClient): void {
         }
         return {
           content: [{ type: 'text' as const, text: `Task killed successfully.` }],
+          structuredContent: {
+            action: 'kill',
+            success: true,
+            task: {
+              ...(taskid ? { id: taskid } : {}),
+              ...(tasktoken ? { token: tasktoken } : {}),
+            },
+            message: 'Task killed successfully.',
+          },
         };
       } catch (error) {
         return {
