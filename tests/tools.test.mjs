@@ -151,11 +151,15 @@ test('get_task supports a short bounded wait without losing the identifier', asy
 test('all 13 tools advertise output schemas and annotations', async () => {
   await withClient({}, async client => {
     const result = await client.listTools();
+    const jsonSchema202012 = 'https://json-schema.org/draft/2020-12/schema';
 
     assert.equal(result.tools.length, 13);
     for (const tool of result.tools) {
       assert.ok(tool.inputSchema, `${tool.name} is missing inputSchema`);
       assert.ok(tool.outputSchema, `${tool.name} is missing outputSchema`);
+      assert.equal(tool.inputSchema.$schema, jsonSchema202012, `${tool.name} inputSchema dialect`);
+      assert.equal(tool.outputSchema.$schema, jsonSchema202012, `${tool.name} outputSchema dialect`);
+      assert.equal(JSON.stringify(tool).includes('draft-07'), false, `${tool.name} still mentions draft-07`);
       assert.equal(typeof tool.annotations?.readOnlyHint, 'boolean');
       assert.equal(typeof tool.annotations?.destructiveHint, 'boolean');
       assert.equal(typeof tool.annotations?.idempotentHint, 'boolean');
