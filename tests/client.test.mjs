@@ -39,11 +39,17 @@ function detail(status, overrides = {}) {
   };
 }
 
-test('waitForTask treats DB task_error as terminal', { concurrency: false }, async () => {
+test('waitForTask continues after DB task_error', { concurrency: false }, async () => {
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async () => jsonResponse(detail('task_error', {
-    debugerror: 'Output folder creation failed',
-  }));
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls += 1;
+    return jsonResponse(
+      calls === 1
+        ? detail('task_error', { debugerror: 'Output folder creation failed' })
+        : detail('task_postprocess_end', { pexit: '1' }),
+    );
+  };
 
   try {
     const client = new WiroClient('api-key');
@@ -51,8 +57,9 @@ test('waitForTask treats DB task_error as terminal', { concurrency: false }, asy
       pollIntervalMs: 1,
     });
 
-    assert.equal(result.tasklist[0].status, 'task_error');
-    assert.equal(result.tasklist[0].debugerror, 'Output folder creation failed');
+    assert.equal(calls, 2);
+    assert.equal(result.tasklist[0].status, 'task_postprocess_end');
+    assert.equal(result.tasklist[0].pexit, '1');
   } finally {
     globalThis.fetch = originalFetch;
   }

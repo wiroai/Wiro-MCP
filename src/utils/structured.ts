@@ -81,7 +81,6 @@ export type TaskContentBlock =
 
 export function getTaskState(task: Task): TaskState {
   if (task.status === 'task_cancel') return 'cancelled';
-  if (task.status === 'task_error') return 'failed';
   if (task.status === 'task_postprocess_end') {
     return task.pexit === '0' ? 'completed' : 'failed';
   }

@@ -12,8 +12,6 @@ export function formatTaskResult(task: Task): string {
 
   if (task.status === 'task_cancel') {
     lines.push(`**Result:** Cancelled`);
-  } else if (task.status === 'task_error') {
-    lines.push(`**Result:** Failed before model execution`);
   } else if (task.pexit === '0') {
     lines.push(`**Result:** Success`);
   } else if (task.pexit) {
