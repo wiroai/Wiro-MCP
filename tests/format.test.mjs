@@ -88,7 +88,7 @@ test('running tasks do not ask the assistant to present unfinished media', () =>
     && block.annotations?.audience?.includes('assistant')), false);
 });
 
-test('formatTaskResult distinguishes fatal DB task errors', () => {
+test('formatTaskResult keeps DB task_error non-terminal', () => {
   const text = formatTaskResult({
     id: '123',
     socketaccesstoken: 'task-token',
@@ -104,7 +104,7 @@ test('formatTaskResult distinguishes fatal DB task errors', () => {
     outputs: [],
   });
 
-  assert.match(text, /Failed before model execution/);
+  assert.doesNotMatch(text, /\*\*Result:\*\*/);
   assert.match(text, /User has no output folder/);
 });
 
