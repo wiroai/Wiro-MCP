@@ -1,7 +1,40 @@
-import type { Task, ToolListItem } from '../types.js';
+import type {
+  Task,
+  TaskSegment,
+  TaskUsage,
+  ToolListItem,
+} from '../types.js';
+import {
+  isToolCallSegment,
+  normalizeTaskRawContent,
+} from './task-segments.js';
 
 export function formatTaskResult(task: Task): string {
   const lines: string[] = [];
+  const requireCompleteTurn = task.status === 'task_postprocess_end'
+    || task.status === 'task_cancel';
+  const rawProjections = (task.outputs ?? [])
+    .filter(output => output.contenttype === 'raw' && output.content)
+    .map(output => {
+      const normalized = normalizeTaskRawContent(output.content, {
+        requireCompleteTurn,
+      });
+      return {
+        output,
+        normalized,
+        state: getTaskOutputProjectionState(normalized),
+      };
+    });
+  const hasInvalidProjection = rawProjections.some(
+    projection => projection.state === 'invalid',
+  );
+  const typedProjection = rawProjections.find(
+    projection => projection.state === 'valid'
+      && projection.normalized.hasSegments,
+  ) ?? rawProjections.find(projection => projection.state === 'valid');
+  const projectionStates = new Map(
+    rawProjections.map(projection => [projection.output, projection.state]),
+  );
   lines.push(`## Task Result`);
   lines.push('');
   lines.push(`**Status:** ${task.status}`);
@@ -26,7 +59,24 @@ export function formatTaskResult(task: Task): string {
     lines.push(`**Cost:** $${task.totalcost}`);
   }
 
-  if (task.debugoutput) {
+  if (hasInvalidProjection) {
+    lines.push('');
+    lines.push('### Response');
+    lines.push('');
+    lines.push('The structured model output could not be validated and was omitted.');
+  } else if (typedProjection) {
+    const { normalized } = typedProjection;
+    lines.push('');
+    lines.push('### Response');
+    lines.push('');
+    if (normalized.finishreason) {
+      lines.push(`**Finish reason:** \`${normalized.finishreason}\``);
+    }
+    if (normalized.usage) appendTaskUsage(lines, normalized.usage);
+    if (normalized.finishreason
+      || normalized.usage) lines.push('');
+    appendTaskSegments(lines, normalized.segments);
+  } else if (task.debugoutput) {
     lines.push('');
     lines.push('### Response');
     lines.push('');
@@ -40,25 +90,32 @@ export function formatTaskResult(task: Task): string {
     lines.push(task.debugerror);
   }
 
-  if (task.outputs?.length > 0) {
+  const displayOutputs = (task.outputs ?? []).filter(output => {
+    const projectionState = projectionStates.get(output);
+    return projectionState === undefined || projectionState === 'none';
+  });
+  if (displayOutputs.length > 0) {
     lines.push('');
     lines.push('### Outputs');
     lines.push('');
-    for (const output of task.outputs) {
+    for (const output of displayOutputs) {
       if (output.contenttype === 'raw' && output.content) {
-        if (output.content.thinking?.length) {
+        const thinking = asStringArray(output.content.thinking);
+        const answers = asStringArray(output.content.answer);
+        if (thinking.length > 0) {
           lines.push('**Thinking:**');
-          for (const t of output.content.thinking) {
+          for (const t of thinking) {
             lines.push(t);
           }
           lines.push('');
         }
-        if (output.content.answer?.length) {
+        if (answers.length > 0) {
           lines.push('**Answer:**');
-          for (const a of output.content.answer) {
+          for (const a of answers) {
             lines.push(a);
           }
-        } else if (output.content.raw) {
+        } else if (typeof output.content.raw === 'string'
+          && output.content.raw) {
           lines.push(output.content.raw);
         }
       } else if (output.url) {
@@ -77,6 +134,72 @@ export function formatTaskResult(task: Task): string {
   }
 
   return lines.join('\n');
+}
+
+type TaskOutputProjectionState = 'none' | 'valid' | 'invalid';
+
+function getTaskOutputProjectionState(
+  normalized: ReturnType<typeof normalizeTaskRawContent>,
+): TaskOutputProjectionState {
+  if (normalized.malformed) return 'invalid';
+  return normalized.hasSegments
+    || normalized.finishreason !== undefined
+    || normalized.usage !== undefined
+    ? 'valid'
+    : 'none';
+}
+
+function appendTaskUsage(lines: string[], usage: TaskUsage): void {
+  lines.push(
+    `**Token usage:** ${usage.input_tokens} input, `
+      + `${usage.output_tokens} output, ${usage.total_tokens} total`,
+  );
+}
+
+function asStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string')
+    : [];
+}
+
+function appendTaskSegments(lines: string[], segments: TaskSegment[]): void {
+  for (const segment of segments) {
+    if (!isToolCallSegment(segment)) {
+      lines.push(segment.type === 'thinking' ? '**Thinking:**' : '**Answer:**');
+      lines.push(segment.text);
+      lines.push('');
+      continue;
+    }
+
+    const label = segment.type === 'function_call'
+      ? 'Function call'
+      : 'Custom tool call';
+    lines.push(`**${label}:** \`${segment.name}\``);
+    lines.push(`- **Status:** \`${segment.status}\``);
+    lines.push(`- **Item ID:** \`${segment.id}\``);
+    lines.push(`- **Call ID:** \`${segment.call_id}\``);
+    lines.push(
+      segment.type === 'function_call'
+        ? '- **Arguments:**'
+        : '- **Input:**',
+    );
+    appendCodeBlock(
+      lines,
+      segment.type === 'function_call' ? segment.arguments : segment.input,
+      segment.type === 'function_call' ? 'json' : 'text',
+    );
+    lines.push('');
+  }
+}
+
+function appendCodeBlock(
+  lines: string[],
+  value: string,
+  language: 'json' | 'text',
+): void {
+  let fence = '```';
+  while (value.includes(fence)) fence += '`';
+  lines.push(`${fence}${language}`, value, fence);
 }
 
 export function formatTaskSubmitted(taskid: string, tasktoken: string): string {
@@ -213,6 +336,7 @@ export function formatModelSchema(model: ToolListItem): string {
         if (param.type === 'fileinput') lines.push(`  Pass a URL directly (e.g. \`${param.id}: "https://..."\`) or use \`${param.id}Url\` for the URL field.`);
         if (param.type === 'multifileinput') lines.push(`  Pass URLs via \`${param.id}Url\` (comma-separated) or upload files in \`${param.id}\`.`);
         if (param.type === 'combinefileinput') lines.push(`  Pass an array of URLs directly: \`${param.id}: ["https://...", "https://..."]\`. No upload needed.`);
+        if (param.type === 'json' || param.type === 'json-array') lines.push(`  Pass this as a structured JSON value inside the ordinary \`params\` object.`);
 
         if (param.options?.length) {
           const optionValues = param.options.map(o => `\`${o.value}\``).join(', ');

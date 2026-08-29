@@ -7,7 +7,20 @@ import { withJsonSchema2020_12 } from './utils/json-schema-dialect.js';
 
 export { WiroClient } from './client.js';
 export { registerTools } from './tools/index.js';
-export type { WiroCredentials } from './types.js';
+export type {
+  Task,
+  TaskCustomToolCallSegment,
+  TaskFinishReason,
+  TaskFunctionCallSegment,
+  TaskOutput,
+  TaskOutputRawContent,
+  TaskSegment,
+  TaskTextSegment,
+  TaskToolCallSegment,
+  TaskToolCallStatus,
+  TaskUsage,
+  WiroCredentials,
+} from './types.js';
 
 const require = createRequire(import.meta.url);
 const { version } = require('../package.json') as { version: string };

@@ -11,8 +11,10 @@ export function registerGetModelSchema(server: McpServer, client: WiroClient): v
     {
       title: 'Get a Wiro model schema',
       description: 'Get one model’s typed parameters, options, defaults, required '
-        + 'fields, and pricing. Fill its required parameters and follow the '
-        + 'returned `run_model` next action exactly once.',
+        + 'fields, and pricing. Catalog fields such as `previousTaskToken` must be '
+        + 'discovered here; use it with `toolOutputs` for tool results or with one '
+        + 'new prompt/messages value for a stateful next turn. Fill required '
+        + 'parameters and follow the returned `run_model` next action exactly once.',
       inputSchema: {
         model: z.string().describe('Model slug in "owner/model" format, e.g. "openai/sora-2", "black-forest-labs/flux-2-pro".'),
       },

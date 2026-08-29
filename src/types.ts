@@ -26,11 +26,66 @@ export interface RunModelResult {
   socketaccesstoken: string;
 }
 
+export type TaskFinishReason =
+  | 'stop'
+  | 'tool_calls'
+  | 'length'
+  | 'content_filter'
+  | 'error';
+
+export type TaskToolCallStatus =
+  | 'in_progress'
+  | 'completed'
+  | 'incomplete';
+
+export interface TaskTextSegment {
+  type: 'thinking' | 'answer';
+  text: string;
+}
+
+export interface TaskFunctionCallSegment {
+  type: 'function_call';
+  id: string;
+  call_id: string;
+  name: string;
+  arguments: string;
+  status: TaskToolCallStatus;
+}
+
+export interface TaskCustomToolCallSegment {
+  type: 'custom_tool_call';
+  id: string;
+  call_id: string;
+  name: string;
+  input: string;
+  status: TaskToolCallStatus;
+}
+
+export type TaskToolCallSegment =
+  | TaskFunctionCallSegment
+  | TaskCustomToolCallSegment;
+
+export type TaskSegment =
+  | TaskTextSegment
+  | TaskToolCallSegment;
+
+export interface TaskUsage {
+  input_tokens: number;
+  input_tokens_details?: Record<string, number>;
+  output_tokens: number;
+  output_tokens_details?: Record<string, number>;
+  total_tokens: number;
+  server_tool_use?: Record<string, number>;
+}
+
 export interface TaskOutputRawContent {
   prompt?: string;
   raw?: string;
-  thinking?: string[];
-  answer?: string[];
+  thinking?: string[] | null;
+  answer?: string[] | null;
+  segments?: TaskSegment[] | null;
+  finishreason?: TaskFinishReason | null;
+  usage?: TaskUsage | null;
 }
 
 export interface TaskOutput {
@@ -81,6 +136,8 @@ export interface ToolParameterItem {
   min?: number;
   max?: number;
   step?: number;
+  advanced?: boolean;
+  jsonschema?: Record<string, unknown> | string | null;
 }
 
 export interface ToolParameterGroup {

@@ -22,7 +22,9 @@ export function registerWaitForTask(server: McpServer, client: WiroClient): void
       title: 'Wait for a Wiro task',
       description: 'Wait for an existing Wiro task without submitting a new '
         + 'model run. If it is still running, repeat the exact `nextAction` '
-        + 'returned by this tool. Never call `run_model` again for the same task. '
+        + 'returned by this tool. Do not resubmit the original request. A '
+        + 'completed tool-call turn may return a `run_model` continuation '
+        + 'template after its calls have been executed. '
         + 'When it completes, present every returned media resource in the '
         + 'user-facing response instead of reporting only task metadata.',
       inputSchema: {
