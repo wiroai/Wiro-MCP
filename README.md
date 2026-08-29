@@ -184,6 +184,46 @@ wait budget expires. The assistant must continue with `wait_for_task`; retrying
 All tools publish typed MCP input and output schemas. Successful calls return
 `structuredContent` for reliable chaining, concise text `content` for clients
 that only render text, and MCP resource links for generated media.
+Model parameters remain catalog-driven: `json` and `json-array` fields are sent
+as structured values in the same `run_model.params` object as all other inputs.
+Use `get_model_schema` as the source of truth for continuation fields.
+`previousTaskToken` is the single continuation reference. Send it with exactly
+one new `prompt` or non-empty `messages` value for a stateful next turn, or with
+`toolOutputs` for a tool-result continuation.
+
+LLM task outputs preserve the public Task Detail segment names and casing:
+`thinking`, `answer`, `function_call`, and `custom_tool_call`, including
+`call_id`, `finishreason`, and optional normalized token `usage`.
+Only validated fields are projected into structured MCP output. When segments
+are present, `response` is derived from ordered `answer` segments instead of
+raw debug transport; tasks without a typed projection retain their normal
+`debugoutput` response.
+
+Completed tool calls return a continuation template in the existing
+`nextAction`. Execute each call, replace the output placeholders, and pass the
+same ordinary `run_model.params` object back:
+
+```json
+{
+  "tool": "run_model",
+  "arguments": {
+    "model": "owner/model",
+    "params": {
+      "previousTaskToken": "task-token",
+      "toolOutputs": [
+        {
+          "call_id": "call_01",
+          "output": "<tool result>"
+        }
+      ]
+    }
+  }
+}
+```
+
+Function calls carry JSON-string `arguments`; custom tool calls carry free-form
+`input`. Tool results are request values in `toolOutputs`, not response
+segments.
 
 Completed media responses also include an assistant-audience delivery
 instruction. Some MCP clients expose a `resource_link` as tool metadata instead

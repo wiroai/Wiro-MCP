@@ -27,12 +27,14 @@ export function registerRunModel(server: McpServer, client: WiroClient): void {
         + '3D, and more. Call `get_model_schema` first. With `wait=true` this '
         + 'performs a bounded wait; when the response contains '
         + '`nextAction.tool = "wait_for_task"`, call that tool with the exact '
-        + 'arguments returned. Never call `run_model` again for the same request. '
+        + 'arguments returned. Do not resubmit the original request. A completed '
+        + 'tool-call turn instead returns a `run_model` continuation template; '
+        + 'execute its calls, fill its `toolOutputs`, and invoke it once. '
         + 'When the task completes, present every returned media resource in the '
         + 'user-facing response instead of reporting only task metadata.',
       inputSchema: {
         model: z.string().describe('Model slug in "owner/model" format, e.g. "openai/sora-2", "google/nano-banana-pro"'),
-        params: z.record(z.string(), z.unknown()).describe('Model-specific parameters as key-value pairs. Use get_model_schema to discover available parameters. For file parameters (fileinput, multifileinput, combinefileinput), pass URLs directly — no upload needed. For combinefileinput, pass an array of URLs.'),
+        params: z.record(z.string(), z.unknown()).describe('Model-specific parameters as key-value pairs. Use get_model_schema to discover available parameters. Pass json and json-array parameters as structured JSON values in this same object. Continue a completed turn with previousTaskToken: add toolOutputs rows with call_id and output for tool results, or provide exactly one new prompt or non-empty messages value for a stateful next turn. For file parameters (fileinput, multifileinput, combinefileinput), pass URLs directly — no upload needed. For combinefileinput, pass an array of URLs.'),
         wait: z.boolean().default(true).describe('If true, poll until completion and return the result. If false, return the task identifiers immediately.'),
         timeout_seconds: z.number().int().min(10).max(600).default(45).describe('Maximum seconds to wait when wait=true. The 45-second default is safe for clients with a 60-second tool timeout.'),
       },
@@ -56,6 +58,9 @@ export function registerRunModel(server: McpServer, client: WiroClient): void {
             content: [{ type: 'text' as const, text: `## Error\n\nFailed to run model: ${errors}` }],
             isError: true,
           };
+        }
+        if (!/^[A-Za-z0-9_.:-]{1,256}$/.test(runResult.socketaccesstoken)) {
+          throw new Error('Wiro task submission omitted socketaccesstoken');
         }
 
         if (!wait) {

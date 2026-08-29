@@ -57,7 +57,12 @@ export function registerListTasks(server: McpServer, client: WiroClient): void {
             state: structured.state,
             task: structured.task,
             outputs: structured.outputs.slice(0, 3).map(output => {
-              const { text: _text, ...summary } = output;
+              const {
+                text: _text,
+                segments: _segments,
+                finishreason: _finishreason,
+                ...summary
+              } = output;
               return summary;
             }),
           };

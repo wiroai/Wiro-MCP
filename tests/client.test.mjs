@@ -39,6 +39,63 @@ function detail(status, overrides = {}) {
   };
 }
 
+test('runModel preserves first-turn and continuation tool-call payloads', { concurrency: false }, async () => {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async (url, init) => {
+    requests.push({
+      url: String(url),
+      body: JSON.parse(String(init?.body)),
+    });
+    return jsonResponse({
+      result: true,
+      errors: [],
+      taskid: '123',
+      socketaccesstoken: 'task-token',
+    });
+  };
+
+  const firstTurnParams = {
+    messages: [{ role: 'user', content: 'Check the weather.' }],
+    tools: [{
+      type: 'function',
+      function: {
+        name: 'get_weather',
+        parameters: {
+          type: 'object',
+          properties: { city: { type: 'string' } },
+          required: ['city'],
+        },
+      },
+    }],
+    tool_choice: 'auto',
+    parallel_tool_calls: true,
+    session_id: 'weather-session',
+  };
+  const continuationParams = {
+    previousTaskToken: 'previous-task-token',
+    toolOutputs: [{
+      call_id: 'call_01',
+      output: { temperature_c: 12 },
+    }],
+    session_id: 'weather-session',
+  };
+
+  try {
+    const client = new WiroClient('api-key');
+    await client.runModel('claude/fable-5', firstTurnParams);
+    await client.runModel('claude/fable-5', continuationParams);
+
+    assert.equal(requests.length, 2);
+    assert.equal(requests[0].url.endsWith('/Run/claude/fable-5'), true);
+    assert.equal(requests[1].url.endsWith('/Run/claude/fable-5'), true);
+    assert.deepEqual(requests[0].body, firstTurnParams);
+    assert.deepEqual(requests[1].body, continuationParams);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('waitForTask continues after DB task_error', { concurrency: false }, async () => {
   const originalFetch = globalThis.fetch;
   let calls = 0;

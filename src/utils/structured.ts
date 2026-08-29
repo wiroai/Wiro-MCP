@@ -2,10 +2,17 @@ import type {
   ExploreCategory,
   FileUploadItem,
   Task,
+  TaskFinishReason,
   TaskOutput,
+  TaskSegment,
+  TaskUsage,
   ToolListItem,
 } from '../types.js';
 import { formatPricing } from './format.js';
+import {
+  isToolCallSegment,
+  normalizeTaskRawContent,
+} from './task-segments.js';
 
 export type TaskState =
   | 'submitted'
@@ -27,6 +34,16 @@ export interface StructuredTaskOutput {
   url?: string;
   kind: 'image' | 'video' | 'audio' | 'text' | 'file';
   text?: string;
+  segments?: TaskSegment[];
+  finishreason?: TaskFinishReason;
+  usage?: TaskUsage;
+}
+
+type TaskOutputProjectionState = 'none' | 'valid' | 'invalid';
+
+interface TaskOutputProjection {
+  output: StructuredTaskOutput;
+  state: TaskOutputProjectionState;
 }
 
 export interface StructuredTaskReference {
@@ -99,7 +116,9 @@ export function toTaskReference(
 
   return compact({
     id: asOptionalString(task?.id || fallback.taskid),
-    token: asOptionalString(task?.socketaccesstoken || fallback.tasktoken),
+    token: asOptionalString(
+      task?.socketaccesstoken || fallback.tasktoken,
+    ),
     model,
     status: asOptionalString(task?.status),
     exitCode: asOptionalString(task?.pexit || undefined),
@@ -113,16 +132,41 @@ export function toStructuredTaskResult(
   fallback: { taskid?: string; tasktoken?: string; model?: string } = {},
 ): StructuredTaskResult {
   const state = getTaskState(task);
+  const requireCompleteTurn = state !== 'running';
+  const outputProjections = task.outputs?.map(
+    output => toStructuredTaskOutputProjection(output, requireCompleteTurn),
+  ) ?? [];
+  const hasInvalidProjection = outputProjections.some(
+    projection => projection.state === 'invalid',
+  );
+  const typedProjection = outputProjections.find(
+    projection => projection.state === 'valid'
+      && projection.output.segments !== undefined,
+  ) ?? outputProjections.find(projection => projection.state === 'valid');
   const result: StructuredTaskResult = {
     state,
     task: toTaskReference(task, fallback),
-    outputs: task.outputs?.map(toStructuredTaskOutput) ?? [],
+    outputs: outputProjections.map(projection => projection.output),
   };
 
-  if (task.debugoutput) result.response = task.debugoutput;
+  if (!hasInvalidProjection && typedProjection) {
+    const answer = (typedProjection.output.segments ?? [])
+      .flatMap(segment => segment.type === 'answer' ? [segment.text] : [])
+      .join('');
+    if (answer) result.response = answer;
+  } else if (!hasInvalidProjection && task.debugoutput) {
+    result.response = task.debugoutput;
+  }
   if (task.debugerror) result.error = task.debugerror;
-  if (state === 'running') {
+  if (!hasInvalidProjection && state === 'running') {
     result.nextAction = createWaitNextAction(result.task);
+  } else if (!hasInvalidProjection && state === 'completed') {
+    const continuation = createToolContinuationNextAction(
+      result.task,
+      result.outputs,
+      task.parameters,
+    );
+    if (continuation) result.nextAction = continuation;
   }
 
   return result;
@@ -220,6 +264,8 @@ export function toStructuredModelDetail(model: ToolListItem): {
         min?: number;
         max?: number;
         step?: number;
+        advanced: boolean;
+        jsonSchema?: Record<string, unknown>;
       }>;
     }>;
   };
@@ -247,6 +293,8 @@ export function toStructuredModelDetail(model: ToolListItem): {
           min: finiteNumber(item.min),
           max: finiteNumber(item.max),
           step: finiteNumber(item.step),
+          advanced: item.advanced === true || String(item.advanced) === 'true',
+          jsonSchema: parseJsonObject(item.jsonschema),
         })),
       })),
     },
@@ -313,22 +361,67 @@ export function toStructuredFile(file: FileUploadItem): {
   };
 }
 
-function toStructuredTaskOutput(output: TaskOutput): StructuredTaskOutput {
-  const rawText = output.content?.answer?.join('\n')
-    || output.content?.raw
-    || undefined;
+function toStructuredTaskOutputProjection(
+  output: TaskOutput,
+  requireCompleteTurn: boolean,
+): TaskOutputProjection {
+  const normalized = normalizeTaskRawContent(
+    output.contenttype === 'raw' ? output.content : undefined,
+    { requireCompleteTurn },
+  );
+  const hasTypedProjection = output.contenttype === 'raw' && (
+    normalized.hasSegments
+    || normalized.malformed
+    || normalized.finishreason !== undefined
+    || normalized.usage !== undefined
+  );
+  const state: TaskOutputProjectionState = normalized.malformed
+    ? 'invalid'
+    : hasTypedProjection
+      ? 'valid'
+      : 'none';
+  const segmentText = state === 'valid' && normalized.hasSegments
+    ? normalized.segments
+      .flatMap(segment => segment.type === 'answer' ? [segment.text] : [])
+      .join('')
+    : '';
+  const rawText = state === 'valid'
+    ? segmentText || undefined
+    : state === 'none'
+      ? getLegacyTaskOutputText(output)
+      : undefined;
   const mimeType = output.contenttype === 'raw'
     ? 'text/plain'
     : output.contenttype || 'application/octet-stream';
 
-  return compact({
-    name: output.name,
-    mimeType,
-    sizeBytes: parseNullableInteger(output.size),
-    url: output.url,
-    kind: getOutputKind(mimeType, rawText),
-    text: rawText,
-  });
+  return {
+    state,
+    output: compact({
+      name: output.name,
+      mimeType,
+      sizeBytes: parseNullableInteger(output.size),
+      url: output.url,
+      kind: getOutputKind(mimeType, rawText),
+      text: rawText,
+      segments: state === 'valid' && normalized.hasSegments
+        ? normalized.segments
+        : undefined,
+      finishreason: state === 'valid' ? normalized.finishreason : undefined,
+      usage: state === 'valid' ? normalized.usage : undefined,
+    }),
+  };
+}
+
+function getLegacyTaskOutputText(output: TaskOutput): string | undefined {
+  const answers = output.content?.answer;
+  if (Array.isArray(answers)
+    && answers.every(answer => typeof answer === 'string')) {
+    const text = answers.join('\n');
+    if (text) return text;
+  }
+  return typeof output.content?.raw === 'string' && output.content.raw
+    ? output.content.raw
+    : undefined;
 }
 
 function getOutputKind(
@@ -351,6 +444,46 @@ function createWaitNextAction(task: StructuredTaskReference): NextAction {
     tool: 'wait_for_task',
     arguments: args,
     reason: 'Continue this exact task. Do not call run_model again.',
+  };
+}
+
+function createToolContinuationNextAction(
+  task: StructuredTaskReference,
+  outputs: StructuredTaskOutput[],
+  parameters: Record<string, unknown>,
+): NextAction | undefined {
+  if (!task.token || !task.model) return undefined;
+
+  const calls = outputs.flatMap(output => {
+    if (output.finishreason !== 'tool_calls') {
+      return [];
+    }
+    return (output.segments ?? [])
+      .filter(isToolCallSegment)
+      .filter(call => call.status === 'completed');
+  });
+  if (calls.length === 0) return undefined;
+
+  const continuationParams: Record<string, unknown> = {
+    previousTaskToken: task.token,
+    toolOutputs: calls.map(call => ({
+      call_id: call.call_id,
+      output: '<tool result>',
+    })),
+  };
+  const sessionValue = parameters.session_id;
+  if (typeof sessionValue === 'string' && sessionValue.trim().length > 0) {
+    continuationParams.session_id = sessionValue;
+  }
+
+  return {
+    tool: 'run_model',
+    arguments: {
+      model: task.model,
+      params: continuationParams,
+    },
+    reason: 'Execute each completed tool call, replace every `<tool result>` '
+      + 'placeholder with that call’s result, then continue this task once.',
   };
 }
 
@@ -380,6 +513,20 @@ function asOptionalString(value: unknown): string | undefined {
   return value === undefined || value === null || value === ''
     ? undefined
     : String(value);
+}
+
+function parseJsonObject(value: unknown): Record<string, unknown> | undefined {
+  let parsed = value;
+  if (typeof value === 'string') {
+    try {
+      parsed = JSON.parse(value);
+    } catch {
+      return undefined;
+    }
+  }
+  return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
+    ? parsed as Record<string, unknown>
+    : undefined;
 }
 
 function compact<T extends Record<string, unknown>>(value: T): T {

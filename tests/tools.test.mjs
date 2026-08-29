@@ -148,6 +148,136 @@ test('get_task supports a short bounded wait without losing the identifier', asy
   });
 });
 
+test('get_task returns a function-call continuation in run_model params', async () => {
+  const detail = completedDetail();
+  detail.tasklist[0].parameters = { session_id: 'weather-session' };
+  detail.tasklist[0].outputs = [{
+    contenttype: 'raw',
+    content: {
+      segments: [{
+        type: 'function_call',
+        id: 'fc_01',
+        call_id: 'call_01',
+        name: 'get_weather',
+        arguments: '{"city":"Paris"}',
+        status: 'completed',
+      }],
+      finishreason: 'tool_calls',
+    },
+  }];
+  detail.tasklist[0].debugoutput = 'raw debug transport';
+
+  await withClient({ getTask: async () => detail }, async client => {
+    const result = await client.callTool({
+      name: 'get_task',
+      arguments: { taskid: '123' },
+    });
+
+    assert.notEqual(result.isError, true);
+    assert.equal(result.structuredContent.response, undefined);
+    assert.equal(
+      result.structuredContent.outputs[0].segments[0].call_id,
+      'call_01',
+    );
+    assert.deepEqual(result.structuredContent.nextAction.arguments, {
+      model: 'owner/model',
+      params: {
+        previousTaskToken: 'task-token',
+        toolOutputs: [{
+          call_id: 'call_01',
+          output: '<tool result>',
+        }],
+        session_id: 'weather-session',
+      },
+    });
+  });
+});
+
+test('get_task omits invalid typed transport without public parser state', async () => {
+  const detail = completedDetail();
+  detail.tasklist[0].outputs = [{
+    contenttype: 'raw',
+    content: {
+      raw: 'signed raw transport must stay private',
+      segments: { type: 'answer', text: 'not an array' },
+      finishreason: 'stop',
+    },
+  }];
+  detail.tasklist[0].debugoutput = 'debug transport must stay private';
+
+  await withClient({ getTask: async () => detail }, async client => {
+    const result = await client.callTool({
+      name: 'get_task',
+      arguments: { taskid: '123' },
+    });
+
+    assert.notEqual(result.isError, true);
+    assert.equal(result.structuredContent.response, undefined);
+    assert.equal(result.structuredContent.nextAction, undefined);
+    assert.equal(
+      Object.hasOwn(result.structuredContent.outputs[0], 'malformed'),
+      false,
+    );
+    assert.doesNotMatch(
+      JSON.stringify(result.structuredContent),
+      /signed raw transport|debug transport/,
+    );
+    assert.doesNotMatch(
+      result.content.map(block => block.text ?? '').join('\n'),
+      /signed raw transport|debug transport/,
+    );
+  });
+});
+
+test('run_model returns custom tool calls without exposing debug transport', async () => {
+  const detail = completedDetail();
+  detail.tasklist[0].outputs = [{
+    contenttype: 'raw',
+    content: {
+      segments: [{
+        type: 'custom_tool_call',
+        id: 'ct_01',
+        call_id: 'call_custom_01',
+        name: 'shell_grammar',
+        input: 'status --short',
+        status: 'completed',
+      }],
+      finishreason: 'tool_calls',
+    },
+  }];
+  detail.tasklist[0].debugoutput = 'raw debug transport';
+  const fakeWiroClient = {
+    runModel: async () => ({
+      result: true,
+      errors: [],
+      taskid: '123',
+      socketaccesstoken: 'task-token',
+    }),
+    waitForTask: async () => detail,
+  };
+
+  await withClient(fakeWiroClient, async client => {
+    const result = await client.callTool({
+      name: 'run_model',
+      arguments: {
+        model: 'owner/model',
+        params: { prompt: 'test' },
+      },
+    });
+
+    assert.notEqual(result.isError, true);
+    assert.equal(result.structuredContent.response, undefined);
+    assert.equal(
+      result.structuredContent.outputs[0].segments[0].input,
+      'status --short',
+    );
+    assert.deepEqual(
+      result.structuredContent.nextAction.arguments.params.toolOutputs,
+      [{ call_id: 'call_custom_01', output: '<tool result>' }],
+    );
+  });
+});
+
 test('all 13 tools advertise output schemas and annotations', async () => {
   await withClient({}, async client => {
     const result = await client.listTools();
@@ -170,10 +300,39 @@ test('all 13 tools advertise output schemas and annotations', async () => {
       const tool = result.tools.find(candidate => candidate.name === name);
       assert.match(tool?.description ?? '', /present every returned media resource/i);
     }
+
+    const taskTool = result.tools.find(tool => tool.name === 'get_task');
+    const outputProperties = taskTool?.outputSchema?.properties?.outputs?.items
+      ?.properties;
+    assert.ok(outputProperties?.segments);
+    assert.ok(outputProperties?.finishreason);
+    assert.ok(outputProperties?.usage);
+    assert.equal(outputProperties?.malformed, undefined);
+
+    const listTool = result.tools.find(tool => tool.name === 'list_tasks');
+    const listOutputProperties = listTool?.outputSchema?.properties?.tasks?.items
+      ?.properties?.outputs?.items?.properties;
+    assert.ok(listOutputProperties?.usage);
+    for (const omitted of ['text', 'segments', 'finishreason']) {
+      assert.equal(listOutputProperties?.[omitted], undefined);
+    }
   });
 });
 
 test('list_tasks returns structured history and chains into get_task', async () => {
+  const historyDetail = completedDetail();
+  historyDetail.tasklist[0].outputs.push({
+    contenttype: 'raw',
+    content: {
+      segments: [{ type: 'answer', text: 'Detailed text is omitted here.' }],
+      finishreason: 'stop',
+      usage: {
+        input_tokens: 3,
+        output_tokens: 4,
+        total_tokens: 7,
+      },
+    },
+  });
   const fakeWiroClient = {
     listTasks: async params => {
       assert.deepEqual(params, {
@@ -181,7 +340,7 @@ test('list_tasks returns structured history and chains into get_task', async () 
         limit: 20,
         model: undefined,
       });
-      return completedDetail();
+      return historyDetail;
     },
     getTask: async ({ taskid }) => {
       assert.equal(taskid, '123');
@@ -199,6 +358,15 @@ test('list_tasks returns structured history and chains into get_task', async () 
     assert.equal(history.structuredContent.tasks.length, 1);
     assert.equal(history.structuredContent.tasks[0].state, 'completed');
     assert.equal(history.structuredContent.tasks[0].task.model, 'owner/model');
+    const historyRawOutput = history.structuredContent.tasks[0].outputs[1];
+    assert.deepEqual(historyRawOutput.usage, {
+      input_tokens: 3,
+      output_tokens: 4,
+      total_tokens: 7,
+    });
+    for (const omitted of ['text', 'segments', 'finishreason']) {
+      assert.equal(Object.hasOwn(historyRawOutput, omitted), false);
+    }
     assert.deepEqual(history.structuredContent.nextAction.arguments, {
       taskid: '123',
     });
