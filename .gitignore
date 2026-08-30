@@ -5,3 +5,6 @@ dist/
 !.env.example
 .cursor/
 *.tgz
+
+# Local Claude Code skills (internal, never publish)
+.claude/
