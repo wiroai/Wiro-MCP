@@ -13,6 +13,7 @@ import type {
   Task,
 } from './types.js';
 import { TERMINAL_STATUSES } from './types.js';
+import { fetchPublicFile } from './utils/remote-file.js';
 
 export type {
   ListTasksParams,
@@ -314,12 +315,9 @@ export class WiroClient {
   }
 
   async uploadFile(fileUrl: string, fileName?: string): Promise<FileUploadResponse> {
-    const fileResponse = await fetch(fileUrl);
-    if (!fileResponse.ok) {
-      throw new Error(`Failed to download file from ${fileUrl}: ${fileResponse.status}`);
-    }
-
-    const blob = await fileResponse.blob();
+    // Public http(s) hosts only; see utils/remote-file.ts.
+    const remote = await fetchPublicFile(fileUrl);
+    const blob = new Blob([remote.data], remote.contentType ? { type: remote.contentType } : {});
     const resolvedName = fileName
       ?? fileUrl.split('/').pop()?.split('?')[0]
       ?? 'upload';
