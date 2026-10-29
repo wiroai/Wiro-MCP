@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import test from 'node:test';
 import {
+  TaskPollingError,
   TaskWaitTimeoutError,
+  WiroApiError,
   WiroClient,
 } from '../dist/client.js';
 
@@ -313,5 +315,135 @@ test('trusted proxy context signs the caller IP and API path', { concurrency: fa
   } finally {
     globalThis.fetch = originalFetch;
     Date.now = originalNow;
+  }
+});
+
+// What the Wiro API answers for a project with signature auth when the request
+// has only x-api-key.
+const SIGNATURE_REQUIRED = {
+  result: false,
+  errors: [{
+    code: 0,
+    message: 'Project requires signature authentication. '
+      + 'x-signature and x-nonce headers are required.',
+  }],
+};
+
+test('a signature client signs every request, a key-only client does not', { concurrency: false }, async () => {
+  const originalFetch = globalThis.fetch;
+  const headers = [];
+  globalThis.fetch = async (_url, init) => {
+    headers.push(init?.headers);
+    return jsonResponse({ result: true, errors: [], total: '0', tasklist: [] });
+  };
+
+  try {
+    await new WiroClient('api-key', 'api-secret').listTasks();
+    await new WiroClient('api-key').listTasks();
+
+    const [signed, keyOnly] = headers;
+    assert.equal(signed['x-api-key'], 'api-key');
+    assert.equal(
+      signed['x-signature'],
+      crypto.createHmac('sha256', 'api-key')
+        .update(`api-secret${signed['x-nonce']}`)
+        .digest('hex'),
+    );
+    assert.equal(keyOnly['x-api-key'], 'api-key');
+    assert.equal(Object.hasOwn(keyOnly, 'x-signature'), false);
+    assert.equal(Object.hasOwn(keyOnly, 'x-nonce'), false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('a key-only client on a signature-auth project says where the secret goes', { concurrency: false }, async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => jsonResponse(SIGNATURE_REQUIRED, 401);
+
+  try {
+    const client = new WiroClient('api-key', undefined, undefined, {
+      missingSecretHint: 'Enter API_KEY:API_SECRET as the API key.',
+    });
+    await assert.rejects(client.listTasks(), error => {
+      assert.ok(error instanceof WiroApiError);
+      assert.equal(error.status, 401);
+      assert.equal(
+        error.message,
+        'Wiro API error 401: Enter API_KEY:API_SECRET as the API key.',
+      );
+      assert.equal(error.responseBody, JSON.stringify(SIGNATURE_REQUIRED));
+      return true;
+    });
+
+    await assert.rejects(
+      new WiroClient('api-key').runModel('owner/model', {}),
+      {
+        message: 'Wiro API error 401: This project uses signature-based auth. '
+          + 'Pass its API secret to WiroClient along with the API key.',
+      },
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('other 401s keep the API message', { concurrency: false }, async () => {
+  const originalFetch = globalThis.fetch;
+  let body;
+  globalThis.fetch = async () => jsonResponse(body, 401);
+
+  try {
+    body = {
+      result: false,
+      errors: [{ code: 0, message: 'Project authorization is not founded.' }],
+    };
+    await assert.rejects(new WiroClient('api-key').listTasks(), error => {
+      assert.equal(error.hint, undefined);
+      assert.equal(error.message, `Wiro API error 401: ${JSON.stringify(body)}`);
+      return true;
+    });
+
+    body = {
+      result: false,
+      errors: [{ code: 0, message: 'Project authorization is not valid.' }],
+    };
+    await assert.rejects(new WiroClient('api-key', 'wrong-secret').listTasks(), error => {
+      assert.equal(error.hint, undefined);
+      assert.equal(error.message, `Wiro API error 401: ${JSON.stringify(body)}`);
+      return true;
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('waitForTask stops on a missing secret and keeps the hint', { concurrency: false }, async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls += 1;
+    return jsonResponse(SIGNATURE_REQUIRED, 401);
+  };
+
+  try {
+    const client = new WiroClient('api-key', undefined, undefined, {
+      missingSecretHint: 'Enter API_KEY:API_SECRET as the API key.',
+    });
+    await assert.rejects(
+      client.waitForTask('task-token', 100, { pollIntervalMs: 1 }),
+      error => {
+        assert.ok(error instanceof TaskPollingError);
+        assert.equal(
+          error.message,
+          'Task status request failed with HTTP 401. '
+            + 'Enter API_KEY:API_SECRET as the API key.',
+        );
+        return true;
+      },
+    );
+    assert.equal(calls, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
   }
 });

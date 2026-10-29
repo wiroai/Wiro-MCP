@@ -22,7 +22,10 @@ if (!apiKey) {
   process.exit(1);
 }
 
-const client = new WiroClient(apiKey, apiSecret, baseUrl);
+const client = new WiroClient(apiKey, apiSecret, baseUrl, {
+  missingSecretHint: 'This project uses signature-based auth. '
+    + 'Set WIRO_API_SECRET to the project\'s API secret in your MCP server config.',
+});
 const server = createMcpServer(client);
 const transport = new StdioServerTransport();
 

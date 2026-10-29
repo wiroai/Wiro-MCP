@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { TaskWaitTimeoutError } from '../dist/client.js';
+import { TaskWaitTimeoutError, WiroClient } from '../dist/client.js';
 import { createMcpServer } from '../dist/server.js';
 
 function runningDetail() {
@@ -383,4 +383,45 @@ test('list_tasks returns structured history and chains into get_task', async () 
       && block.annotations?.audience?.includes('assistant')
       && /Present every generated media output/.test(block.text)), true);
   });
+});
+
+test('tools tell a key-only caller of a signature-auth project what to enter', { concurrency: false }, async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    result: false,
+    errors: [{
+      code: 0,
+      message: 'Project requires signature authentication. '
+        + 'x-signature and x-nonce headers are required.',
+    }],
+  }), { status: 401, headers: { 'Content-Type': 'application/json' } });
+
+  const wiroClient = new WiroClient('api-key', undefined, 'https://api.example/v1', {
+    missingSecretHint: 'This project uses signature-based auth. '
+      + 'Enter API_KEY:API_SECRET as the API key.',
+  });
+  const calls = [
+    ['run_model', { model: 'owner/model', params: { prompt: 'test' } }],
+    ['wait_for_task', { tasktoken: 'task-token' }],
+    ['get_task', { tasktoken: 'task-token' }],
+    ['get_task', { tasktoken: 'task-token', wait_seconds: 5 }],
+    ['list_tasks', {}],
+    ['get_task_price', { tasktoken: 'task-token' }],
+    ['cancel_task', { taskid: '123' }],
+    ['kill_task', { taskid: '123' }],
+  ];
+
+  try {
+    await withClient(wiroClient, async client => {
+      for (const [name, args] of calls) {
+        const result = await client.callTool({ name, arguments: args });
+        const text = result.content[0].text;
+        assert.equal(result.isError, true, name);
+        assert.match(text, /Enter API_KEY:API_SECRET as the API key\./, name);
+        assert.doesNotMatch(text, /x-nonce/, name);
+      }
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });

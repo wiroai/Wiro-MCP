@@ -285,6 +285,14 @@ const client = new WiroClient('your-api-key', 'your-api-secret');
 const server = createMcpServer(client);
 ```
 
+If a project uses signature-based auth and no API secret was given, tool errors say that the secret is missing. When your server takes credentials in its own way, tell users where the secret goes:
+
+```typescript
+const client = new WiroClient(apiKey, apiSecret, undefined, {
+  missingSecretHint: 'This project uses signature-based auth. Enter API_KEY:API_SECRET as the API key.',
+});
+```
+
 ### Exports
 
 | Export | Description |

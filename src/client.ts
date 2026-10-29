@@ -49,6 +49,8 @@ const FAST_POLL_INTERVAL = 2000;
 const NORMAL_POLL_INTERVAL = 5000;
 const SLOW_POLL_INTERVAL = 10000;
 const DEFAULT_MAX_CONSECUTIVE_ERRORS = 5;
+const DEFAULT_MISSING_SECRET_HINT = 'This project uses signature-based auth. '
+  + 'Pass its API secret to WiroClient along with the API key.';
 
 export interface TaskReference {
   tasktoken?: string;
@@ -72,17 +74,23 @@ export interface TrustedProxyContext {
 
 export interface WiroClientOptions {
   trustedProxy?: TrustedProxyContext;
+  // Shown instead of the API's "x-signature and x-nonce headers are required"
+  // error when the project needs signature auth and no API secret was given.
+  // Say where your users enter the secret.
+  missingSecretHint?: string;
 }
 
 export class WiroApiError extends Error {
   readonly status: number;
   readonly responseBody: string;
+  readonly hint?: string;
 
-  constructor(status: number, responseBody: string) {
-    super(`Wiro API error ${status}: ${responseBody}`);
+  constructor(status: number, responseBody: string, hint?: string) {
+    super(`Wiro API error ${status}: ${hint ?? responseBody}`);
     this.name = 'WiroApiError';
     this.status = status;
     this.responseBody = responseBody;
+    this.hint = hint;
   }
 }
 
@@ -117,6 +125,7 @@ export class WiroClient {
   private readonly apiSecret?: string;
   private readonly baseUrl: string;
   private readonly trustedProxy?: TrustedProxyContext;
+  private readonly missingSecretHint: string;
   public readonly authType: 'signature' | 'apikey-only';
 
   constructor(
@@ -138,7 +147,21 @@ export class WiroClient {
     this.apiSecret = apiSecret;
     this.baseUrl = baseUrl ?? DEFAULT_BASE_URL;
     this.trustedProxy = options.trustedProxy;
+    this.missingSecretHint = options.missingSecretHint ?? DEFAULT_MISSING_SECRET_HINT;
     this.authType = apiSecret ? 'signature' : 'apikey-only';
+  }
+
+  // Without a secret, the only 401 that mentions a signature is a project
+  // that requires signature auth.
+  private toApiError(status: number, responseBody: string): WiroApiError {
+    const missingSecret = status === 401
+      && this.authType === 'apikey-only'
+      && /signature/i.test(responseBody);
+    return new WiroApiError(
+      status,
+      responseBody,
+      missingSecret ? this.missingSecretHint : undefined,
+    );
   }
 
   private getAuthHeaders(pathname: string): Record<string, string> {
@@ -194,7 +217,7 @@ export class WiroClient {
     const text = await response.text();
 
     if (!response.ok) {
-      throw new WiroApiError(response.status, text);
+      throw this.toApiError(response.status, text);
     }
 
     try {
@@ -337,7 +360,7 @@ export class WiroClient {
 
     const text = await response.text();
     if (!response.ok) {
-      throw new Error(`Wiro API error ${response.status}: ${text}`);
+      throw this.toApiError(response.status, text);
     }
 
     try {
@@ -418,7 +441,8 @@ export class WiroClient {
           && error.status !== 408
           && error.status !== 429) {
           throw new TaskPollingError(
-            `Task status request failed with HTTP ${error.status}`,
+            `Task status request failed with HTTP ${error.status}`
+              + (error.hint ? `. ${error.hint}` : ''),
             lastDetail,
             error,
           );
