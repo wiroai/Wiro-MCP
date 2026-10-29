@@ -8,7 +8,7 @@ import type {
   TaskUsage,
   ToolListItem,
 } from '../types.js';
-import { formatPricing } from './format.js';
+import { formatPricing, toParameterOption } from './format.js';
 import {
   isToolCallSegment,
   normalizeTaskRawContent,
@@ -286,10 +286,7 @@ export function toStructuredModelDetail(model: ToolListItem): {
           required: item.required === true || String(item.required) === 'true',
           placeholder: item.placeholder == null ? undefined : String(item.placeholder),
           note: item.note == null ? undefined : String(item.note),
-          options: (item.options ?? []).map(option => ({
-            label: String(option.label),
-            value: String(option.value),
-          })),
+          options: (item.options ?? []).map(toParameterOption),
           min: finiteNumber(item.min),
           max: finiteNumber(item.max),
           step: finiteNumber(item.step),

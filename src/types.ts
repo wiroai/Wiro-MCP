@@ -123,6 +123,18 @@ export interface TaskDetailResponse {
 
 export type TaskListResponse = TaskDetailResponse;
 
+// Select rows list options as {value, text} or {value, label}, multiselect rows
+// as {id, name}, and model pickers as whole model rows.
+export interface ToolParameterOption {
+  value?: string | number;
+  label?: string;
+  text?: string;
+  id?: string | number;
+  name?: string;
+  slugowner?: string;
+  slugproject?: string;
+}
+
 export interface ToolParameterItem {
   id: string;
   type: string;
@@ -132,7 +144,7 @@ export interface ToolParameterItem {
   required?: boolean;
   placeholder?: string;
   note?: string;
-  options?: Array<{ label: string; value: string }>;
+  options?: ToolParameterOption[];
   min?: number;
   max?: number;
   step?: number;

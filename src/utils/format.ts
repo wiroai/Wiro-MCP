@@ -3,11 +3,20 @@ import type {
   TaskSegment,
   TaskUsage,
   ToolListItem,
+  ToolParameterOption,
 } from '../types.js';
 import {
   isToolCallSegment,
   normalizeTaskRawContent,
 } from './task-segments.js';
+
+// The value Wiro accepts for an option, and a label to show next to it. Wiro
+// checks an option's value, or its id when it has no value.
+export function toParameterOption(option: ToolParameterOption): { label: string; value: string } {
+  const value = String(option.value ?? option.id ?? '');
+  const modelSlug = option.slugowner && option.slugproject ? `${option.slugowner}/${option.slugproject}` : undefined;
+  return { label: String(option.label ?? option.text ?? option.name ?? modelSlug ?? value), value };
+}
 
 export function formatTaskResult(task: Task): string {
   const lines: string[] = [];
@@ -339,7 +348,10 @@ export function formatModelSchema(model: ToolListItem): string {
         if (param.type === 'json' || param.type === 'json-array') lines.push(`  Pass this as a structured JSON value inside the ordinary \`params\` object.`);
 
         if (param.options?.length) {
-          const optionValues = param.options.map(o => `\`${o.value}\``).join(', ');
+          const optionValues = param.options
+            .map(toParameterOption)
+            .map(o => (o.label === o.value ? `\`${o.value}\`` : `\`${o.value}\` (${o.label})`))
+            .join(', ');
           lines.push(`  Options: ${optionValues}`);
         }
 
