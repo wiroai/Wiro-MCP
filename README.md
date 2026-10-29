@@ -1,20 +1,23 @@
 <div align="center">
 
-<img src="https://wiro.ai/images/logos/logo/logo.png" alt="Wiro" width="180" />
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://wiro.ai/images/logos/logo/logo-white.png">
+  <img src="https://wiro.ai/images/logos/logo/logo-black.png" alt="Wiro AI" width="180">
+</picture>
 
 # Wiro MCP Server
 
-**Official [MCP](https://modelcontextprotocol.io/) server for [Wiro AI](https://wiro.ai/)** — access all AI models on Wiro from Cursor, Claude, Windsurf, and any MCP-compatible AI assistant.
+Official MCP server for Wiro AI: search, price and run image, video, audio and LLM models from Cursor, Claude Code, Claude Desktop, Windsurf and any other MCP client.
 
-[![npm](https://img.shields.io/badge/npm-@wiro--ai/wiro--mcp-00c38c?style=for-the-badge&logo=npm&logoColor=white)](https://www.npmjs.com/package/@wiro-ai/wiro-mcp)
-[![MCP](https://img.shields.io/badge/MCP-compatible-333?style=for-the-badge)](https://modelcontextprotocol.io/)
-[![MIT](https://img.shields.io/badge/license-MIT-6f42c1?style=for-the-badge)](./LICENSE)
+[![npm](https://img.shields.io/npm/v/@wiro-ai/wiro-mcp?style=for-the-badge&color=111111)](https://www.npmjs.com/package/@wiro-ai/wiro-mcp) [![Node.js 20+](https://img.shields.io/badge/Node.js-20%2B-111111?style=for-the-badge&color=111111)](#quick-start) [![MCP server](https://img.shields.io/badge/MCP-server-111111?style=for-the-badge&color=111111)](https://modelcontextprotocol.io/) [![License: MIT](https://img.shields.io/badge/license-MIT-111111?style=for-the-badge&color=111111)](./LICENSE)
 
-[Official MCP Server](https://wiro.ai/docs/wiro-mcp-server) · [Self-Hosted MCP](https://wiro.ai/docs/mcp-self-hosted) · [Models](https://wiro.ai/models) · [Dashboard](https://wiro.ai/panel) · [Docs](https://wiro.ai/docs)
+[Website](https://wiro.ai) · [Models](https://wiro.ai/models) · [Docs](https://wiro.ai/docs/wiro-mcp-server) · [Dashboard](https://wiro.ai/panel)
 
-<img src="https://wiro.ai/images/koala/accent-heavy-koala.png" alt="Wiro Koala mascot" width="60" />
+<img src="https://wiro.ai/images/koala/accent-heavy-koala.png" alt="Wiro AI koala mascot" width="60" />
 
 </div>
+
+`@wiro-ai/wiro-mcp` is a TypeScript [Model Context Protocol](https://modelcontextprotocol.io/) server that runs locally over stdio with `npx`. Its 13 tools let an AI assistant search the Wiro AI model catalog, read a model's parameters and price, run it and wait for the result, upload input files, browse past tasks and search the Wiro AI docs. The hosted server at `https://mcp.wiro.ai/v1` serves the same tools with nothing to install.
 
 ## Quick Start
 
@@ -27,7 +30,7 @@ Sign up at [wiro.ai](https://wiro.ai/) and create a project at [wiro.ai/panel/pr
 
 ### 2. Add to Your AI Assistant
 
-**Cursor** — open MCP settings (`Cmd+Shift+P` → "Open MCP settings") and add:
+**Cursor**: open MCP settings (`Cmd+Shift+P` → "Open MCP settings") and add:
 
 ```json
 {
@@ -52,7 +55,7 @@ claude mcp add wiro -- npx -y @wiro-ai/wiro-mcp
 
 Then set environment variables `WIRO_API_KEY` and `WIRO_API_SECRET`.
 
-**Claude Desktop** — add to `claude_desktop_config.json`:
+**Claude Desktop**: add to `claude_desktop_config.json`:
 
 ```json
 {
@@ -70,7 +73,7 @@ Then set environment variables `WIRO_API_KEY` and `WIRO_API_SECRET`.
 }
 ```
 
-**Windsurf** — add to MCP settings:
+**Windsurf**: add to MCP settings:
 
 ```json
 {
@@ -87,7 +90,7 @@ Then set environment variables `WIRO_API_KEY` and `WIRO_API_SECRET`.
 }
 ```
 
-**OpenClaw** — configure a remote server under `mcp.servers`:
+**OpenClaw**: configure a remote server under `mcp.servers`:
 
 ```json
 {
@@ -106,12 +109,13 @@ Then set environment variables `WIRO_API_KEY` and `WIRO_API_SECRET`.
 }
 ```
 
-Set `WIRO_MCP_AUTH` in OpenClaw's environment, then verify with
+Set `WIRO_MCP_AUTH` in OpenClaw's environment to your API key, or to
+`API_KEY:API_SECRET` for a project with signature-based auth. Then verify with
 `openclaw mcp doctor wiro --probe`. On older OpenClaw releases without that
 probe command, use `openclaw mcp show wiro`, restart OpenClaw, and run
 `/tools verbose`.
 
-**Hermes** — add to `~/.hermes/config.yaml`:
+**Hermes**: add to `~/.hermes/config.yaml`:
 
 ```yaml
 mcp_servers:
@@ -123,7 +127,7 @@ mcp_servers:
     connect_timeout: 10
 ```
 
-Store `WIRO_MCP_AUTH` in `~/.hermes/.env`, then run `/reload-mcp` and `/tools`.
+Store `WIRO_MCP_AUTH` (your API key, or `API_KEY:API_SECRET`) in `~/.hermes/.env`, then run `/reload-mcp` and `/tools`.
 
 ### 3. Start Using
 
@@ -132,13 +136,13 @@ Ask your AI assistant:
 - *"Generate a photorealistic image of a mountain lake at sunset"*
 - *"What video generation models are available on Wiro?"*
 - *"Show me the parameters for openai/sora-2"*
-- *"Create a 5-second video with Kling V3 — a drone shot over mountains"*
+- *"Create a 5-second video with Kling V3: a drone shot over mountains"*
 - *"Check the status of my last task"*
 - *"Show my latest productions and open the newest result"*
 
 ## Authentication
 
-Wiro supports two authentication types (chosen when creating a project):
+Wiro AI supports two authentication types, chosen when you create a project:
 
 ### Signature-Based (Recommended)
 
@@ -157,6 +161,10 @@ Simpler. Only requires the API key. Omit `WIRO_API_SECRET` from your config.
 WIRO_API_KEY=your-api-key
 ```
 
+The hosted server takes the same credentials as a bearer token:
+`Authorization: Bearer API_KEY:API_SECRET` for a signature-based project, or
+`Authorization: Bearer API_KEY` for an API Key Only project.
+
 ## Available Tools
 
 | Tool | Description |
@@ -164,15 +172,15 @@ WIRO_API_KEY=your-api-key
 | `search_models` | Search and browse AI models by keyword, category, or owner |
 | `get_model_schema` | Get full parameter schema and pricing for any model |
 | `recommend_model` | Describe what you want to build, get model recommendations by relevance |
-| `explore` | Browse curated models organized by category — no parameters needed |
-| `run_model` | Run any model — waits up to 45s by default, then returns a recoverable task token |
+| `explore` | Browse curated models grouped by category, no parameters needed |
+| `run_model` | Run any model, waiting up to 45s by default before it returns a recoverable task token |
 | `wait_for_task` | Continue waiting for an existing task without submitting or billing a duplicate run |
 | `get_task` | Check task status immediately or wait up to 45s with `wait_seconds` |
 | `list_tasks` | Browse authenticated task history across conversations, then continue with `get_task` |
 | `get_task_price` | Get the cost of a completed task |
 | `cancel_task` | Cancel a queued task |
 | `kill_task` | Kill a running task |
-| `upload_file` | Upload a file from URL for use as model input |
+| `upload_file` | Upload a file from a public http(s) URL (up to 200 MB) for use as model input |
 | `search_docs` | Search the Wiro documentation for guides and API references |
 
 For long generations, `run_model` returns the existing task ID and token when its
@@ -261,17 +269,22 @@ Cross-conversation history:
 
 ## Hosted MCP Server
 
-Wiro also provides a hosted MCP server at `https://mcp.wiro.ai/v1` that requires no local installation. See the [MCP Server documentation](https://wiro.ai/docs/wiro-mcp-server) for setup instructions.
+Wiro AI also hosts the same tools at `https://mcp.wiro.ai/v1` over streamable HTTP, so nothing has to be installed locally. Send your credentials in the `Authorization` header as shown under [Authentication](#authentication). The [MCP Server documentation](https://wiro.ai/docs/wiro-mcp-server) has setup instructions for each client.
+
+### Install as a plugin
+
+[wiroai/Wiro-Plugin](https://github.com/wiroai/Wiro-Plugin) packages the hosted server as a plugin for Cursor, Claude Code, Gemini CLI and Devin. Its README has the install command for each of them.
 
 ## Documentation
 
-- [MCP Server (Hosted)](https://wiro.ai/docs/wiro-mcp-server) — setup guides for Cursor, Claude Code, Claude Desktop, Windsurf, OpenClaw, and Hermes
-- [Self-Hosted MCP](https://wiro.ai/docs/mcp-self-hosted) — run locally with npx, environment variables, library usage
-- [Authentication](https://wiro.ai/docs/authentication) — signature-based vs API Key Only
-- [Run a Model](https://wiro.ai/docs/run-a-model) — how the Run endpoint works
-- [Tasks](https://wiro.ai/docs/tasks) — task lifecycle, statuses, determining success
-- [Concurrency Limits](https://wiro.ai/docs/concurrency-limits) — concurrent task limits based on balance
-- [Error Reference](https://wiro.ai/docs/error-reference) — error codes and handling
+- [MCP Server (Hosted)](https://wiro.ai/docs/wiro-mcp-server): setup guides for Cursor, Claude Code, Claude Desktop, Windsurf, Gemini CLI, Devin, OpenClaw, and Hermes
+- [Self-Hosted MCP](https://wiro.ai/docs/mcp-self-hosted): run locally with npx, environment variables, library usage
+- [Node.js Library](https://wiro.ai/docs/nodejs-library): use `WiroClient` from this package in your own Node.js or TypeScript code
+- [Authentication](https://wiro.ai/docs/authentication): signature-based vs API Key Only
+- [Run a Model](https://wiro.ai/docs/run-a-model): how the Run endpoint works
+- [Tasks](https://wiro.ai/docs/tasks): task lifecycle, statuses, determining success
+- [Concurrency Limits](https://wiro.ai/docs/concurrency-limits): concurrent task limits based on balance
+- [Error Reference](https://wiro.ai/docs/error-reference): error codes and handling
 
 ## Using as a Library
 
@@ -315,24 +328,24 @@ import { registerTools } from '@wiro-ai/wiro-mcp/tools';
 | `WIRO_API_SECRET` | No | Your Wiro project API secret (for signature auth) |
 | `WIRO_API_BASE_URL` | No | Override API base URL (default: `https://api.wiro.ai/v1`) |
 
-## Links
+## More from Wiro AI
 
-- [Wiro AI](https://wiro.ai/)
-- [Dashboard](https://wiro.ai/panel)
-- [Models](https://wiro.ai/models)
-- [API Documentation](https://wiro.ai/docs)
-- [Create Project](https://wiro.ai/panel/project/new)
+| Repository | What it is |
+| --- | --- |
+| [Wiro-Plugin](https://github.com/wiroai/Wiro-Plugin) | Wiro AI plugin for Cursor, Claude Code, Gemini CLI and Devin |
+| [Swift-QuickStart](https://github.com/wiroai/Swift-QuickStart) | WiroKit, the Wiro AI SDK for iOS |
+| [Kotlin-QuickStart](https://github.com/wiroai/Kotlin-QuickStart) | WiroKit, the Wiro AI SDK for Android |
+| [Dart-QuickStart](https://github.com/wiroai/Dart-QuickStart) | Wiro AI SDK for Dart and Flutter |
+| [ReactNative-QuickStart](https://github.com/wiroai/ReactNative-QuickStart) | WiroKit, the Wiro AI SDK for React Native |
+| [Swift-Realtime](https://github.com/wiroai/Swift-Realtime) | Realtime voice AI example for iOS |
+| [Kotlin-Realtime](https://github.com/wiroai/Kotlin-Realtime) | Realtime voice AI example for Android |
+| [Dart-Realtime](https://github.com/wiroai/Dart-Realtime) | Realtime voice AI example for Flutter |
+| [ReactNative-Realtime](https://github.com/wiroai/ReactNative-Realtime) | Realtime voice AI example for React Native |
+| [n8n-nodes-wiroai](https://github.com/wiroai/n8n-nodes-wiroai) | Wiro AI nodes for n8n |
+| [Wiro-Docs](https://github.com/wiroai/Wiro-Docs) | Source of the Wiro AI API docs |
+
+[Website](https://wiro.ai) · [Models](https://wiro.ai/models) · [Docs](https://wiro.ai/docs) · [X](https://x.com/wiroai)
 
 ## License
 
-MIT — see [LICENSE](./LICENSE) for details.
-
----
-
-<div align="center">
-
-**Built with ❤️ by the Wiro team**
-
-🌐 [wiro.ai](https://wiro.ai) · [GitHub @wiroai](https://github.com/wiroai)
-
-</div>
+MIT, see [LICENSE](./LICENSE).
