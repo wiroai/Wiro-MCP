@@ -49,14 +49,14 @@
       "headers": [
         {
           "name": "Authorization",
-          "description": "Your Wiro project credentials",
+          "description": "Optional. Leave it out to sign in with your Wiro account in the browser, or send your project credentials.",
           "value": "Bearer {wiro_credentials}",
-          "isRequired": true,
+          "isRequired": false,
           "isSecret": true,
           "variables": {
             "wiro_credentials": {
               "description": "API key, or API_KEY:API_SECRET for projects that use signature-based auth. Create a project at https://wiro.ai/panel/project/new",
-              "isRequired": true,
+              "isRequired": false,
               "isSecret": true,
               "format": "string"
             }
