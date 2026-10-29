@@ -3,7 +3,7 @@
   "name": "ai.wiro/mcp",
   "title": "Wiro AI",
   "description": "Run image, video, audio and LLM models on Wiro AI straight from your AI assistant.",
-  "version": "1.3.3",
+  "version": "1.3.4",
   "websiteUrl": "https://wiro.ai/docs/wiro-mcp-server",
   "repository": {
     "url": "https://github.com/wiroai/Wiro-MCP",
@@ -20,7 +20,7 @@
     {
       "registryType": "npm",
       "identifier": "@wiro-ai/wiro-mcp",
-      "version": "1.3.3",
+      "version": "1.3.4",
       "transport": {
         "type": "stdio"
       },
