@@ -1,0 +1,68 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "ai.wiro/mcp",
+  "title": "Wiro AI",
+  "description": "Run image, video, audio and LLM models on Wiro AI straight from your AI assistant.",
+  "version": "1.3.2",
+  "websiteUrl": "https://wiro.ai/docs/wiro-mcp-server",
+  "repository": {
+    "url": "https://github.com/wiroai/Wiro-MCP",
+    "source": "github"
+  },
+  "icons": [
+    {
+      "src": "https://wiro.ai/images/logos/logo/icon.png",
+      "mimeType": "image/png",
+      "sizes": ["1080x1080"]
+    }
+  ],
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "@wiro-ai/wiro-mcp",
+      "version": "1.3.2",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "WIRO_API_KEY",
+          "description": "API key of your Wiro project. Create one at https://wiro.ai/panel/project/new",
+          "isRequired": true,
+          "isSecret": true,
+          "format": "string"
+        },
+        {
+          "name": "WIRO_API_SECRET",
+          "description": "API secret, only for projects that use signature-based auth",
+          "isRequired": false,
+          "isSecret": true,
+          "format": "string"
+        }
+      ]
+    }
+  ],
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://mcp.wiro.ai/v1",
+      "headers": [
+        {
+          "name": "Authorization",
+          "description": "Your Wiro project credentials",
+          "value": "Bearer {wiro_credentials}",
+          "isRequired": true,
+          "isSecret": true,
+          "variables": {
+            "wiro_credentials": {
+              "description": "API key, or API_KEY:API_SECRET for projects that use signature-based auth. Create a project at https://wiro.ai/panel/project/new",
+              "isRequired": true,
+              "isSecret": true,
+              "format": "string"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
