@@ -1,9 +1,6 @@
 <div align="center">
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://wiro.ai/images/logos/logo/logo-white.png">
-  <img src="https://wiro.ai/images/logos/logo/logo-black.png" alt="Wiro AI" width="180">
-</picture>
+<img src="https://wiro.ai/images/favicon/icon-512x512.png" alt="Wiro AI" width="100">
 
 # Wiro MCP Server
 
@@ -135,7 +132,7 @@ Ask your AI assistant:
 
 - *"Generate a photorealistic image of a mountain lake at sunset"*
 - *"What video generation models are available on Wiro?"*
-- *"Show me the parameters for openai/sora-2"*
+- *"Show me the parameters for google/veo3-1"*
 - *"Create a 5-second video with Kling V3: a drone shot over mountains"*
 - *"Check the status of my last task"*
 - *"Show my latest productions and open the newest result"*
