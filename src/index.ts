@@ -3,10 +3,12 @@
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { WiroClient } from './client.js';
 import { createMcpServer } from './server.js';
+import { parseToolsets } from './tools/index.js';
 
 const apiKey = process.env['WIRO_API_KEY'];
 const apiSecret = process.env['WIRO_API_SECRET'];
 const baseUrl = process.env['WIRO_API_BASE_URL'];
+const toolsets = parseToolsets(process.env['WIRO_TOOLSETS']);
 
 if (!apiKey) {
   console.error(
@@ -26,8 +28,8 @@ const client = new WiroClient(apiKey, apiSecret, baseUrl, {
   missingSecretHint: 'This project uses signature-based auth. '
     + 'Set WIRO_API_SECRET to the project\'s API secret in your MCP server config.',
 });
-const server = createMcpServer(client);
+const server = createMcpServer(client, { toolsets });
 const transport = new StdioServerTransport();
 
 await server.connect(transport);
-console.error(`Wiro MCP server running on stdio (auth: ${client.authType})`);
+console.error(`Wiro MCP server running on stdio (auth: ${client.authType}, tools: ${(toolsets ?? ['all']).join(', ')})`);

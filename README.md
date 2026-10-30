@@ -4,7 +4,7 @@
 
 # Wiro MCP Server
 
-Official MCP server for Wiro AI: search, price and run image, video, audio and LLM models from Cursor, Claude Code, Claude Desktop, Windsurf and any other MCP client.
+Official MCP server for Wiro AI: run image, video, audio and LLM models, build and run workflows, and deploy and talk to AI agents from Cursor, Claude Code, Claude Desktop, Windsurf and any other MCP client.
 
 [![npm](https://img.shields.io/npm/v/@wiro-ai/wiro-mcp?style=for-the-badge&color=111111)](https://www.npmjs.com/package/@wiro-ai/wiro-mcp) [![Node.js 20+](https://img.shields.io/badge/Node.js-20%2B-111111?style=for-the-badge&color=111111)](#quick-start) [![MCP server](https://img.shields.io/badge/MCP-server-111111?style=for-the-badge&color=111111)](https://modelcontextprotocol.io/) [![License: MIT](https://img.shields.io/badge/license-MIT-111111?style=for-the-badge&color=111111)](./LICENSE)
 
@@ -14,7 +14,13 @@ Official MCP server for Wiro AI: search, price and run image, video, audio and L
 
 </div>
 
-`@wiro-ai/wiro-mcp` is a TypeScript [Model Context Protocol](https://modelcontextprotocol.io/) server that runs locally over stdio with `npx`. Its 13 tools let an AI assistant search the Wiro AI model catalog, read a model's parameters and price, run it and wait for the result, upload input files, browse past tasks and search the Wiro AI docs. The hosted server at `https://mcp.wiro.ai/v1` serves the same tools with nothing to install.
+`@wiro-ai/wiro-mcp` is a TypeScript [Model Context Protocol](https://modelcontextprotocol.io/) server that runs locally over stdio with `npx`. Its tools are grouped in three sets:
+
+- **Models**: search the Wiro AI model catalog, read a model's parameters and price, run it and wait for the result, upload input files and browse past tasks.
+- **Workflows**: build multi-step workflows that chain models, run them, resume failed runs, browse the public gallery, and design workflows together with the Workflow Agent.
+- **Agents**: talk to Studio, the creative agent that runs models for you, and deploy, configure, run and message your own agents built from templates or from scratch.
+
+Playbooks explain each job step by step, so the assistant knows the order of calls, what costs money and what needs your approval. The hosted server at `https://mcp.wiro.ai/v1` serves the same tools with nothing to install.
 
 ## Quick Start
 
@@ -130,12 +136,28 @@ Store `WIRO_MCP_AUTH` (your API key, or `API_KEY:API_SECRET`) in `~/.hermes/.env
 
 Ask your AI assistant:
 
+**Models**
+
 - *"Generate a photorealistic image of a mountain lake at sunset"*
 - *"What video generation models are available on Wiro?"*
 - *"Show me the parameters for google/veo3-1"*
 - *"Create a 5-second video with Kling V3: a drone shot over mountains"*
 - *"Check the status of my last task"*
 - *"Show my latest productions and open the newest result"*
+
+**Workflows**
+
+- *"Build a workflow that turns a product photo into a short ad video, then run it on this photo"*
+- *"Find a public workflow for podcast covers and run it with my show's name"*
+- *"Ask the Workflow Agent to add an upscale step to my product ad workflow and save it"*
+- *"Why did my last workflow run fail? Resume it if it can be resumed"*
+
+**Agents**
+
+- *"Ask Studio for three logo ideas for a coffee shop"*
+- *"Which agent templates can manage Instagram? What does each plan cost?"*
+- *"Deploy the Instagram manager agent on the Starter plan and tell me what it still needs"*
+- *"Tell my support agent to summarise today's tickets"*
 
 ## Authentication
 
@@ -164,10 +186,12 @@ The hosted server takes the same credentials as a bearer token:
 
 ## Available Tools
 
+### Models
+
 | Tool | Description |
 |------|-------------|
 | `search_models` | Search and browse AI models by keyword, category, or owner |
-| `get_model_schema` | Get full parameter schema and pricing for any model |
+| `get_model_schema` | Get full parameter schema and pricing for any model, or the parameters and output ports of a workflow utility |
 | `recommend_model` | Describe what you want to build, get model recommendations by relevance |
 | `explore` | Browse curated models grouped by category, no parameters needed |
 | `run_model` | Run any model, waiting up to 45s by default before it returns a recoverable task token |
@@ -177,12 +201,121 @@ The hosted server takes the same credentials as a bearer token:
 | `get_task_price` | Get the cost of a completed task |
 | `cancel_task` | Cancel a queued task |
 | `kill_task` | Kill a running task |
-| `upload_file` | Upload a file from a public http(s) URL (up to 200 MB) for use as model input |
-| `search_docs` | Search the Wiro documentation for guides and API references |
+| `upload_file` | Upload a file from a public http(s) URL (up to about 100 MB) for use as model input |
 
 For long generations, `run_model` returns the existing task ID and token when its
 wait budget expires. The assistant must continue with `wait_for_task`; retrying
 `run_model` creates a separate billable task.
+
+### Workflows
+
+A workflow chains models and built-in utility steps into one graph with its own
+inputs and outputs. Every model step is charged like a normal model run when it
+finishes. Wiro fills a model input you leave out with the model's default, so the
+save result lists what it filled, and a graph can be at most 40 KB of JSON.
+
+| Tool | Description |
+|------|-------------|
+| `list_workflows` | List the workflows in your workspace, or search the public gallery by text, tag or model |
+| `get_workflow` | Read a workflow's inputs, outputs and step graph |
+| `create_workflow` | Save a new workflow from a step graph. Wiro checks it against the live model catalog and returns every problem at once |
+| `update_workflow` | Edit a workflow's title, description, tags or graph without overwriting newer changes; a new graph is saved only after you confirm a summary of the change |
+| `clone_workflow` | Copy a public workflow into your workspace |
+| `delete_workflow` | Delete a workflow, after your confirmation |
+| `run_workflow` | Run a workflow and wait for its outputs; can stop after a chosen step to test the first steps |
+| `wait_for_workflow_run` | Keep waiting on a run, read its outputs, or see why a step failed |
+| `resume_workflow_run` | Continue a failed or stopped run without paying again for finished steps |
+| `list_workflow_runs` | Browse past and current runs, including runs started on wiro.ai |
+| `save_workflow_from_agent` | Save a workflow the Workflow Agent proposed, as a new workflow, or onto an existing one after you confirm a summary of the change |
+
+The **Workflow Agent** designs workflows with you in plain language: talk to it
+with `send_agent_message` and `agent: "workflow-agent"`, attach an existing
+workflow to edit, then save its proposal with `save_workflow_from_agent`.
+Conversations started with an API key belong to that key's project and are
+separate from your Workflow Agent chats on wiro.ai.
+
+### Agents
+
+Talk to any Wiro agent with one set of tools. `agent` is `"studio"`, `"workflow-agent"`
+or the id of one of your own agents.
+
+| Tool | Description |
+|------|-------------|
+| `send_agent_message` | Send a message and wait for the reply, with any media, workflows or model runs it produced |
+| `get_agent_message` | Keep waiting on a reply, or read one again |
+| `get_agent_conversation` | List conversations, or read one conversation's history |
+| `cancel_agent_message` | Stop a reply that is still being written |
+| `delete_agent_session` | Delete a conversation and the agent's memory of it, after your confirmation |
+| `list_studio_results` | List the images, videos and other results Studio generated for you |
+
+**Studio** is Wiro's creative agent: it picks and runs models for you and charges
+your wallet after each reply. Your own agents run on a monthly plan with credits.
+
+| Tool | Description |
+|------|-------------|
+| `list_agent_templates` | Browse ready-made agent templates and their monthly prices |
+| `get_agent_template` | Read a template's skills, plans, and the accounts and keys it needs |
+| `list_agent_skills` | Browse the skills an agent can have, and what each one needs to work |
+| `deploy_agent` | Deploy an agent from a template or build one from skills; shows the price and asks before charging |
+| `list_my_agents` | List your agents with their status, plan and credits |
+| `get_my_agent` | Read one agent's setup, plan and credits; can wait until it is running |
+| `control_agent` | Start, stop or restart an agent |
+| `update_agent` | Change an agent's name, description, time zone, models and chat commands |
+| `apply_agent_skills` | Turn skills on or off; shows the price change and asks before charging |
+| `set_agent_credentials` | Save the keys, tokens and settings an agent's skills and channels need, such as a Telegram bot token or a Gmail app password |
+| `connect_agent_oauth` | Connect sign-in accounts such as HubSpot or X; you approve the connection in your browser. Some services need your own app keys or a token first |
+| `disconnect_agent_oauth` | Disconnect a connected account, after your confirmation |
+| `manage_agent_custom_skill` | Add, edit, schedule, restore or remove an agent's own instructions and scheduled tasks |
+| `manage_agent_billing` | Subscribe, upgrade to Pro, cancel, renew or buy extra credits from your wallet, after your confirmation |
+| `get_agent_activity` | Read an agent's credit usage and activity logs |
+| `delete_agent` | Delete an agent, after your confirmation |
+
+### Account and guides
+
+| Tool | Description |
+|------|-------------|
+| `get_account` | Show which workspace your API key works in and its wallet balance |
+| `get_playbook` | Step-by-step guides: getting started, models, workflows, the Workflow Agent, Studio, agents and billing |
+| `search_docs` | Search the Wiro documentation for guides and API references |
+
+The server also offers prompts for common jobs (`build_workflow`, `deploy_agent`,
+`create_with_studio`, `talk_to_my_agent`). In clients that support MCP prompts
+they appear as ready-made commands.
+
+### Choosing tool groups
+
+All groups are on by default. Some clients work best with fewer tools; set
+`WIRO_TOOLSETS` to a comma-separated list of `models`, `workflows` and `agents`
+to load only those. `get_account`, `get_playbook` and `search_docs` are always
+available, and `workflows` also brings the model search tools it needs. The
+conversation tools for Studio and the Workflow Agent, with
+`save_workflow_from_agent`, come with either `workflows` or `agents`, and each
+prompt appears only when its tools are loaded. If a job needs a tool from a
+group that is not loaded, the server instructions tell the assistant to say so.
+
+```json
+"env": {
+  "WIRO_API_KEY": "your-api-key",
+  "WIRO_TOOLSETS": "models,workflows"
+}
+```
+
+### Paid and irreversible actions
+
+Running a model or workflow, sending a message to Studio or the Workflow Agent,
+and messages to your own agents (which use the agent's credits) cost money. Agent
+plans, plan changes, credit packs and skill changes are charged to your wallet,
+so those tools first return the price (an estimate for prorated changes such as
+an upgrade to Pro) and only act when called again with `confirm: true` and the
+quote's reference (`confirm_charge_usd` with the approved amount, or the quote's
+`idempotency_key` for skill changes) after you agree. If the price changed in
+between, nothing is charged and you get a new quote. Deleting a workflow, an
+agent, a conversation or an account connection also waits for `confirm: true`,
+and so does replacing a workflow's steps with `update_workflow` or
+`save_workflow_from_agent`: you see a summary of the change first. No tool
+returns a payment page: an agent plan paid by card is upgraded or topped up in
+the Wiro dashboard. Your API key decides the workspace: a personal project's key
+uses your personal wallet, a team project's key uses the team wallet.
 
 ### LLM-friendly responses
 
@@ -235,7 +368,9 @@ instruction. Some MCP clients expose a `resource_link` as tool metadata instead
 of previewing it inside the tool card, so the assistant is explicitly told to
 render images and preserve clickable media links in its user-facing response.
 The standard resource link and full-resolution URL remain available to every
-client; no base64 media payload is required.
+client; no base64 media payload is required. Only files on Wiro's own hosts are
+returned this way. Other links in an agent's reply stay plain links in the text,
+without the delivery instruction.
 
 Task responses use the stable states `submitted`, `running`, `completed`,
 `failed`, and `cancelled`. When more work is required, the response includes an
@@ -264,6 +399,15 @@ Generation chain:
 Cross-conversation history:
 `list_tasks → get_task`
 
+Workflow chain:
+`search_models → get_model_schema → create_workflow → run_workflow → wait_for_workflow_run`
+
+Workflow Agent chain:
+`send_agent_message (agent "workflow-agent") → get_agent_message → save_workflow_from_agent → run_workflow`
+
+Agent chain:
+`list_agent_templates → get_agent_template → deploy_agent → set_agent_credentials / connect_agent_oauth → control_agent → send_agent_message`
+
 ## Hosted MCP Server
 
 Wiro AI also hosts the same tools at `https://mcp.wiro.ai/v1` over streamable HTTP, so nothing has to be installed locally. Send your credentials in the `Authorization` header as shown under [Authentication](#authentication). The [MCP Server documentation](https://wiro.ai/docs/wiro-mcp-server) has setup instructions for each client.
@@ -282,6 +426,10 @@ Wiro AI also hosts the same tools at `https://mcp.wiro.ai/v1` over streamable HT
 - [Tasks](https://wiro.ai/docs/tasks): task lifecycle, statuses, determining success
 - [Concurrency Limits](https://wiro.ai/docs/concurrency-limits): concurrent task limits based on balance
 - [Error Reference](https://wiro.ai/docs/error-reference): error codes and handling
+- [Agents Overview](https://wiro.ai/docs/agent-overview): templates, plans, credits and the agent lifecycle
+- [Agent Builder](https://wiro.ai/docs/agent-builder): build an agent from skills instead of a template
+- [Agent Skills](https://wiro.ai/docs/agent-skills) and [Agent Credentials](https://wiro.ai/docs/agent-credentials): what each skill needs and how accounts are connected
+- [Agent Messaging](https://wiro.ai/docs/agent-messaging): conversations, sessions and replies
 
 ## Using as a Library
 
@@ -307,14 +455,18 @@ const client = new WiroClient(apiKey, apiSecret, undefined, {
 
 | Export | Description |
 |--------|-------------|
-| `createMcpServer(client)` | Creates an McpServer with all 13 tools registered |
-| `WiroClient` | API client with both auth types |
-| `registerTools(server, client)` | Register tools on an existing McpServer |
+| `createMcpServer(client, options?)` | Creates an McpServer with the tools, prompts and server instructions registered. `options.toolsets` picks tool groups and the prompts that use them; `options.instructions` replaces the instructions |
+| `WiroClient` | API client with both auth types; `post(path, body)` calls any Wiro API endpoint with the same credentials |
+| `registerTools(server, client, options?)` | Register tools on an existing McpServer |
+| `parseToolsets(value)` | Parse a `WIRO_TOOLSETS`-style list such as `"models,agents"` |
 
 ```typescript
 // Import specific components
 import { WiroClient } from '@wiro-ai/wiro-mcp/client';
 import { registerTools } from '@wiro-ai/wiro-mcp/tools';
+
+// Only the model and workflow tools
+const server = createMcpServer(client, { toolsets: ['models', 'workflows'] });
 ```
 
 ## Environment Variables
@@ -324,6 +476,7 @@ import { registerTools } from '@wiro-ai/wiro-mcp/tools';
 | `WIRO_API_KEY` | Yes | Your Wiro project API key |
 | `WIRO_API_SECRET` | No | Your Wiro project API secret (for signature auth) |
 | `WIRO_API_BASE_URL` | No | Override API base URL (default: `https://api.wiro.ai/v1`) |
+| `WIRO_TOOLSETS` | No | Comma-separated tool groups to load: `models`, `workflows`, `agents` (default: all) |
 
 ## More from Wiro AI
 

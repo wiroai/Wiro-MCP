@@ -114,7 +114,7 @@ export async function fetchPublicFile(
     const declared = Number(response.headers['content-length']);
     if (Number.isFinite(declared) && declared > maxBytes) {
       response.destroy();
-      throw new Error(`File at ${rawUrl} is larger than ${maxBytes / 1024 / 1024}MB`);
+      throw new Error(`File at ${rawUrl} is larger than ${Math.round(maxBytes / 1024 / 1024)} MB`);
     }
 
     const chunks: Buffer[] = [];
@@ -123,7 +123,7 @@ export async function fetchPublicFile(
       size += (chunk as Buffer).length;
       if (size > maxBytes) {
         response.destroy();
-        throw new Error(`File at ${rawUrl} is larger than ${maxBytes / 1024 / 1024}MB`);
+        throw new Error(`File at ${rawUrl} is larger than ${Math.round(maxBytes / 1024 / 1024)} MB`);
       }
       chunks.push(chunk as Buffer);
     }

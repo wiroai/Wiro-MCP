@@ -164,7 +164,10 @@ export const modelParameterSchema = z.object({
   type: z.string(),
   label: z.string(),
   description: z.string().optional(),
-  default: z.string().optional(),
+  default: z.string().optional()
+    .describe('What a run uses when the parameter is left out.'),
+  sample: z.string().optional()
+    .describe('The value from the model\'s page. A workflow step that leaves the parameter out gets it. A run does not: it leaves an optional parameter empty (a seed is picked at random) and refuses a required one that is left out.'),
   required: z.boolean(),
   placeholder: z.string().optional(),
   note: z.string().optional(),
@@ -185,6 +188,13 @@ export const modelDetailOutputSchema = {
       title: z.string(),
       items: z.array(modelParameterSchema),
     })),
+    // Workflow utilities only: the output ports other steps can reference.
+    outputs: z.array(z.object({
+      id: z.string(),
+      label: z.string(),
+      type: z.string(),
+    })).optional(),
+    dynamicOutputs: z.boolean().optional(),
   }),
   nextAction: nextActionSchema,
 };

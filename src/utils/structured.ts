@@ -8,7 +8,7 @@ import type {
   TaskUsage,
   ToolListItem,
 } from '../types.js';
-import { formatPricing, toParameterOption } from './format.js';
+import { formatPricing, parameterFallback, parameterRange, toParameterOption } from './format.js';
 import {
   isToolCallSegment,
   normalizeTaskRawContent,
@@ -257,6 +257,7 @@ export function toStructuredModelDetail(model: ToolListItem): {
         label: string;
         description?: string;
         default?: string;
+        sample?: string;
         required: boolean;
         placeholder?: string;
         note?: string;
@@ -282,14 +283,12 @@ export function toStructuredModelDetail(model: ToolListItem): {
           type: String(item.type),
           label: item.label ? String(item.label) : String(item.id),
           description: item.description || undefined,
-          default: item.default == null ? undefined : String(item.default),
+          ...parameterFallback(item),
           required: item.required === true || String(item.required) === 'true',
           placeholder: item.placeholder == null ? undefined : String(item.placeholder),
           note: item.note == null ? undefined : String(item.note),
           options: (item.options ?? []).map(toParameterOption),
-          min: finiteNumber(item.min),
-          max: finiteNumber(item.max),
-          step: finiteNumber(item.step),
+          ...parameterRange(item),
           advanced: item.advanced === true || String(item.advanced) === 'true',
           jsonSchema: parseJsonObject(item.jsonschema),
         })),

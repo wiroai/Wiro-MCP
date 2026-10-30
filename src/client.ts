@@ -51,6 +51,7 @@ const SLOW_POLL_INTERVAL = 10000;
 const DEFAULT_MAX_CONSECUTIVE_ERRORS = 5;
 const DEFAULT_MISSING_SECRET_HINT = 'This project uses signature-based auth. '
   + 'Pass its API secret to WiroClient along with the API key.';
+const MAX_UPLOAD_BYTES = Math.floor(0.1 * 1024 ** 3);
 
 export interface TaskReference {
   tasktoken?: string;
@@ -151,6 +152,11 @@ export class WiroClient {
     this.authType = apiSecret ? 'signature' : 'apikey-only';
   }
 
+  /** A short, non-reversible id of this client's API key, for per-caller bookkeeping. */
+  get identity(): string {
+    return crypto.createHash('sha256').update(this.apiKey).digest('hex').slice(0, 16);
+  }
+
   // Without a secret, the only 401 that mentions a signature is a project
   // that requires signature auth.
   private toApiError(status: number, responseBody: string): WiroApiError {
@@ -216,6 +222,48 @@ export class WiroClient {
 
     const text = await response.text();
 
+    if (!response.ok) {
+      throw this.toApiError(response.status, text);
+    }
+
+    try {
+      return JSON.parse(text) as T;
+    } catch {
+      throw new Error(`Invalid JSON response: ${text}`);
+    }
+  }
+
+  /**
+   * Calls any Wiro API endpoint with this client's credentials, for example
+   * `post('/Workflow/List', { scope: 'my' })`. Wiro reports each outcome in the
+   * response body, so check `result` on the returned body.
+   */
+  async post<T = Record<string, unknown>>(
+    path: string,
+    body: Record<string, unknown> = {},
+    signal?: AbortSignal,
+  ): Promise<T> {
+    return this.request<T>(path, body, signal);
+  }
+
+  /** Same as `post`, for endpoints that take multipart/form-data. */
+  async postForm<T = Record<string, unknown>>(
+    path: string,
+    form: FormData,
+    signal?: AbortSignal,
+  ): Promise<T> {
+    const url = `${this.baseUrl}${path}`;
+    const headers = this.getAuthHeaders(new URL(url).pathname);
+    delete headers['Content-Type'];
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: form,
+      signal,
+    });
+
+    const text = await response.text();
     if (!response.ok) {
       throw this.toApiError(response.status, text);
     }
@@ -338,8 +386,9 @@ export class WiroClient {
   }
 
   async uploadFile(fileUrl: string, fileName?: string): Promise<FileUploadResponse> {
-    // Public http(s) hosts only; see utils/remote-file.ts.
-    const remote = await fetchPublicFile(fileUrl);
+    // Public http(s) hosts only; see utils/remote-file.ts. The upload endpoint
+    // refuses files over 0.1 GiB, so a bigger one is not downloaded at all.
+    const remote = await fetchPublicFile(fileUrl, { maxBytes: MAX_UPLOAD_BYTES });
     const blob = new Blob([remote.data], remote.contentType ? { type: remote.contentType } : {});
     const resolvedName = fileName
       ?? fileUrl.split('/').pop()?.split('?')[0]
@@ -348,26 +397,7 @@ export class WiroClient {
     const formData = new FormData();
     formData.append('file', blob, resolvedName);
 
-    const url = `${this.baseUrl}/File/Upload`;
-    const headers = this.getAuthHeaders(new URL(url).pathname);
-    delete headers['Content-Type'];
-
-    const response = await fetch(url, {
-      method: 'POST',
-      headers,
-      body: formData,
-    });
-
-    const text = await response.text();
-    if (!response.ok) {
-      throw this.toApiError(response.status, text);
-    }
-
-    try {
-      return JSON.parse(text) as FileUploadResponse;
-    } catch {
-      throw new Error(`Invalid JSON response: ${text}`);
-    }
+    return this.postForm<FileUploadResponse>('/File/Upload', formData);
   }
 
   async waitForTask(

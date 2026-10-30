@@ -3,6 +3,7 @@ import type {
   TaskSegment,
   TaskUsage,
   ToolListItem,
+  ToolParameterItem,
   ToolParameterOption,
 } from '../types.js';
 import {
@@ -285,6 +286,99 @@ export function formatTaskList(
   return lines.join('\n');
 }
 
+/** A number from Tool/Detail's text fields, where "" means none. */
+function rangeNumber(value: unknown): number | undefined {
+  if (value === undefined || value === null || value === '') return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+// A checkbox's catalog value means on or off. true, 1, yes, on and any other
+// non-empty text are on (some models keep a command-line flag such as
+// "--do_sample" there); "", false, 0, no, off, null and undefined are off.
+const CHECKBOX_OFF_VALUES = new Set(['', 'false', '0', 'no', 'off', 'null', 'undefined']);
+
+function checkboxIsOn(value: unknown): boolean {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value !== 0;
+  if (typeof value !== 'string') return false;
+  return !CHECKBOX_OFF_VALUES.has(value.trim().toLowerCase());
+}
+
+/**
+ * The catalog value of a parameter: a checkbox's state as "true" or "false"
+ * (from Tool/Detail's `value`, else `defaultvalue`), otherwise `defaultvalue`,
+ * then `value`. Arrays are JSON text; empty means none.
+ */
+export function parameterDefault(item: ToolParameterItem): string | undefined {
+  if (item.type === 'checkbox') {
+    const initial = Object.prototype.hasOwnProperty.call(item, 'value') ? item.value : item.defaultvalue;
+    return checkboxIsOn(initial) ? 'true' : 'false';
+  }
+  const raw = item.defaultvalue ?? item.value ?? item.default;
+  if (raw === undefined || raw === null || raw === '') return undefined;
+  if (Array.isArray(raw)) return raw.length > 0 ? JSON.stringify(raw) : undefined;
+  return typeof raw === 'object' ? JSON.stringify(raw) : String(raw);
+}
+
+// A run fills an optional parameter left out of its request with the catalog
+// value, except these, whose catalog value is a sample shown on the model's page:
+// file inputs, ids containing "input", the prompt and the structured LLM fields.
+// A run refuses a required parameter that is left out before it fills anything.
+// A workflow step that leaves out any of them gets the catalog value. Two ids
+// follow their own rule: a run picks a random seed when `seed` is left out or 0,
+// and `parallel_tool_calls` is true whenever `tools` are sent.
+const SAMPLE_TYPES = new Set(['fileinput', 'multifileinput', 'multifileinputdrop', 'combinefileinput', 'fileexplorer']);
+const SAMPLE_IDS = new Set(['prompt', 'messages', 'tools', 'tool_choice', 'previousTaskToken', 'toolOutputs', 'response_format']);
+
+export function isSampleParameter(item: ToolParameterItem): boolean {
+  const id = String(item.id);
+  return SAMPLE_TYPES.has(String(item.type)) || id.includes('input') || SAMPLE_IDS.has(id);
+}
+
+/** What a left-out parameter gets: `default` in a run, `sample` only in a workflow step. */
+export function parameterFallback(item: ToolParameterItem): { default?: string; sample?: string } {
+  const id = String(item.id);
+  if (id === 'parallel_tool_calls') return { default: 'true' };
+  const value = parameterDefault(item);
+  if (value === undefined) return {};
+  if (id === 'seed') return Number(value) === 0 ? {} : { sample: value };
+  const required = item.required === true || String(item.required) === 'true';
+  return !required && !isSampleParameter(item) ? { default: value } : { sample: value };
+}
+
+/** How the parameter list shows what a left-out parameter gets. */
+export function parameterFallbackText(item: ToolParameterItem): string {
+  const id = String(item.id);
+  const { default: value, sample } = parameterFallback(item);
+  const shown = (text: string) => (text.length > 120 ? `${text.slice(0, 120)}...` : text);
+  if (id === 'parallel_tool_calls') return ' (default: `true` when `tools` are sent)';
+  if (id === 'seed') {
+    return ` (a run picks a random seed when it is left out or 0${sample !== undefined
+      ? `; a workflow step that leaves it out gets \`${shown(sample)}\``
+      : ''})`;
+  }
+  if (value !== undefined) return ` (default: \`${shown(value)}\`)`;
+  if (sample === undefined) return '';
+  return /\/sampleinputs\//.test(sample)
+    ? ' (sample files on the model\'s page, used only by a workflow step that leaves it out)'
+    : ` (sample: \`${shown(sample)}\`, used only by a workflow step that leaves it out)`;
+}
+
+// A run checks a range only on number and float parameters, and the run form
+// draws a slider only for those. Other types carry placeholder bounds in the
+// catalog (0 to 0 on a text or select field), so they get none.
+const RANGE_TYPES = new Set(['number', 'float', 'range']);
+
+export function parameterRange(item: ToolParameterItem): { min?: number; max?: number; step?: number } {
+  if (!RANGE_TYPES.has(String(item.type))) return {};
+  return {
+    min: rangeNumber(item.minvalue) ?? rangeNumber(item.min),
+    max: rangeNumber(item.maxvalue) ?? rangeNumber(item.max),
+    step: rangeNumber(item.incrementby) ?? rangeNumber(item.step),
+  };
+}
+
 export function formatModelList(models: ToolListItem[], header?: string): string {
   if (models.length === 0) return 'No models found.';
 
@@ -295,7 +389,7 @@ export function formatModelList(models: ToolListItem[], header?: string): string
   for (const model of models) {
     const slug = `${model.cleanslugowner}/${model.cleanslugproject}`;
     const cats = model.categories?.filter(c => c !== 'tool').join(', ') || '';
-    lines.push(`### ${model.title}`);
+    lines.push(`### ${model.title || slug}`);
     lines.push(`- **Model:** \`${slug}\``);
     if (cats) lines.push(`- **Categories:** ${cats}`);
     if (model.seodescription) lines.push(`- **Description:** ${model.seodescription}`);
@@ -311,7 +405,7 @@ export function formatModelSchema(model: ToolListItem): string {
   const lines: string[] = [];
   const slug = `${model.cleanslugowner}/${model.cleanslugproject}`;
 
-  lines.push(`## ${model.title}`);
+  lines.push(`## ${model.title || slug}`);
   lines.push(`**Model:** \`${slug}\``);
   if (model.seodescription) lines.push(`**Description:** ${model.seodescription}`);
   const cats = model.categories?.filter(c => c !== 'tool').join(', ') || '';
@@ -336,7 +430,7 @@ export function formatModelSchema(model: ToolListItem): string {
 
       for (const param of group.items) {
         const required = param.required ? ' **(required)**' : '';
-        const defaultVal = param.default ? ` (default: \`${param.default}\`)` : '';
+        const defaultVal = parameterFallbackText(param);
         lines.push(`- **\`${param.id}\`** (${param.type})${required}${defaultVal}`);
         if (param.label) lines.push(`  ${param.label}`);
         if (param.description && param.description !== param.label) lines.push(`  ${param.description}`);
@@ -355,8 +449,9 @@ export function formatModelSchema(model: ToolListItem): string {
           lines.push(`  Options: ${optionValues}`);
         }
 
-        if (param.type === 'range' && param.min != null && param.max != null) {
-          lines.push(`  Range: ${param.min} - ${param.max}${param.step ? `, step: ${param.step}` : ''}`);
+        const range = parameterRange(param);
+        if (range.min !== undefined || range.max !== undefined) {
+          lines.push(`  Range: ${range.min ?? 'no minimum'} to ${range.max ?? 'no maximum'}${range.step ? `, step ${range.step}` : ''}`);
         }
       }
       lines.push('');

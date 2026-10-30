@@ -141,6 +141,10 @@ export interface ToolParameterItem {
   label: string;
   description?: string;
   default?: string;
+  /** The catalog default. For some models it is a sample from the model's page. */
+  defaultvalue?: unknown;
+  /** The form's current value; a checkbox's default. */
+  value?: unknown;
   required?: boolean;
   placeholder?: string;
   note?: string;
@@ -148,6 +152,10 @@ export interface ToolParameterItem {
   min?: number;
   max?: number;
   step?: number;
+  /** The range as Tool/Detail sends it, as text; empty when there is none. */
+  minvalue?: string | number;
+  maxvalue?: string | number;
+  incrementby?: string | number;
   advanced?: boolean;
   jsonschema?: Record<string, unknown> | string | null;
 }

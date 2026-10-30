@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readdirSync, readFileSync } from 'node:fs';
 import test from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
@@ -46,8 +47,8 @@ function completedDetail() {
   return result;
 }
 
-async function withClient(fakeWiroClient, callback) {
-  const server = createMcpServer(fakeWiroClient);
+async function withClient(fakeWiroClient, callback, options) {
+  const server = createMcpServer(fakeWiroClient, options);
   const client = new Client({ name: 'test-client', version: '1.0.0' });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
 
@@ -278,12 +279,55 @@ test('run_model returns custom tool calls without exposing debug transport', asy
   });
 });
 
-test('all 13 tools advertise output schemas and annotations', async () => {
+// Every description in a JSON schema, with the path that leads to it.
+function schemaDescriptions(schema, path = 'schema') {
+  if (!schema || typeof schema !== 'object') return [];
+  const found = typeof schema.description === 'string' ? [[path, schema.description]] : [];
+  for (const [key, value] of Object.entries(schema)) {
+    if (value && typeof value === 'object') found.push(...schemaDescriptions(value, `${path}.${key}`));
+  }
+  return found;
+}
+
+const EXPECTED_TOOLS = [
+  // Always available
+  'get_account', 'get_playbook', 'search_docs',
+  // Models
+  'search_models', 'get_model_schema', 'recommend_model', 'explore', 'run_model',
+  'wait_for_task', 'get_task', 'list_tasks', 'get_task_price', 'cancel_task',
+  'kill_task', 'upload_file',
+  // Workflows
+  'list_workflows', 'get_workflow', 'create_workflow', 'update_workflow',
+  'clone_workflow', 'delete_workflow', 'run_workflow', 'wait_for_workflow_run',
+  'resume_workflow_run', 'list_workflow_runs', 'save_workflow_from_agent',
+  // Agents
+  'send_agent_message', 'get_agent_message', 'get_agent_conversation',
+  'cancel_agent_message', 'delete_agent_session', 'list_studio_results',
+  'list_agent_templates', 'get_agent_template', 'list_agent_skills', 'deploy_agent',
+  'list_my_agents', 'get_my_agent', 'control_agent', 'update_agent',
+  'manage_agent_billing', 'get_agent_activity', 'delete_agent',
+  'apply_agent_skills', 'set_agent_credentials', 'connect_agent_oauth',
+  'disconnect_agent_oauth', 'manage_agent_custom_skill',
+];
+
+test('every tool advertises output schemas and annotations', async () => {
   await withClient({}, async client => {
     const result = await client.listTools();
     const jsonSchema202012 = 'https://json-schema.org/draft/2020-12/schema';
 
-    assert.equal(result.tools.length, 13);
+    assert.deepEqual(result.tools.map(tool => tool.name).sort(), [...EXPECTED_TOOLS].sort());
+    for (const tool of result.tools) {
+      const texts = [
+        ['title', tool.title ?? ''],
+        ['description', tool.description ?? ''],
+        ...schemaDescriptions(tool.inputSchema, 'inputSchema'),
+        ...schemaDescriptions(tool.outputSchema, 'outputSchema'),
+      ];
+      for (const [where, text] of texts) {
+        assert.equal(text.includes('\u2014'), false, `${tool.name} ${where} has an em dash`);
+        assert.equal(text.includes('\u2013'), false, `${tool.name} ${where} has an en dash`);
+      }
+    }
     for (const tool of result.tools) {
       assert.ok(tool.inputSchema, `${tool.name} is missing inputSchema`);
       assert.ok(tool.outputSchema, `${tool.name} is missing outputSchema`);
@@ -424,4 +468,134 @@ test('tools tell a key-only caller of a signature-auth project what to enter', {
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+// The tool names in `tool: '<name>'` literals under src, which is how a
+// nextAction names the tool to call next.
+function nextActionToolsInSource(dir = new URL('../src/', import.meta.url)) {
+  const names = new Set();
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.isDirectory()) {
+      for (const name of nextActionToolsInSource(new URL(`${entry.name}/`, dir))) names.add(name);
+    } else if (entry.name.endsWith('.ts')) {
+      const source = readFileSync(new URL(entry.name, dir), 'utf8');
+      for (const match of source.matchAll(/\btool: ['"`]([a-z][a-z0-9_]*)['"`]/g)) names.add(match[1]);
+    }
+  }
+  return names;
+}
+
+test('every nextAction in the source names a tool the default server registers', async () => {
+  const named = nextActionToolsInSource();
+  for (const name of ['wait_for_task', 'get_playbook', 'save_workflow_from_agent']) {
+    assert.ok(named.has(name), `the source scan missed ${name}`);
+  }
+  await withClient({}, async client => {
+    const registered = new Set((await client.listTools()).tools.map(tool => tool.name));
+    assert.deepEqual([...named].filter(name => !registered.has(name)).sort(), []);
+  });
+});
+
+function imageModelSchema() {
+  return {
+    result: true,
+    errors: [],
+    tool: [{
+      cleanslugowner: 'owner',
+      cleanslugproject: 'image-model',
+      title: 'Image model',
+      categories: ['text-to-image'],
+      parameters: [{ title: 'Inputs', items: [{ id: 'prompt', type: 'text', label: 'Prompt', required: true }] }],
+    }],
+  };
+}
+
+test('get_model_schema points at workflow steps when run_model is not loaded', async () => {
+  const fakeWiroClient = { getModelSchema: async () => imageModelSchema() };
+  const callSchema = client => client.callTool({ name: 'get_model_schema', arguments: { model: 'owner/image-model' } });
+
+  await withClient(fakeWiroClient, async client => {
+    const result = await callSchema(client);
+    assert.notEqual(result.isError, true);
+    assert.deepEqual(result.structuredContent.nextAction, {
+      tool: 'run_model',
+      arguments: { model: 'owner/image-model', params: {} },
+      reason: 'Fill the required model parameters, then submit one generation.',
+    });
+    assert.match(result.content[0].text, /Use `run_model` with this model/);
+  });
+
+  await withClient(fakeWiroClient, async client => {
+    const { tools } = await client.listTools();
+    const names = new Set(tools.map(tool => tool.name));
+    assert.equal(names.has('run_model'), false);
+    assert.doesNotMatch(tools.find(tool => tool.name === 'get_model_schema').description, /run_model/);
+
+    const result = await callSchema(client);
+    assert.notEqual(result.isError, true);
+    const { nextAction, model } = result.structuredContent;
+    assert.equal(nextAction.tool, 'get_playbook');
+    assert.ok(names.has(nextAction.tool));
+    assert.deepEqual(nextAction.arguments, { topics: ['workflows'] });
+    assert.equal(model.slug, 'owner/image-model');
+    assert.equal(model.parameters[0].items[0].id, 'prompt');
+
+    const text = result.content[0].text;
+    assert.doesNotMatch(text, /run_model/);
+    assert.match(text, /`prompt`/);
+    assert.match(text, /### Usage\n\nUse this model as a workflow step: `"type": "run"`, `"tool": "owner\/image-model"`/);
+  }, { toolsets: ['workflows'] });
+});
+
+test('a Workflow Agent proposal read with the agents toolset alone points at a loaded tool', async () => {
+  const contents = {
+    version: '1',
+    nodes: {
+      'node-a1': { type: 'run', id: 'node-a1', tool: 'owner/image-model', depends: ['input'], input: { prompt: '$input.prompt' }, metadata: { position: { x: 400, y: 0 } } },
+      output: { type: 'display', id: 'output', depends: ['node-a1'], input: {}, fields: { image: '$node-a1.outputs' }, metadata: { position: { x: 800, y: 0 } } },
+    },
+    output: { image: '$node-a1.outputs' },
+    schema: {
+      input: {
+        prompt: { name: 'prompt', label: 'Prompt', type: 'string', description: 'A text field', required: false, defaultValue: 'a fox', examples: [], ui: { field: 'textarea' } },
+      },
+      output: {},
+    },
+    metadata: { input: { position: { x: 0, y: 0 } } },
+  };
+  const artifact = { artifactVersion: 1, title: 'Fox maker', description: 'Makes foxes', contents };
+  const reply = `Here it is.\n\n\`\`\`wiro-workflow\n${JSON.stringify(artifact)}\n\`\`\`\n`;
+  const fakeWiroClient = {
+    post: async path => {
+      assert.equal(path, '/StudioWorkflow/Message/Detail');
+      return {
+        result: true,
+        errors: [],
+        data: { guid: 'wf-1', sessionkey: 'mcp-flow', status: 'agent_end', response: reply, timeline: [], createdat: '1761700000', endedat: '1761700010', tokencost: '10' },
+      };
+    },
+  };
+
+  await withClient(fakeWiroClient, async client => {
+    const names = new Set((await client.listTools()).tools.map(tool => tool.name));
+    const result = await client.callTool({
+      name: 'get_agent_message',
+      arguments: { agent: 'workflow-agent', message_id: 'wf-1', session: 'mcp-flow', wait_seconds: 0 },
+    });
+    assert.notEqual(result.isError, true);
+    assert.equal(result.structuredContent.nextAction.tool, 'save_workflow_from_agent');
+    assert.ok(names.has('save_workflow_from_agent'), 'save_workflow_from_agent is not loaded with the agents toolset');
+  }, { toolsets: ['agents'] });
+});
+
+test('the workflow tools alone still bring the catalog and Studio tools their guidance names', async () => {
+  await withClient({}, async client => {
+    const names = new Set((await client.listTools()).tools.map(tool => tool.name));
+    for (const name of ['search_models', 'recommend_model', 'get_model_schema', 'upload_file', 'send_agent_message', 'list_studio_results']) {
+      assert.ok(names.has(name), `${name} is missing with the workflows toolset`);
+    }
+    for (const name of ['run_model', 'deploy_agent', 'list_my_agents']) {
+      assert.equal(names.has(name), false, `${name} should need its own toolset`);
+    }
+  }, { toolsets: ['workflows'] });
 });
