@@ -343,9 +343,13 @@ export function credentialsNeededFor(
   row?: Row,
 ): Array<{ skill: string; credentials: string[] }> {
   const groups = row && isPlainObject(row.credentials) ? row.credentials : {};
+  // An OAuth credential is ready only once connected: a saved shop domain or
+  // own-app key alone does not let the agent sign in.
   const ready = (key: string): boolean => {
     const group = groups[key];
-    return isPlainObject(group) && (group._connected === true || group._filled === true);
+    if (!isPlainObject(group)) return false;
+    const oauth = isPlainObject(group._schema) && isPlainObject(group._schema.oauth_provider);
+    return group._connected === true || (!oauth && group._filled === true);
   };
   return skills
     .map(skill => ({

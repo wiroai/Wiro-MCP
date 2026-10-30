@@ -63,9 +63,27 @@ export function hasErrorCode(error: unknown, code: number | string): boolean {
     && error.codes.some(candidate => String(candidate) === String(code));
 }
 
+/** The first error message of a Wiro JSON answer, if the body is one. */
+function bodyErrorMessage(responseBody: string): string | undefined {
+  try {
+    const parsed: unknown = JSON.parse(responseBody);
+    const errors = isPlainObject(parsed) && Array.isArray(parsed.errors) ? parsed.errors : [];
+    const first = errors.find(entry => isPlainObject(entry) && typeof entry.message === 'string' && entry.message.trim() !== '');
+    return isPlainObject(first) ? String(first.message).trim() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function errorText(error: unknown): string {
   if (error instanceof WiroApiError && error.status === 413) {
     return 'The request was too large for the Wiro API (HTTP 413). A file is probably over the size limit.';
+  }
+  // Refusals such as a team key whose creator left the team arrive as HTTP
+  // errors with Wiro's own sentence in the body; show that sentence.
+  if (error instanceof WiroApiError && !error.hint) {
+    const message = bodyErrorMessage(error.responseBody);
+    if (message) return `Wiro API error ${error.status}: ${message}`;
   }
   return error instanceof Error ? error.message : String(error);
 }

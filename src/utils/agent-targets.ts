@@ -198,9 +198,19 @@ export const WORKFLOW_AGENT_KEY_REFUSED = 'The Workflow Agent did not accept thi
 
 /** Turns HTTP refusals that only mean "not available to this caller" into readable answers. */
 export function mapAgentHttpError(target: AgentTarget, error: unknown): unknown {
-  if (!(error instanceof WiroApiError) || error.status !== 403 || target.kind !== 'workflow-agent') {
+  if (!(error instanceof WiroApiError) || error.status !== 403 || target.kind === 'deployed') {
     return error;
   }
+  if (/must be a member of this team/i.test(error.responseBody)) {
+    return new ApiResultError(
+      `${target.kind === 'studio' ? 'Studio' : 'The Workflow Agent'} refused this API key (HTTP 403): the key belongs `
+        + 'to a team project, and the person who created it is no longer a member of that team. Ask a team admin '
+        + 'for a new key, or use a key from a project you can still access.',
+      [403],
+      {},
+    );
+  }
+  if (target.kind !== 'workflow-agent') return error;
   if (/bearer authentication is required/i.test(error.responseBody)) {
     return new ApiResultError(WORKFLOW_AGENT_KEY_REFUSED, [403], {});
   }

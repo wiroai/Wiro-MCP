@@ -233,9 +233,14 @@ function planFor(
       }
       if (active) {
         if (!prepaid) {
+          // A card plan can be set to stop at its period end, by its payer or when the
+          // payer's account is deleted.
           return {
             outcome: 'refused',
-            message: `This plan is billed by card and renews by itself. It is managed from the dashboard: ${agent.dashboardUrl}`,
+            message: agent.subscription?.cancelAtPeriodEnd
+              ? `This plan is billed by card and is set to stop renewing after ${periodEnd}. Card plans are managed `
+                + `from the dashboard, where it can be kept: ${agent.dashboardUrl}`
+              : `This plan is billed by card and renews by itself. It is managed from the dashboard: ${agent.dashboardUrl}`,
           };
         }
         if (!cancelled) {

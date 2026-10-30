@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { WiroApiError } from '../dist/client.js';
 import { createMcpServer } from '../dist/server.js';
 
 async function withClient(fakeWiroClient, callback, options) {
@@ -154,6 +155,18 @@ test('get_workflow accepts a page URL and hides identities', async () => {
     assert.equal(workflow.inputs[0].key, 'prompt');
     assert.equal(workflow.inputs[0].savedValue, 'saved prompt');
     assert.equal(JSON.stringify(result.structuredContent).includes('owner-uuid'), false);
+  });
+});
+
+test('an HTTP refusal shows Wiro\'s own sentence instead of the raw answer', async () => {
+  const sentence = 'The person who created this API key is no longer in its team. Ask a team admin for a new key.';
+  const fake = fakeClient({
+    '/Workflow/List': () => { throw new WiroApiError(401, JSON.stringify({ result: false, errors: [{ code: 0, message: sentence }] })); },
+  });
+  await withClient(fake, async client => {
+    const result = await client.callTool({ name: 'list_workflows', arguments: { scope: 'mine' } });
+    assert.equal(result.isError, true);
+    assert.equal(result.content[0].text, `## Error\n\nWiro API error 401: ${sentence}`);
   });
 });
 

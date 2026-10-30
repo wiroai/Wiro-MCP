@@ -8,6 +8,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createMcpServer } from '../dist/server.js';
 import {
   buildChainedSelections,
+  credentialsNeededFor,
   buildPickerAccounts,
   connectionState,
   estimateProratedUsd,
@@ -1433,6 +1434,18 @@ test('custom skill keys follow the API normalisation rules', () => {
   assert.equal(normalizeCustomSkillKey(`cs-${'a'.repeat(61)}`), null);
   assert.deepEqual(upsertCustomSkillKey('report', 'scheduled_task'), { key: 'cs-cron-report' });
   assert.match(upsertCustomSkillKey('cs-report', 'scheduled_task').error, /custom skill key/);
+});
+
+test('an OAuth credential is ready for new skills only once it is connected', () => {
+  const registry = { skills: new Map([['int-shop', { requiresCredentials: true, credentialKeys: ['shopify', 'notes'] }]]) };
+  const row = (shopify) => ({
+    credentials: {
+      shopify: { _schema: { oauth_provider: { oauth_flow: {} } }, ...shopify },
+      notes: { _schema: { oauth_provider: null }, _filled: true, _connected: false },
+    },
+  });
+  assert.deepEqual(credentialsNeededFor(['int-shop'], registry, row({ _filled: true, _connected: false })), [{ skill: 'int-shop', credentials: ['shopify'] }]);
+  assert.deepEqual(credentialsNeededFor(['int-shop'], registry, row({ _filled: true, _connected: true })), []);
 });
 
 test('skill plans follow dependency cycles and keys are bound to their change', () => {

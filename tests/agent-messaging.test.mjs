@@ -712,6 +712,22 @@ test('Workflow Agent refusals: protected copies and API keys it does not accept'
   });
 });
 
+test('a team key whose creator left the team gets a readable refusal from Studio and the Workflow Agent', async () => {
+  const body = '{"result":false,"errors":[{"code":0,"message":"You must be a member of this team to perform this action"}]}';
+  const fake = fakeClient({
+    '/Studio/Message/Send': () => { throw new WiroApiError(403, body); },
+    '/StudioWorkflow/Message/Send': () => { throw new WiroApiError(403, body); },
+  });
+  await withClient(fake, async client => {
+    for (const agent of ['studio', 'workflow-agent']) {
+      const result = await client.callTool({ name: 'send_agent_message', arguments: { agent, message: 'hi' } });
+      assert.equal(result.isError, true);
+      assert.match(textOf(result), /the person who created it is no longer a member of that team/);
+      assert.doesNotMatch(textOf(result), /\{"result"/);
+    }
+  });
+});
+
 test('get_agent_message reads a deployed agent message without secrets and explains a missing one', async () => {
   const fake = fakeClient({
     '/UserAgent/Message/Detail': (body) => (body.messageguid === 'msg-9'

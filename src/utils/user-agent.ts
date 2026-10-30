@@ -547,8 +547,10 @@ export function toAgentDetail(row: Record<string, unknown>): AgentDetail {
     ...(models.length > 0 ? { selectableModels: models } : {}),
     enabledCommands: Array.isArray(row.enabledCommands) ? toStringArray(row.enabledCommands) : null,
     credentials,
+    // Wiro does not mark a required OAuth card that is not connected as missing
+    // (its page shows a Connect button instead), yet setup waits for it.
     missingCredentials: credentials
-      .filter(credential => credential.requiredMissing)
+      .filter(credential => credential.requiredMissing || (credential.oauth && !credential.optional && !credential.connected))
       .map(({ key, title, oauth }) => ({ key, title, oauth })),
     channels,
     scheduledTasks: summarizeTasks(row.scheduledskills),

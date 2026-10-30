@@ -389,6 +389,17 @@ test('next steps carry every argument the next tool needs', () => {
   assert.equal(nextStepForAgent(toAgentDetail(agentRow({ credentials: {} })), 45), undefined);
 });
 
+test('a required OAuth credential that is saved but not connected still counts as missing', () => {
+  const shop = { optional: false, _connected: false, _filled: true, _required_missing: false, _schema: { title: 'Shopify', oauth_provider: { oauth_flow: {} } } };
+  const later = { optional: true, _connected: false, _filled: false, _required_missing: false, _schema: { title: 'Slack', oauth_provider: { oauth_flow: {} } } };
+  const agent = toAgentDetail(agentRow({ status: 6, setuprequired: true, credentials: { shopify: shop, slack: later } }));
+  assert.deepEqual(agent.missingCredentials, [{ key: 'shopify', title: 'Shopify', oauth: true }]);
+  assert.equal(nextStepForAgent(agent, 45).tool, 'connect_agent_oauth');
+  assert.deepEqual(nextStepForAgent(agent, 45).arguments, { action: 'connect', agent_guid: 'ua-1', credential: 'shopify' });
+  const connected = toAgentDetail(agentRow({ credentials: { shopify: { ...shop, _connected: true } } }));
+  assert.deepEqual(connected.missingCredentials, []);
+});
+
 test('status labels, html cleanup and custom skill keys follow the server rules', () => {
   assert.equal(agentStatusLabel(4), 'running');
   assert.equal(agentStatusLabel(6), 'setup_required');
@@ -1599,6 +1610,22 @@ test('manage_agent_billing sends card plans to the dashboard without a payment l
     assert.match(pack.structuredContent.message, /To buy the pack, open https:\/\/wiro\.ai\/panel\/agents\/ua-1/);
     assert.doesNotMatch(JSON.stringify(pack), /checkout\.stripe\.com/);
     assert.deepEqual(proCard.calls.map(item => item.path).filter(path => path !== '/UserAgent/Detail'), []);
+  });
+});
+
+test('manage_agent_billing does not say a card plan set to stop will renew', async () => {
+  const card = subscription({ provider: 'stripe' });
+  const fake = fakeClient({ '/UserAgent/Detail': detailResponse(agentRow({ subscription: card, stripecancelatperiodend: true })) });
+  await withClient(fake, async client => {
+    const renew = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'renew' });
+    assert.equal(renew.structuredContent.outcome, 'refused');
+    assert.match(renew.structuredContent.message, /is set to stop renewing after .*where it can be kept: https:\/\/wiro\.ai\/panel\/agents\/ua-1$/);
+    assert.doesNotMatch(renew.structuredContent.message, /renews by itself/);
+  });
+  const renewing = fakeClient({ '/UserAgent/Detail': detailResponse(agentRow({ subscription: card })) });
+  await withClient(renewing, async client => {
+    const renew = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'renew' });
+    assert.match(renew.structuredContent.message, /renews by itself/);
   });
 });
 
