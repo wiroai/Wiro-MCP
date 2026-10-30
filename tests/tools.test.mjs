@@ -310,6 +310,27 @@ const EXPECTED_TOOLS = [
   'disconnect_agent_oauth', 'manage_agent_custom_skill',
 ];
 
+test('wrapTool sees every tool with its annotations and can answer in its place', async () => {
+  const seen = new Map();
+  const wrapTool = (tool, handler) => {
+    seen.set(tool.name, tool.annotations);
+    if (tool.annotations?.readOnlyHint === true) return handler;
+    return async () => ({ content: [{ type: 'text', text: `${tool.name} is turned off here.` }], isError: true });
+  };
+  await withClient({}, async client => {
+    const { tools } = await client.listTools();
+    assert.deepEqual([...seen.keys()].sort(), tools.map(tool => tool.name).sort());
+    assert.equal(seen.get('delete_workflow').destructiveHint, true);
+
+    const blocked = await client.callTool({ name: 'delete_workflow', arguments: { slug: 'fox-maker-Ab3xZ' } });
+    assert.equal(blocked.isError, true);
+    assert.equal(blocked.content[0].text, 'delete_workflow is turned off here.');
+
+    const open = await client.callTool({ name: 'get_playbook', arguments: { topics: ['workflows'] } });
+    assert.notEqual(open.isError, true);
+  }, { wrapTool });
+});
+
 test('every tool advertises output schemas and annotations', async () => {
   await withClient({}, async client => {
     const result = await client.listTools();

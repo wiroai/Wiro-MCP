@@ -10,7 +10,7 @@ import { withJsonSchema2020_12 } from './utils/json-schema-dialect.js';
 export { WiroClient } from './client.js';
 export { SERVER_INSTRUCTIONS } from './instructions.js';
 export { registerTools, parseToolsets, TOOLSETS } from './tools/index.js';
-export type { RegisterToolsOptions, Toolset } from './tools/index.js';
+export type { RegisterToolsOptions, Toolset, ToolHandler, ToolInfo, ToolWrapper } from './tools/index.js';
 export type {
   Task,
   TaskCustomToolCallSegment,
@@ -48,7 +48,7 @@ export function createMcpServer(
     },
   );
 
-  registerTools(server, client, { toolsets: options.toolsets });
+  registerTools(server, client, { toolsets: options.toolsets, wrapTool: options.wrapTool });
   registerPrompts(server, options.toolsets);
 
   // Claude and other 2020-12-only MCP clients reject the SDK's draft-07 $schema.

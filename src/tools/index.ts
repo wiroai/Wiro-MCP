@@ -1,4 +1,5 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 import type { WiroClient } from '../client.js';
 import { registerSearchModels } from './search-models.js';
 import { registerGetModelSchema } from './get-model-schema.js';
@@ -52,9 +53,44 @@ import { registerManageAgentCustomSkill } from './manage-agent-custom-skill.js';
 export const TOOLSETS = ['models', 'workflows', 'agents'] as const;
 export type Toolset = typeof TOOLSETS[number];
 
+/** What a tool wrapper is told about the tool it wraps. */
+export interface ToolInfo {
+  name: string;
+  title?: string;
+  annotations?: ToolAnnotations;
+}
+
+/** A tool's handler as the MCP server calls it: the arguments, then the request context. */
+export type ToolHandler = (...args: never[]) => unknown;
+
+/**
+ * Lets a server that embeds these tools put its own checks around every call,
+ * such as logging or an extra permission check. It gets each tool and its handler
+ * and returns the handler to register.
+ */
+export type ToolWrapper = (tool: ToolInfo, handler: ToolHandler) => ToolHandler;
+
 export interface RegisterToolsOptions {
   /** Which groups of tools to register. Defaults to all of them. */
   toolsets?: readonly Toolset[];
+  /** Wraps every tool's handler before it is registered. */
+  wrapTool?: ToolWrapper;
+}
+
+/** The server as the register functions see it, with every handler passed through `wrap`. */
+function withToolWrapper(server: McpServer, wrap: ToolWrapper): McpServer {
+  const registerTool = server.registerTool.bind(server) as unknown as (
+    name: string,
+    config: { title?: string; annotations?: ToolAnnotations },
+    handler: ToolHandler,
+  ) => unknown;
+  return new Proxy(server, {
+    get(target, property, receiver) {
+      if (property !== 'registerTool') return Reflect.get(target, property, receiver);
+      return (name: string, config: { title?: string; annotations?: ToolAnnotations }, handler: ToolHandler) =>
+        registerTool(name, config, wrap({ name, title: config.title, annotations: config.annotations }, handler));
+    },
+  });
 }
 
 /** Parses a comma-separated list such as "models,workflows"; unknown names are ignored. */
@@ -66,10 +102,11 @@ export function parseToolsets(value: string | undefined): Toolset[] | undefined 
 }
 
 export function registerTools(
-  server: McpServer,
+  mcpServer: McpServer,
   client: WiroClient,
   options: RegisterToolsOptions = {},
 ): void {
+  const server = options.wrapTool ? withToolWrapper(mcpServer, options.wrapTool) : mcpServer;
   const enabled = new Set<Toolset>(options.toolsets ?? TOOLSETS);
 
   // Always available: account context, guides and documentation.
