@@ -150,7 +150,8 @@ export const modelSummarySchema = z.object({
   description: z.string().optional(),
   categories: z.array(z.string()),
   pricing: z.string().optional(),
-  estimatedCostUsd: z.number().nullable().optional(),
+  estimatedCostUsd: z.number().nullable().optional()
+    .describe('Estimated USD cost of one run, averaged from past runs, for a model billed by run time. Null when there is no such estimate, as for a model priced by its options or by usage: see pricing.'),
 });
 
 export const modelListOutputSchema = {

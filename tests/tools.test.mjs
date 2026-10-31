@@ -817,6 +817,37 @@ test('get_model_schema points at workflow steps when run_model is not loaded', a
   }, { toolsets: ['workflows'] });
 });
 
+test('get_model_schema answers a price question for a token-billed model with its rates', async () => {
+  const note = 'Pricing is token-based: input $0.2 per 1M tokens, output $1.25 per 1M tokens. Image inputs are billed as input tokens. If web search is enabled, each search call costs an additional $0.01. Final cost depends on your prompt, attached images, and response length.';
+  const fakeWiroClient = {
+    getModelSchema: async () => ({
+      result: true,
+      errors: [],
+      tool: [{
+        cleanslugowner: 'openai',
+        cleanslugproject: 'gpt-5-4-nano',
+        title: 'GPT-5.4 Nano (OpenAI)',
+        categories: ['tool', 'partner-llm'],
+        parameters: [{ title: 'Inputs', items: [{ id: 'prompt', type: 'textarea', label: 'Prompt', required: true }] }],
+        dynamicprice: [{ inputs: {}, price: 0, priceMethod: 'cp-readoutput', note }],
+        approximatelycost: 0,
+        cps: 0,
+      }],
+    }),
+  };
+
+  await withClient(fakeWiroClient, async client => {
+    const { tools } = await client.listTools();
+    assert.match(tools.find(tool => tool.name === 'get_model_schema').description, /for a price question, the price here is the answer\. A usage-based price gives the rates, and the charge is known after the run\./);
+
+    const result = await client.callTool({ name: 'get_model_schema', arguments: { model: 'openai/gpt-5-4-nano' } });
+    assert.notEqual(result.isError, true);
+    assert.ok(result.content[0].text.includes(`### Pricing (usage-based)\n${note} The price is set from usage when the run completes.`));
+    assert.equal(result.structuredContent.model.pricing, `usage-based: ${note}`);
+    assert.equal(result.structuredContent.model.estimatedCostUsd, null);
+  });
+});
+
 test('a Workflow Agent proposal read with the agents toolset alone points at a loaded tool', async () => {
   const contents = {
     version: '1',

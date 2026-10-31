@@ -113,7 +113,8 @@ export function registerGetModelSchema(
           + 'discovered here: a chat continues with the same `session_id` and the next prompt, and '
           + '`previousTaskToken` with `toolOutputs` continues a turn that ended with tool calls. Fill required '
           + 'parameters and follow the returned `run_model` next action once when the user wants a run; '
-          + 'for a price question, the price here is the answer. '
+          + 'for a price question, the price here is the answer. A usage-based price gives the rates, '
+          + 'and the charge is known after the run. '
         : 'Get one model’s typed parameters, options, defaults, required '
           + 'fields, and pricing, to use the model as a workflow step: its parameter '
           + 'ids are the keys of the step’s input. ')

@@ -8,7 +8,7 @@ import type {
   TaskUsage,
   ToolListItem,
 } from '../types.js';
-import { formatPricing, parameterFallback, parameterRange, toParameterOption } from './format.js';
+import { formatPricing, isUsageBilled, parameterFallback, parameterRange, toParameterOption } from './format.js';
 import {
   isToolCallSegment,
   normalizeTaskRawContent,
@@ -240,7 +240,11 @@ export function createTaskContent(text: string, task?: Task): TaskContentBlock[]
 }
 
 export function toStructuredModel(model: ToolListItem): StructuredModelSummary {
-  const estimatedCost = parseNullableNumber(model.approximatelycost);
+  // approximatelycost estimates one run from past run times, and 0 means there
+  // is no such estimate, as for a model priced by its options. A price set
+  // from usage is known only once the run completes.
+  const approximateCost = parseNullableNumber(model.approximatelycost);
+  const estimatedCost = isUsageBilled(model) || approximateCost === 0 ? null : approximateCost;
   const pricing = formatPricing(model);
 
   return compact({
@@ -279,9 +283,13 @@ export function toStructuredModelDetail(model: ToolListItem): {
   nextAction: NextAction;
 } {
   const summary = toStructuredModel(model);
+  // A price question is answered here, so the price carries the rules that
+  // the short search line leaves out, such as how megapixels count.
+  const pricing = formatPricing(model, true);
   return {
     model: {
       ...summary,
+      ...(pricing ? { pricing } : {}),
       parameters: (model.parameters ?? []).map(group => ({
         title: group.title || '',
         items: group.items.map(item => compact({
