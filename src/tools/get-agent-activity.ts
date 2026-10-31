@@ -172,8 +172,9 @@ export function registerGetAgentActivity(server: McpServer, client: WiroClient):
         + 'usage per model for the current period and the credit ledger (charges, renewals, packs and token '
         + 'usage per turn; 100 credits = 1 USD). kind logs returns the activity log for one day, newest first '
         + '(tool calls, turns, scheduled runs, errors). kind log_dates lists the days that have a log. Logs '
-        + 'are read from the agent\'s host, so they are only available while the agent is on one; a stopped '
-        + 'agent must be started first. Names and emails of the people who acted are never returned.',
+        + 'are read from the agent\'s host: a running agent and an agent in error have one, a stopped agent '
+        + 'has none (the call says so; start it only if the user agrees). Names and emails of the people who '
+        + 'acted are never returned.',
       inputSchema: {
         agent_guid: z.string().min(1).max(100)
           .describe('The deployed agent\'s guid, from list_my_agents or deploy_agent.'),

@@ -26,7 +26,8 @@ export function registerListAgentTemplates(server: McpServer, client: WiroClient
       title: 'List Wiro agent templates',
       description: 'Browse the catalog of ready-made Wiro agents (templates) that deploy_agent can deploy. '
         + 'Each template shows its Starter and Pro price in USD per 30 days and the monthly credit pool '
-        + 'that pays for the agent\'s model usage (100 credits = 1 USD). A template whose pricing is null '
+        + 'that pays for the agent\'s chat and scheduled tasks (100 credits = 1 USD); image and video runs it '
+        + 'starts are billed to a Wiro wallet. A template whose pricing is null '
         + 'cannot be priced right now: do not quote or deploy it. Call get_agent_template next for the '
         + 'skills, the credentials the user must provide and the exact prices. To build an agent from '
         + 'individual skills instead, use list_agent_skills. get_playbook describes the whole flow from '

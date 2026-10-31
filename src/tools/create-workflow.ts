@@ -49,7 +49,8 @@ export function registerCreateWorkflow(server: McpServer, client: WiroClient): v
         + 'and call again. Set every model input you care about: a left-out one gets the model\'s '
         + 'default, which for some models is the sample prompt or sample images from its page '
         + '(the Notes in the result list what was filled). The graph can be at most 40 KB of JSON '
-        + 'with those defaults. Free. Each call creates another workflow.',
+        + 'with those defaults. Free. Each call creates another workflow. The result gives the '
+        + 'full slug, the page link and the input keys, so no get_workflow call is needed to run it.',
       inputSchema: {
         title: z.string().trim().min(1).max(160).describe('Workflow title (1-160 characters).'),
         contents: workflowContentsInputSchema,
@@ -94,7 +95,7 @@ export function registerCreateWorkflow(server: McpServer, client: WiroClient): v
             nextAction: {
               tool: 'run_workflow',
               arguments: { slug: saved.fullSlug },
-              reason: 'To try it, ask the user first (each model step is charged), then pass input values'
+              reason: 'Run it only if the user asked for a run, after telling them the estimate; otherwise ask the user first (each model step is charged). Pass input values'
                 + (saved.inputs.length > 0
                   ? ` for: ${saved.inputs.map(input => input.key).join(', ')}. A key you leave out uses its saved value or default.`
                   : '. It has no inputs.'),

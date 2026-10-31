@@ -14,7 +14,7 @@ export function registerSearchModels(server: McpServer, client: WiroClient): voi
         + 'the result and call the returned `get_model_schema` next action before '
         + 'using `run_model`.',
       inputSchema: {
-        search: z.string().optional().describe('Search keyword, e.g. "flux", "video generation", "upscale".'),
+        search: z.string().optional().describe('One to three key words, e.g. "flux", "upscale", "remove background". Every word must appear in one field of a model (name, description or a parameter), so never a sentence.'),
         categories: z.array(z.string()).optional().describe(
           'Filter by categories. Available: "text-to-image", "image-to-image", "image-editing", '
           + '"text-to-video", "image-to-video", "speech-to-video", "talking-head", '
@@ -23,7 +23,7 @@ export function registerSearchModels(server: McpServer, client: WiroClient): voi
         ),
         slugowner: z.string().optional().describe('Filter by model owner slug.'),
         sort: z.enum(['relevance', 'time', 'ratedusercount', 'commentcount', 'averagepoint']).default('relevance')
-          .describe('Sort by relevance, newest, usage, comments, or rating.'),
+          .describe('Sort by relevance, newest (time), number of ratings (ratedusercount), comments (commentcount) or average rating (averagepoint).'),
         start: z.number().int().min(0).default(0).describe('Pagination offset (default 0).'),
         limit: z.number().int().min(1).max(100).default(20).describe('Maximum results (default 20, max 100).'),
       },

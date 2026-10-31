@@ -94,12 +94,14 @@ export function registerListAgentSkills(server: McpServer, client: WiroClient): 
       title: 'List Wiro agent skills',
       description: 'List the skills a Wiro agent can have, with their monthly price, the skills they depend '
         + 'on and the credential each one needs. Use it to plan a custom build for deploy_agent or a skill '
-        + 'change for apply_agent_skills. Pass `name` with a skill name (or a credential or channel key such '
+        + 'change for apply_agent_skills. Without `name` it lists every skill with its title and price: look '
+        + 'there for the service the user named (apply_agent_skills also answers an unknown name with close '
+        + 'matches). Pass `name` with a skill name (or a credential or channel key such '
         + 'as "telegram") to get the exact fields the user must provide, with their labels, formats and setup '
         + 'help, so you know what to ask for before calling set_agent_credentials or connect_agent_oauth.',
       inputSchema: {
         name: z.string().min(1).max(100).optional()
-          .describe('A skill name (for example "int-gmail-check") or a credential or channel key (for example "telegram"). Returns that skill and the setup fields of every credential it needs.'),
+          .describe('A skill name (for example "int-gmail-check") returns its price and the setup fields of every credential it needs. A credential or channel key (for example "telegram") returns that credential\'s setup, including whether one-click Wiro connect is available.'),
         category: z.enum(['int', 'util']).optional()
           .describe('"int" for skills that connect to an outside service, "util" for helper skills.'),
         capability: z.string().max(100).optional()

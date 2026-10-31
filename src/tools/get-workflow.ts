@@ -90,7 +90,7 @@ export function registerGetWorkflow(server: McpServer, client: WiroClient): void
             nextAction: {
               tool: 'run_workflow',
               arguments: { slug: workflow.fullSlug },
-              reason: 'To run it, ask the user first (each model step is charged), then pass input values'
+              reason: 'Run it only if the user asked for a run, after telling them the estimate; otherwise ask the user first (each model step is charged). Pass input values'
                 + (workflow.inputs.length > 0
                   ? ` for: ${workflow.inputs.map(input => input.key).join(', ')}. A key you leave out uses its saved value or default.`
                   : '. It has no inputs.'),

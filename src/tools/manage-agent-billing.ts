@@ -692,7 +692,7 @@ export function registerManageAgentBilling(server: McpServer, client: WiroClient
         tier: z.enum(['starter', 'pro']).optional()
           .describe('subscribe only: the tier to pay for (default: the agent\'s current tier).'),
         pack: z.enum(['small', 'medium', 'large']).optional()
-          .describe('buy_credits only: the credit pack to buy. get_my_agent lists the packs with their prices.'),
+          .describe('buy_credits only: the credit pack to buy. Leave it out to get the packs with their credits and prices.'),
         request_id: z.string().regex(/^[A-Za-z0-9_-]{8,128}$/).optional()
           .describe('buy_credits only: the id returned by the quote. Repeating a purchase with the same id never charges twice. Every new purchase needs a new quote; an id whose purchase already completed buys nothing.'),
         confirm_charge_usd: z.number().min(0).max(100_000).optional()

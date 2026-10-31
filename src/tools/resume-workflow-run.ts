@@ -22,15 +22,17 @@ export function registerResumeWorkflowRun(server: McpServer, client: WiroClient)
     {
       title: 'Resume a Wiro workflow run',
       description: 'Continue a workflow run that failed or stopped at a breakpoint, on the '
-        + 'same run token. Completed steps are kept and not charged again; failed, skipped '
+        + 'same run token. Steps run as the run started them, with the same inputs and '
+        + 'settings: changes saved to the workflow since then apply to new runs only. '
+        + 'Completed steps are kept and not charged again; failed, skipped '
         + 'and not-yet-run steps run again as new model runs and are charged to the wallet '
         + 'that paid for the original run. Ask the user before resuming. Use it only when '
         + 'wait_for_workflow_run reports `canResume: true`.',
       inputSchema: {
         workflowtoken: z.string().min(1).describe('The run token of a failed or stopped run.'),
         breakpoint_node_id: z.string().max(100).nullable().optional()
-          .describe('Optional step id to stop after this time. Omit it to keep the run\'s '
-            + 'original breakpoint (a stopped run then runs to the end); pass null to run to the end.'),
+          .describe('Optional step id to stop after this time. Leave it out and a failed run keeps the '
+            + 'breakpoint it started with, while a stopped run runs to the end. Pass null to run to the end.'),
         wait_seconds: z.number().int().min(0).max(MAX_WAIT_SECONDS).default(DEFAULT_WAIT_SECONDS)
           .describe(`How long to wait for the result (0-${MAX_WAIT_SECONDS} seconds, default ${DEFAULT_WAIT_SECONDS}).`),
       },

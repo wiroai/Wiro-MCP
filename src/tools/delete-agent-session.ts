@@ -68,8 +68,9 @@ export function registerDeleteAgentSession(server: McpServer, client: WiroClient
       title: 'Delete an agent conversation',
       description: 'Permanently delete one conversation (session) with Studio, the Workflow Agent or one of your '
         + 'deployed agents, and reset the agent\'s memory of it so the next message in that session starts fresh. '
-        + 'Without confirm: true it only describes what would be deleted; ask the user before confirming. Cancel a '
-        + 'running turn first with cancel_agent_message. Studio keeps a display name the session was given on '
+        + 'Without confirm: true it only describes what would be deleted; ask the user before confirming. A turn '
+        + 'that is still running is deleted too; to stop it instead, cancel it first with cancel_agent_message '
+        + '(get_agent_conversation with the session shows whether one is running). Studio keeps a display name the session was given on '
         + 'wiro.ai. The Workflow Agent\'s "default" session cannot be deleted. Model outputs and saved workflows '
         + 'are not affected.',
       inputSchema: {

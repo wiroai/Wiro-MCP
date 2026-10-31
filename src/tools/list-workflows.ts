@@ -19,7 +19,9 @@ export function registerListWorkflows(server: McpServer, client: WiroClient): vo
         + 'workspace (personal, or the team the key\'s project belongs to). scope "public" '
         + 'searches the public gallery of ready-made workflows, for example every workflow '
         + 'that uses a given model. Use the returned `fullSlug` with get_workflow, '
-        + 'run_workflow, clone_workflow or update_workflow.',
+        + 'run_workflow, clone_workflow or update_workflow. A row marked "graph hidden" is '
+        + 'protected: it can still be run, and a clone of it keeps its steps hidden, so only '
+        + 'the clone\'s title, description and tags can change.',
       inputSchema: {
         scope: z.enum(['mine', 'public']).default('mine')
           .describe('"mine" for your workspace, "public" for the public gallery.'),

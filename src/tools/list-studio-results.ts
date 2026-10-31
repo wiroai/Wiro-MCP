@@ -26,7 +26,8 @@ export function registerListStudioResults(server: McpServer, client: WiroClient)
         + 'their status, output URLs, text answers and cost. It covers every Studio conversation of this API key\'s '
         + 'workspace. Use it to collect outputs that finished after a turn ended, or to check what is still running. '
         + 'These runs belong to Studio, so get_task, list_tasks, cancel_task and kill_task cannot read or stop them; '
-        + 'poll this tool instead. Only successful runs are charged. Read-only.',
+        + 'poll this tool instead. It reads at most the 100 most recent runs: to collect a period, pass limit '
+        + '100 and since. Only successful runs are charged. Read-only.',
       inputSchema: {
         limit: z.number().int().min(1).max(100).default(20)
           .describe('How many recent runs to read (1-100, default 20). Filters apply after reading, so fewer can come back.'),

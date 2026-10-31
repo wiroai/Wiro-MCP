@@ -48,7 +48,7 @@ export function registerListWorkflowRuns(server: McpServer, client: WiroClient):
       inputSchema: {
         status: z.enum(['running', 'completed', 'failed', 'cancelled', 'stopped']).optional()
           .describe('Only runs with this status.'),
-        search: z.string().max(200).optional().describe('Text to look for in the workflow title or slug.'),
+        search: z.string().max(200).optional().describe('Text to look for in the workflow title, or in its slug without the 5 character id: "product-ad" finds the runs of "product-ad-a1B2c".'),
         start: z.number().int().min(0).default(0).describe('Pagination offset (default 0).'),
         limit: z.number().int().min(1).max(100).default(20).describe('Maximum runs (default 20, max 100).'),
       },

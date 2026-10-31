@@ -12,9 +12,10 @@ export function registerGetTaskPrice(server: McpServer, client: WiroClient): voi
     'get_task_price',
     {
       title: 'Get a Wiro task price',
-      description: 'Get one task’s final charged cost. Successful tasks are '
-        + 'billed; failed tasks are not. If the task is active, follow the '
-        + 'returned `wait_for_task` next action.',
+      description: 'Get one task’s cost at the model\'s list price. Successful tasks are '
+        + 'billed; failed and cancelled tasks are not. A finished task\'s result already '
+        + 'shows its cost, so use this for a task whose result you do not have. If the '
+        + 'task is active, follow the returned `wait_for_task` next action.',
       inputSchema: {
         tasktoken: z.string().optional().describe('The task token returned from run_model.'),
         taskid: z.string().optional().describe('The task ID (alternative to tasktoken).'),

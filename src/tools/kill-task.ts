@@ -8,9 +8,9 @@ export function registerKillTask(server: McpServer, client: WiroClient): void {
     'kill_task',
     {
       title: 'Kill a running Wiro task',
-      description: 'Stop a task that is already running. This changes remote '
-        + 'state and can discard in-progress work. Use `cancel_task` for a '
-        + 'task that is still queued.',
+      description: 'Stop a model task that has not finished: a running task stops '
+        + 'and its work is lost, and a queued one is cancelled. A stopped task is '
+        + 'not charged. Not for the steps of a workflow run or the runs Studio starts.',
       inputSchema: {
         tasktoken: z.string().optional().describe('The task token returned from run_model.'),
         taskid: z.string().optional().describe('The task ID (alternative to tasktoken).'),

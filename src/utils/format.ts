@@ -437,7 +437,7 @@ export function formatModelSchema(model: ToolListItem): string {
         if (param.placeholder) lines.push(`  Example: \`${param.placeholder}\``);
         if (param.note) lines.push(`  ${param.note}`);
         if (param.type === 'fileinput') lines.push(`  Pass a URL directly (e.g. \`${param.id}: "https://..."\`) or use \`${param.id}Url\` for the URL field.`);
-        if (param.type === 'multifileinput') lines.push(`  Pass URLs via \`${param.id}Url\` (comma-separated) or upload files in \`${param.id}\`.`);
+        if (param.type === 'multifileinput') lines.push(`  Pass the URLs comma-separated in \`${param.id.replace('Multiple', '')}UrlMultiple\`.`);
         if (param.type === 'combinefileinput') lines.push(`  Pass an array of URLs directly: \`${param.id}: ["https://...", "https://..."]\`. No upload needed.`);
         if (param.type === 'json' || param.type === 'json-array') lines.push(`  Pass this as a structured JSON value inside the ordinary \`params\` object.`);
 
@@ -581,7 +581,7 @@ function formatDynamicPrice(dynamicprice?: string): string | null {
 
     const min = entries[0];
     const max = entries[entries.length - 1];
-    return `$${formatPrice(min.price)} – $${formatPrice(max.price)} / ${min.label}`;
+    return `$${formatPrice(min.price)} to $${formatPrice(max.price)} / ${min.label}`;
   } catch {
     return null;
   }

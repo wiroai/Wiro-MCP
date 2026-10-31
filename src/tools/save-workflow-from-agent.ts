@@ -112,7 +112,7 @@ export function registerSaveWorkflowFromAgent(server: McpServer, client: WiroCli
       description: 'Save the workflow the Workflow Agent proposed in one of its replies. Without '
         + '`workflow` it is saved as a new private workflow. With `workflow` (the workflow that was '
         + 'attached when the agent was asked to edit it) the proposal replaces that workflow\'s '
-        + 'steps; its saved input values and hidden secret inputs are kept. Applying needs the '
+        + 'steps, title and description; its saved input values and hidden secret inputs are kept. Applying needs the '
         + 'attached workflow\'s `loaded_updatetime`, and without `confirm: true` it only returns '
         + 'what would change: show that to the user and repeat the call with `confirm: true` after '
         + 'they agree. The reply is read again from Wiro, so pass its ids, not the JSON. Wiro '
@@ -121,7 +121,7 @@ export function registerSaveWorkflowFromAgent(server: McpServer, client: WiroCli
         + 'once: a repeated save is caught only while this server remembers the first one, so it '
         + 'can still create a second copy. Saving is free; running the workflow is charged.',
       inputSchema: {
-        message_id: z.string().min(1).describe('The Workflow Agent reply that holds the proposal.'),
+        message_id: z.string().min(1).describe('The message id from send_agent_message or get_agent_message. One id covers the message and its reply.'),
         session: z.string().min(1).describe('The session that reply belongs to.'),
         artifact_hash: z.string().optional()
           .describe('Which proposal to save when the reply has more than one (from send_agent_message or get_agent_message).'),
@@ -310,6 +310,6 @@ export function registerSaveWorkflowFromAgent(server: McpServer, client: WiroCli
 
 function runReason(saved: SavedWorkflow): string {
   const keys = saved.inputs.map(input => input.key);
-  return 'To try it, ask the user first (each model step is charged), then call run_workflow with input values'
+  return 'Run it only if the user asked for a run, after telling them the estimate; otherwise ask the user first (each model step is charged). Call run_workflow with input values'
     + (keys.length > 0 ? ` for: ${keys.join(', ')}. A key you leave out uses its saved value or default.` : '.');
 }

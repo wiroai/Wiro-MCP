@@ -217,7 +217,7 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
         skills: z.record(z.string(), z.boolean())
           .describe('Skills to change, as name: true to turn on or name: false to turn off, for example {"int-instagram-post": true}. Registry names only (list_agent_skills). Custom skills and scheduled tasks (cs-...) are managed with manage_agent_custom_skill; channels such as Telegram turn on through set_agent_credentials.'),
         tier: z.enum(['starter', 'pro']).optional()
-          .describe('Optional plan change in the same step. Only Starter to Pro is supported.'),
+          .describe('Optional: also move from Starter to Pro in this billed change. To upgrade without a skill change, use manage_agent_billing (upgrade_to_pro).'),
         add_dependencies: z.boolean().default(true)
           .describe('Also turn on the skills that the enabled skills depend on (default true). Without them the change is refused.'),
         confirm: z.boolean().default(false)

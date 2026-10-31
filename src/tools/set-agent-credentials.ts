@@ -240,8 +240,9 @@ export function registerSetAgentCredentials(server: McpServer, client: WiroClien
         + 'and the file is uploaded. Values are never echoed back. A running agent restarts to load '
         + 'the values. Channels such as Telegram, Slack and Discord turn on by themselves once all '
         + 'their required fields are set, and turn off when one is cleared. Saving a credential can '
-        + 'switch scheduled tasks that need it back on. Sign-in integrations (Google, Meta, HubSpot '
-        + 'and similar) are then connected with connect_agent_oauth. Only save a Wiro project API '
+        + 'switch scheduled tasks that need it back on. Sign-in integrations (such as Google Ads, YouTube, '
+        + 'Meta and HubSpot) are then connected with connect_agent_oauth; Gmail, Google Calendar and Google '
+        + 'Drive are not sign-ins and are set here. Only save a Wiro project API '
         + 'key (credential "wiro") that the user gave you: model runs are billed to its wallet. '
         + 'The agents playbook (get_playbook) has the full setup walkthrough.',
       inputSchema: {

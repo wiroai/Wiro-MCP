@@ -10,11 +10,14 @@ export function registerRecommendModel(server: McpServer, client: WiroClient): v
     'recommend_model',
     {
       title: 'Recommend Wiro models',
-      description: 'Describe a generation goal in natural language and receive '
-        + 'ranked model recommendations. Follow the returned '
-        + '`get_model_schema` next action before running a model.',
+      description: 'Find models for a goal by key words, such as "upscale image" or '
+        + '"remove background". A model matches only when every word appears in one of '
+        + 'its fields (name, description or a parameter), so use two or three words, not '
+        + 'a sentence; for a kind of task, search_models with categories also works. The '
+        + 'best matches come first. Follow the returned `get_model_schema` next action '
+        + 'before running a model.',
       inputSchema: {
-        task: z.string().describe('What you want to do, e.g. "generate a photorealistic portrait", "upscale an image to 4K", "transcribe audio to text".'),
+        task: z.string().describe('Two or three key words, e.g. "upscale image", "remove background", "transcribe audio".'),
       },
       outputSchema: modelListOutputSchema,
       annotations: {

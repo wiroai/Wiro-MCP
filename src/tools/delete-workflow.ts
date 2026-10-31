@@ -12,10 +12,12 @@ export function registerDeleteWorkflow(server: McpServer, client: WiroClient): v
     'delete_workflow',
     {
       title: 'Delete a Wiro workflow',
-      description: 'Delete a workflow from the API key\'s workspace. It disappears from your '
-        + 'list, the gallery and runs for everyone, and it cannot be restored. Without '
-        + '`confirm: true` this only describes what would be deleted; ask the user, then '
-        + 'call again with `confirm: true`.',
+      description: 'Delete a workflow from the API key\'s workspace, for everyone: it leaves '
+        + 'every list and the gallery, can no longer be run, and cannot be restored. Runs '
+        + 'already started finish, and copies made from it keep working. With a team '
+        + 'project\'s key this includes teammates\' workflows. Without `confirm: true` this '
+        + 'only describes what would be deleted; ask the user, then call again with '
+        + '`confirm: true`.',
       inputSchema: {
         slug: z.string().min(1).describe('The full workflow slug or the workflow page URL.'),
         confirm: z.boolean().default(false).describe('Set true only after the user approved the deletion.'),

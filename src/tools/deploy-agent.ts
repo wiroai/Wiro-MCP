@@ -102,7 +102,7 @@ function quoteText(quote: Quote): string {
     `- Agent: ${what}`,
     `- Tier: ${quote.tier === 'pro' ? 'Pro' : 'Starter'}`,
     `- Price: ${formatUsd(quote.priceUsd)} now, then ${formatUsd(quote.priceUsd)} every 30 days until the plan is cancelled`,
-    `- Monthly credits: ${formatCredits(quote.monthlyCredits)}. They pay for the agent's model usage (100 credits = $1).`,
+    `- Monthly credits: ${formatCredits(quote.monthlyCredits)}. They pay for the agent's chat and scheduled tasks (100 credits = $1). Image and video runs it starts are billed to the wallet of the Wiro key saved on it.`,
     `- Paid from: ${quote.paidFrom} get_account shows the balance.`,
   ];
   if (quote.customSkills?.length) {
@@ -156,7 +156,8 @@ export function registerDeployAgent(server: McpServer, client: WiroClient): void
     'deploy_agent',
     {
       title: 'Deploy a Wiro agent',
-      description: 'Deploy a new agent from a template or as a custom build from chosen skills. This costs '
+      description: 'Deploy a new agent from a template or as a custom build from chosen skills. In a team '
+        + 'workspace only a team admin can deploy; anyone else is refused before anything is created or charged. This costs '
         + 'money: the first 30 days are paid from the Wiro wallet of the workspace this API key belongs to '
         + '(a team project\'s key pays from the team wallet), and the plan renews from that wallet every 30 '
         + 'days until it is cancelled. Without confirm: true the tool only returns the exact quote. Show it to '

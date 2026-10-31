@@ -10,17 +10,19 @@ export function registerListTasks(server: McpServer, client: WiroClient): void {
     'list_tasks',
     {
       title: 'List Wiro tasks',
-      description: 'List the authenticated project’s recent model-generation tasks. '
-        + 'Use this to find work from previous conversations, then call `get_task` '
-        + 'with a returned task ID for the complete result. The caller identity is '
-        + 'derived from authentication; no user UUID is accepted.',
+      description: 'List recent model tasks in the API key\'s workspace (personal, or the '
+        + 'key\'s team), newest first, from every project in it, with their status, cost '
+        + 'and first outputs. Use it to find work from earlier conversations, then call '
+        + '`get_task` with a returned task ID for the complete result. Start times are Unix '
+        + 'seconds. Steps of workflow runs and the runs Studio starts are not listed: '
+        + 'list_workflow_runs and list_studio_results have those.',
       inputSchema: {
         start: z.number().int().min(0).default(0)
           .describe('Pagination offset (default 0).'),
         limit: z.number().int().min(1).max(100).default(20)
           .describe('Maximum tasks to return (default 20, max 100).'),
         model: z.string().optional()
-          .describe('Optional model slug or partial model name filter.'),
+          .describe('Part of a model\'s name or of its owner, e.g. "flux" or "flux-2-pro". It is matched against the owner and the model name one at a time, so an "owner/model" slug matches nothing.'),
       },
       outputSchema: taskListOutputSchema,
       annotations: {

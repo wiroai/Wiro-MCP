@@ -8,9 +8,9 @@ export function registerCancelTask(server: McpServer, client: WiroClient): void 
     'cancel_task',
     {
       title: 'Cancel a queued Wiro task',
-      description: 'Cancel a task that is still queued, before worker '
-        + 'assignment. This changes remote state. Use `kill_task` for a task '
-        + 'that has already started.',
+      description: 'Cancel a model task that is still queued. It is refused once '
+        + 'the task has started; `kill_task` stops a task in either state. A '
+        + 'cancelled task is not charged.',
       inputSchema: {
         tasktoken: z.string().optional().describe('The task token returned from run_model.'),
         taskid: z.string().optional().describe('The task ID (alternative to tasktoken).'),

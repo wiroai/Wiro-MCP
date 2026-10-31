@@ -550,13 +550,15 @@ export function registerConnectAgentOauth(server: McpServer, client: WiroClient)
         + 'must open in their own browser and approve within 15 minutes; never open it for them. '
         + 'With mode api_key it checks a token saved earlier with set_agent_credentials and returns '
         + 'the accounts it can use, with no browser. Without mode the tool picks the one that '
-        + 'works; when Wiro\'s app is not available for a provider yet, it says which app keys or '
-        + 'token to save first. action status: whether the sign-in finished (wait_seconds waits for '
+        + 'works; when a provider needs the user\'s own app keys or a token first, it says which to '
+        + 'save. action status: whether the sign-in finished (wait_seconds waits for '
         + 'the user). action select_accounts: saves which accounts the agent uses ({id, name} from '
         + 'connect), and with picker runs the extra step some providers have (Meta Ads pages, '
         + 'Google Business locations). Connecting again replaces an existing connection and needs '
         + 'confirm: true. A running agent restarts when a connection or selection is saved. '
-        + 'Remove a connection with disconnect_agent_oauth. The agents playbook (get_playbook) has the '
+        + 'Remove a connection with disconnect_agent_oauth. Connect only a credential that the agent\'s '
+        + 'skills use (get_my_agent lists them). Only the person who deployed the agent can connect, so the '
+        + 'API key must come from a project that person created. The agents playbook (get_playbook) has the '
         + 'full setup walkthrough.',
       inputSchema: {
         action: z.enum(['connect', 'status', 'select_accounts']).default('connect')

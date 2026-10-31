@@ -27,7 +27,7 @@ function formatTemplate(template: TemplateDetail): string {
     lines.push(
       `**Starter:** ${formatUsd(starter.priceUsd)} per 30 days, ${formatCredits(starter.monthlyCredits)} credits per month`,
       `**Pro:** ${formatUsd(pro.priceUsd)} per 30 days, ${formatCredits(pro.monthlyCredits)} credits per month`,
-      'Prices are paid from the Wiro wallet when deploying and renew every 30 days until the plan is cancelled. Credits pay for the agent\'s model usage (100 credits = 1 USD).',
+      'Prices are paid from the Wiro wallet when deploying and renew every 30 days until the plan is cancelled. Credits pay for the agent\'s chat and scheduled tasks (100 credits = 1 USD); image and video runs it starts are billed to a Wiro wallet.',
     );
   } else {
     lines.push('**Pricing:** unavailable right now. Do not deploy this template until it can be priced.');

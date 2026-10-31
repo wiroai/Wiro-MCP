@@ -83,7 +83,8 @@ export function registerUpdateWorkflow(server: McpServer, client: WiroClient): v
         + 'secret inputs are kept. Wiro checks and prepares the new graph like '
         + 'create_workflow, with the same 40 KB limit on the new graph, also when the saved workflow '
         + 'is larger (removing steps can bring it under). Replacing the steps cannot be undone: without `confirm: true` '
-        + 'the call only returns what would change; show it to the user and repeat the call '
+        + 'the call checks the new graph, reports any problems and the defaults it filled, and '
+        + 'returns what would change, saving nothing; show it to the user and repeat the call '
         + 'with `confirm: true` after they agree. Editing a published workflow takes it out of '
         + 'the public gallery until Wiro reviews it again, so that also needs '
         + '`acknowledge_review_reset: true`.',
