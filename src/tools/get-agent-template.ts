@@ -42,6 +42,10 @@ function formatTemplate(template: TemplateDetail): string {
     lines.push('', '### Optional credentials', '');
     for (const credential of template.optionalCredentials) lines.push(credentialLine(credential));
   }
+  if ([...template.requiredCredentials, ...template.optionalCredentials].some(credential => credential.oauth)) {
+    lines.push('', 'A connect_agent_oauth service can use a sign-in link, a token or the user\'s own app keys: '
+      + 'list_agent_skills with its key shows which, so tell the user before deploying.');
+  }
   if (template.channels.length > 0) {
     lines.push('', `**Chat channels (optional):** ${template.channels.map(channel => `${channel.title} (${channel.requiredFields.join(', ')})`).join('; ')}`);
   }

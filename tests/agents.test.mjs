@@ -464,6 +464,7 @@ test('get_agent_template returns what to ask for without preset values', async (
     const template = result.structuredContent.template;
     assert.deepEqual(template.requiredCredentials.map(item => item.key), ['instagram']);
     assert.equal(template.requiredCredentials[0].oauth, true);
+    assert.match(textOf(result), /list_agent_skills with its key shows which, so tell the user before deploying/);
     assert.deepEqual(template.requiredCredentials[0].fields.map(field => field.key), ['appid']);
     assert.deepEqual(template.optionalCredentials.map(item => item.key), ['var-website']);
     assert.equal(template.skills[0].credentialKey, 'instagram');
