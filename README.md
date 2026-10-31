@@ -467,7 +467,9 @@ const client = new WiroClient(apiKey, apiSecret, undefined, {
 ```typescript
 // Import specific components
 import { WiroClient } from '@wiro-ai/wiro-mcp/client';
-import { registerTools } from '@wiro-ai/wiro-mcp/tools';
+import { createMcpServer } from '@wiro-ai/wiro-mcp/server';
+
+const client = new WiroClient('your-api-key', 'your-api-secret');
 
 // Only the model and workflow tools
 const server = createMcpServer(client, { toolsets: ['models', 'workflows'] });
