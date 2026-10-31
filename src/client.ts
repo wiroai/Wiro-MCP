@@ -324,7 +324,7 @@ export class WiroClient {
     const [cleanslugowner, ...rest] = model.split('/');
     const cleanslugproject = rest.join('/');
     if (!cleanslugowner || !cleanslugproject) {
-      throw new Error('Model must be in "owner/model" format, e.g. "openai/sora-2"');
+      throw new Error('Model must be in "owner/model" format, e.g. "google/veo3-1"');
     }
     return this.request<ToolDetailResponse>('/Tool/Detail', {
       slugowner: cleanslugowner,
@@ -340,7 +340,7 @@ export class WiroClient {
     const [cleanslugowner, ...rest] = model.split('/');
     const cleanslugproject = rest.join('/');
     if (!cleanslugowner || !cleanslugproject) {
-      throw new Error('Model must be in "owner/model" format, e.g. "openai/sora-2"');
+      throw new Error('Model must be in "owner/model" format, e.g. "google/veo3-1"');
     }
     return this.request<RunModelResult>(
       `/Run/${cleanslugowner}/${cleanslugproject}`,

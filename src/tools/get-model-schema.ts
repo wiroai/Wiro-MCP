@@ -122,7 +122,7 @@ export function registerGetModelSchema(
         + 'workflow-utilities/merge-text, workflow-utilities/split-text): their parameters and '
         + 'the output ports other workflow steps reference.',
       inputSchema: {
-        model: z.string().describe('Model slug in "owner/model" format, e.g. "openai/sora-2", "black-forest-labs/flux-2-pro", or a workflow utility such as "workflow-utilities/output-filter".'),
+        model: z.string().describe('Model slug in "owner/model" format, e.g. "google/veo3-1", "black-forest-labs/flux-2-pro", or a workflow utility such as "workflow-utilities/output-filter".'),
       },
       outputSchema: modelDetailOutputSchema,
       annotations: {
