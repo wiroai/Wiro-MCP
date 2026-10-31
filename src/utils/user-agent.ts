@@ -856,9 +856,7 @@ export function nextStepForAgent(agent: AgentDetail, waitSeconds: number): NextA
   return undefined;
 }
 
-// Refusals Wiro sends before it touches the wallet, or after rolling back
-// everything it wrote. Only these are known to come before any charge, so any
-// other result:false answer to a paid call leaves the outcome open.
+// Refusals known to leave the wallet untouched.
 const PRE_CHARGE_CODES = new Set([95, 96, 97, 99, 101, 102, 103, 104, 105, 106, 107, 108, 109]);
 
 const PRE_CHARGE_REFUSALS: RegExp[] = [
@@ -885,7 +883,7 @@ const PRE_CHARGE_REFUSALS: RegExp[] = [
   /^failed to deploy agent|failed to save communication channel settings|failed to save custom skill/i,
 ];
 
-/** Whether a result:false answer is one that Wiro sends before any charge. */
+/** Whether a result:false answer is one of the refusals known to leave the wallet untouched. */
 export function isPreChargeRefusal(error: unknown): boolean {
   if (!(error instanceof ApiResultError)) return false;
   if (error.codes.some(code => PRE_CHARGE_CODES.has(Number(code)))) return true;

@@ -381,7 +381,7 @@ test('the guidance and the README make no stale promises', async () => {
       assert.doesNotMatch(text, /exact (USD )?amount|return the exact price/i, `${label} calls a quote exact`);
       assert.doesNotMatch(text, /200 MB/, `${label} states the old upload limit`);
       assert.doesNotMatch(text, /checkout/i, `${label} mentions a checkout page`);
-      assert.doesNotMatch(text, /credit[^.\n]*expir|expir[^.\n]*credit/i, `${label} mentions credit expiry`);
+      assert.doesNotMatch(text, /credit[^.\n]*expir|expir[^.\n]*credit/i, `${label} describes data the tools do not return`);
       // get_account and the balance refusals link the dashboard's deposit page.
       assert.doesNotMatch(text, /returns?\s+a\s+payment\s+page/i, `${label} says no tool returns a payment page`);
     }

@@ -296,10 +296,10 @@ export function registerSetAgentCredentials(server: McpServer, client: WiroClien
         + 'Wiro dashboard). Other file fields take a public URL and the file is uploaded. '
         + 'Values are never echoed back. A running agent restarts to load '
         + 'the values. Channels such as Telegram, Slack and Discord turn on by themselves once all '
-        + 'their required fields are set, and turn off when one is cleared. Saving a credential can '
-        + 'switch scheduled tasks that need it back on. Sign-in integrations (such as Google Ads, YouTube, '
-        + 'Meta and HubSpot) are then connected with connect_agent_oauth; Gmail, Google Calendar and Google '
-        + 'Drive are not sign-ins and are set here. Only save a Wiro project API '
+        + 'their required fields are set, and turn off when one is cleared. Saving a credential turns on '
+        + 'the scheduled tasks that need it; turn off any you do not want. Sign-in integrations (such as '
+        + 'Google Ads, YouTube, Meta and HubSpot) are then connected with connect_agent_oauth; Gmail, Google '
+        + 'Calendar and Google Drive are not sign-ins and are set here. Only save a Wiro project API '
         + 'key (credential "wiro") that the user gave you: model runs are billed to its wallet. '
         + 'The agents playbook (get_playbook) has the full setup walkthrough.',
       inputSchema: {
@@ -421,7 +421,7 @@ export function registerSetAgentCredentials(server: McpServer, client: WiroClien
         }
         if (row && customSkillEntries(row).some(entry => entry.kind === 'scheduled_task'
           && entry.requiresCredentials.some(key => keys.includes(key)))) {
-          notes.push('Scheduled tasks that need these credentials are switched on or off to match, including ones that were turned off by hand.');
+          notes.push('Saving these credentials turns on the scheduled tasks that need them; turn off any you do not want.');
         }
         if (keys.includes('wiro')) {
           notes.push('Model runs started by this agent are billed to the wallet of the workspace that owns that project key.');

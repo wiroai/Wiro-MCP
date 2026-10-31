@@ -41,8 +41,8 @@ export function registerUpdateAgent(server: McpServer, client: WiroClient): void
       description: 'Change a deployed agent\'s name, description, cover or categories, and its settings: '
         + 'timezone (used by scheduled tasks), team session mode, the models used for chat, scheduled tasks '
         + 'and voice calls, and which slash commands are available. Only the fields you pass change. A '
-        + 'running or starting agent restarts to apply the change. Calling it with only agent_guid re-checks '
-        + 'the setup of an agent waiting for setup, after its credentials were set. Skills, credentials and '
+        + 'running or starting agent restarts to apply the change. Calling it with only agent_guid refreshes '
+        + 'the setup status of an agent waiting for setup, after its credentials were set. Skills, credentials and '
         + 'custom instructions have their own tools (apply_agent_skills, set_agent_credentials, '
         + 'manage_agent_custom_skill).',
       inputSchema: {
@@ -163,7 +163,7 @@ export function registerUpdateAgent(server: McpServer, client: WiroClient): void
         const restarted = previous === 3 || previous === 4;
         const setupFinished = previous === 6 && agent.status !== 6;
         const message = [
-          changed.length > 0 ? `Saved: ${changed.join(', ')}.` : 'Setup re-checked.',
+          changed.length > 0 ? `Saved: ${changed.join(', ')}.` : 'Setup status refreshed.',
           restarted ? 'The agent restarts to apply the change.' : '',
           setupFinished ? 'Setup is complete; the agent can be started.' : '',
           previous === 6 && agent.status === 6 && agent.missingCredentials.length > 0

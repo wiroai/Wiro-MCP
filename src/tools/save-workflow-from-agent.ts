@@ -18,12 +18,10 @@ import {
 } from '../utils/workflow-save.js';
 import { formatUpdatedWorkflow, updatedWorkflowSchema } from './update-workflow.js';
 
-// Remembers which proposal was already saved as a new workflow, so a repeated
-// call (a retry, or the model asking twice) does not create a copy such as
-// "Title-1". A create in progress is shared with any concurrent call for the
-// same proposal. This is best effort: the memory is this process's, for an
-// hour, so a server with several processes or a restart can still save a
-// second copy.
+// Remembers for an hour which proposal was already saved as a new workflow, so
+// a repeated call (a retry, or the model asking twice) does not create a copy
+// such as "Title-1". A create in progress is shared with any concurrent call
+// for the same proposal.
 const CREATED = new Map<string, { fullSlug?: string; pending?: Promise<SavedWorkflow>; at: number }>();
 const CREATED_TTL_MS = 60 * 60 * 1000;
 const CREATED_MAX = 500;
@@ -118,8 +116,7 @@ export function registerSaveWorkflowFromAgent(server: McpServer, client: WiroCli
         + 'they agree. The reply is read again from Wiro, so pass its ids, not the JSON. Wiro '
         + 'checks and prepares the graph against the live model catalog first; if it finds '
         + 'problems, send them back to the Workflow Agent in the same session. Save each proposal '
-        + 'once: a repeated save is caught only while this server remembers the first one, so it '
-        + 'can still create a second copy. Saving is free; running the workflow is charged.',
+        + 'once; saving it again can create another copy. Saving is free; running the workflow is charged.',
       inputSchema: {
         message_id: z.string().min(1).describe('The message id from send_agent_message or get_agent_message. One id covers the message and its reply.'),
         session: z.string().min(1).describe('The session that reply belongs to.'),

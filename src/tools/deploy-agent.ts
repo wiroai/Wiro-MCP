@@ -419,27 +419,26 @@ export function registerDeployAgent(server: McpServer, client: WiroClient): void
               // The guid is still worth reporting when the row cannot be read.
             }
           }
-          // Wiro refuses a second deploy of the same template within about 10
-          // seconds. An agent the user gave its own title is a new agent, so the
-          // text says to wait and repeat; without a title of its own it counts
-          // as a repeat.
+          // An agent the user gave its own title is a new agent, so the text
+          // says to wait and repeat the deploy; without a title of its own, the
+          // refused deploy counts as a repeat of the existing agent.
           const existingTitle = existing?.title ?? /identical agent \("([^"]*)"\)/.exec((error as ApiResultError).message)?.[1];
           if (quote.kind === 'template' && args.title !== undefined && existingTitle !== undefined && existingTitle !== quote.title) {
-            const message = `Wiro refused this deploy because another agent from the same template ("${existingTitle}") was deployed a few seconds ago. That check only blocks deploys made within about 10 seconds of each other, so nothing was created or charged for "${quote.title}". Wait about 10 seconds, then repeat the call.`;
+            const message = `Wiro refused this as a repeat of a deploy made a moment ago from the same template ("${existingTitle}"). Nothing was created or charged for "${quote.title}". Wait a few seconds, then repeat the call.`;
             return {
               content: [{ type: 'text' as const, text: `## Deploy not made yet\n\n${message}` }],
               structuredContent: {
                 stage: 'retry_later' as const,
                 quote,
                 message,
-                nextAction: confirmCall(`Wait about 10 seconds first. The user already approved this charge, and it was not made.`),
+                nextAction: confirmCall(`Wait a few seconds first. The user already approved this charge, and it was not made.`),
               },
             };
           }
           const unpaid = existing && existing.status === 6 && !existing.subscription;
-          const message = 'Wiro refused this deploy because an identical one was made a few seconds ago, so '
-            + 'nothing new was created or charged. Do not call deploy_agent again for it.'
-            + (existingGuid ? ` The existing agent is ${existingGuid}.` : '')
+          const message = 'Wiro refused this as a repeat of a deploy made a moment ago, so nothing new was created '
+            + 'or charged. Do not call deploy_agent again for it.'
+            + (existingGuid ? ` The existing agent is ${existingGuid}.` : ' Check list_my_agents for the agent that was deployed.')
             + (unpaid
               ? ' It has no paid plan: manage_agent_billing with action subscribe pays for it, or delete_agent removes it.'
               : '');

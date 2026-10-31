@@ -11,7 +11,7 @@ export const MESSAGE_TERMINAL_STATUSES = ['agent_end', 'agent_error', 'agent_can
 export const MESSAGE_CANCELLABLE_STATUSES = ['agent_queue', 'agent_start', 'agent_output'] as const;
 const MAX_MEDIA_URLS = 20;
 const MAX_REPLY_LENGTH = 20_000;
-// The line Wiro writes for a voice call, followed by the caller's number.
+// The line that opens Wiro's own record of a voice call.
 const VOICE_CALL_PATTERN = /^\s*\u{1F4DE}\s*Incoming voice call:/u;
 
 export const messageStateSchema = z.enum(['submitted', 'running', 'completed', 'failed', 'cancelled']);
@@ -152,12 +152,12 @@ function messageKind(row: Record<string, unknown>): AgentMessage['kind'] {
   return 'user_turn';
 }
 
-/** Wiro's own line for a voice call, which goes on with the caller's number. */
+/** Whether a text is the line that opens Wiro's own record of a voice call. */
 export function isVoiceCallText(value: unknown): boolean {
   return typeof value === 'string' && VOICE_CALL_PATTERN.test(value);
 }
 
-/** Voice call rows carry callers' phone numbers and call transcripts. */
+/** Wiro's own voice call records, which are summarized without caller details. */
 export function isVoiceCallRow(row: Record<string, unknown>): boolean {
   if (messageKind(row) === 'voice_call') return true;
   // Without its metadata a call is still Wiro's own row: no user text, and the
@@ -238,10 +238,7 @@ export function formatAgentMessage(message: AgentMessage, heading = 'Reply'): st
   return lines.join('\n');
 }
 
-/**
- * Session keys are free-form, but Wiro reserves a few prefixes for its own
- * scheduled and voice sessions and refuses them for normal callers.
- */
+/** Why a session name cannot be used, or null when it can. */
 export function sessionKeyProblem(sessionKey: string): string | null {
   if (!sessionKey.trim()) return 'The session name cannot be empty.';
   if (sessionKey.length > 128) return 'The session name must be at most 128 characters.';
@@ -265,7 +262,7 @@ export function newSessionKey(prefix = 'mcp'): string {
   return `${prefix}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-/** "Message not found" right after a send only means the new message is not readable yet. */
+/** Whether a "Message not found" answer came in the first 10 seconds of a wait, and so is read again. */
 export function isEarlyNotFound(error: unknown, elapsedMs: number): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return elapsedMs < 10_000 && /message not found/i.test(message);

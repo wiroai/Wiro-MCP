@@ -58,11 +58,11 @@ function setupRefusal(agent: AgentDetail): Decision {
   return {
     outcome: 'refused',
     message: `The agent cannot start until its setup is finished${missing.length > 0 ? `: missing ${missing.map(item => item.title).join(', ')}` : ''}. `
-      + 'After the credentials are set, call update_agent with only agent_guid to finish setup, then start it.',
+      + 'After the credentials are set, call update_agent with only agent_guid to refresh its setup status, then start it.',
     nextAction: missingCredentialStep(agent) ?? {
       tool: 'update_agent',
       arguments: { agent_guid: agent.guid },
-      reason: 'Re-check the setup so the agent can be started.',
+      reason: 'Refresh the setup status so the agent can be started.',
     },
   };
 }

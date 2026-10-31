@@ -154,7 +154,7 @@ function changedLead(action: BillingAction, amount: number | null, approved: num
   if (action === 'buy_credits' && callerRequestId) {
     // Wiro binds a purchase request id to the price of its first attempt.
     return `${changed} Nothing was charged by this call. Show the new amount to the user and ask again. `
-      + `If an earlier call with request_id "${callerRequestId}" said the wallet was charged but the purchase is still pending, that purchase can only be finished at its original price, and Wiro refuses this request id at the new one. Do not approve the new amount for it; ask Wiro support to finish it.`;
+      + `If an earlier call with request_id "${callerRequestId}" ended without a clear result, do not approve the new amount for it: this request id works only at its original price. Check get_my_agent and the wallet balance with get_account, and if the balance changed, contact Wiro support.`;
   }
   return `${changed} Nothing was charged. Show the new amount to the user and ask again.`;
 }
@@ -234,8 +234,7 @@ function planFor(
       }
       if (active) {
         if (!prepaid) {
-          // A card plan can be set to stop at its period end, by its payer or when the
-          // payer's account is deleted.
+          // A card plan can be set to stop at its period end.
           return {
             outcome: 'refused',
             message: agent.subscription?.cancelAtPeriodEnd
@@ -511,8 +510,8 @@ function confirmArguments(guid: string, action: BillingAction, quote: Quote | un
 
 function retryPurchaseText(guid: string, quote: Quote | undefined, requestId: string): string {
   const amount = chargeOf(quote);
-  return `To retry, call manage_agent_billing again with agent_guid "${guid}", action buy_credits, pack "${quote?.pack ?? ''}", request_id "${requestId}"${amount !== null ? `, confirm_charge_usd ${amount}` : ''} and confirm: true. That request id never charges twice, and it finishes a purchase that was charged but not completed. Do not get a new quote for this purchase: a new request id is a new purchase.`
-    + (amount !== null ? ` This works only while the pack still costs ${formatUsd(amount)}; Wiro refuses the id at any other price, and then Wiro support has to finish the purchase.` : '');
+  return `To retry, call manage_agent_billing again with agent_guid "${guid}", action buy_credits, pack "${quote?.pack ?? ''}", request_id "${requestId}"${amount !== null ? `, confirm_charge_usd ${amount}` : ''} and confirm: true. That request id never charges twice, and repeating it completes this same purchase. Do not get a new quote for this purchase: a new request id is a new purchase.`
+    + (amount !== null ? ` This request id works only while the pack costs ${formatUsd(amount)}. If the price changes, do not buy again: check get_my_agent and the wallet balance with get_account, and if the balance changed, contact Wiro support.` : '');
 }
 
 /**
@@ -554,9 +553,8 @@ interface Observation {
 }
 
 /**
- * After a charging request whose outcome is open, reads the agent again and
- * says what it shows: the charge may have gone through, and the agent's
- * detail is where its result shows.
+ * After a paid request whose answer did not confirm it, reads the agent again
+ * and says what it shows.
  */
 async function observeOpenOutcome(
   client: WiroClient,
@@ -571,7 +569,7 @@ async function observeOpenOutcome(
   try {
     row = await readAgentDetail(client, before.guid, signal);
   } catch {
-    return { happened: false, text: 'The agent could not be read afterwards to check it.' };
+    return { happened: false, text: 'The agent could not be read afterwards to check it. Check get_my_agent and the wallet balance with get_account first.' };
   }
   const after = toAgentDetail(row);
   const charged = chargeOf(quote);
@@ -586,7 +584,7 @@ async function observeOpenOutcome(
           result: { chargedUsd: charged, ...(quote?.tier ? { tier: quote.tier } : {}) },
           nextAction: waitAction(before.guid, 'Wait until the agent is running.'),
         }
-        : { happened: false, text: 'The agent shows no active plan yet. Check get_my_agent again in a minute before trying again.' };
+        : { happened: false, text: 'The agent shows no active plan yet. Check get_my_agent again in a minute and the wallet balance with get_account before trying again; if the plan is still not active but the balance changed, contact Wiro support.' };
     case 'renew':
       return after.subscription?.status === 'active'
         ? {
@@ -596,7 +594,7 @@ async function observeOpenOutcome(
           result: { chargedUsd: charged, renewal: 'renewed' },
           nextAction: restart,
         }
-        : { happened: false, text: 'The plan still shows as expired, but the wallet may have been charged anyway. Compare the wallet balance with get_account before renewing again.' };
+        : { happened: false, text: 'The plan still shows as expired. Check get_my_agent again in a minute and the wallet balance with get_account before renewing again; if the plan is still expired but the balance changed, contact Wiro support.' };
     case 'upgrade_to_pro': {
       if (after.tier === 'pro') {
         return {
@@ -613,8 +611,8 @@ async function observeOpenOutcome(
       return {
         happened: false,
         text: priced
-          ? 'The plan already shows the Pro price but not the Pro tier, so the upgrade was charged and did not finish. Do not upgrade again; ask Wiro support to finish it.'
-          : 'The agent still shows Starter, but the wallet may have been charged anyway. Compare the wallet balance with get_account before trying again.',
+          ? 'The agent does not show Pro yet. Do not upgrade again: check get_my_agent and the wallet balance with get_account, and if the balance changed, contact Wiro support.'
+          : 'The agent still shows Starter. Check get_my_agent and the wallet balance with get_account before trying again; if the balance changed, contact Wiro support.',
       };
     }
     case 'buy_credits': {
@@ -632,13 +630,13 @@ async function observeOpenOutcome(
       }
       const fresh = await freshPackShows(client, before.guid, credits, sentAtMs, signal);
       if (fresh) {
-        // The pack is paid for, but its credits are counted only when the
-        // purchase finishes, which the same request id does without a charge.
+        // The pack shows on the agent. If its credits do not show yet, the same
+        // request id completes the purchase without a second charge.
         return {
           happened: true,
           row,
-          text: 'A new pack of that size shows on the agent, so the purchase went through and the wallet was charged. Do not buy it again. '
-            + `Its credits may not be counted yet. If get_my_agent still does not show them in a few minutes, repeating this purchase with the same request_id "${requestId ?? ''}" and confirm_charge_usd ${charged ?? ''} finishes it without a second charge.`,
+          text: 'A new pack of that size shows on the agent, so the purchase went through. Do not buy it again. '
+            + `If get_my_agent does not show its credits in a few minutes, repeat this purchase with the same request_id "${requestId ?? ''}" and confirm_charge_usd ${charged ?? ''}; that request id never charges twice.`,
           result: bought,
           nextAction: waitAction(before.guid, 'Check that the pack\'s credits show on the agent.'),
         };
@@ -659,7 +657,7 @@ function annotateKnownRefusal(error: ApiResultError): Error {
     return new Error(`${text}\n\nNothing was charged. Funds are added at https://wiro.ai/panel/wallet/deposit/credit-card (for a team project, select that team in the dashboard first); once the user has added them and says yes, try again. get_account shows the balance.`);
   }
   if (/purchase request id was already used/i.test(text)) {
-    return new Error(`${text}\n\nNothing was charged now. This request id belongs to an earlier purchase of another pack or at another price. For a new purchase, get a new quote without request_id. If an earlier call with this id said the wallet was charged but the purchase is still pending, do not buy again: that purchase can only be finished at its original price, so ask Wiro support to finish it.`);
+    return new Error(`${text}\n\nNothing was charged now. This request id belongs to an earlier purchase of another pack or at another price. For a new purchase, get a new quote without request_id. If the earlier purchase with this id ended without a clear result, do not buy again: check get_my_agent and the wallet balance with get_account, and if the balance changed, contact Wiro support.`);
   }
   const hint = workspaceHint(text);
   if (hint) return new Error(`${text}\n\n${hint}`);
@@ -823,9 +821,9 @@ export function registerManageAgentBilling(server: McpServer, client: WiroClient
         }
 
         // A request id that already completed a purchase is answered with
-        // success again, without a charge and without new credits. A purchase
-        // also retires any pack past its end date, so the extra credits can
-        // grow by less than the pack, and the agent's packs decide.
+        // success again, without a new charge or new credits. An older pack can
+        // end at the same moment, so the extra credits can grow by less than
+        // the pack, and the agent's packs decide.
         const credits = plan.quote?.creditsAdded ?? 0;
         const extraBefore = toNumber(row.extracredits);
         const extraAfter = afterRead ? toNumber(after.extracredits) : null;
@@ -873,7 +871,7 @@ export function registerManageAgentBilling(server: McpServer, client: WiroClient
           if (observed.happened && observed.row) {
             return respond({
               outcome: 'done',
-              message: `Wiro answered with an error (${text}) after the request was sent, but reading the agent again shows that it went through. ${observed.text}`,
+              message: `The answer did not confirm this request, so the agent was read again. ${observed.text}`,
               quote,
               result: observed.result,
               nextAction: observed.nextAction,
@@ -883,7 +881,7 @@ export function registerManageAgentBilling(server: McpServer, client: WiroClient
           const retry = action === 'buy_credits' && requestId
             ? retryPurchaseText(guid, quote, requestId)
             : 'Do not repeat the call until this is checked.';
-          return errorResult(new Error(`${text}\n\nThe request was sent and the answer does not show whether it went through, so the wallet may have been charged. ${observed.text} ${retry}`));
+          return errorResult(new Error(`${text}\n\nThe request was sent and the answer does not show whether it went through. ${observed.text} ${retry}`));
         }
         if (error instanceof ApiResultError) return errorResult(annotateKnownRefusal(error));
         return errorResult(error);

@@ -271,7 +271,7 @@ async function connect(
       if (code === 'direct_token_missing') {
         parts.push(`Save ${requirement.fields.map(field => field.field).join(', ')} with set_agent_credentials first.`);
       } else if (connectedBefore) {
-        parts.push('The previous connection was cleared by this check.');
+        parts.push('Connect again to restore the connection.');
       }
       return errorResult(new Error(parts.join(' ')));
     }
@@ -361,7 +361,7 @@ function statusMessage(state: ConnectionState, meta: CredentialMeta, snapshot: O
     case 'waiting_for_user':
       return `The ${meta.title} sign-in has not finished yet. The link from connect works for ${OAUTH_LINK_TTL_SECONDS / 60} minutes; after that, connect again.`;
     case 'token_expired':
-      return `The saved ${meta.title} access has expired, usually because the agent was stopped and could not refresh it. Start the agent with control_agent, or connect again.`;
+      return `The saved ${meta.title} access has expired. Start the agent with control_agent, or connect again.`;
     default:
       return `${meta.title} is not connected. Start with action connect.`;
   }

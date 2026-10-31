@@ -88,15 +88,14 @@ export function registerGetTaskPrice(server: McpServer, client: WiroClient): voi
         lines.push(`**Status:** ${task.status}`);
 
         const state = getTaskState(task);
-        // Wiro sets chargedcost once it has billed a finished task; a failed or
-        // cancelled task shows a charge only when Wiro reports one.
+        // Shows the charge Wiro reports for the task.
         const chargedUsd = task.chargedcost === null || task.chargedcost === undefined || task.chargedcost === ''
           ? null
           : Number(task.chargedcost);
         const charged = chargedUsd !== null && Number.isFinite(chargedUsd) && chargedUsd > 0
           ? formatTaskCost(task)
           : null;
-        // A successful task reads as finished a moment before its charge is recorded.
+        // A successful task shows its list price until its charge is recorded.
         const awaiting = awaitingCharge(task);
         // No worker took a task cancelled while queued, so it never ran.
         const neverRan = state === 'cancelled' && charged === null && cancelledWhileQueued(task);

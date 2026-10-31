@@ -1718,8 +1718,8 @@ test('a Studio turn that yielded to sub-agents keeps collecting the runs they st
     assert.equal(output.background, true);
     assert.deepEqual(output.modelRuns.map(run => run.id), ['77']);
     assert.equal(output.nextAction, undefined);
-    assert.ok(output.notes.some(note => /list_studio_results/.test(note) && /team project/.test(note)));
-    assert.ok(output.notes.some(note => /matched by time/.test(note) && /another Studio conversation/.test(note)));
+    assert.ok(output.notes.some(note => /handed this work to the background/.test(note) && /use list_studio_results for Studio's late results/.test(note)));
+    assert.ok(output.notes.some(note => /Runs that start after the hand-off are collected here/.test(note) && /list_studio_results lists every run/.test(note)));
     assert.deepEqual(result.content.filter(block => block.type === 'resource_link').map(link => link.uri), ['https://cdn1.wiro.ai/cat.mp4']);
     // One short history page per call finds the session's next message.
     assert.deepEqual(withRun.callsTo('/Studio/Message/History').map(call => call.body), [{ limit: 20, sessionkey: 'mcp-v' }]);
@@ -1837,7 +1837,7 @@ test('a Studio hand-off counts runs only until the next message in its session, 
     assert.equal(output.modelRunsPending, undefined, 'a later run that is still running does not keep this turn open');
     assert.equal(output.nextAction, undefined);
     assert.deepEqual(result.content.filter(block => block.type === 'resource_link').map(link => link.uri), ['https://cdn1.wiro.ai/cat.png']);
-    assert.ok(output.notes.some(note => /another Studio conversation/.test(note)));
+    assert.ok(output.notes.some(note => /collected here until the next message in this session, for up to 30 minutes/.test(note)));
     assert.ok(output.notes.some(note => /Runs started after the next message in this session are not counted.*list_studio_results/.test(note)));
   });
 
@@ -2049,7 +2049,7 @@ test('Studio run collection reads a small page, 100 runs only when the turn star
   });
 });
 
-test('Workflow Agent session names leave room for the prefix Wiro adds for API keys', async () => {
+test('Workflow Agent session names sent from here stay within 100 characters', async () => {
   const fake = fakeClient({
     '/StudioWorkflow/Message/Send': { result: true, errors: [], messageguid: 'wf-s', status: 'agent_queue' },
     '/Studio/Message/Send': { result: true, errors: [], messageguid: 'st-s', status: 'agent_queue' },

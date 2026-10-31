@@ -303,7 +303,7 @@ Utilities are free and finish at once. Read their parameters with \`get_model_sc
 ## Rules for model steps
 
 - Use only parameter ids from \`get_model_schema\`.
-- Set every parameter you care about. Wiro fills a parameter you leave out with the model's default, and for some models that default is the sample prompt or the sample images from the model's page, which every run would then use. \`get_model_schema\` shows each default and marks the samples, and the Notes of \`create_workflow\` and \`update_workflow\` list what was filled. To leave a file parameter empty, set it to \`[]\` (or \`""\` for a single file).
+- Set every parameter you care about; the save result lists what Wiro filled. \`get_model_schema\` shows what a parameter left out of a step gets. To leave a file parameter empty, set it to \`[]\` (or \`""\` for a single file).
 - A single file parameter takes one URL string. A combined file parameter (\`combinefileinput\`) takes an array, even for one file, up to its maximum count. A multi-file parameter (\`multifileinput\`) takes its URLs comma-separated in its matching \`...UrlMultiple\` field, the one \`get_model_schema\` names; a reference in that field passes one file.
 - Training models cannot be used in workflows.
 
@@ -382,7 +382,7 @@ Example, "ask the workflow agent for something that turns a recipe into a short 
 ## Give it a workflow to edit
 
 - Attach the workflow: \`send_agent_message\` takes its full slug, from \`list_workflows\` or \`get_workflow\`. Attach one from the key's workspace, at most 40 KB. A protected copy whose graph is hidden cannot be edited this way.
-- The agent sees the graph but not the values saved in the Start fields. Inputs whose names mark them as secrets, such as \`apiKey\`, \`api_key\`, \`token\` or \`password\`, are hidden from it. A key in an input with any other name, such as \`openaiApiKey\`, or inside a prompt, is sent as it is. When you apply its proposal, hidden values come back from the saved workflow if the step keeps its model; if not, the save stops and names the value to set.
+- The agent sees the graph but not the values saved in the Start fields. Never put keys, tokens or passwords in a workflow's inputs or prompts; the Workflow Agent sees the graph. When you apply its proposal, values hidden from the agent come back from the saved workflow if the step keeps its model; if not, the save stops and names the value to set.
 - If the agent asks which of the user's workflows to work on, call \`list_workflows\`, agree on one with the user and attach it to your next message.
 
 ## Read the proposals
@@ -428,7 +428,7 @@ Studio is Wiro's creative agent. Describe what you want, such as an image, a sho
 
 - The wallet of the connected project's workspace must hold at least $10 to start a turn; otherwise the message is refused with the minimum and the wallet's balance, and nothing is charged.
 - $10 is a minimum, not a cap. One message can start several paid model runs, so a turn can cost more.
-- Each turn is billed after it ends: the chat part by token use, even when the turn fails, and each model run Studio started when it succeeds. The reply shows the chat part as Agent usage, in dollars. If it is not in the reply yet, read the message again with \`get_agent_message\`. Charges that land after the work can take the wallet below zero.
+- Each turn is billed after it ends: the chat part by token use, even when the turn fails, and each model run Studio started when it succeeds. The reply shows the chat part as Agent usage, in dollars. If it is not in the reply yet, read the message again with \`get_agent_message\`.
 - For a rough estimate before a turn, take a typical model for the job from \`search_models\`, multiply its price by the number of results, and add the chat part.
 - Before the first message, tell the user this in one line and check the balance with \`get_account\`. When they asked for exactly this, go ahead. For large or open-ended requests, such as many videos or long clips, agree on the scope first.
 
@@ -506,7 +506,7 @@ A Wiro agent is an assistant that keeps running on Wiro with a set of skills, su
 | 3 | Starting | Wait. An agent that is not healthy after about 2 minutes moves to 5. |
 | 4 | Running | Ready for messages. |
 | 5 | Error | It failed to start or stopped unexpectedly. Read the logs with \`get_agent_activity\` (logs), then start it again. |
-| 6 | Not paid yet, or setup not finished | Without an active plan: \`manage_agent_billing\` (subscribe), which also starts it. With one: set the missing credentials, call \`update_agent\` with the agent's guid so it checks the setup again, then start it. |
+| 6 | Not paid yet, or setup not finished | Without an active plan: \`manage_agent_billing\` (subscribe), which also starts it. With one: set the missing credentials, then call \`update_agent\` with the agent's guid to refresh its setup status, then start it. |
 
 ## Setup: credentials and connected accounts
 
@@ -558,7 +558,7 @@ Then offer the one fix that matches, with its price.
 - \`subscribe\` starts a plan for an agent without an active one, and queues the agent to start.
 - \`upgrade_to_pro\` charges the difference for the rest of the period now; the full Pro credit pool applies at once, and renewals charge the Pro price. The quote is an estimate with a maximum, and \`confirm_charge_usd\` is the most the user agreed to pay. To move to Starter, cancel, let the plan end, then subscribe to Starter.
 - \`buy_credits\` is for Pro plans; without a pack it lists them. A small, medium or large pack adds 5, 10 or 20 times the monthly credits, at 5, 10 or 20 times the monthly price. Pack credits are added at once, are used after the monthly pool and do not reset each month; the pool refills at each renewal. On Starter, \`upgrade_to_pro\` is the way to more credits now.
-- \`cancel\` stops the next renewal, with no refund. The agent keeps working until the paid period ends, then stops, unless extra credits are left: it keeps running on those while they last. It keeps its skills, settings and connected accounts, though some sign-ins may need connecting again after a long stop.
+- \`cancel\` stops the next renewal, with no refund. The agent keeps working until the paid period ends, then stops, unless extra credits are left: it keeps running on those while they last. It keeps its skills, settings and connected accounts. If a sign-in later shows as expired, connect it again with \`connect_agent_oauth\`.
 - \`renew\` undoes a cancellation for free while the period lasts, or renews a plan that already ended, for a charge; when a plan cannot be renewed, it says to use \`subscribe\`. If the wallet is short at renewal time, the plan ends instead of renewing.
 - Plans paid by card are managed in the Wiro dashboard: \`upgrade_to_pro\` and \`buy_credits\` return the link to the agent's page there and charge nothing, a personal card plan is cancelled there, and a skill change goes on the next card invoice.
 - In a team, only team admins can deploy, pay for, start, stop or change agents, including skills and credentials; other members can see the team's agents with \`get_my_agent\` and talk to them; their logs and usage (\`get_agent_activity\`) need a team admin. That refusal is final for this connection: a team admin can do it or grant admin rights, or the user can deploy in the personal workspace with a personal project, by its key or a browser sign-in. Billing works only from the agent's own workspace.
@@ -576,7 +576,7 @@ Then offer the one fix that matches, with its price.
   - upsert replaces an entry's whole text. Read the entry in full with \`manage_agent_custom_skill\` (history) first, since \`get_my_agent\` shows only the start of a long entry, and never upsert a text rebuilt from a shortened copy.
   - delete and revert first describe the change and need \`confirm: true\`. upsert and rename act at once, so agree on the text and the schedule with the user first.
   - Reverting to the template's original removes an item that has none. Items that came with the agent's template, a custom build's approval policy (\`cs-approval-policy\`) and the scheduled tasks its skills brought cannot be deleted; turn them off instead. A custom build's starter entries can be deleted. A template's scheduled task can change only its schedule and its on or off switch.
-  - Tasks that came with the agent's skills run only while the services they need are connected, and connecting one can turn them back on. A task you create runs on its schedule from the start, and every run uses credits, so create it, or turn it on, once the services it needs are connected.
+  - Tasks that came with the agent's skills run only while the services they need are connected. Saving the credentials they need, or connecting the service, turns them on; turn off any you do not want. A task you create runs on its schedule from the start, and every run uses credits, so create it, or turn it on, once the services it needs are connected.
 - \`update_agent\` changes the title, description, cover, categories, time zone, session sharing for team agents, the chat models and the enabled commands.
 
 ## Remove an agent safely
@@ -607,7 +607,7 @@ Everything on Wiro is paid from a prepaid wallet in USD; only agent plans can be
 - \`get_account\` shows the balance in its parts: deposits, coupon credit and store revenue.
 - Coupon credit can be limited to certain models, and then it only counts for those models.
 - Charges use coupon credit first, then store revenue, then deposits.
-- Charges that land after the work is done, such as Studio turns, can take the balance below zero.
+- A Studio turn is charged after it ends and can cost more than the $10 minimum.
 - Right after a charge, read the balance again before you report it.
 - Funds are added in the Wiro dashboard at wiro.ai/panel/wallet/deposit/credit-card; for a team project, select that team in the dashboard first. No tool adds funds or takes a card payment.
 - To move funds between the personal wallet and a team wallet, or between two teams, the user opens Transfer Credit in the Wiro dashboard (wiro.ai/panel/wallet/transfer-credit). It needs an admin of each team involved, or the organization's owner; other members ask a team admin. No tool moves funds.

@@ -419,8 +419,7 @@ export function toCredentialSetup(
   };
 }
 
-// Wiro keeps a few credentials for itself (model routing, command lists); a
-// user never fills them in.
+// Credentials Wiro manages itself are hidden.
 export function isPlatformCredentialKey(key: string): boolean {
   return key.startsWith('sys-');
 }

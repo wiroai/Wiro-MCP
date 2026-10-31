@@ -10,8 +10,9 @@ import {
 import type { MediaItem } from './media.js';
 
 // Workflow rows and runs as the Wiro API returns them, projected to what an
-// assistant needs. Owner, team and moderator identities are dropped, and run
-// outputs are resolved from the End node the same way the run engine does.
+// assistant needs: a workflow keeps its slug, title, inputs, outputs, state,
+// counts and creator and team names, and a run its status, steps, cost and
+// outputs, resolved from the End node the same way a run does.
 
 export const WORKFLOW_PAGE_URL = 'https://wiro.ai/workflows/';
 export const RUN_TERMINAL_STATUSES = ['completed', 'failed', 'cancelled', 'stopped'] as const;
@@ -19,8 +20,7 @@ export const RUN_TERMINAL_STATUSES = ['completed', 'failed', 'cancelled', 'stopp
 export class WorkflowInputError extends Error {}
 
 // What the workflow tools hide, and where. A secret-looking name matches
-// SENSITIVE_INPUT_KEY (the Workflow Agent's own rule); a key-looking value
-// matches looksLikeSecretValue.
+// SENSITIVE_INPUT_KEY; a key-looking value matches looksLikeSecretValue.
 // - Input lists (get_workflow and the save results): a Start field's default and
 //   saved value show as "[hidden]" under a secret-looking name or when the value
 //   looks like a key, for every caller.
@@ -330,7 +330,8 @@ export function toWorkflowDetail(
 ): WorkflowDetail {
   const contents = parseJsonValue(row.contents);
   const contentsObject = isPlainObject(contents) ? contents : {};
-  // Moderation fields are only sent to the owner and the owner's team.
+  // A row with rejectreason comes from the caller's own workspace; only then
+  // are its state and rejectReason kept.
   const insider = Object.prototype.hasOwnProperty.call(row, 'rejectreason');
   const isProtected = toInteger(row.isprotected) === 1;
   const isClone = row.clonedfromid !== undefined && row.clonedfromid !== null && row.clonedfromid !== '';

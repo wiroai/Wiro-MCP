@@ -596,7 +596,7 @@ test('apply_agent_skills applies only at the quoted price', async () => {
 });
 
 test('apply_agent_skills checks the live agent when Wiro answers with an error or a saved result', async () => {
-  // An error after the change was saved: the agent shows the new skills.
+  // An error answer while the agent shows the new skills.
   const saved = fakeClient(skillRoutes({
     '/UserAgent/Detail': detailAfterApply(),
     '/UserAgent/SkillsApply': { result: false, errors: [{ code: 0, message: 'Connection reset while saving' }] },
@@ -606,7 +606,8 @@ test('apply_agent_skills checks the live agent when Wiro answers with an error o
     const result = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
     assert.notEqual(result.isError, true, text(result));
     assert.equal(result.structuredContent.status, 'applied');
-    assert.match(result.structuredContent.billing.note, /Connection reset while saving.*the change was saved.*Do not repeat the change/);
+    assert.match(result.structuredContent.billing.note, /^The agent's skills now match the request, so the change is in place\. Do not repeat it\./);
+    assert.match(text(result), /^## Skills updated$/m);
     assert.match(result.structuredContent.billing.note, /probably taken from, or credited to, your personal wallet, and a credit can be spent until this period ends;/);
     assert.doesNotMatch(text(result), /Nothing changed/);
   });
@@ -620,7 +621,8 @@ test('apply_agent_skills checks the live agent when Wiro answers with an error o
     const result = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
     assert.equal(result.isError, true);
     assert.equal(result.structuredContent.status, 'refused');
-    assert.match(text(result), /skills are unchanged, so the change was not applied/);
+    assert.match(text(result), /^The agent's skills are unchanged, so the change was not applied \(Connection reset while saving\)\./m);
+    assert.doesNotMatch(text(result), /Wiro answered with an error/);
   });
 
   // The agent cannot be read afterwards: nothing is claimed either way.
@@ -634,11 +636,12 @@ test('apply_agent_skills checks the live agent when Wiro answers with an error o
     const quote = await quoteInstagram(client);
     const result = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
     assert.equal(result.isError, true);
-    assert.match(text(result), /could not be read to check whether the change was saved/);
+    assert.match(text(result), /^The change could not be confirmed \(socket hang up\)\. Check get_my_agent to see whether the skills match the request before trying again;/m);
+    assert.doesNotMatch(text(result), /Wiro answered with an error/);
     assert.equal(result.structuredContent.restart, 'The agent restarts if the change was saved.');
   });
 
-  // A reused key replays an earlier success although this change was not made.
+  // A success answer while the agent does not show the change.
   const replayed = fakeClient(skillRoutes({
     '/UserAgent/SkillsApply': { result: true, pricing: { previousPriceUsd: 42, newPriceUsd: 43, deltaUsd: 1 }, prepaidWalletDelta: 0.5 },
   }));
@@ -647,11 +650,11 @@ test('apply_agent_skills checks the live agent when Wiro answers with an error o
     const result = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
     assert.equal(result.isError, true);
     assert.equal(result.structuredContent.status, 'refused');
-    assert.match(text(result), /saved result of an earlier call.*probably not applied by this call/);
+    assert.match(text(result), /The agent's skills do not match this change, so it is not in place\. Check get_my_agent/);
     assert.deepEqual(result.structuredContent.nextAction.arguments, { agent_guid: AGENT, skills: { 'int-instagram-post': true }, add_dependencies: true });
   });
 
-  // A retry after a timeout: the change is already on, and Wiro returns the earlier result.
+  // A repeated confirm with the same key: the change is already on, and the answer is the earlier result.
   const retry = fakeClient(skillRoutes({
     '/UserAgent/Detail': detail({ skills: INSTAGRAM_SET.map(name => ({ name, enabled: true })), monthlypriceusd: '43.00' }),
     '/UserAgent/SkillsApply': { result: true, pricing: { previousPriceUsd: 42, newPriceUsd: 43, deltaUsd: 1 }, prepaidWalletDelta: 0.5 },

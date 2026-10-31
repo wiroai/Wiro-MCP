@@ -351,7 +351,7 @@ test('agent tools are registered with output schemas, annotations and plain copy
     assert.equal('checkoutUrl' in billing.outputSchema.properties, false);
     assert.deepEqual(billing.outputSchema.properties.outcome.enum, ['quote', 'done', 'not_needed', 'refused']);
     for (const tool of tools.filter(candidate => AGENT_TOOLS.includes(candidate.name))) {
-      assert.doesNotMatch(JSON.stringify(tool), /expiresAt|expiry|credits? expire/i, `${tool.name} mentions credit expiry`);
+      assert.doesNotMatch(JSON.stringify(tool), /expiresAt|expiry|credits? expire/i, `${tool.name} names data the tools do not return`);
     }
   });
 });
@@ -1095,7 +1095,7 @@ test('deploy_agent never retries a duplicate and reports the existing agent', as
   });
 });
 
-test('deploy_agent tells a second agent with its own title to wait out the 10-second guard', async () => {
+test('deploy_agent tells a second agent with its own title to wait and deploy again', async () => {
   const fake = fakeClient({
     '/Agent/Detail': { result: true, errors: [], agents: [templateRow()] },
     '/UserAgent/Deploy': { result: false, errors: [{ code: 99, message: 'Duplicate deploy: an identical agent ("Brand A") was already deployed 3s ago. Open the existing one in your panel, or wait a few seconds and retry.' }], existingUserAgentGuid: 'ua-a' },
@@ -1115,12 +1115,13 @@ test('deploy_agent tells a second agent with its own title to wait out the 10-se
     assert.equal(content.stage, 'retry_later');
     assert.equal(content.agent, undefined);
     assert.equal(content.existingAgentGuid, undefined);
-    assert.match(content.message, /nothing was created or charged for "Brand B"/);
+    assert.match(content.message, /Nothing was created or charged for "Brand B"\. Wait a few seconds, then repeat the call\./);
+    assert.doesNotMatch(content.message, /\d+ seconds/);
     assert.equal(content.nextAction.tool, 'deploy_agent');
     assert.equal(content.nextAction.arguments.title, 'Brand B');
     assert.equal(content.nextAction.arguments.confirm_charge_usd, 12);
     assert.equal(content.nextAction.arguments.credentials, undefined);
-    assert.match(content.nextAction.reason, /Wait about 10 seconds first.*Pass the same credentials again/);
+    assert.match(content.nextAction.reason, /Wait a few seconds first.*Pass the same credentials again/);
     assertNoSecrets(result);
   });
 });
@@ -1705,7 +1706,8 @@ test('manage_agent_billing tells how to retry a pending pack purchase', async ()
     const result = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'buy_credits', pack: 'medium', request_id: 'retry-key-123', confirm_charge_usd: 120, confirm: true });
     assert.equal(result.isError, true);
     assert.match(textOf(result), /request_id "retry-key-123", confirm_charge_usd 120 and confirm: true/);
-    assert.match(textOf(result), /This works only while the pack still costs \$120\.00; Wiro refuses the id at any other price, and then Wiro support has to finish the purchase/);
+    assert.match(textOf(result), /That request id never charges twice, and repeating it completes this same purchase\./);
+    assert.match(textOf(result), /This request id works only while the pack costs \$120\.00\. If the price changes, do not buy again: check get_my_agent and the wallet balance with get_account, and if the balance changed, contact Wiro support\./);
   });
 });
 
@@ -1736,8 +1738,8 @@ test('manage_agent_billing explains that a pending purchase finishes only at its
     assert.equal(retry.structuredContent.priceChanged, true);
     const message = retry.structuredContent.message;
     assert.match(message, /it is now \$90\.00, and the user approved \$60\.00\. Nothing was charged by this call\./);
-    assert.match(message, /If an earlier call with request_id "reqPENDING1" said the wallet was charged but the purchase is still pending, that purchase can only be finished at its original price/);
-    assert.match(message, /Do not approve the new amount for it; ask Wiro support to finish it\./);
+    assert.match(message, /If an earlier call with request_id "reqPENDING1" ended without a clear result, do not approve the new amount for it: this request id works only at its original price\./);
+    assert.match(message, /Check get_my_agent and the wallet balance with get_account, and if the balance changed, contact Wiro support\./);
     // The same id stays in the nextAction, so Wiro refuses it instead of charging a second pack.
     assert.equal(retry.structuredContent.nextAction.arguments.request_id, 'reqPENDING1');
     assert.equal(attempt, 1);
@@ -1748,7 +1750,7 @@ test('manage_agent_billing explains that a pending purchase finishes only at its
     assert.match(text, /Purchase request id was already used for another pack/);
     assert.match(text, /Nothing was charged now\./);
     assert.match(text, /For a new purchase, get a new quote without request_id\./);
-    assert.match(text, /can only be finished at its original price, so ask Wiro support to finish it/);
+    assert.match(text, /If the earlier purchase with this id ended without a clear result, do not buy again: check get_my_agent and the wallet balance with get_account, and if the balance changed, contact Wiro support\./);
     assert.equal(attempt, 2);
   });
 });
@@ -1770,7 +1772,7 @@ test('manage_agent_billing reports a failure after the request as a possible cha
     assert.equal(result.isError, true);
     const text = textOf(result);
     assert.match(text, /Lock timeout/);
-    assert.match(text, /the wallet may have been charged/);
+    assert.match(text, /The request was sent and the answer does not show whether it went through\./);
     assert.match(text, /No new pack shows on the agent yet/);
     assert.match(text, /request_id "pack-key-123"/);
     assert.match(text, /Do not get a new quote for this purchase/);
@@ -1790,6 +1792,7 @@ test('manage_agent_billing reports a failure after the request as a possible cha
     assert.equal(subscribed, true);
     assert.equal(result.isError, true);
     assert.match(textOf(result), /The agent shows no active plan yet/);
+    assert.match(textOf(result), /the wallet balance with get_account before trying again; if the plan is still not active but the balance changed, contact Wiro support\./);
     assert.match(textOf(result), /Do not repeat the call until this is checked/);
   });
 
@@ -1805,8 +1808,8 @@ test('manage_agent_billing reports a failure after the request as a possible cha
   await withClient(upgrade, async client => {
     const result = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'upgrade_to_pro', confirm_charge_usd: 108, confirm: true });
     assert.equal(result.isError, true);
-    assert.match(textOf(result), /the wallet may have been charged/);
-    assert.match(textOf(result), /already shows the Pro price but not the Pro tier.*Do not upgrade again/);
+    assert.match(textOf(result), /The request was sent and the answer does not show whether it went through\./);
+    assert.match(textOf(result), /The agent does not show Pro yet\. Do not upgrade again: check get_my_agent and the wallet balance with get_account, and if the balance changed, contact Wiro support\./);
     assert.equal(upgrade.called('/UserAgent/UpgradeTier').length, 1);
   });
 });
@@ -1828,9 +1831,9 @@ test('manage_agent_billing reports an action that went through despite an error 
     const out = result.structuredContent;
     assert.equal(out.outcome, 'done');
     assert.deepEqual(out.result, { chargedUsd: 60, creditsAdded: 6000 });
-    assert.match(out.message, /^Wiro answered with an error \(Lock timeout\) after the request was sent, but reading the agent again shows that it went through\./);
-    assert.match(out.message, /A new pack of that size shows on the agent, so the purchase went through and the wallet was charged\. Do not buy it again\./);
-    assert.match(out.message, /repeating this purchase with the same request_id "pack-key-123" and confirm_charge_usd 60 finishes it without a second charge/);
+    assert.match(out.message, /^The answer did not confirm this request, so the agent was read again\./);
+    assert.match(out.message, /A new pack of that size shows on the agent, so the purchase went through\. Do not buy it again\./);
+    assert.match(out.message, /repeat this purchase with the same request_id "pack-key-123" and confirm_charge_usd 60; that request id never charges twice/);
     assert.doesNotMatch(textOf(result), /To retry|may have been charged/);
     assert.equal(out.nextAction.tool, 'get_my_agent');
     assert.equal(pack.called('/UserAgent/CreateExtraCreditCheckout').length, 1);

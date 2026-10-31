@@ -62,10 +62,10 @@ const MAX_PARTIAL_LENGTH = 2_000;
 // absorbs rounding to whole seconds.
 const RUN_WINDOW_BEFORE_SECONDS = 5;
 const RUN_WINDOW_AFTER_SECONDS = 30;
-// Work handed to the background starts its runs after the turn has ended, and
-// runs are matched to a turn by time. A hand-off's runs are therefore counted
-// until the next message in its session, and for at most this long. Until then get_agent_message keeps pointing to itself while no
-// run has appeared; a text-only result cannot keep an assistant polling forever.
+// Runs that start after a hand-off are collected until the next message in its
+// session, and for at most this long. Until then get_agent_message keeps
+// pointing to itself while no run has appeared; a text-only result cannot keep
+// an assistant polling forever.
 const BACKGROUND_FOLLOW_UP_SECONDS = 30 * 60;
 // One short page of the session's history finds its next message.
 const NEXT_MESSAGE_HISTORY_LIMIT = 20;
@@ -75,8 +75,8 @@ const STUDIO_RUNS_PAGE = 30;
 // The first run of a hand-off is looked for less often: the reply has already
 // said that its results come later.
 const BACKGROUND_RUN_POLL_MS = 15_000;
-// A read that has not found the message yet is repeated past the 10 seconds a
-// new message can take to become visible.
+// The wait the next get_agent_message call gets for a message that cannot be
+// read yet.
 const NOT_VISIBLE_RETRY_WAIT_SECONDS = 15;
 // Not a status of Wiro's: the message cannot be read yet.
 const NOT_VISIBLE_STATUS = 'not_visible';
@@ -200,7 +200,7 @@ export function projectAgentMessage(
   includeUserText: boolean,
 ): ProjectedMessage {
   const message = toAgentMessage(row, { includeUserText });
-  // A voice call keeps only its id, status and times; its text names the caller.
+  // Wiro's own voice call records are summarized without caller details: id, status and times.
   if (message.kind === 'voice_call') return { message };
   const terminal = isTerminalMessageStatus(row.status);
   if (!terminal) {
@@ -340,9 +340,7 @@ async function collectStudioRuns(
 function backgroundNote(target: AgentTarget): string {
   if (target.kind === 'studio') {
     return 'Studio handed this work to the background, so its results come later. get_agent_message collects the '
-      + 'model runs it starts there, and list_studio_results lists them too. A text follow-up can also arrive as a '
-      + 'separate message in this session: get_agent_conversation shows it with the API key of a personal project, '
-      + 'but not with a team project\'s key. Do not send the request again.';
+      + 'model runs it starts there; use list_studio_results for Studio\'s late results. Do not send the request again.';
   }
   return 'The agent handed this work to the background. Its result arrives later as a separate message in this '
     + 'session: read it with get_agent_conversation. Do not send the request again.';
@@ -350,10 +348,8 @@ function backgroundNote(target: AgentTarget): string {
 
 const FOLLOW_UP_MINUTES = BACKGROUND_FOLLOW_UP_SECONDS / 60;
 
-const HAND_OFF_RUNS_BY_TIME_NOTE = 'Studio does not record which message started a run, so the runs of a hand-off '
-  + 'are matched by time: runs started after this message and before the next message in this session, up to '
-  + `${FOLLOW_UP_MINUTES} minutes after the hand-off. A run started from another Studio conversation in that time `
-  + 'can show up here too.';
+const HAND_OFF_RUNS_NOTE = 'Runs that start after the hand-off are collected here until the next message in this '
+  + `session, for up to ${FOLLOW_UP_MINUTES} minutes; list_studio_results lists every run.`;
 
 function handOffClosedNote(closedBy: NonNullable<CollectedRuns['closedBy']>, anyRuns: boolean): string {
   if (closedBy === 'next message') {
@@ -417,9 +413,8 @@ export async function collectTurn(options: CollectTurnOptions): Promise<AgentTur
         isDone: value => isTerminalMessageStatus(value.status),
         timeoutMs: options.waitSeconds * 1000,
         signal: options.extra?.signal,
-        // A new message can take a moment to become readable. After Send the
-        // message is known to exist, so "not found" is read again for the
-        // whole wait; otherwise only for the first seconds.
+        // After Send the message is known to exist, so "not found" is read
+        // again for the whole wait; otherwise only for the first seconds.
         isRetryable: (error, elapsedMs) => (afterSend ? isMessageNotFound(error) : isEarlyNotFound(error, elapsedMs)),
         onPoll: (value, elapsedMs) => reportProgress(
           options.extra,
@@ -528,7 +523,7 @@ export async function collectTurn(options: CollectTurnOptions): Promise<AgentTur
         if (collected.runs.length > 0) {
           notes.push(STUDIO_RUNS_NOTE);
           if (background) {
-            notes.push(HAND_OFF_RUNS_BY_TIME_NOTE);
+            notes.push(HAND_OFF_RUNS_NOTE);
             if (collected.closedBy) {
               notes.push(handOffClosedNote(collected.closedBy, true));
             } else if (!collected.pending) {

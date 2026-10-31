@@ -9,10 +9,10 @@ import {
   unixToIso,
 } from './api.js';
 
-// Model runs that Studio starts on the user's behalf. They are not owned by the
-// caller's project, so the task tools (get_task, cancel_task, kill_task) cannot
-// see them; /Studio/Tasks is the only way to read them. Run tokens and the full
-// request parameters stay out of the projection.
+// Model runs that Studio starts on the user's behalf. They belong to Studio, so
+// list_studio_results and get_agent_message read them, not the task tools
+// (get_task, cancel_task, kill_task). Each run keeps its model, state, outputs,
+// text answer, prompt, cost and times.
 
 export const studioRunSchema = z.object({
   id: z.string(),

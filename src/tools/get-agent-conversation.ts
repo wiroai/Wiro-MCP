@@ -57,8 +57,8 @@ type HistoryMessage = AgentMessage & { workflows?: WorkflowArtifactSummary[] };
 function sessionPreview(value: unknown): string | undefined {
   const text = asString(value)?.trim();
   if (!text) return undefined;
-  // Wiro's own call line carries the caller's number, so it reads "Voice call", as a
-  // call record does. What the agent itself writes, such as a call report, comes back as written.
+  // Wiro's own voice call records are summarized as "Voice call", without caller details.
+  // What the agent itself writes, such as a call report, comes back as written.
   if (isVoiceCallText(text)) return 'Voice call';
   return truncate(text.replace(/\s+/g, ' '), MAX_LAST_MESSAGE);
 }
@@ -147,11 +147,11 @@ export function registerGetAgentConversation(server: McpServer, client: WiroClie
         + 'a result an agent delivered later in the background, or to check whether a message was queued before '
         + 'sending it again. Studio sessions are the same ones the user sees in Studio on wiro.ai. Workflow Agent '
         + 'sessions listed here are the ones this API key\'s project used; the user\'s own Workflow Agent chats on '
-        + 'wiro.ai are separate and are not listed. Studio\'s late results do not show here for a team project\'s '
-        + 'key; list_studio_results has their model runs. Workflow Agent replies list their workflows with '
-        + 'artifact_hash for save_workflow_from_agent. Wiro\'s own voice call records come back without caller '
-        + 'details or transcripts; what the agent itself writes, such as a receptionist\'s call report, comes back '
-        + 'as written. Media from Wiro is in mediaUrls; share other links from a reply as plain links. Read-only.',
+        + 'wiro.ai are separate and are not listed. Use list_studio_results for Studio\'s late results. Workflow '
+        + 'Agent replies list their workflows with artifact_hash for save_workflow_from_agent. Wiro\'s own voice '
+        + 'call records come back without caller details or transcripts; what the agent itself writes, such as a '
+        + 'receptionist\'s call report, comes back as written. Media from Wiro is in mediaUrls; share other links '
+        + 'from a reply as plain links. Read-only.',
       inputSchema: {
         agent: z.string().min(1).describe(AGENT_INPUT_DESCRIPTION),
         session: z.string().optional().describe('The conversation to read. Leave it out to list the sessions.'),
@@ -190,7 +190,7 @@ export function registerGetAgentConversation(server: McpServer, client: WiroClie
           const rows = Array.isArray(data.sessions) ? data.sessions.filter(isPlainObject) : [];
           const sessions = rows
             .map(row => ({ row, key: asString(row.sessionkey) ?? '' }))
-            // Reserved sessions belong to Wiro's own scheduling and voice plumbing and cannot be read.
+            // Sessions whose names cannot be used with these tools are left out.
             .filter(({ key }) => key !== '' && sessionKeyProblem(key) === null)
             .map(({ row, key }) => {
               const updatedAt = unixToIso(row.updatedat);

@@ -332,8 +332,8 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
         const billingBase = { plan: billing.plan, subscriptionStatus: billing.status, wallet: billing.wallet };
 
         // An empty change cannot charge anything. With a key issued for this
-        // same change, Wiro returns the saved result of an earlier call with
-        // it, which is how a retry after a timeout learns what happened.
+        // same change it is still sent, so a repeated confirm gets the result
+        // of the earlier call with that key.
         if (nothingToDo && !(confirm && givenKey)) {
           return {
             content: [{ type: 'text' as const, text: `## No change needed\n\nThe skills${tier ? ' and tier' : ''} are already as requested on agent \`${agent_guid}\`.` }],
@@ -497,7 +497,8 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
 
           const message = errorText(error);
           if (sentEmpty) {
-            const note = `The agent's skills are already as requested. Wiro answered with an error (${message}) when asked for the result of the earlier call with this idempotency_key, so what that call charged is not shown here; get_agent_activity with kind usage shows it.`;
+            const note = 'The agent\'s skills already match the request, so the change is in place. Do not repeat it. '
+              + 'What the earlier call with this idempotency_key charged is not shown here; get_agent_activity with kind usage shows it.';
             return {
               content: [{ type: 'text' as const, text: `## No change needed\n\n${note}` }],
               structuredContent: {
@@ -510,14 +511,14 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
             };
           }
 
-          // The outcome is open: the change may have been saved and charged,
-          // so the agent is read again before reporting anything.
+          // The agent is read again to see whether the change is in place
+          // before anything is reported.
           const holds = await changeHolds(client, agent_guid, plan.requested, tierChange, extra.signal);
           if (holds === true) {
-            const note = `Wiro answered with an error (${message}), but the agent's skills are now as requested, so the change was saved. ${billing.plan === 'prepaid' && billing.status === 'active' ? `The difference for the rest of this period was probably taken from, or credited to, ${walletName(billing)}, and a credit can be spent until this period ends; get_agent_activity with kind usage and get_account show it.` : 'Any price difference follows the plan\'s usual billing.'} Do not repeat the change.`;
+            const note = `The agent's skills now match the request, so the change is in place. Do not repeat it. ${billing.plan === 'prepaid' && billing.status === 'active' ? `The difference for the rest of this period was probably taken from, or credited to, ${walletName(billing)}, and a credit can be spent until this period ends; get_agent_activity with kind usage and get_account show it.` : 'Any price difference follows the plan\'s usual billing.'}`;
             return {
               content: [{ type: 'text' as const, text: [
-                '## Skills updated (with an error report)',
+                '## Skills updated',
                 '',
                 `**Agent:** \`${agent_guid}\``,
                 listLine('Turned on', changes.enable),
@@ -536,8 +537,8 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
           }
           const unverified = holds === null;
           const note = unverified
-            ? `Wiro answered with an error (${message}), and the agent could not be read to check whether the change was saved. Check get_my_agent before trying again. Repeating this call with the same idempotency_key never applies the change twice.`
-            : `Wiro answered with an error (${message}) and the agent's skills are unchanged, so the change was not applied. Repeating this call with the same idempotency_key is safe.`;
+            ? `The change could not be confirmed (${message}). Check get_my_agent to see whether the skills match the request before trying again; repeating this call with the same idempotency_key never applies the change twice.`
+            : `The agent's skills are unchanged, so the change was not applied (${message}). Repeating this call with the same idempotency_key is safe.`;
           return {
             content: [{ type: 'text' as const, text: `## Skill change ${unverified ? 'not confirmed' : 'not applied'}\n\n${note}\n\nidempotency_key: \`${key}\`` }],
             structuredContent: {
@@ -552,11 +553,12 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
           };
         }
 
-        // A reused key gets the saved answer of the call that first used it,
-        // so the live agent is checked against this change.
+        // The live agent is checked against this change before it is reported
+        // as applied.
         const holds = await changeHolds(client, agent_guid, plan.requested, tierChange, extra.signal);
         if (holds === false) {
-          const note = 'Wiro answered with the saved result of an earlier call that used this idempotency_key, and the agent\'s skills are not as this change asks, so this change was probably not applied by this call. Check get_my_agent; if the skills are still not as requested, call apply_agent_skills again without idempotency_key to get a new quote.';
+          const note = 'The agent\'s skills do not match this change, so it is not in place. Check get_my_agent; if they '
+            + 'still do not match the request, call apply_agent_skills again without idempotency_key to get a new quote.';
           return {
             content: [{ type: 'text' as const, text: `## Skill change not applied\n\n${note}` }],
             structuredContent: {

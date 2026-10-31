@@ -115,10 +115,8 @@ export async function prepareWorkflowContents(
   return { contents: response.contents, warnings };
 }
 
-// Prepare fills every model parameter a step leaves out with its catalog default,
-// as the editor does on its canvas. For some models those defaults are the samples
-// from the model's page (a prompt, input images), which every run then uses, so
-// the caller is told what was filled.
+// Prepare fills every model parameter a step leaves out with its catalog value,
+// as the editor does on its canvas, and the caller is told what was filled.
 const SAMPLE_FILE_PATH = /\/sampleinputs\//;
 
 function isSampleFile(value: unknown): boolean {
@@ -314,10 +312,9 @@ export async function createWorkflow(
   };
 }
 
-// When Wiro shows a workflow to an agent, it replaces the value under any
-// secret-looking key (at any depth of a step's input, and the default of a Start
-// field with such a name) with one of the first two markers. "[hidden]" is the
-// mask this package itself shows in input summaries.
+// Markers that stand in for a hidden value in a graph copied from a read or a
+// Workflow Agent proposal. "[hidden]" is the mask this package shows in input
+// summaries.
 const HIDDEN_VALUES = new Set(['[REDACTED]', '[OMITTED]', '[hidden]']);
 
 function collectHidden(value: unknown, path: string, found: string[]): void {
@@ -637,10 +634,7 @@ async function readEditableRow(
   return row;
 }
 
-/**
- * Right after a create, Update and Delete can answer "Workflow not found" for
- * a row Detail just returned. One retry after a short pause covers that window.
- */
+/** Posts once more, after a short pause, when the answer is "Workflow not found". */
 export async function postWithNotFoundRetry<T extends ApiEnvelope>(
   client: WiroClient,
   path: string,
@@ -848,8 +842,8 @@ export function prepareIssuesText(error: WorkflowPrepareError): string {
   if (tooLarge) {
     const size = tooLarge.bytes !== undefined ? ` (${(tooLarge.bytes / 1024).toFixed(1)} KB)` : '';
     const cause = tooLarge.code === 'prepared-contents-too-large'
-      ? ` It grew past the limit${size} when Wiro filled each model step's left-out inputs with their defaults, `
-        + 'which for some models are sample files: set those inputs yourself, or set a file input to [] to leave it out.'
+      ? ` It grew past the limit${size} when Wiro filled each model step's left-out inputs with their defaults: `
+        + 'set those inputs yourself, or set a file input to [] to leave it out.'
       : ` The graph sent was too large${size}.`;
     return [
       '## The workflow was not saved',

@@ -63,7 +63,7 @@ export function registerDeleteWorkflow(server: McpServer, client: WiroClient): v
         const response = await postWithNotFoundRetry<ApiEnvelope>(client, '/Workflow/Delete', { slug: fullSlug }, extra.signal);
         if (response.result !== true
           && (response.errors ?? []).some(error => /workflow not found/i.test(String(error?.message ?? '')))) {
-          // Detail may still find it: report "not deleted yet" rather than "already gone".
+          // When Detail still returns the workflow, it is reported as not deleted yet.
           const check = await client.post<ApiEnvelope & { workflow?: unknown[] }>('/Workflow/Detail', { slug: fullSlug }, extra.signal);
           if (check.result === true && Array.isArray(check.workflow) && check.workflow.length > 0) {
             throw new Error('The workflow exists but could not be deleted yet. Try again in a few seconds.');

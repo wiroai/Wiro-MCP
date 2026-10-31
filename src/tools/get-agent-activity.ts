@@ -232,7 +232,6 @@ export function registerGetAgentActivity(server: McpServer, client: WiroClient):
               remainingCredits: toNumber(summary.remainingcredits) ?? 0,
               ...(period ? { period } : {}),
             },
-            // Pack end dates are left out on purpose: no tool shows a pack's end date.
             extraPacks: (Array.isArray(summary.extrapacks) ? summary.extrapacks : []).filter(isPlainObject).map(pack => {
               const status = asString(pack.status);
               const purchasedAt = unixToIso(pack.purchasedat);

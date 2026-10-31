@@ -301,17 +301,21 @@ test('get_task_price tells a task cancelled while queued from one stopped after 
   }
 });
 
-test('get_task_price shows the charge Wiro recorded for a failed task', async () => {
-  const failed = completedDetail();
-  failed.tasklist[0].pexit = '1';
-  failed.tasklist[0].totalcost = '0.03';
-  failed.tasklist[0].chargedcost = '0.03';
-  await withClient({ getTask: async () => failed }, async client => {
+test('get_task_price shows the charge Wiro recorded for a task stopped while running', async () => {
+  // kill_task stopped the task after a worker had started it.
+  const killed = completedDetail();
+  killed.tasklist[0].status = 'task_cancel';
+  killed.tasklist[0].pexit = '';
+  killed.tasklist[0].accepttime = '1761700000';
+  killed.tasklist[0].starttime = '1761700001';
+  killed.tasklist[0].totalcost = '0.03';
+  killed.tasklist[0].chargedcost = '0.03';
+  await withClient({ getTask: async () => killed }, async client => {
     const result = await client.callTool({ name: 'get_task_price', arguments: { taskid: '123' } });
     assert.notEqual(result.isError, true);
-    assert.match(result.content[0].text, /\*\*Result:\*\* Failed \(exit code: 1\)/);
+    assert.match(result.content[0].text, /\*\*Result:\*\* Cancelled/);
     assert.match(result.content[0].text, /\*\*Cost:\*\* \$0\.03$/m);
-    assert.equal(result.structuredContent.state, 'failed');
+    assert.equal(result.structuredContent.state, 'cancelled');
     assert.equal(result.structuredContent.billed, true);
     assert.equal(result.structuredContent.costUsd, 0.03);
   });

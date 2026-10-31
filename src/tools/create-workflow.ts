@@ -48,8 +48,7 @@ export function registerCreateWorkflow(server: McpServer, client: WiroClient): v
         + 'step runs. Wiro checks the graph against the live model catalog, fills catalog defaults '
         + 'and lays the steps out before saving; every problem it finds comes back together, so fix '
         + 'them all and call again. Set every model input you care about: a left-out one gets the model\'s '
-        + 'default, which for some models is the sample prompt or sample images from its page '
-        + '(the Notes in the result list what was filled). The graph can be at most 40 KB of JSON '
+        + 'default (the Notes in the result list what was filled). The graph can be at most 40 KB of JSON '
         + 'with those defaults. Free. Each call creates another workflow. The result gives the '
         + 'full slug, the page link and the input keys, so no get_workflow call is needed to run it.',
       inputSchema: {

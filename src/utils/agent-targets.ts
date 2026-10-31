@@ -48,8 +48,7 @@ const ENDPOINTS: Record<AgentKind, Partial<Record<AgentOperation, string>>> = {
     history: '/Studio/Message/History',
     sessions: '/Studio/Message/Sessions',
     cancel: '/Studio/Message/Cancel',
-    // ClearSession deletes the history and always moves the agent to a fresh
-    // memory; DeleteSession does that only for "default".
+    // ClearSession deletes the session's messages and resets Studio's memory of it.
     deleteSession: '/Studio/Message/ClearSession',
     status: '/Studio/Status',
   },
@@ -80,24 +79,24 @@ export const AGENT_INPUT_DESCRIPTION = 'Which agent: "studio" (Wiro Studio, the 
 
 export const WORKFLOW_AGENT_MAX_MESSAGE_BYTES = 16 * 1024;
 const WORKFLOW_SESSION_PATTERN = /^[A-Za-z0-9._:-]+$/;
-// Wiro prefixes the session names an API key uses with the Workflow Agent and
-// keeps the whole name within 128 characters, so names sent from here stay
-// within 100. Names that already exist can be longer and are read as they are.
+// Workflow Agent session names sent from here stay within 100 characters, the
+// limit for a new session. Names that already exist can be longer and are read
+// as they are.
 const WORKFLOW_SEND_SESSION_MAX = 100;
 const AGENT_GUID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{2,127}$/;
 const PRODUCT_UNAVAILABLE_PATTERN = /^agent (is|has no remaining|not found)|not configured/i;
 export const BARE_UNAVAILABLE_PATTERN = /temporarily unavailable/i;
 export const BACKGROUND_REPLY_PATTERN = /working on it in the background/i;
-// A turn that spawns sub-agents or yields to them ends before their work does.
-// Its reply is then often the agent's own waiting line, which no pattern finds.
+// Tools whose use in a turn marks a hand-off to the background, whatever the
+// reply says.
 const BACKGROUND_TOOLS = new Set(['sessions_spawn', 'sessions_yield']);
 
-/** Whether a finished turn handed (part of) its work to sub-agents that deliver later. */
+/** Whether a finished turn handed (part of) its work to the background, to be delivered later. */
 export function isBackgroundHandOff(
   reply: string | undefined,
   tools: Array<{ name: string; status?: string }>,
 ): boolean {
-  // A spawn or yield that failed handed nothing over.
+  // A hand-off tool that failed handed nothing over.
   return BACKGROUND_REPLY_PATTERN.test(reply ?? '')
     || tools.some(tool => BACKGROUND_TOOLS.has(tool.name) && tool.status !== 'error');
 }
@@ -142,8 +141,7 @@ export function agentSessionProblem(
   }
   if (use === 'send' && session.length > WORKFLOW_SEND_SESSION_MAX) {
     return 'A Workflow Agent session name may contain only letters, digits, ".", "_", ":" and "-", '
-      + `and at most ${WORKFLOW_SEND_SESSION_MAX} characters (Wiro adds a prefix of its own to sessions started `
-      + 'with an API key).';
+      + `and at most ${WORKFLOW_SEND_SESSION_MAX} characters.`;
   }
   return null;
 }
@@ -363,7 +361,6 @@ export async function explainSendRefusal(
   if (target.kind !== 'deployed'
     && (response.agentstatus !== undefined || response.agentbalance !== undefined
       || PRODUCT_UNAVAILABLE_PATTERN.test(message))) {
-    // Status and credit numbers here are not the caller's own, so they are not repeated.
     return `${target.name} is temporarily unavailable. Please try again shortly.`;
   }
 
