@@ -88,9 +88,13 @@ export function registerGetWorkflow(server: McpServer, client: WiroClient): void
         if (workflow.graphHidden && !workflow.insider && workflow.inputs.length > 0) lines.push('', leftOut);
         const outputs = Object.keys(workflow.outputs);
         if (outputs.length > 0) lines.push('', `### Outputs`, '', ...outputs.map(key => `- \`${key}\``));
-        if (workflow.estimatedCost?.valueUsd !== undefined && workflow.estimatedCost.valueUsd !== null) {
-          lines.push('', `**Estimated cost per run:** about $${workflow.estimatedCost.valueUsd}`);
+        const estimate = workflow.estimatedCost;
+        if (estimate?.valueUsd !== undefined && estimate.valueUsd !== null) {
+          lines.push('', `**Estimated cost per run:** about $${estimate.valueUsd}`);
+        } else if (estimate?.notes) {
+          lines.push('', '**Estimated cost per run:** not known before the run');
         }
+        if (estimate?.notes) lines.push(...estimate.notes.map(note => `- ${note}`));
         if (workflow.contents) {
           lines.push('', 'The full step graph is in the structured result under `workflow.contents`.');
         }

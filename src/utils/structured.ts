@@ -8,7 +8,15 @@ import type {
   TaskUsage,
   ToolListItem,
 } from '../types.js';
-import { formatPricing, isUsageBilled, parameterFallback, parameterRange, toParameterOption } from './format.js';
+import {
+  discountPercent,
+  formatPricing,
+  listedEstimate,
+  parameterFallback,
+  parameterRange,
+  pricingNotes,
+  toParameterOption,
+} from './format.js';
 import {
   isToolCallSegment,
   normalizeTaskRawContent,
@@ -74,6 +82,7 @@ export interface StructuredModelSummary {
   categories: string[];
   pricing?: string;
   estimatedCostUsd?: number | null;
+  discountPercent?: number;
 }
 
 export type TaskContentBlock =
@@ -240,11 +249,12 @@ export function createTaskContent(text: string, task?: Task): TaskContentBlock[]
 }
 
 export function toStructuredModel(model: ToolListItem): StructuredModelSummary {
-  // approximatelycost estimates one run from past run times, and 0 means there
-  // is no such estimate, as for a model priced by its options. A price set
-  // from usage is known only once the run completes.
-  const approximateCost = parseNullableNumber(model.approximatelycost);
-  const estimatedCost = isUsageBilled(model) || approximateCost === 0 ? null : approximateCost;
+  // estimatedCostUsd is a positive estimate of one run, or null when there is
+  // none. A price list gives its own (see listedEstimate); otherwise
+  // approximatelycost averages past runs, and 0 there means no estimate.
+  const listed = listedEstimate(model);
+  const estimate = listed === undefined ? parseNullableNumber(model.approximatelycost) : listed;
+  const estimatedCost = typeof estimate === 'number' && estimate <= 0 ? null : estimate;
   const pricing = formatPricing(model);
 
   return compact({
@@ -254,11 +264,13 @@ export function toStructuredModel(model: ToolListItem): StructuredModelSummary {
     categories: model.categories?.filter(category => category !== 'tool') ?? [],
     pricing: pricing || undefined,
     estimatedCostUsd: estimatedCost,
+    discountPercent: discountPercent(model) ?? undefined,
   });
 }
 
 export function toStructuredModelDetail(model: ToolListItem): {
   model: StructuredModelSummary & {
+    pricingNotes?: string[];
     parameters: Array<{
       title: string;
       items: Array<{
@@ -283,13 +295,16 @@ export function toStructuredModelDetail(model: ToolListItem): {
   nextAction: NextAction;
 } {
   const summary = toStructuredModel(model);
-  // A price question is answered here, so the price carries the rules that
-  // the short search line leaves out, such as how megapixels count.
+  // A price question is answered here, so the price is checked against the
+  // model's settings and carries the rules that the short search line leaves
+  // out, such as how pixels are counted.
   const pricing = formatPricing(model, true);
+  const notes = pricingNotes(model);
   return {
     model: {
       ...summary,
       ...(pricing ? { pricing } : {}),
+      ...(notes.length > 0 ? { pricingNotes: notes } : {}),
       parameters: (model.parameters ?? []).map(group => ({
         title: group.title || '',
         items: group.items.map(item => compact({

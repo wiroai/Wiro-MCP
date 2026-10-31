@@ -151,7 +151,9 @@ export const modelSummarySchema = z.object({
   categories: z.array(z.string()),
   pricing: z.string().optional(),
   estimatedCostUsd: z.number().nullable().optional()
-    .describe('Estimated USD cost of one run, averaged from past runs, for a model billed by run time. Null when there is no such estimate, as for a model priced by its options or by usage: see pricing.'),
+    .describe('Estimated USD cost of one run: the average of past runs for a model billed by run time, or the listed estimate of a price set when the run ends. Null when there is no such estimate, as for a model priced by its options: see pricing.'),
+  discountPercent: z.number().optional()
+    .describe('Your discount on this model, in percent. It comes off the part of a charge paid from deposits; coupon credit and store revenue pay first, at the list price in pricing.'),
 });
 
 export const modelListOutputSchema = {
@@ -188,6 +190,8 @@ export const modelParameterSchema = z.object({
 
 export const modelDetailOutputSchema = {
   model: modelSummarySchema.extend({
+    pricingNotes: z.array(z.string()).optional()
+      .describe('Notes from the model\'s price list, as its page shows them, such as the rates behind a price or the setting it applies to.'),
     parameters: z.array(z.object({
       title: z.string(),
       items: z.array(modelParameterSchema),

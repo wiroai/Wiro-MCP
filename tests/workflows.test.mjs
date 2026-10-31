@@ -536,6 +536,109 @@ test('get_workflow says a protected gallery workflow from elsewhere runs left-ou
   });
 });
 
+// One line of a workflow estimate as Workflow/Detail sends it to a viewer whose
+// graph is hidden: the step's tool, source and node are left out.
+function estimateLine(code, fields = {}) {
+  return {
+    code, count: 1, pricemethod: null, rate: null, tool: null, note: null, unit: null, source: null,
+    param: null, paramlabel: null, defaultvalue: null, defaultlength: null, amount: null,
+    rangemin: null, rangemax: null, startfield: null, startlabel: null, options: null,
+    rangeminvalue: null, rangemaxvalue: null, nodeid: null, ...fields,
+  };
+}
+
+test('get_workflow names the steps its estimate leaves out', async () => {
+  const rates = 'Pricing is token-based: input $0.2 per 1M tokens, output $1.25 per 1M tokens.';
+  const hidden = estimatedcost => {
+    const row = storedRow({ isprotected: 1, ispublic: 1, estimatedcost });
+    row.contents = { version: '1', nodes: {}, schema: graph().schema, metadata: { input: { position: { x: 0, y: 0 } } } };
+    delete row.rejectreason;
+    return row;
+  };
+  const rows = {
+    'fox-maker-Ab3xZ': hidden({ type: 'estimated', value: 0.2, details: [
+      estimateLine('metered', { note: rates }),
+      estimateLine('no-price'),
+      estimateLine('choose-setting', { param: 'resolution', paramlabel: 'Resolution', rangemin: 0.1, rangemax: 0.5 }),
+      estimateLine('per-unit', { unit: 'run-second', rate: 0.0006, amount: 0.0006 }),
+    ] }),
+    'fox-maker-Bb3xZ': hidden({ type: 'unavailable', value: null, details: [estimateLine('metered')] }),
+    'fox-maker-Cb3xZ': hidden({ type: 'estimated', value: 0.04, details: [] }),
+  };
+  const fake = fakeClient({ '/Workflow/Detail': body => ({ result: true, errors: [], workflow: [rows[body.slug]] }) });
+  await withClient(fake, async client => {
+    // Listed first, so the client checks the results against the output schema.
+    await client.listTools();
+    const notes = [
+      `A step charged after the run by usage is not in this figure. Its rates: ${rates}`,
+      'A step without a fixed price for its settings is not in this figure: its charge follows the time it takes.',
+      'A step whose price depends on its Resolution setting, $0.1 to $0.5, is not in this figure.',
+      'A step priced at $0.0006 per second of run time counts as one second in this figure; it is charged for every second.',
+    ];
+    const priced = await client.callTool({ name: 'get_workflow', arguments: { slug: 'fox-maker-Ab3xZ' } });
+    assert.notEqual(priced.isError, true);
+    assert.ok(priced.content[0].text.includes(`**Estimated cost per run:** about $0.2\n${notes.map(note => `- ${note}`).join('\n')}`), priced.content[0].text);
+    assert.deepEqual(priced.structuredContent.workflow.estimatedCost, { type: 'estimated', valueUsd: 0.2, notes });
+
+    // With no figure, the lines still say what is charged.
+    const metered = await client.callTool({ name: 'get_workflow', arguments: { slug: 'fox-maker-Bb3xZ' } });
+    assert.match(metered.content[0].text, /\*\*Estimated cost per run:\*\* not known before the run\n- A step charged after the run by usage is not in this figure\./);
+
+    const plain = await client.callTool({ name: 'get_workflow', arguments: { slug: 'fox-maker-Cb3xZ' } });
+    assert.match(plain.content[0].text, /\*\*Estimated cost per run:\*\* about \$0\.04(\n\n|$)/);
+    assert.deepEqual(plain.structuredContent.workflow.estimatedCost, { type: 'estimated', valueUsd: 0.04 });
+  });
+});
+
+// Estimate lines shaped as Wiro sends them: a duration and a resolution set by
+// Start fields, the images of a step priced by image size, prompt text and audio
+// given at the start, a step priced per video second, and a setting and text that
+// an earlier step fills.
+test('get_workflow says what its estimate counts only in part', async () => {
+  const hidden = estimatedcost => {
+    const row = storedRow({ isprotected: 1, ispublic: 1, estimatedcost });
+    row.contents = { version: '1', nodes: {}, schema: graph().schema, metadata: { input: { position: { x: 0, y: 0 } } } };
+    delete row.rejectreason;
+    return row;
+  };
+  const duration = { param: 'duration', paramlabel: 'duration', startfield: 'duration', startlabel: 'Duration', rangemin: 0.785, rangemax: 4.71, rangeminvalue: '5', rangemaxvalue: '30' };
+  const rows = {
+    'fox-maker-Ab3xZ': hidden({ type: 'estimated', value: 0.165, details: [
+      estimateLine('start-field', { ...duration, defaultvalue: '5', amount: 0.785 }),
+      estimateLine('start-field', { param: 'resolution', paramlabel: 'Resolution (K)', startfield: 'res', startlabel: 'Resolution', defaultvalue: '1K', amount: 0.14, options: [{ value: '1K', price: 0.14 }, { value: '4K', price: 0.24 }] }),
+      estimateLine('start-field', { unit: 'image', rate: 0.015, param: 'inputImage', startfield: 'img', startlabel: 'Image', defaultlength: 1, rangemin: 0.015, rangemax: 0.06 }),
+      estimateLine('start-field', { unit: 'character', rate: 0.0001, param: 'prompt', paramlabel: 'Prompt', startfield: 'prompt', startlabel: 'Prompt', defaultlength: 120, amount: 0.012 }),
+      estimateLine('start-field', { unit: 'audio-second', rate: 0.0003, param: 'inputAudio', paramlabel: 'Input Audio', startfield: 'audio', startlabel: 'Audio', amount: 0.0003 }),
+      estimateLine('per-unit', { unit: 'video-second', rate: 0.025, amount: 0.025 }),
+      estimateLine('earlier-step', { param: 'duration', paramlabel: 'duration', defaultvalue: '5', amount: 0.785, rangemin: 0.785, rangemax: 4.71 }),
+      estimateLine('earlier-step', { unit: 'character', rate: 0.0001, defaultlength: 38, amount: 0.0038 }),
+    ] }),
+    'fox-maker-Bb3xZ': hidden({ type: 'unavailable', value: null, details: [estimateLine('start-field', { ...duration, defaultvalue: '' })] }),
+  };
+  const fake = fakeClient({ '/Workflow/Detail': body => ({ result: true, errors: [], workflow: [rows[body.slug]] }) });
+  await withClient(fake, async client => {
+    await client.listTools();
+    const notes = [
+      'The `duration` input changes the price of a step: $0.785 for "5" to $4.71 for "30". The figure uses "5" ($0.785).',
+      'The `res` input changes the price of a step: "1K" $0.14, "4K" $0.24. The figure uses "1K" ($0.14).',
+      'Each image in the `img` input adds $0.015 to $0.06 by its size, which is not in this figure.',
+      'A step priced at $0.0001 per character of the `prompt` input counts its 120-character default in this figure ($0.012); other text costs more or less.',
+      'A step priced at $0.0003 per second of the audio in the `audio` input counts as one second in this figure; it is charged for every second.',
+      'A step priced at $0.025 per second of output video counts as one second in this figure; it is charged for every second.',
+      'A step whose duration setting comes from an earlier step counts at its default (5, $0.785) in this figure; it can cost $0.785 to $4.71.',
+      'A step priced at $0.0001 per character of text from an earlier step counts its 38-character default text in this figure ($0.0038); the real text costs more or less.',
+    ];
+    const priced = await client.callTool({ name: 'get_workflow', arguments: { slug: 'fox-maker-Ab3xZ' } });
+    assert.notEqual(priced.isError, true);
+    assert.ok(priced.content[0].text.includes(`**Estimated cost per run:** about $0.165\n${notes.map(note => `- ${note}`).join('\n')}`), priced.content[0].text);
+    assert.deepEqual(priced.structuredContent.workflow.estimatedCost, { type: 'estimated', valueUsd: 0.165, notes });
+
+    // A step left out until its Start field gets a value: no figure, but the note.
+    const unset = await client.callTool({ name: 'get_workflow', arguments: { slug: 'fox-maker-Bb3xZ' } });
+    assert.match(unset.content[0].text, /\*\*Estimated cost per run:\*\* not known before the run\n- The `duration` input changes the price of a step: \$0\.785 for "5" to \$4\.71 for "30"\. With no value set, that step is not in this figure\./);
+  });
+});
+
 test('list_workflows counts only gallery runs and leaves out an empty count', async () => {
   const fake = fakeClient({
     '/Workflow/List': {

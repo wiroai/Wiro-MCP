@@ -973,13 +973,73 @@ test('get_model_schema answers a price question for a token-billed model with it
 
   await withClient(fakeWiroClient, async client => {
     const { tools } = await client.listTools();
-    assert.match(tools.find(tool => tool.name === 'get_model_schema').description, /for a price question, the price here is the answer\. A usage-based price gives the rates, and the charge is known after the run\./);
+    assert.match(tools.find(tool => tool.name === 'get_model_schema').description, /for a price question, the price here is the answer\. A price set when the run ends, or turn by turn in a live session, gives the rates, and the charge is known after the run\. "No fixed price" means the run is charged for the time it takes\./);
 
     const result = await client.callTool({ name: 'get_model_schema', arguments: { model: 'openai/gpt-5-4-nano' } });
     assert.notEqual(result.isError, true);
-    assert.ok(result.content[0].text.includes(`### Pricing (usage-based)\n${note} The price is set from usage when the run completes.`));
-    assert.equal(result.structuredContent.model.pricing, `usage-based: ${note}`);
+    assert.ok(result.content[0].text.includes(`### Pricing\nSet by the run when it ends: ${note}\n`));
+    assert.equal(result.structuredContent.model.pricing, `Set by the run when it ends: ${note}`);
     assert.equal(result.structuredContent.model.estimatedCostUsd, null);
+    assert.deepEqual(result.structuredContent.model.pricingNotes, [note]);
+  });
+});
+
+test('the price guidance covers prices set when the run ends and prices that are not fixed', async () => {
+  await withClient({}, async client => {
+    const { tools } = await client.listTools();
+    const metered = /A price set when the run ends, or turn by turn in a live session, gives the rates, and the charge is known after the run\./;
+    const unpriced = /"No fixed price" means the run is charged for the time it takes\./;
+    for (const name of ['search_models', 'get_model_schema']) {
+      const { description } = tools.find(tool => tool.name === name);
+      assert.match(description, metered, name);
+      assert.match(description, unpriced, name);
+    }
+    // A search row is not checked against the model's settings, so the price to
+    // quote or compare comes from get_model_schema.
+    assert.match(tools.find(tool => tool.name === 'search_models').description, /checks it against them, so read the price there before you quote it or name a model as the cheapest\./);
+    const models = await client.callTool({ name: 'get_playbook', arguments: { topics: ['models'] } });
+    const playbook = models.content.map(part => part.text ?? '').join('\n');
+    assert.match(playbook, /compare the prices, and check the cheapest ones with `get_model_schema` before you name one: it checks the price against the model's settings and can read "No fixed price"\./);
+    assert.match(playbook, /- A price set by the run when it ends, or billed turn by turn in a live session, gives the rates: estimate from them and say the charge is known after the run\. A price that reads "No fixed price" is charged for the time the run takes: say so before the run\./);
+    assert.match(playbook, /A model that shows the user's discount takes it off the part of a charge paid from deposits/);
+  });
+});
+
+test('search_models and get_model_schema return the caller\'s discount and the price notes in their structured output', async () => {
+  const row = {
+    cleanslugowner: 'tencent',
+    cleanslugproject: 'hunyuan3d-2-1',
+    title: 'Hunyuan3D 2.1',
+    categories: ['tool', '3d-generation'],
+    dynamicprice: '[{"inputs":{"generate_texture":"true"},"price":0.9,"priceMethod":"cpr","note":"$0.9 for textured mesh"},{"inputs":{"generate_texture":"false"},"price":0.3,"priceMethod":"cpr","note":"$0.30 for untextured white mesh."}]',
+    approximatelycost: 0,
+    cps: 0,
+    discount: 20,
+  };
+  const fakeWiroClient = {
+    searchModels: async () => ({ result: true, errors: [], total: 1, tool: [{ ...row, parameters: null }] }),
+    getModelSchema: async () => ({ result: true, errors: [], tool: [{ ...row, dynamicprice: JSON.parse(row.dynamicprice), parameters: [] }] }),
+  };
+
+  await withClient(fakeWiroClient, async client => {
+    // Listed first, so the client checks the results against the output schemas.
+    await client.listTools();
+    const search = await client.callTool({ name: 'search_models', arguments: { search: 'hunyuan' } });
+    assert.notEqual(search.isError, true);
+    assert.match(search.content[0].text, /- \*\*Your discount:\*\* 20% off the part of a charge paid from deposits/);
+    assert.deepEqual(search.structuredContent.models[0], {
+      slug: 'tencent/hunyuan3d-2-1',
+      title: 'Hunyuan3D 2.1',
+      categories: ['3d-generation'],
+      pricing: '$0.3 to $0.9 / per request',
+      estimatedCostUsd: null,
+      discountPercent: 20,
+    });
+
+    const schema = await client.callTool({ name: 'get_model_schema', arguments: { model: 'tencent/hunyuan3d-2-1' } });
+    assert.notEqual(schema.isError, true);
+    assert.deepEqual(schema.structuredContent.model.pricingNotes, ['$0.9 for textured mesh', '$0.30 for untextured white mesh.']);
+    assert.equal(schema.structuredContent.model.discountPercent, 20);
   });
 });
 

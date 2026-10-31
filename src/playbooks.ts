@@ -108,7 +108,7 @@ Wiro hosts image, video, audio, speech, 3D and LLM models from many providers. E
 
 - \`search_models\` takes categories, an owner or key words, and each row shows the model's price. Categories include text-to-image, image-to-image, image-editing, text-to-video, image-to-video, video-to-video (models that start from a video you already have, such as edits and conversions), text-to-speech, speech-to-text, text-to-music, 3d-generation, chat and llm.
 - Search with one to three key words, such as "upscale" or "remove background"; each extra word narrows the results. A search looks at each model's name and owner, its description, its parameters (id, label, placeholder, notes and help) and the option names of a \`selectwithcover\` field, such as an effect. Case, spaces, dots, dashes and underscores are ignored, and a short stem such as "timestamp" also finds the longer words that contain it. \`recommend_model\` searches the same way, best matches first.
-- To find the cheapest model for a job, list its category with \`search_models\` (limit up to 100) and compare the prices. To find a feature, add a key word, such as "timestamp" with the category speech-to-text.
+- To find the cheapest model for a job, list its category with \`search_models\` (limit up to 100), compare the prices, and check the cheapest ones with \`get_model_schema\` before you name one: it checks the price against the model's settings and can read "No fixed price". To find a feature, add a key word, such as "timestamp" with the category speech-to-text.
 - \`explore\` lists curated models by category. Use model slugs (\`owner/model\`) exactly as returned.
 
 ## Read the schema
@@ -145,7 +145,9 @@ Example, "a 10 second clip of a city street at night with Kling": \`search_model
 
 ## Prices and limits
 
-- The price is a fixed price per run, a price per unit (per second of video, per character, per token, per output and so on), or a rate per second of run time. A range means it depends on inputs such as resolution or duration: \`get_model_schema\` shows which. Quote the price at the size and count the user wants, or at the schema default, and say which.
+- The price is a fixed price per run, a price per unit (per second of video, per prompt character, per token, per output and so on), a price by image size, or a rate per second of run time. A range means it depends on inputs such as resolution or duration: \`get_model_schema\` shows which. Quote the price at the size and count the user wants, or at the schema default, and say which.
+- A price set by the run when it ends, or billed turn by turn in a live session, gives the rates: estimate from them and say the charge is known after the run. A price that reads "No fixed price" is charged for the time the run takes: say so before the run.
+- Prices are list prices. A model that shows the user's discount takes it off the part of a charge paid from deposits; coupon credit and store revenue pay first, at the list price.
 - Successful tasks are billed. Failed tasks and tasks cancelled while queued are not; a task stopped while running can still be charged.
 - A finished task's result shows its cost: the amount charged, and the list price when the two differ. \`get_task_price\` gives the cost of a task whose result you do not have. Right after a task ends, the result can show only the list price, marked as such: \`get_task_price\` a moment later gives the amount charged.
 - A run is refused with "Insufficient balance" when the spendable balance for that model is under $0.50. Tell the user the balance from \`get_account\`.
@@ -651,7 +653,7 @@ Where to see costs afterwards:
 
 ## Estimates and quotes
 
-- For usage-priced work, the estimate is the model price from \`get_model_schema\` times the number of runs or steps. Say when the final cost depends on output length or duration, and get one yes on the total of a batch.
+- For usage-priced work, the estimate is the model price from \`get_model_schema\` times the number of runs or steps. When it shows the user's discount, take it off the part the deposits will pay. Say when the final cost depends on output length or duration, and get one yes on the total of a batch.
 - Known charges come as a quote first. After a clear yes, repeat the call as the quote's \`nextAction\` shows: \`confirm: true\` with \`confirm_charge_usd\` set to the approved amount, or for \`apply_agent_skills\` the quote's \`idempotency_key\`. If the price changed in between, nothing is charged and a new quote comes back: show the new amount and ask again.
 - Prorated amounts, such as an upgrade to Pro or a skill change, are estimates for the days left in the period. For an upgrade the quote also gives the maximum, and \`confirm_charge_usd\` is the most the user agreed to pay.
 - Cancelling an agent plan stops the next renewal. It does not refund the current period.

@@ -7,6 +7,7 @@ import {
   truncate,
   unixToIso,
 } from './api.js';
+import { formatPrice } from './format.js';
 import type { MediaItem } from './media.js';
 
 // Workflow rows and runs as the Wiro API returns them, projected to what an
@@ -318,11 +319,89 @@ export const workflowDetailSchema = workflowSummarySchema.extend({
   estimatedCost: z.object({
     type: z.string().optional(),
     valueUsd: z.number().nullable().optional(),
+    notes: z.array(z.string()).optional()
+      .describe('What the figure leaves out or counts only in part: steps charged after the run by usage or without a fixed price for their settings, steps counted as one unit of a per-unit price or at a default, and inputs that change the price.'),
   }).optional(),
   contents: z.record(z.string(), z.unknown()).optional(),
 });
 
 export type WorkflowDetail = z.infer<typeof workflowDetailSchema>;
+
+// What one unit of a per-unit price is, by the unit Wiro names in the estimate.
+const ESTIMATE_UNITS: Record<string, { per: string; unit: string }> = {
+  'video-second': { per: 'per second of output video', unit: 'second' },
+  'audio-second': { per: 'per second of input audio', unit: 'second' },
+  'run-second': { per: 'per second of run time', unit: 'second' },
+  token: { per: 'per token', unit: 'token' },
+  character: { per: 'per character', unit: 'character' },
+};
+
+// Notes on a workflow's estimate, from the lines Wiro sends with it: steps the
+// figure leaves out, steps it counts as one unit or at a default, and inputs
+// that change the price.
+function estimateNotes(details: unknown): string[] {
+  const notes = new Set<string>();
+  const usd = (value: unknown): string | null => {
+    const amount = toNumber(value);
+    return amount === null ? null : `$${formatPrice(amount)}`;
+  };
+  for (const detail of Array.isArray(details) ? details : []) {
+    if (!isPlainObject(detail)) continue;
+    const unit = asString(detail.unit);
+    const rate = usd(detail.rate);
+    const amount = usd(detail.amount);
+    const low = usd(detail.rangemin);
+    const high = usd(detail.rangemax);
+    const field = asString(detail.startfield);
+    const input = field ? `the \`${field}\` input` : 'an input';
+    if (detail.code === 'metered') {
+      const rates = typeof detail.note === 'string' ? detail.note.replace(/\s+/g, ' ').trim() : '';
+      notes.add(`A step charged after the run by usage is not in this figure${rates ? `. Its rates: ${rates}` : '.'}`);
+    } else if (detail.code === 'no-price') {
+      notes.add('A step without a fixed price for its settings is not in this figure: its charge follows the time it takes.');
+    } else if (detail.code === 'choose-setting') {
+      const setting = asString(detail.paramlabel) || asString(detail.param);
+      const range = low === null || high === null ? '' : low === high ? `, ${low},` : `, ${low} to ${high},`;
+      notes.add(`A step whose price depends on ${setting ? `its ${setting} setting` : 'a setting'}${range} is not in this figure.`);
+    } else if (detail.code === 'per-unit') {
+      const words = unit ? ESTIMATE_UNITS[unit] : undefined;
+      if (words && rate) notes.add(`A step priced at ${rate} ${words.per} counts as one ${words.unit} in this figure; it is charged for every ${words.unit}.`);
+    } else if (detail.code === 'start-field') {
+      if (unit === 'image') {
+        if (low && high) notes.add(`Each image in ${input} adds ${low === high ? low : `${low} to ${high}`} by its size, which is not in this figure.`);
+      } else if (unit === 'character') {
+        if (rate) notes.add(`A step priced at ${rate} per character of ${input} counts its ${toInteger(detail.defaultlength)}-character default in this figure${amount ? ` (${amount})` : ''}; other text costs more or less.`);
+      } else if (unit === 'audio-second') {
+        if (rate) notes.add(`A step priced at ${rate} per second of the audio in ${input} counts as one second in this figure; it is charged for every second.`);
+      } else {
+        const options = Array.isArray(detail.options)
+          ? detail.options.filter(isPlainObject).map(option => `"${asString(option.value) ?? ''}" ${usd(option.price) ?? ''}`.trim())
+          : [];
+        const at = (price: string, value: unknown) => (asString(value) ? `${price} for "${asString(value)}"` : price);
+        const prices = options.length > 0
+          ? `: ${options.join(', ')}`
+          : low && high ? `: ${low === high ? low : `${at(low, detail.rangeminvalue)} to ${at(high, detail.rangemaxvalue)}`}` : '';
+        const value = asString(detail.defaultvalue) ?? '';
+        const used = value === ''
+          ? 'With no value set, that step is not in this figure.'
+          : amount
+            ? `The figure uses "${value}" (${amount}).`
+            : `The figure uses "${value}", which has no price, so that step is not in it.`;
+        notes.add(`${field ? `The \`${field}\` input` : 'An input'} changes the price of a step${prices}. ${used}`);
+      }
+    } else if (detail.code === 'earlier-step') {
+      if (unit === 'character') {
+        if (rate) notes.add(`A step priced at ${rate} per character of text from an earlier step counts its ${toInteger(detail.defaultlength)}-character default text in this figure${amount ? ` (${amount})` : ''}; the real text costs more or less.`);
+      } else {
+        const setting = asString(detail.paramlabel) || asString(detail.param);
+        const value = asString(detail.defaultvalue);
+        const counted = value ? ` (${value}${amount ? `, ${amount}` : ''})` : amount ? ` (${amount})` : '';
+        notes.add(`A step whose ${setting ? `${setting} setting` : 'price setting'} comes from an earlier step counts at its default${counted} in this figure; it can cost ${low && high && low !== high ? `${low} to ${high}` : 'more or less'}.`);
+      }
+    }
+  }
+  return [...notes];
+}
 
 export function toWorkflowDetail(
   row: Record<string, unknown>,
@@ -338,6 +417,7 @@ export function toWorkflowDetail(
   const graphHidden = row.estimatedcost !== undefined
     || (isProtected && workflowStepCount(contentsObject) === 0);
   const estimated = isPlainObject(row.estimatedcost) ? row.estimatedcost : undefined;
+  const notes = estimateNotes(estimated?.details);
 
   const description = asString(row.description);
   return {
@@ -358,6 +438,7 @@ export function toWorkflowDetail(
         estimatedCost: {
           ...(asString(estimated.type) ? { type: asString(estimated.type) } : {}),
           valueUsd: toNumber(estimated.value),
+          ...(notes.length > 0 ? { notes } : {}),
         },
       }
       : {}),

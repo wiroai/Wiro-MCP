@@ -11,7 +11,10 @@ export function registerSearchModels(server: McpServer, client: WiroClient): voi
     {
       title: 'Search Wiro models',
       description: 'Search and browse AI models on Wiro. Each row shows the model\'s price; '
-        + '`get_model_schema` shows how it depends on settings such as resolution. Choose a '
+        + '`get_model_schema` shows how it depends on settings such as resolution and checks it against '
+        + 'them, so read the price there before you quote it or name a model as the cheapest. A price set when '
+        + 'the run ends, or turn by turn in a live session, gives the rates, and the charge is known '
+        + 'after the run. "No fixed price" means the run is charged for the time it takes. Choose a '
         + 'model and call the returned `get_model_schema` next action before using `run_model`.',
       inputSchema: {
         search: z.string().optional().describe('One to three key words, e.g. "flux", "upscale" or "remove background"; each extra word narrows the results. It looks at each model\'s name and owner, its description, its parameters (id, label, placeholder, notes and help) and the option names of a selectwithcover field, such as an effect. Case, spaces, dots, dashes and underscores are ignored, and a short stem such as "timestamp" also finds the longer words that contain it.'),

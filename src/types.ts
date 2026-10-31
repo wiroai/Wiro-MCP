@@ -153,6 +153,8 @@ export interface ToolParameterItem {
   placeholder?: string;
   note?: string;
   options?: ToolParameterOption[];
+  /** Set when the options are loaded from a list, such as the models of a category, so `options` may not hold them all. */
+  optionsLoad?: unknown;
   min?: number;
   max?: number;
   step?: number;
@@ -188,7 +190,11 @@ export interface ToolListItem {
   marketplace?: number;
   dynamicprice?: string;
   cps?: string;
+  /** The rate per second of run time a run is billed at when cps is 0 and there is no price list. */
+  quegroupcps?: string | number;
   approximatelycost?: string;
+  /** The caller's own discount on this model, in percent; null when there is none. */
+  discount?: number | string | null;
   seotitle?: string;
   taskstat?: {
     runcount: number;
