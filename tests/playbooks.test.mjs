@@ -32,6 +32,7 @@ const PLANNED_TOOLS = new Set([
 const NON_TOOL_IDENTIFIERS = new Set([
   'timeout_seconds', 'wait_seconds', 'call_id', 'function_call', 'custom_tool_call',
   'upgrade_to_pro', 'buy_credits', 'select_accounts', 'confirm_charge_usd', 'idempotency_key', 'redirect_url',
+  'session_id', 'debug_node_id',
 ]);
 
 const PROMPT_ARGUMENTS = {
@@ -147,11 +148,10 @@ test('the workflow examples are valid graphs that reference only declared source
     }
   }
 
+  // Wiro fills in the rest of a Start field the way the wiro.ai editor does,
+  // so the example sends only the keys that count.
   for (const field of Object.values(minimal.schema.input)) {
-    for (const property of ['name', 'label', 'type', 'description', 'required', 'defaultValue', 'examples', 'ui']) {
-      assert.ok(Object.hasOwn(field, property), `Start field is missing ${property}`);
-    }
-    assert.equal(field.required, false);
+    assert.deepEqual(Object.keys(field).sort(), ['defaultValue', 'label', 'type', 'ui']);
   }
 });
 
