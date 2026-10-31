@@ -597,6 +597,9 @@ export function formatAgentSummaryLines(agent: AgentSummary): string[] {
 
 export function formatAgentDetail(agent: AgentDetail): string {
   const lines = formatAgentSummaryLines(agent);
+  if (agent.timezone !== undefined) {
+    lines.push(`**Time zone:** ${agent.timezone?.trim() ? agent.timezone : 'UTC, the default'}. Scheduled tasks run in it.`);
+  }
   if (agent.setupRequired) {
     lines.push(agent.missingCredentials.length > 0
       ? `**Setup required:** missing ${agent.missingCredentials.map(item => item.title).join(', ')}`

@@ -121,6 +121,27 @@ test('formatTaskPending tells the assistant to resume instead of rerun', () => {
   assert.match(text, /task-token/);
 });
 
+test('formatTaskResult shows the task token and what the wallet was charged', () => {
+  const base = {
+    id: '123',
+    socketaccesstoken: 'task-token',
+    parameters: {},
+    status: 'task_postprocess_end',
+    pexit: '0',
+    debugoutput: 'Hello',
+    starttime: '',
+    endtime: '',
+    elapsedseconds: '2',
+    totalcost: '0.05',
+    outputs: [],
+  };
+  assert.match(formatTaskResult(base), /\*\*Task Token:\*\* task-token/);
+  assert.match(formatTaskResult(base), /\*\*Cost:\*\* \$0\.05$/m);
+  assert.match(formatTaskResult({ ...base, chargedcost: '0.0400000' }), /\*\*Cost:\*\* \$0\.04 charged \(list price \$0\.05\)/);
+  assert.match(formatTaskResult({ ...base, chargedcost: '0.05' }), /\*\*Cost:\*\* \$0\.05$/m);
+  assert.match(formatTaskResult({ ...base, pexit: '1', chargedcost: '0' }), /\*\*Cost:\*\* \$0 \(not charged\)/);
+});
+
 test('formatTaskList keeps history concise and points to get_task', () => {
   const text = formatTaskList([{
     id: '123',

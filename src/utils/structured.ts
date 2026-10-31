@@ -54,6 +54,7 @@ export interface StructuredTaskReference {
   exitCode?: string;
   durationSeconds?: number | null;
   costUsd?: number | null;
+  chargedUsd?: number | null;
 }
 
 export interface StructuredTaskResult {
@@ -113,6 +114,10 @@ export function toTaskReference(
     : fallback.model;
   const durationSeconds = parseNullableNumber(task?.elapsedseconds);
   const costUsd = parseNullableNumber(task?.totalcost);
+  // What the payer was charged after any discount; absent until Wiro bills it.
+  const chargedUsd = task?.chargedcost === null || task?.chargedcost === undefined
+    ? undefined
+    : parseNullableNumber(String(task.chargedcost));
 
   return compact({
     id: asOptionalString(task?.id || fallback.taskid),
@@ -124,6 +129,7 @@ export function toTaskReference(
     exitCode: asOptionalString(task?.pexit || undefined),
     durationSeconds,
     costUsd,
+    chargedUsd,
   });
 }
 
@@ -300,7 +306,7 @@ export function toStructuredModelDetail(model: ToolListItem): {
         model: summary.slug,
         params: {},
       },
-      reason: 'Fill the required model parameters, then submit one generation.',
+      reason: 'When the user asked for a run, fill the required model parameters, then submit one generation. A price question needs no run.',
     },
   };
 }

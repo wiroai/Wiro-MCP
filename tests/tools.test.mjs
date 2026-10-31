@@ -194,6 +194,31 @@ test('get_task returns a function-call continuation in run_model params', async 
   });
 });
 
+test('get_task_price reports the charged amount and a cancelled task as free', async () => {
+  const charged = completedDetail();
+  charged.tasklist[0].totalcost = '0.1';
+  charged.tasklist[0].chargedcost = '0.08';
+  await withClient({ getTask: async () => charged }, async client => {
+    const result = await client.callTool({ name: 'get_task_price', arguments: { taskid: '123' } });
+    assert.notEqual(result.isError, true);
+    assert.match(result.content[0].text, /\*\*Cost:\*\* \$0\.08 charged \(list price \$0\.1\)/);
+    assert.equal(result.structuredContent.costUsd, 0.08);
+    assert.equal(result.structuredContent.task.chargedUsd, 0.08);
+  });
+
+  const cancelled = completedDetail();
+  cancelled.tasklist[0].status = 'task_cancel';
+  cancelled.tasklist[0].pexit = '';
+  cancelled.tasklist[0].totalcost = '0.1';
+  await withClient({ getTask: async () => cancelled }, async client => {
+    const result = await client.callTool({ name: 'get_task_price', arguments: { taskid: '123' } });
+    assert.match(result.content[0].text, /\*\*Result:\*\* Cancelled/);
+    assert.match(result.content[0].text, /\$0 \(cancelled tasks are not charged\)/);
+    assert.equal(result.structuredContent.state, 'cancelled');
+    assert.equal(result.structuredContent.costUsd, 0);
+  });
+});
+
 test('get_task omits invalid typed transport without public parser state', async () => {
   const detail = completedDetail();
   detail.tasklist[0].outputs = [{
@@ -541,7 +566,7 @@ test('get_model_schema points at workflow steps when run_model is not loaded', a
     assert.deepEqual(result.structuredContent.nextAction, {
       tool: 'run_model',
       arguments: { model: 'owner/image-model', params: {} },
-      reason: 'Fill the required model parameters, then submit one generation.',
+      reason: 'When the user asked for a run, fill the required model parameters, then submit one generation. A price question needs no run.',
     });
     assert.match(result.content[0].text, /Use `run_model` with this model/);
   });

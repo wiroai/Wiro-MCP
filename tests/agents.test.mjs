@@ -945,6 +945,7 @@ test('get_my_agent returns the sanitized state and the next step', async () => {
     assert.equal(agent.extraCreditPacks[0].pack, 'small');
     assert.equal(nextAction.tool, 'set_agent_credentials');
     assert.match(textOf(result), /Gmail \(`gmail`\): missing \(required\)/);
+    assert.match(textOf(result), /\*\*Time zone:\*\* UTC, the default\. Scheduled tasks run in it\./);
     assertNoSecrets(result);
   });
 });

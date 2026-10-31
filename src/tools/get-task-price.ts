@@ -1,6 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { WiroClient } from '../client.js';
+import { formatTaskCost } from '../utils/format.js';
 import {
   getTaskState,
   toStructuredTaskResult,
@@ -12,7 +13,8 @@ export function registerGetTaskPrice(server: McpServer, client: WiroClient): voi
     'get_task_price',
     {
       title: 'Get a Wiro task price',
-      description: 'Get one task’s cost at the model\'s list price. Successful tasks are '
+      description: 'Get one task’s cost: the amount charged once Wiro has billed it, with the '
+        + 'model\'s list price beside it when a discount made them differ. Successful tasks are '
         + 'billed; failed and cancelled tasks are not. A finished task\'s result already '
         + 'shows its cost, so use this for a task whose result you do not have. If the '
         + 'task is active, follow the returned `wait_for_task` next action.',
@@ -56,15 +58,24 @@ export function registerGetTaskPrice(server: McpServer, client: WiroClient): voi
         }
         lines.push(`**Status:** ${task.status}`);
 
-        if (task.pexit === '0') {
-          const cost = task.totalcost && task.totalcost !== '0'
-            ? `$${task.totalcost}`
-            : '$0 (no charge)';
+        const state = getTaskState(task);
+        // Wiro sets chargedcost once it has billed a finished task; a failed or
+        // cancelled task shows a charge only when Wiro reports one.
+        const chargedUsd = task.chargedcost === null || task.chargedcost === undefined || task.chargedcost === ''
+          ? null
+          : Number(task.chargedcost);
+        const charged = chargedUsd !== null && Number.isFinite(chargedUsd) && chargedUsd > 0
+          ? formatTaskCost(task)
+          : null;
+        if (state === 'completed') {
           lines.push(`**Result:** Success`);
-          lines.push(`**Cost:** ${cost}`);
-        } else if (task.pexit) {
-          lines.push(`**Result:** Failed (exit code: ${task.pexit})`);
-          lines.push(`**Cost:** $0 (failed tasks are not charged)`);
+          lines.push(`**Cost:** ${formatTaskCost(task) ?? '$0 (no charge)'}`);
+        } else if (state === 'failed') {
+          lines.push(`**Result:** Failed${task.pexit ? ` (exit code: ${task.pexit})` : ''}`);
+          lines.push(`**Cost:** ${charged ?? '$0 (failed tasks are not charged)'}`);
+        } else if (state === 'cancelled') {
+          lines.push(`**Result:** Cancelled`);
+          lines.push(`**Cost:** ${charged ?? '$0 (cancelled tasks are not charged)'}`);
         } else {
           lines.push(`**Result:** In progress`);
           lines.push(`**Cost:** Not yet determined (task still running)`);
@@ -74,7 +85,6 @@ export function registerGetTaskPrice(server: McpServer, client: WiroClient): voi
           lines.push(`**Duration:** ${task.elapsedseconds}s`);
         }
 
-        const state = getTaskState(task);
         const structuredTask = toStructuredTaskResult(task, {
           taskid,
           tasktoken,
@@ -87,9 +97,11 @@ export function registerGetTaskPrice(server: McpServer, client: WiroClient): voi
           structuredContent: {
             state,
             task: structuredTask.task,
-            billed: terminal ? successful : null,
+            billed: terminal ? successful || charged !== null : null,
             costUsd: terminal
-              ? (successful ? Number(task.totalcost || 0) : 0)
+              ? (chargedUsd !== null && Number.isFinite(chargedUsd)
+                ? chargedUsd
+                : (successful ? Number(task.totalcost || 0) : 0))
               : null,
             ...(structuredTask.nextAction
               ? { nextAction: structuredTask.nextAction }

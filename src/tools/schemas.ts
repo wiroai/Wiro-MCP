@@ -22,6 +22,7 @@ export const taskReferenceSchema = z.object({
   exitCode: z.string().optional(),
   durationSeconds: z.number().nullable().optional(),
   costUsd: z.number().nullable().optional(),
+  chargedUsd: z.number().nullable().optional(),
 });
 
 export const taskFinishReasonSchema = z.enum([

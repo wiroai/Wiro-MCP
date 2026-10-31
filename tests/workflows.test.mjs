@@ -845,6 +845,42 @@ test('wait_for_workflow_run offers resume for a failed run that can be resumed',
   });
 });
 
+test('wait_for_workflow_run prints the inputs a failed step received and hides secrets', async () => {
+  const fake = fakeClient({
+    '/Workflow/RunDetail': {
+      result: true,
+      errors: [],
+      workflowrun: { workflowtoken: 'run-token-3', status: 'failed', canresume: true, contents: graph() },
+      workflowrunnodes: [{ nodeId: 'node-a1', status: 'failed', tasktoken: 'step-token', error: 'Duration must be 5 or 10.' }],
+    },
+    '/Workflow/RunNodeDetail': {
+      result: true,
+      errors: [],
+      workflowrunnode: {
+        taskDetail: {
+          taskStatus: 'task_postprocess_end',
+          modelslugowner: 'owner',
+          modelslugproject: 'video-model',
+          parameters: { duration: '12', inputImage: 'https://cdn1.wiro.ai/a.png', apiKey: 'sk-live-hidden' },
+        },
+      },
+    },
+  });
+  await withClient(fake, async client => {
+    const result = await client.callTool({
+      name: 'wait_for_workflow_run',
+      arguments: { workflowtoken: 'run-token-3', wait_seconds: 0, debug_node_id: 'node-a1' },
+    });
+    assert.notEqual(result.isError, true);
+    const text = result.content.map(block => block.text ?? '').join('\n');
+    assert.match(text, /Step `node-a1`/);
+    assert.match(text, /owner\/video-model/);
+    assert.match(text, /https:\/\/cdn1\.wiro\.ai\/a\.png/);
+    assert.equal(JSON.stringify(result).includes('sk-live-hidden'), false);
+    assert.equal(result.structuredContent.debug.parameters.apiKey, '[hidden]');
+  });
+});
+
 test('delete_workflow only describes the deletion until it is confirmed', async () => {
   const fake = fakeClient({
     '/Workflow/Detail': { result: true, errors: [], workflow: [storedRow()] },

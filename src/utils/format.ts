@@ -19,6 +19,30 @@ export function toParameterOption(option: ToolParameterOption): { label: string;
   return { label: String(option.label ?? option.text ?? option.name ?? modelSlug ?? value), value };
 }
 
+function usdAmount(value: unknown): number | null {
+  if (value === undefined || value === null || value === '') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+/**
+ * A task's cost for the user: what Wiro charged once it billed the task, with
+ * the list price beside it when a discount made them differ. Before Wiro bills
+ * it, the list price.
+ */
+export function formatTaskCost(task: Task): string | null {
+  const list = usdAmount(task.totalcost);
+  const charged = usdAmount(task.chargedcost);
+  if (charged !== null) {
+    if (charged === 0) return '$0 (not charged)';
+    if (list !== null && list > 0 && Math.abs(list - charged) > 1e-9) {
+      return `$${charged} charged (list price $${list})`;
+    }
+    return `$${charged}`;
+  }
+  return list !== null && list > 0 ? `$${list}` : null;
+}
+
 export function formatTaskResult(task: Task): string {
   const lines: string[] = [];
   const requireCompleteTurn = task.status === 'task_postprocess_end'
@@ -49,6 +73,7 @@ export function formatTaskResult(task: Task): string {
   lines.push('');
   lines.push(`**Status:** ${task.status}`);
   lines.push(`**Task ID:** ${task.id}`);
+  if (task.socketaccesstoken) lines.push(`**Task Token:** ${task.socketaccesstoken}`);
   if (task.modelslugowner && task.modelslugproject) {
     lines.push(`**Model:** \`${task.modelslugowner}/${task.modelslugproject}\``);
   }
@@ -65,9 +90,8 @@ export function formatTaskResult(task: Task): string {
     lines.push(`**Duration:** ${task.elapsedseconds}s`);
   }
 
-  if (task.totalcost && task.totalcost !== '0') {
-    lines.push(`**Cost:** $${task.totalcost}`);
-  }
+  const cost = formatTaskCost(task);
+  if (cost) lines.push(`**Cost:** ${cost}`);
 
   if (hasInvalidProjection) {
     lines.push('');
@@ -269,9 +293,8 @@ export function formatTaskList(
     lines.push(`- **Status:** ${task.status}`);
     if (task.starttime) lines.push(`- **Started:** ${task.starttime}`);
     if (task.elapsedseconds) lines.push(`- **Duration:** ${task.elapsedseconds}s`);
-    if (task.totalcost && task.totalcost !== '0') {
-      lines.push(`- **Cost:** $${task.totalcost}`);
-    }
+    const cost = formatTaskCost(task);
+    if (cost) lines.push(`- **Cost:** ${cost}`);
 
     const outputLinks = (task.outputs ?? [])
       .filter(output => output.url)

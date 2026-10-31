@@ -194,7 +194,9 @@ export function formatStudioRun(run: StudioRun): string {
   const label = run.model ?? run.modelTitle ?? 'model';
   const parts = [`- \`${label}\` ${run.state}`];
   if (run.costUsd !== null && run.costUsd !== undefined && run.costUsd > 0) parts.push(`($${run.costUsd})`);
+  if (run.createdAt) parts.push(`started ${run.createdAt}`);
   const lines = [parts.join(' ')];
+  if (run.prompt) lines.push(`  - Prompt: ${truncate(run.prompt.replace(/\s+/g, ' '), 120)}`);
   for (const output of run.outputs) lines.push(`  - ${output.url}`);
   if (run.text) lines.push(`  - ${truncate(run.text.replace(/\s+/g, ' '), 300)}`);
   return lines.join('\n');

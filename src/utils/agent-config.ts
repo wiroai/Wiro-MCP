@@ -1118,6 +1118,11 @@ export function prepareCredentialWrite(
         prepared.errors.push(`${field.label} takes the file's content as text or base64.`);
         continue;
       }
+      // A link would be saved as the key itself. Key files are never fetched from a URL.
+      if (/^\s*https?:\/\//i.test(input.value)) {
+        prepared.errors.push(`${field.label} takes the file's content as text or base64, not a link. The user can paste the file's text or upload the file on the agent's page in the Wiro dashboard.`);
+        continue;
+      }
       prepared.apiFields.push({
         credentialkey: credential,
         fieldname: fieldName,

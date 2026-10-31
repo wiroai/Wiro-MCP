@@ -828,6 +828,23 @@ test('set_agent_credentials encodes base64 file fields from their text', async (
   });
 });
 
+test('set_agent_credentials refuses a link in a key file field without saving it', async () => {
+  const fake = fakeClient({
+    '/Credentials/Detail': credentialDetail,
+    '/UserAgent/CredentialUpsert': { result: true, applied: 1 },
+    '/UserAgent/Detail': detail(),
+  });
+  await withClient(fake, async client => {
+    const result = await client.callTool({
+      name: 'set_agent_credentials',
+      arguments: { agent_guid: AGENT, fields: [{ credential: 'google-play', field: 'serviceaccountjson', value: 'https://example.com/key.json' }] },
+    });
+    assert.equal(result.isError, true);
+    assert.match(text(result), /not a link/);
+    assert.equal(fake.calls.some(call => call.path === '/UserAgent/CredentialUpsert'), false);
+  });
+});
+
 test('set_agent_credentials refuses a private file URL without calling Wiro', { concurrency: false }, async () => {
   const fake = fakeClient({ '/Credentials/Detail': credentialDetail });
   await withClient(fake, async client => {

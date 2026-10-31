@@ -108,6 +108,8 @@ export interface Task {
   endtime: string;
   elapsedseconds: string;
   totalcost: string;
+  /** What the payer was charged, after any discount; Wiro sets it once a finished task is billed. */
+  chargedcost?: string | number | null;
   outputs: TaskOutput[];
   modeldescription?: string;
   modelslugowner?: string;

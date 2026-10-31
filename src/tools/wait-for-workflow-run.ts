@@ -15,6 +15,7 @@ import {
   formatWorkflowRun,
   isRunTerminal,
   runMediaItems,
+  SENSITIVE_INPUT_KEY,
   toWorkflowRun,
   workflowRunSchema,
   type WorkflowRun,
@@ -84,11 +85,12 @@ export function workflowRunResult(
     nextAction = {
       tool: 'resume_workflow_run',
       arguments: { workflowtoken: run.workflowtoken },
-      reason: 'Ask the user first: resuming runs the unfinished steps again and charges for them.',
+      reason: 'Resuming runs the unfinished steps again and charges for them: ask the user first, unless they asked you to continue this run.',
     };
   }
 
   let text = formatWorkflowRun(run);
+  if (debug) text += `\n\n${formatStepDebug(debug)}`;
   if (!terminal) {
     text += '\n\nThe run is still in progress. Call `wait_for_workflow_run` with this run token '
       + 'to keep waiting. Do not call `run_workflow` again; that starts a second, separately '
@@ -147,6 +149,29 @@ export function registerWaitForWorkflowRun(server: McpServer, client: WiroClient
   );
 }
 
+/** The step details debug_node_id asked for, as text for clients that show only text. */
+function formatStepDebug(debug: Record<string, unknown>): string {
+  const lines = [`### Step \`${String(debug.nodeId ?? '')}\``, ''];
+  if (debug.available !== true) {
+    lines.push(typeof debug.reason === 'string' ? debug.reason : 'No details are available for this step.');
+    return lines.join('\n');
+  }
+  if (typeof debug.model === 'string') lines.push(`**Model:** \`${debug.model}\``);
+  if (typeof debug.taskStatus === 'string') lines.push(`**Task status:** ${debug.taskStatus}`);
+  const block = (language: string, value: string): string[] => {
+    let fence = '```';
+    while (value.includes(fence)) fence += '`';
+    return [`${fence}${language}`, value, fence];
+  };
+  if (debug.parameters && typeof debug.parameters === 'object') {
+    lines.push('**Inputs its model received:**', ...block('json', JSON.stringify(debug.parameters, null, 2)));
+  }
+  if (typeof debug.output === 'string' && debug.output) {
+    lines.push('**Output:**', ...block('text', debug.output));
+  }
+  return lines.join('\n');
+}
+
 async function readStepDebug(
   client: WiroClient,
   nodes: Array<Record<string, unknown>>,
@@ -170,7 +195,9 @@ async function readStepDebug(
   const detail = (response.workflowrunnode?.taskDetail ?? {}) as Record<string, unknown>;
   const parameters = typeof detail.parameters === 'object' && detail.parameters !== null
     ? Object.fromEntries(Object.entries(detail.parameters as Record<string, unknown>)
-      .map(([key, value]) => [key, typeof value === 'string' ? truncate(value, 500) : value]))
+      .map(([key, value]) => [key, SENSITIVE_INPUT_KEY.test(key) && value !== '' && value !== null && value !== undefined
+        ? '[hidden]'
+        : typeof value === 'string' ? truncate(value, 500) : value]))
     : undefined;
   const debugoutput = asString(detail.debugoutput);
   return {
