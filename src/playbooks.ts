@@ -46,15 +46,15 @@ This server lets an assistant work with Wiro for the user: run AI models, build 
 - The server uses a Wiro project's API key, plus its API secret when the project uses signature authentication. Both are set where the MCP client connects to this server (\`WIRO_API_KEY\` and \`WIRO_API_SECRET\` for a local install). Never ask for them in chat: when one is wrong or missing, tell the user where to set it.
 - The key's project belongs to one workspace, personal or a team, and decides which workflows, agents, conversations and wallet the tools see. A call cannot switch workspaces: another workspace needs a key from a project in it.
 - A personal project spends from the personal wallet, a team project from that team's wallet. Calls act as the person who created the project, so team rights such as team admin are checked for that person.
-- \`get_account\` names the workspace and shows the balance. It is also the check that the key works: model search, schema reads and \`search_docs\` answer without a valid key. Call it before paid work, after an "Insufficient balance" error, and when the user asks whether the server works; then give one line per route above.
+- \`get_account\` names the workspace and shows the balance. It is also the call that confirms the key works, since model search, schema reads and \`search_docs\` are public. Call it before paid work, after an "Insufficient balance" error, and when the user asks whether the server works; then give one line per route above.
 
 ## Tool groups
 
 A server can load only some tool groups: models, workflows and agents (a local install picks them with \`WIRO_TOOLSETS\`; all load by default). The chat tools and \`save_workflow_from_agent\` come with either the workflow or the agent group. If a tool named in a playbook or in a \`nextAction\` is not in your tool list, its group is not loaded: tell the user instead of looking for a way around it.
 
-## Errors: HTTP 200 is not success
+## Errors
 
-Wiro answers most refusals with HTTP 200 and an error list. The tools check every answer and return an error result when the call did not do what was asked.
+The tools check every answer and return an error result when a call did not do what was asked.
 
 - Treat an error result as "nothing happened", unless it says part of the work was done or the outcome is unknown.
 - Read the message: it usually names the fix, such as a missing input, a stopped agent, a low balance or the wrong workspace.
@@ -85,7 +85,7 @@ Model tasks, workflow runs, agent replies and agent start-up can take minutes. T
 
 - Keep the ids each result returns (task token, workflow slug, run token, agent guid, message id, session name). The next call needs them.
 - Secret values the user gives you, such as a bot token, go only into \`set_agent_credentials\`. Never repeat them, and never put keys or passwords in an agent message.
-- Some reads trail a write by a few seconds, such as a balance right after a charge. Read again before you decide something is missing.
+- Right after a change, read again before you decide something is missing.
 - Show generated files: images inline when the client can, links for the rest. Only files on Wiro's own hosts are generated media; show other links in an agent's reply as plain links.
 - \`search_docs\` searches the public Wiro documentation.
 `;
@@ -106,7 +106,7 @@ Wiro hosts image, video, audio, speech, 3D and LLM models from many providers. E
 ## Find a model
 
 - \`search_models\` takes categories, an owner or key words, and each row shows the model's price. Categories include text-to-image, image-to-image, image-editing, text-to-video, image-to-video, text-to-speech, speech-to-text, text-to-music, 3d-generation, chat and llm.
-- Key words must all appear in one field: the name, the description, or a parameter's id, label or notes. Case, dashes and underscores are ignored, and a word also matches inside a longer one, so a stem such as "timestamp" works. Use one to three words, such as "upscale" or "remove background", never a sentence. \`recommend_model\` searches the same way, best matches first.
+- Search with one to three key words, such as "upscale" or "remove background"; each extra word narrows the results. A search looks at each model's name and owner, its description, its parameters (id, label, placeholder, notes and help) and the option names of a \`selectwithcover\` field, such as an effect. Case, spaces, dots, dashes and underscores are ignored, and a short stem such as "timestamp" also finds the longer words that contain it. \`recommend_model\` searches the same way, best matches first.
 - To find the cheapest model for a job, list its category with \`search_models\` (limit up to 100) and compare the prices. To find a feature, add a key word, such as "timestamp" with the category speech-to-text.
 - \`explore\` lists curated models by category. Use model slugs (\`owner/model\`) exactly as returned.
 
@@ -124,7 +124,7 @@ Wiro hosts image, video, audio, speech, 3D and LLM models from many providers. E
 1. Call \`run_model\` with \`model\` and \`params\`. It waits up to 45 seconds by default (\`timeout_seconds\`).
 2. If the task is still running, follow the \`nextAction\` for \`wait_for_task\`, and repeat. Video and long audio often take several minutes.
 3. Never call \`run_model\` again for the same request: that starts a second task, billed again.
-4. A task is \`submitted\` or \`running\` until it ends as \`completed\`, \`failed\` or \`cancelled\`. A queued task also shows as \`running\`.
+4. A task is \`submitted\` or \`running\` until it ends as \`completed\`, \`failed\` or \`cancelled\`.
 5. Show every returned file (images inline when the client can, links for the rest) and the cost the result shows.
 6. For a batch, start runs with \`wait: false\` up to the concurrency limit below, keep each task token, and start the next as one finishes. At the end, list the results per item, name any failures, which are not billed, and ask before running them again.
 
@@ -153,7 +153,7 @@ Example, "a 10 second clip of a city street at night with Kling": \`search_model
 ## Earlier work
 
 - \`list_tasks\` lists the model tasks of the key's workspace, newest first, from every project in it and from wiro.ai, with their cost and first files. Times are Unix seconds. \`get_task\` reads one in full.
-- Its \`model\` filter takes part of a model's name, such as "flux"; an \`owner/model\` slug matches nothing.
+- Its \`model\` filter takes a model or owner name, or part of one, such as "flux" or "flux-2-pro", without the "owner/" part.
 - Media made in Studio or by a workflow run is in \`list_studio_results\` or \`list_workflow_runs\` instead.
 
 ## LLM models

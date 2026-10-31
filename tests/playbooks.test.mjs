@@ -247,7 +247,7 @@ test('the server advertises short instructions that point to the playbooks', asy
     const instructions = client.getInstructions();
     assert.equal(instructions, SERVER_INSTRUCTIONS);
     assert.ok(instructions.split('\n').length <= 25);
-    for (const phrase of ['get_playbook', 'HTTP 200', 'confirm: true', 'nextAction', 'resubmit']) {
+    for (const phrase of ['get_playbook', 'error result', 'confirm: true', 'nextAction', 'resubmit']) {
       assert.ok(instructions.includes(phrase), `instructions should mention ${phrase}`);
     }
   });

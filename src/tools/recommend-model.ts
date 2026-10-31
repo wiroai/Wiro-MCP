@@ -10,13 +10,10 @@ export function registerRecommendModel(server: McpServer, client: WiroClient): v
     'recommend_model',
     {
       title: 'Recommend Wiro models',
-      description: 'Find models for a goal by key words, such as "upscale image" or '
-        + '"remove background". A model matches only when every word appears in one of '
-        + 'its fields (name, description, or a parameter\'s id, label or notes); a word also '
-        + 'matches inside a longer one. Use two or three words, not a sentence; for a kind of '
-        + 'task, search_models with categories also works. The '
-        + 'best matches come first. Follow the returned `get_model_schema` next action '
-        + 'before running a model.',
+      description: 'Find models for a goal from two or three key words, such as "upscale image" or '
+        + '"remove background", best matches first; each extra word narrows the results. For a kind '
+        + 'of task, search_models with categories also works. Follow the returned `get_model_schema` '
+        + 'next action before running a model.',
       inputSchema: {
         task: z.string().describe('Two or three key words, e.g. "upscale image", "remove background", "transcribe audio".'),
       },
@@ -53,7 +50,7 @@ export function registerRecommendModel(server: McpServer, client: WiroClient): v
           return {
             content: [{
               type: 'text' as const,
-              text: `No models found for "${task}". Try a different description or use \`search_models\` with specific categories.`,
+              text: `No models found for "${task}". Try fewer or other key words, or use \`search_models\` with specific categories.`,
             }],
             structuredContent: {
               models: [],

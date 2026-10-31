@@ -22,7 +22,7 @@ export function registerListTasks(server: McpServer, client: WiroClient): void {
         limit: z.number().int().min(1).max(100).default(20)
           .describe('Maximum tasks to return (default 20, max 100).'),
         model: z.string().optional()
-          .describe('Part of a model\'s name or of its owner, e.g. "flux" or "flux-2-pro". It is matched against the owner and the model name one at a time, so an "owner/model" slug matches nothing.'),
+          .describe('A model or owner name, or part of one, e.g. "flux" or "flux-2-pro". Leave out the "owner/" part.'),
       },
       outputSchema: taskListOutputSchema,
       annotations: {
