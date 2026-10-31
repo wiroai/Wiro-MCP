@@ -1,7 +1,13 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import type { WiroClient } from '../client.js';
-import { awaitingCharge, cancelledWhileQueued, formatTaskCost } from '../utils/format.js';
+import { isTaskId, isTaskIdTooLarge, isTaskNotFound, type WiroClient } from '../client.js';
+import {
+  awaitingCharge,
+  cancelledWhileQueued,
+  formatTaskCost,
+  TASK_ID_NOT_NUMERIC,
+  TASK_NOT_FOUND,
+} from '../utils/format.js';
 import {
   getTaskState,
   toStructuredTaskResult,
@@ -40,13 +46,34 @@ export function registerGetTaskPrice(server: McpServer, client: WiroClient): voi
             isError: true,
           };
         }
+        if (taskid && !isTaskId(taskid)) {
+          return {
+            content: [{ type: 'text' as const, text: `## Error\n\n${TASK_ID_NOT_NUMERIC}` }],
+            isError: true,
+          };
+        }
+        if (taskid && isTaskIdTooLarge(taskid)) {
+          return {
+            content: [{ type: 'text' as const, text: `## Error\n\n${TASK_NOT_FOUND}` }],
+            isError: true,
+          };
+        }
 
         const detail = await client.getTask({ tasktoken, taskid }, extra.signal);
+        if (!detail.result) {
+          const errors = isTaskNotFound(detail)
+            ? TASK_NOT_FOUND
+            : detail.errors?.map(error => error.message).join(', ') || 'Task status request failed.';
+          return {
+            content: [{ type: 'text' as const, text: `## Error\n\n${errors}` }],
+            isError: true,
+          };
+        }
         const task = detail.tasklist?.[0];
 
         if (!task) {
           return {
-            content: [{ type: 'text' as const, text: '## Error\n\nTask not found.' }],
+            content: [{ type: 'text' as const, text: `## Error\n\n${TASK_NOT_FOUND}` }],
             isError: true,
           };
         }

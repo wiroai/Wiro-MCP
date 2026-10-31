@@ -661,6 +661,137 @@ test('tools tell a key-only caller of a signature-auth project what to enter', {
   }
 });
 
+test('task tools say a task is not in the workspace at the first answer', { concurrency: false }, async () => {
+  const originalFetch = globalThis.fetch;
+  let answer;
+  let requests = 0;
+  globalThis.fetch = async () => {
+    requests += 1;
+    return new Response(JSON.stringify(answer), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  };
+  // Wiro's answer for an unknown task and for another workspace's task.
+  const refusal = message => ({
+    total: '0',
+    errors: [{ time: 1793463112, code: 0, message }],
+    tasklist: [],
+    result: false,
+  });
+  const notFound = '## Error\n\nTask not found in this workspace. '
+    + 'Check the task ID or token, or find the task with list_tasks.';
+
+  try {
+    await withClient(new WiroClient('api-key', undefined, 'https://api.example/v1'), async client => {
+      for (const message of ['task-not-founded', 'coretask-not-founded']) {
+        answer = refusal(message);
+        for (const [name, args] of [
+          ['get_task', { taskid: '1' }],
+          ['get_task', { tasktoken: 'task-token', wait_seconds: 5 }],
+          ['wait_for_task', { taskid: '1', timeout_seconds: 10 }],
+          ['wait_for_task', { tasktoken: 'task-token' }],
+          ['get_task_price', { taskid: '1' }],
+        ]) {
+          requests = 0;
+          const result = await client.callTool({ name, arguments: args });
+          const label = `${name} ${JSON.stringify(args)} ${message}`;
+          assert.equal(result.isError, true, label);
+          assert.equal(result.content[0].text, notFound, label);
+          // A missing task stays missing, so nothing waits for it.
+          assert.equal(requests, 1, label);
+        }
+      }
+
+      // Any other refusal is passed on as it came, not called a missing task.
+      answer = refusal('task-not-checked');
+      for (const name of ['get_task', 'get_task_price']) {
+        const result = await client.callTool({ name, arguments: { taskid: '1' } });
+        assert.equal(result.isError, true, name);
+        assert.equal(result.content[0].text, '## Error\n\ntask-not-checked', name);
+      }
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('task tools refuse a task ID that is not a number without asking Wiro', { concurrency: false }, async () => {
+  const originalFetch = globalThis.fetch;
+  let requests = 0;
+  globalThis.fetch = async () => {
+    requests += 1;
+    return new Response(JSON.stringify({
+      total: '0',
+      errors: [{ time: 1793469235, code: 0, message: 'Task not checked' }],
+      tasklist: [],
+      result: false,
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  };
+  const expected = '## Error\n\n`taskid` is the numeric Task ID that run_model and list_tasks show. '
+    + 'Pass a Task Token as `tasktoken` instead.';
+
+  try {
+    await withClient(new WiroClient('api-key', undefined, 'https://api.example/v1'), async client => {
+      for (const [name, args] of [
+        ['get_task', { taskid: 'abc' }],
+        ['get_task', { taskid: 'abc', wait_seconds: 5 }],
+        ['wait_for_task', { taskid: 'abc', timeout_seconds: 10 }],
+        ['get_task_price', { taskid: 'abc' }],
+      ]) {
+        requests = 0;
+        const result = await client.callTool({ name, arguments: args });
+        const label = `${name} ${JSON.stringify(args)}`;
+        assert.equal(result.isError, true, label);
+        assert.equal(result.content[0].text, expected, label);
+        assert.equal(requests, 0, label);
+      }
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('task tools say a task ID above the largest task ID is not found without asking Wiro', { concurrency: false }, async () => {
+  const originalFetch = globalThis.fetch;
+  let requests = 0;
+  globalThis.fetch = async () => {
+    requests += 1;
+    return new Response(JSON.stringify({
+      total: '0',
+      errors: [{ time: 1793469235, code: 0, message: 'Task not checked' }],
+      tasklist: [],
+      result: false,
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  };
+  const expected = '## Error\n\nTask not found in this workspace. '
+    + 'Check the task ID or token, or find the task with list_tasks.';
+
+  try {
+    await withClient(new WiroClient('api-key', undefined, 'https://api.example/v1'), async client => {
+      for (const [name, args] of [
+        ['get_task', { taskid: '9223372036854775808' }],
+        ['get_task', { taskid: '99999999999999999999', wait_seconds: 5 }],
+        ['wait_for_task', { taskid: '99999999999999999999', timeout_seconds: 10 }],
+        ['get_task_price', { taskid: '99999999999999999999' }],
+      ]) {
+        requests = 0;
+        const result = await client.callTool({ name, arguments: args });
+        const label = `${name} ${JSON.stringify(args)}`;
+        assert.equal(result.isError, true, label);
+        assert.equal(result.content[0].text, expected, label);
+        assert.equal(requests, 0, label);
+      }
+
+      // The largest task ID, also with leading zeros, is still looked up.
+      for (const taskid of ['9223372036854775807', '00000009223372036854775807']) {
+        requests = 0;
+        await client.callTool({ name: 'get_task_price', arguments: { taskid } });
+        assert.equal(requests, 1, taskid);
+      }
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('run_model says a task may exist when a sent run gets no clear answer', { concurrency: false }, async () => {
   const originalFetch = globalThis.fetch;
   const runOnce = async answer => {

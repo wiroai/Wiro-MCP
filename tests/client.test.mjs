@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import test from 'node:test';
 import {
+  isTaskNotFound,
   TaskPollingError,
   TaskWaitTimeoutError,
   WiroApiError,
@@ -158,6 +159,52 @@ test('waitForTask retries a transient fetch failure', { concurrency: false }, as
       pollIntervalMs: 1,
     });
 
+    assert.equal(calls, 2);
+    assert.equal(result.tasklist[0].status, 'task_postprocess_end');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('waitForTask stops at once for a task that is not in the workspace', { concurrency: false }, async () => {
+  const originalFetch = globalThis.fetch;
+  // Wiro's answer for an unknown task and for another workspace's task.
+  const notFound = {
+    total: '0',
+    errors: [{ time: 1793463112, code: 0, message: 'task-not-founded' }],
+    tasklist: [],
+    result: false,
+  };
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls += 1;
+    return jsonResponse(notFound);
+  };
+
+  try {
+    const client = new WiroClient('api-key');
+    await assert.rejects(
+      client.waitForTask({ taskid: '1' }, 100, { pollIntervalMs: 1 }),
+      error => {
+        assert.ok(error instanceof TaskPollingError);
+        assert.equal(error.message, 'Task not found in this workspace');
+        assert.deepEqual(error.lastDetail, notFound);
+        return true;
+      },
+    );
+    assert.equal(calls, 1);
+    assert.equal(isTaskNotFound(notFound), true);
+    assert.equal(isTaskNotFound(detail('task_start')), false);
+
+    // Any other refusal may pass, so it is asked again.
+    calls = 0;
+    globalThis.fetch = async () => {
+      calls += 1;
+      return jsonResponse(calls === 1
+        ? { ...notFound, errors: [{ code: 0, message: 'task-not-checked' }] }
+        : detail('task_postprocess_end', { pexit: '0' }));
+    };
+    const result = await client.waitForTask('task-token', 100, { pollIntervalMs: 1 });
     assert.equal(calls, 2);
     assert.equal(result.tasklist[0].status, 'task_postprocess_end');
   } finally {

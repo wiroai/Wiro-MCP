@@ -57,7 +57,8 @@ type HistoryMessage = AgentMessage & { workflows?: WorkflowArtifactSummary[] };
 function sessionPreview(value: unknown): string | undefined {
   const text = asString(value)?.trim();
   if (!text) return undefined;
-  // A voice call row starts with the caller's number; it is not ours to pass on.
+  // Wiro's own call line carries the caller's number, so it reads "Voice call", as a
+  // call record does. What the agent itself writes, such as a call report, comes back as written.
   if (isVoiceCallText(text)) return 'Voice call';
   return truncate(text.replace(/\s+/g, ' '), MAX_LAST_MESSAGE);
 }
@@ -148,8 +149,9 @@ export function registerGetAgentConversation(server: McpServer, client: WiroClie
         + 'sessions listed here are the ones this API key\'s project used; the user\'s own Workflow Agent chats on '
         + 'wiro.ai are separate and are not listed. Studio\'s late results do not show here for a team project\'s '
         + 'key; list_studio_results has their model runs. Workflow Agent replies list their workflows with '
-        + 'artifact_hash for save_workflow_from_agent. Voice call details are not returned. Media from Wiro is in '
-        + 'mediaUrls; share other links from a reply as plain links. Read-only.',
+        + 'artifact_hash for save_workflow_from_agent. Wiro\'s own voice call records come back without caller '
+        + 'details or transcripts; what the agent itself writes, such as a receptionist\'s call report, comes back '
+        + 'as written. Media from Wiro is in mediaUrls; share other links from a reply as plain links. Read-only.',
       inputSchema: {
         agent: z.string().min(1).describe(AGENT_INPUT_DESCRIPTION),
         session: z.string().optional().describe('The conversation to read. Leave it out to list the sessions.'),

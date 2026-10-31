@@ -1,12 +1,18 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import {
+  isTaskId,
+  isTaskIdTooLarge,
+  isTaskNotFound,
+  TaskPollingError,
   TaskWaitTimeoutError,
   type WiroClient,
 } from '../client.js';
 import {
   formatTaskPending,
   formatTaskResult,
+  TASK_ID_NOT_NUMERIC,
+  TASK_NOT_FOUND,
 } from '../utils/format.js';
 import {
   createTaskContent,
@@ -48,6 +54,18 @@ export function registerWaitForTask(server: McpServer, client: WiroClient): void
             type: 'text' as const,
             text: '## Error\n\nEither `tasktoken` or `taskid` is required.',
           }],
+          isError: true,
+        };
+      }
+      if (taskid && !isTaskId(taskid)) {
+        return {
+          content: [{ type: 'text' as const, text: `## Error\n\n${TASK_ID_NOT_NUMERIC}` }],
+          isError: true,
+        };
+      }
+      if (taskid && isTaskIdTooLarge(taskid)) {
+        return {
+          content: [{ type: 'text' as const, text: `## Error\n\n${TASK_NOT_FOUND}` }],
           isError: true,
         };
       }
@@ -124,6 +142,13 @@ export function registerWaitForTask(server: McpServer, client: WiroClient): void
                 taskid,
                 tasktoken,
               }),
+          };
+        }
+
+        if (error instanceof TaskPollingError && isTaskNotFound(error.lastDetail)) {
+          return {
+            content: [{ type: 'text' as const, text: `## Error\n\n${TASK_NOT_FOUND}` }],
+            isError: true,
           };
         }
 

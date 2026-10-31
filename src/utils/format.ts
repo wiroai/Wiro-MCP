@@ -272,6 +272,16 @@ export function formatTaskSubmitted(taskid: string, tasktoken: string): string {
     + 'Do not submit the model again for the same request.';
 }
 
+// What get_task, wait_for_task and get_task_price say when Wiro finds no task
+// with that ID or token in the key's workspace.
+export const TASK_NOT_FOUND = 'Task not found in this workspace. '
+  + 'Check the task ID or token, or find the task with list_tasks.';
+
+// What they say when `taskid` is not a number, such as a task token passed as
+// the ID: no task can have that ID, so Wiro is not asked.
+export const TASK_ID_NOT_NUMERIC = '`taskid` is the numeric Task ID that run_model and list_tasks show. '
+  + 'Pass a Task Token as `tasktoken` instead.';
+
 export function formatTaskPending(params: {
   taskid?: string;
   tasktoken?: string;

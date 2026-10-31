@@ -932,6 +932,47 @@ test('get_agent_conversation lists sessions and pages history without voice data
   });
 });
 
+// Only Wiro's own call records are trimmed. A report the agent posts after a
+// call is its own message and comes back the way the agent wrote it.
+test('get_agent_conversation returns what an agent writes about a call as written', async () => {
+  const report = '\u{1F4DE} Caller ID: +15551234567\nCategory: lead\nSubject: Table booking\nSummary: Asked for a table for two at 7.';
+  const fake = fakeClient({
+    '/UserAgent/Message/Sessions': {
+      result: true,
+      errors: [],
+      data: { sessions: [{ sessionkey: 'default', messagecount: '2', updatedat: '1700000100', lastmessage: report }] },
+    },
+    '/UserAgent/Message/History': {
+      result: true,
+      errors: [],
+      data: {
+        count: 1,
+        hasmore: false,
+        messages: [messageRow({ guid: 'report-1', content: '', response: report, status: 'agent_end', metadata: { type: 'system' } })],
+      },
+    },
+  });
+
+  await withClient(fake, async client => {
+    const { tools } = await client.listTools();
+    const description = tools.find(tool => tool.name === 'get_agent_conversation').description;
+    assert.match(description, /Wiro's own voice call records come back without caller details or transcripts; what the agent itself writes, such as a receptionist's call report, comes back as written\./);
+    assert.doesNotMatch(description, /Voice call details are not returned/);
+
+    const listed = await client.callTool({ name: 'get_agent_conversation', arguments: { agent: 'agent-guid-1' } });
+    assert.equal(listed.structuredContent.sessions[0].lastMessage, report.replace(/\s+/g, ' '));
+
+    const history = await client.callTool({
+      name: 'get_agent_conversation',
+      arguments: { agent: 'agent-guid-1', session: 'default' },
+    });
+    assert.notEqual(history.isError, true, textOf(history));
+    assert.equal(history.structuredContent.messages[0].kind, 'agent_message');
+    assert.equal(history.structuredContent.messages[0].reply, report);
+    assert.match(textOf(history), /\*\*Agent:\*\* \u{1F4DE} Caller ID: \+15551234567\nCategory: lead/u);
+  });
+});
+
 test('cancel_agent_message reads the final status back, including a turn that finished anyway', async () => {
   const fake = fakeClient({
     '/Studio/Message/Cancel': { result: true, errors: [] },

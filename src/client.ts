@@ -121,6 +121,32 @@ export class TaskPollingError extends Error {
   }
 }
 
+/** True when a value can be a task ID: Wiro task IDs are whole numbers. */
+export function isTaskId(value: string): boolean {
+  return /^\d+$/.test(value.trim());
+}
+
+// No task ID is larger than this.
+const MAX_TASK_ID = 9223372036854775807n;
+
+/** True when a whole number is larger than any task ID, so no task has it. */
+export function isTaskIdTooLarge(value: string): boolean {
+  if (!isTaskId(value)) return false;
+  const digits = value.trim().replace(/^0+/, '');
+  return digits.length > 19 || BigInt(digits || '0') > MAX_TASK_ID;
+}
+
+// Task/Detail's answer when no task matches the reference in the key's
+// workspace: an unknown task and another workspace's task get the same one.
+const TASK_NOT_FOUND_ERRORS = ['task-not-founded', 'coretask-not-founded'];
+
+/** True when a task status answer says the task is not in the key's workspace. */
+export function isTaskNotFound(detail?: TaskDetailResponse): boolean {
+  if (!detail || detail.result) return false;
+  return (detail.errors ?? [])
+    .some(error => TASK_NOT_FOUND_ERRORS.includes(String(error?.message ?? '').trim()));
+}
+
 export class WiroClient {
   private readonly apiKey: string;
   private readonly apiSecret?: string;
@@ -464,6 +490,11 @@ export class WiroClient {
 
         lastError = error;
         consecutiveErrors += 1;
+
+        // No task matches in this workspace, so asking again cannot find one.
+        if (isTaskNotFound(lastDetail)) {
+          throw new TaskPollingError('Task not found in this workspace', lastDetail, error);
+        }
 
         if (error instanceof WiroApiError
           && error.status >= 400

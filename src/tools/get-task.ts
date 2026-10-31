@@ -1,12 +1,18 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import {
+  isTaskId,
+  isTaskIdTooLarge,
+  isTaskNotFound,
+  TaskPollingError,
   TaskWaitTimeoutError,
   type WiroClient,
 } from '../client.js';
 import {
   formatTaskPending,
   formatTaskResult,
+  TASK_ID_NOT_NUMERIC,
+  TASK_NOT_FOUND,
 } from '../utils/format.js';
 import {
   createTaskContent,
@@ -51,6 +57,18 @@ export function registerGetTask(server: McpServer, client: WiroClient): void {
             isError: true,
           };
         }
+        if (taskid && !isTaskId(taskid)) {
+          return {
+            content: [{ type: 'text' as const, text: `## Error\n\n${TASK_ID_NOT_NUMERIC}` }],
+            isError: true,
+          };
+        }
+        if (taskid && isTaskIdTooLarge(taskid)) {
+          return {
+            content: [{ type: 'text' as const, text: `## Error\n\n${TASK_NOT_FOUND}` }],
+            isError: true,
+          };
+        }
 
         const reference = { tasktoken, taskid };
         const detail = wait_seconds > 0
@@ -79,8 +97,9 @@ export function registerGetTask(server: McpServer, client: WiroClient): void {
           )
           : await client.getTask(reference, extra.signal);
         if (!detail.result) {
-          const errors = detail.errors?.map(error => error.message).join(', ')
-            || 'Task status request failed.';
+          const errors = isTaskNotFound(detail)
+            ? TASK_NOT_FOUND
+            : detail.errors?.map(error => error.message).join(', ') || 'Task status request failed.';
           return {
             content: [{ type: 'text' as const, text: `## Error\n\n${errors}` }],
             isError: true,
@@ -90,7 +109,7 @@ export function registerGetTask(server: McpServer, client: WiroClient): void {
 
         if (!task) {
           return {
-            content: [{ type: 'text' as const, text: '## Error\n\nTask not found.' }],
+            content: [{ type: 'text' as const, text: `## Error\n\n${TASK_NOT_FOUND}` }],
             isError: true,
           };
         }
@@ -121,8 +140,11 @@ export function registerGetTask(server: McpServer, client: WiroClient): void {
           };
         }
 
+        const message = error instanceof TaskPollingError && isTaskNotFound(error.lastDetail)
+          ? TASK_NOT_FOUND
+          : (error instanceof Error ? error.message : String(error));
         return {
-          content: [{ type: 'text' as const, text: `## Error\n\n${error instanceof Error ? error.message : String(error)}` }],
+          content: [{ type: 'text' as const, text: `## Error\n\n${message}` }],
           isError: true,
         };
       }
