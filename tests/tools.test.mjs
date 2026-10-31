@@ -334,11 +334,17 @@ test('model tool texts send the same session_id on a tool-result turn too', asyn
   await withClient({}, async client => {
     const { tools } = await client.listTools();
     const runModel = tools.find(tool => tool.name === 'run_model');
-    assert.match(runModel.inputSchema.properties.params.description, /Continue a completed turn with previousTaskToken and the same session_id as that turn: add toolOutputs rows with call_id and output for tool results, or send exactly one new prompt or non-empty messages value for a stateful next turn\./);
+    assert.match(runModel.inputSchema.properties.params.description, /To continue a chat, send the same session_id with the next prompt, without previousTaskToken\. A turn that ended with tool calls is continued with previousTaskToken, toolOutputs rows \(call_id and output\) and the same session_id, as its nextAction shows\./);
     const schema = tools.find(tool => tool.name === 'get_model_schema');
-    assert.match(schema.description, /use it with the same `session_id` as the previous turn, plus `toolOutputs` for tool results or one new prompt\/messages value for a stateful next turn\./);
+    assert.match(schema.description, /a chat continues with the same `session_id` and the next prompt, and `previousTaskToken` with `toolOutputs` continues a turn that ended with tool calls\./);
     const getTask = tools.find(tool => tool.name === 'get_task');
     assert.match(getTask.description, /`previousTaskToken`, `toolOutputs` and the turn's `session_id` when it had one\./);
+    // A plain prompt turn is continued by session_id alone; previousTaskToken follows tool calls only.
+    const models = await client.callTool({ name: 'get_playbook', arguments: { topics: ['models'] } });
+    const playbook = models.content.map(part => part.text ?? '').join('\n');
+    assert.match(playbook, /send each next `prompt` without `previousTaskToken`: the model keeps the session's earlier turns/);
+    assert.match(playbook, /`previousTaskToken`, the Task Token of a turn \(never its task ID\), continues only a turn that ended with tool calls, together with `toolOutputs`/);
+    assert.doesNotMatch(playbook, /Each next turn also sends `previousTaskToken`/);
   });
 });
 

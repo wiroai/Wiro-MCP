@@ -327,10 +327,10 @@ Model parameters remain catalog-driven: `json` and `json-array` fields are sent
 as structured values in the same `run_model.params` object as all other inputs.
 Use `get_model_schema` as the source of truth for continuation fields. A model
 can continue a conversation only when its schema lists `session_id`: send the
-same `session_id` on every turn, the first one included. Each next turn also
-sends `previousTaskToken`, the last turn's task token, with exactly one new
-`prompt` or non-empty `messages` value for a stateful next turn, or with
-`toolOutputs` for a tool-result continuation.
+same `session_id` on every turn, the first one included, with the next
+`prompt`. A turn that ended with tool calls is continued with
+`previousTaskToken`, that turn's task token, and `toolOutputs`, as the turn's
+`nextAction` template shows.
 
 LLM task outputs preserve the public Task Detail segment names and casing:
 `thinking`, `answer`, `function_call`, and `custom_tool_call`, including
