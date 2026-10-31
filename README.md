@@ -218,7 +218,7 @@ save result lists what it filled, and a graph can be at most 40 KB of JSON.
 |------|-------------|
 | `list_workflows` | List the workflows in your workspace, or search the public gallery by text, tag or model |
 | `get_workflow` | Read a workflow's inputs, outputs and step graph |
-| `create_workflow` | Save a new workflow from a step graph. Wiro checks it against the live model catalog and returns every problem at once |
+| `create_workflow` | Save a new workflow from a step graph. Wiro checks it against the live model catalog and returns every problem it finds at once |
 | `update_workflow` | Edit a workflow's title, description, tags or graph without overwriting newer changes; a new graph is saved only after you confirm a summary of the change |
 | `clone_workflow` | Copy a public workflow into your workspace |
 | `delete_workflow` | Delete a workflow, after your confirmation |
@@ -231,8 +231,8 @@ save result lists what it filled, and a graph can be at most 40 KB of JSON.
 The **Workflow Agent** designs workflows with you in plain language: talk to it
 with `send_agent_message` and `agent: "workflow-agent"`, attach an existing
 workflow to edit, then save its proposal with `save_workflow_from_agent`.
-Conversations started with an API key belong to that key's project and are
-separate from your Workflow Agent chats on wiro.ai.
+Conversations started through this server belong to the connected project and
+are separate from your Workflow Agent chats on wiro.ai.
 
 ### Agents
 
@@ -274,7 +274,7 @@ your wallet after each reply. Your own agents run on a monthly plan with credits
 
 | Tool | Description |
 |------|-------------|
-| `get_account` | Show which workspace your API key works in and its wallet balance |
+| `get_account` | Show which workspace the connected project belongs to and its wallet balance |
 | `get_playbook` | Step-by-step guides: getting started, models, workflows, workflow graphs, the Workflow Agent, Studio, agents and billing |
 | `search_docs` | Search the Wiro documentation for guides and API references |
 
@@ -312,10 +312,11 @@ quote's reference (`confirm_charge_usd` with the approved amount, or the quote's
 between, nothing is charged and you get a new quote. Deleting a workflow, an
 agent, a conversation or an account connection also waits for `confirm: true`,
 and so does replacing a workflow's steps with `update_workflow` or
-`save_workflow_from_agent`: you see a summary of the change first. No tool
-returns a payment page: an agent plan paid by card is upgraded or topped up in
-the Wiro dashboard. Your API key decides the workspace: a personal project's key
-uses your personal wallet, a team project's key uses the team wallet.
+`save_workflow_from_agent`: you see a summary of the change first. No tool adds
+funds or takes a card payment: funds are added in the Wiro dashboard, and an
+agent plan paid by card is upgraded or topped up there. The connected project
+decides the workspace: a personal project uses your personal wallet, a team
+project uses the team wallet.
 
 ### LLM-friendly responses
 
@@ -324,9 +325,11 @@ All tools publish typed MCP input and output schemas. Successful calls return
 that only render text, and MCP resource links for generated media.
 Model parameters remain catalog-driven: `json` and `json-array` fields are sent
 as structured values in the same `run_model.params` object as all other inputs.
-Use `get_model_schema` as the source of truth for continuation fields.
-`previousTaskToken` is the single continuation reference. Send it with exactly
-one new `prompt` or non-empty `messages` value for a stateful next turn, or with
+Use `get_model_schema` as the source of truth for continuation fields. A model
+can continue a conversation only when its schema lists `session_id`: send the
+same `session_id` on every turn, the first one included. Each next turn also
+sends `previousTaskToken`, the last turn's task token, with exactly one new
+`prompt` or non-empty `messages` value for a stateful next turn, or with
 `toolOutputs` for a tool-result continuation.
 
 LLM task outputs preserve the public Task Detail segment names and casing:
@@ -353,7 +356,8 @@ same ordinary `run_model.params` object back:
           "call_id": "call_01",
           "output": "<tool result>"
         }
-      ]
+      ],
+      "session_id": "launch-taglines"
     }
   }
 }

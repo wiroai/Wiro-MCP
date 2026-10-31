@@ -265,7 +265,7 @@ export function newSessionKey(prefix = 'mcp'): string {
   return `${prefix}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-/** "Message not found" right after a send only means the read replica is behind. */
+/** "Message not found" right after a send only means the new message is not readable yet. */
 export function isEarlyNotFound(error: unknown, elapsedMs: number): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return elapsedMs < 10_000 && /message not found/i.test(message);

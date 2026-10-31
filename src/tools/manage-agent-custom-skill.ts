@@ -117,16 +117,24 @@ function echo(value: string | null | undefined): { value: string; valueTruncated
     : { value: text };
 }
 
-function toEntry(entry: CustomSkillEntry) {
+/** An entry as returned; full keeps its whole text, which an edit starts from. */
+function toEntry(entry: CustomSkillEntry, full = false) {
   return {
     key: entry.key,
     kind: entry.kind,
     description: entry.description,
-    ...echo(entry.value),
+    ...(full ? { value: entry.value } : echo(entry.value)),
     interval: entry.interval,
     enabled: entry.enabled,
     origin: entry.userCreated ? 'user' as const : 'agent' as const,
   };
+}
+
+/** Text in a fence longer than any run of backticks inside it, so it shows as is. */
+function textBlock(value: string): string[] {
+  let fence = '```';
+  while (value.includes(fence)) fence += '`';
+  return [`${fence}text`, value, fence];
 }
 
 function kindLabel(kind: CustomSkillKind): string {
@@ -314,7 +322,7 @@ async function remove(client: WiroClient, input: Input, signal: AbortSignal) {
   if (resolved.error || !resolved.key) return errorResult(new Error(resolved.error ?? 'Invalid key.'));
   const key = resolved.key;
   const existing = entries.find(entry => entry.key === key);
-  // The API reports success for a key that does not exist, so it is checked here.
+  // The key is checked against the agent's entries first, so a key that matches none is reported, not sent.
   if (!existing) return errorResult(new Error(`This agent has no ${kindLabel(customSkillKindOf(key))} ${key}.`));
   if (!existing.userCreated) {
     const response = reply(input, key, 'no_change',
@@ -433,12 +441,13 @@ async function history(client: WiroClient, input: Input, signal: AbortSignal) {
     templates.length > 0 ? `${templates.length} ready-made template${templates.length === 1 ? '' : 's'} can be used as its text.` : '',
   ].filter(Boolean).join(' ');
   return reply(input, key, 'listed', message, {
-    entry: current ? toEntry(current) : null,
+    entry: current ? toEntry(current, true) : null,
     history: versions,
     presetDefault,
     templates,
     warnings,
   }, [
+    ...(current?.value ? ['', '**Current text:**', '', ...textBlock(current.value)] : []),
     '',
     ...versions.map(version => `- \`${version.versionId}\` ${version.changedAt ?? ''} ${version.operation}${version.changedFields.length > 0 ? ` (${version.changedFields.join(', ')})` : ''}`),
     ...(templates.length > 0 ? ['', '**Templates:**', ...templates.map(template => `- ${template.title}${template.interval ? ` (schedule "${template.interval}")` : ''}: ${template.description}`)] : []),
@@ -549,13 +558,14 @@ export function registerManageAgentCustomSkill(server: McpServer, client: WiroCl
         + '"weekly-report" updates the agent\'s own entry of that name when there is one, and otherwise '
         + 'gets its prefix from kind or interval; the result gives the final key); rename '
         + 'changes the key of one you created; delete removes one you created together with its '
-        + 'history (needs confirm: true); history lists earlier versions, the template default and '
-        + 'ready-made templates (key "cs-my-custom-strategy" or "cs-cron-my-scheduled-task" gives '
-        + 'starter templates); revert restores the template default or an earlier version (needs '
-        + 'confirm: true). Schedules use the agent\'s time zone, which is UTC unless it was set with '
-        + 'update_agent; a new task without interval runs Mondays at 10:00. Every scheduled run '
-        + 'spends the agent\'s credits, so confirm the schedule with the user. Entries that come '
-        + 'with the agent cannot be deleted or renamed: set enabled false instead. The agent '
+        + 'history (needs confirm: true); history shows the current text in full and lists earlier '
+        + 'versions, the template default and ready-made templates (key "cs-my-custom-strategy" or '
+        + '"cs-cron-my-scheduled-task" gives starter templates); revert restores the template default '
+        + 'or an earlier version (needs confirm: true). Schedules use the agent\'s time zone, which is '
+        + 'UTC unless it was set with update_agent; a new task without interval runs Mondays at 10:00. '
+        + 'Every scheduled run spends the agent\'s credits, so confirm the schedule with the user. '
+        + 'Entries from the agent\'s template, cs-approval-policy and the scheduled tasks its skills '
+        + 'brought cannot be deleted or renamed: set enabled false instead. The agent '
         + 'restarts when the text, schedule or on/off state changes. get_my_agent lists the '
         + 'current entries. Registry skills are switched with apply_agent_skills instead. The agents '
         + 'playbook (get_playbook) covers custom skills and schedules.',

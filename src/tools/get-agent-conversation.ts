@@ -31,6 +31,7 @@ import {
 import {
   summarizeWorkflowReply,
   workflowArtifactSummarySchema,
+  workflowModelsText,
   workflowReplyProse,
   type WorkflowArtifactSummary,
 } from '../utils/workflow-agent.js';
@@ -122,9 +123,11 @@ function formatHistory(session: string, messages: HistoryMessage[], hasMore: boo
     if (message.reply) lines.push(`**Agent:** ${truncate(message.reply, 1_500)}`);
     for (const url of message.mediaUrls) lines.push(`- ${url}`);
     for (const workflow of message.workflows ?? []) {
+      const models = workflowModelsText(workflow);
       lines.push(`- Workflow ${workflow.title ? `"${workflow.title}"` : workflow.index + 1}: `
         + `${workflow.valid ? 'valid' : workflow.status}`
-        + (workflow.artifactHash ? `, artifact_hash \`${workflow.artifactHash}\`` : ''));
+        + (workflow.artifactHash ? `, artifact_hash \`${workflow.artifactHash}\`` : '')
+        + (models ? `, ${models}` : ''));
     }
     lines.push('');
   }

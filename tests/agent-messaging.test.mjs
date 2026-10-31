@@ -368,6 +368,10 @@ test('deployed agent refusals explain the fix and point to the right tool', asyn
       response: { result: false, errors: [{ code: 0, message: 'Agent not found or access denied' }] },
       expect: /list_my_agents/,
     },
+    {
+      response: { result: false, errors: [{ code: 0, message: 'This agent belongs to a team. Switch to the team context to access it.' }] },
+      expect: /The connected project decides the workspace: connect with a project from the agent's workspace, by its API key or a browser sign-in\./,
+    },
   ];
 
   for (const { response, expect } of cases) {
@@ -396,9 +400,9 @@ test('Studio wallet and availability refusals say what to do without repeating c
   await withClient(wallet, async client => {
     const result = await client.callTool({ name: 'send_agent_message', arguments: { agent: 'studio', message: 'hi' } });
     assert.equal(result.isError, true);
-    assert.match(textOf(result), /at least \$10\.00/);
+    assert.match(textOf(result), /at least \$10\.00 in the Wiro wallet of the connected project's workspace to start a turn/);
     assert.match(textOf(result), /has \$3\.50/);
-    assert.match(textOf(result), /for a team key, select the team in the dashboard first/);
+    assert.match(textOf(result), /for a team project, select that team in the dashboard first/);
     assert.match(textOf(result), /get_account/);
   });
 
@@ -613,6 +617,9 @@ test('the Workflow Agent gets the workflow to edit and its reply comes back as w
     assert.equal(output.workflows[0].index, 0);
     assert.equal(output.workflows[0].title, 'Faster campaign');
     assert.equal(output.workflows[0].nodeCount, 2);
+    // The utility step is not a model.
+    assert.deepEqual(output.workflows[0].models, ['openai/gpt-image']);
+    assert.match(textOf(result), /- \*\*Faster campaign\*\* \(2 steps, models `openai\/gpt-image`\): valid, artifact_hash `[0-9a-f]{64}`/);
     assert.match(output.workflows[0].artifactHash, /^[0-9a-f]{64}$/);
 
     const lists = fake.callsTo('/Workflow/List');
@@ -667,6 +674,8 @@ test('get_agent_message never runs the list request when the reply has only inva
     assert.equal(workflow.valid, false);
     assert.equal(workflow.status, 'invalid');
     assert.match(workflow.issues[0], /must exactly match nodes\.output\.fields/);
+    // An invalid proposal still names the models its steps use.
+    assert.deepEqual(workflow.models, ['openai/gpt-image']);
     assert.equal(result.structuredContent.nextAction, undefined);
     assert.equal(result.structuredContent.workflowList, undefined);
     assert.equal(result.structuredContent.message.userText, 'Make a cat picture');
@@ -710,6 +719,17 @@ test('Workflow Agent refusals: protected copies and API keys it does not accept'
       assert.match(textOf(result), /did not accept this API key/);
       assert.doesNotMatch(textOf(result), /Wiro API error/);
     }
+  });
+
+  const otherWorkspace = fakeClient({
+    '/StudioWorkflow/Message/Send': () => {
+      throw new WiroApiError(403, '{"result":false,"errors":[{"code":0,"message":"The requested workspace is not available."}]}');
+    },
+  });
+  await withClient(otherWorkspace, async client => {
+    const result = await client.callTool({ name: 'send_agent_message', arguments: { agent: 'workflow-agent', message: 'hi' } });
+    assert.equal(result.isError, true);
+    assert.match(textOf(result), /The connected project decides the workspace: connect with a project from the workspace you want to work in, by its API key or a browser sign-in\./);
   });
 });
 
@@ -1128,6 +1148,13 @@ test('list_studio_results filters by state and time and keeps run tokens private
     assert.deepEqual(fake.callsTo('/Studio/Tasks')[0].body, { limit: 20 });
     assert.doesNotMatch(JSON.stringify(all.structuredContent), /private raw|apikey/);
     assertNoSecrets(all);
+    // Each run line gives its creation time; only a run whose model takes a prompt shows one.
+    const text = textOf(all);
+    assert.match(text, /^- `acme\/video` running created 2023-11-14T22:18:20\.000Z\n {2}- Prompt: a dog$/m);
+    assert.match(text, /^- `acme\/llm` completed \(\$0\.001\) created 2023-11-14T22:16:40\.000Z\n {2}- Twelve words\.$/m);
+    assert.equal(text.match(/Prompt:/g).length, 1);
+    assert.doesNotMatch(text, /started \d/);
+    assert.equal(all.structuredContent.mayMissOlder, undefined);
 
     const completed = await client.callTool({
       name: 'list_studio_results',
@@ -1138,6 +1165,58 @@ test('list_studio_results filters by state and time and keeps run tokens private
 
     const badSince = await client.callTool({ name: 'list_studio_results', arguments: { since: 'yesterday-ish' } });
     assert.equal(badSince.isError, true);
+  });
+});
+
+test('list_studio_results says when a full page may leave out older runs of the period', async () => {
+  // Studio's newest runs, one a second, as many as were asked for.
+  const fake = fakeClient({
+    '/Studio/Tasks': body => ({
+      result: true,
+      errors: [],
+      tasks: Array.from({ length: body.limit }, (_, index) => ({
+        id: 1000 - index,
+        status: 'task_postprocess_end',
+        terminal: true,
+        success: true,
+        outputs: [],
+        totalcost: '0.01',
+        createtime: String(1700001000 - index),
+      })),
+    }),
+  });
+  const iso = seconds => new Date(seconds * 1000).toISOString();
+
+  await withClient(fake, async client => {
+    const full = await client.callTool({ name: 'list_studio_results', arguments: { since: iso(1699990000), limit: 100 } });
+    assert.notEqual(full.isError, true, textOf(full));
+    assert.equal(full.structuredContent.count, 100);
+    assert.equal(full.structuredContent.mayMissOlder, true);
+    assert.match(textOf(full), /Studio returns its 100 most recent model runs, and the oldest of them is newer than since, so earlier runs from that period are not in this list\./);
+
+    const small = await client.callTool({ name: 'list_studio_results', arguments: { since: iso(1699990000), limit: 20 } });
+    assert.equal(small.structuredContent.mayMissOlder, true);
+    assert.match(textOf(small), /Call again with limit 100 to see more of that period\./);
+    assert.doesNotMatch(textOf(small), /most recent model runs/);
+
+    // The page reaches back past since, so the period is complete.
+    const covered = await client.callTool({ name: 'list_studio_results', arguments: { since: iso(1700000950), limit: 100 } });
+    assert.equal(covered.structuredContent.count, 51);
+    assert.equal(covered.structuredContent.mayMissOlder, undefined);
+    assert.doesNotMatch(textOf(covered), /Call again|most recent model runs/);
+
+    // Without since there is no period to miss.
+    const recent = await client.callTool({ name: 'list_studio_results', arguments: { limit: 100 } });
+    assert.equal(recent.structuredContent.mayMissOlder, undefined);
+  });
+
+  await withClient(fakeClient({}), async client => {
+    const { tools } = await client.listTools();
+    const description = tools.find(tool => tool.name === 'list_studio_results').description;
+    assert.match(description, /for this key's account/);
+    assert.match(description, /teammates' runs are not included/);
+    assert.match(description, /Each run shows when it was created and, for a model that takes a prompt, its prompt/);
+    assert.match(description, /It reads at most Studio's 100 most recent runs: to collect a period, pass since with limit 100, and the result says when older runs in that period may be missing\./);
   });
 });
 
@@ -1241,6 +1320,8 @@ test('Workflow Agent history summarizes workflows but never runs list requests',
     assert.equal(message.reply, 'An older answer.');
     assert.equal(message.workflows[0].valid, true);
     assert.match(message.workflows[0].artifactHash, /^[0-9a-f]{64}$/);
+    assert.deepEqual(message.workflows[0].models, ['openai/gpt-image']);
+    assert.match(textOf(result), /- Workflow "Old draft": valid, artifact_hash `[0-9a-f]{64}`, models `openai\/gpt-image`/);
     assert.equal(result.structuredContent.hasMore, false);
     assert.equal(result.structuredContent.nextAction, undefined);
     assert.equal(fake.callsTo('/Workflow/List').length, 0);

@@ -352,7 +352,7 @@ export function summarizeTasks(value: unknown, maxInstructionLength = 300): Agen
       ...(interval !== undefined ? { interval: interval || null } : {}),
       ...(source ? { source } : {}),
       ...(shortened ? { instructions: shortened } : {}),
-      ...(shortened.length < instructions.length ? { instructionsTruncated: true } : {}),
+      ...(instructions.length > maxInstructionLength ? { instructionsTruncated: true } : {}),
     };
   });
 }
@@ -547,8 +547,8 @@ export function toAgentDetail(row: Record<string, unknown>): AgentDetail {
     ...(models.length > 0 ? { selectableModels: models } : {}),
     enabledCommands: Array.isArray(row.enabledCommands) ? toStringArray(row.enabledCommands) : null,
     credentials,
-    // Wiro does not mark a required OAuth card that is not connected as missing
-    // (its page shows a Connect button instead), yet setup waits for it.
+    // A required sign-in that is not connected also holds back the setup, so it
+    // is listed as missing too.
     missingCredentials: credentials
       .filter(credential => credential.requiredMissing || (credential.oauth && !credential.optional && !credential.connected))
       .map(({ key, title, oauth }) => ({ key, title, oauth })),
@@ -595,8 +595,15 @@ export function formatAgentSummaryLines(agent: AgentSummary): string[] {
   ];
 }
 
+const SHORTENED_NOTE = ' (its text is long; manage_agent_custom_skill history shows it in full)';
+
 export function formatAgentDetail(agent: AgentDetail): string {
   const lines = formatAgentSummaryLines(agent);
+  if (agent.pricing) {
+    // This agent's own Starter and Pro prices, which can differ from its template's.
+    const { starter, pro } = agent.pricing;
+    lines.push(`**Prices now:** Starter ${formatUsd(starter.priceUsd)} per 30 days with ${formatCredits(starter.monthlyCredits)} credits per month; Pro ${formatUsd(pro.priceUsd)} per 30 days with ${formatCredits(pro.monthlyCredits)} credits per month. A new plan or an upgrade uses these.`);
+  }
   if (agent.timezone !== undefined) {
     lines.push(`**Time zone:** ${agent.timezone?.trim() ? agent.timezone : 'UTC, the default'}. Scheduled tasks run in it.`);
   }
@@ -625,13 +632,13 @@ export function formatAgentDetail(agent: AgentDetail): string {
   if (agent.scheduledTasks.length > 0) {
     lines.push('', '### Scheduled tasks', '');
     for (const task of agent.scheduledTasks) {
-      lines.push(`- \`${task.key}\` ${task.enabled ? 'on' : 'off'}${task.interval ? `, ${task.interval}` : ''}${task.description ? `: ${task.description}` : ''}`);
+      lines.push(`- \`${task.key}\` ${task.enabled ? 'on' : 'off'}${task.interval ? `, ${task.interval}` : ''}${task.description ? `: ${task.description}` : ''}${task.instructionsTruncated ? SHORTENED_NOTE : ''}`);
     }
   }
   if (agent.customInstructions.length > 0) {
     lines.push('', '### Custom instructions', '');
     for (const task of agent.customInstructions) {
-      lines.push(`- \`${task.key}\`${task.description ? `: ${task.description}` : ''}`);
+      lines.push(`- \`${task.key}\`${task.description ? `: ${task.description}` : ''}${task.instructionsTruncated ? SHORTENED_NOTE : ''}`);
     }
   }
   lines.push('', `Dashboard: ${agent.dashboardUrl}`);
@@ -790,8 +797,8 @@ export function nextStepForAgent(agent: AgentDetail, waitSeconds: number): NextA
 }
 
 // Refusals Wiro sends before it touches the wallet, or after rolling back
-// everything it wrote. Paid endpoints also answer result:false from a
-// catch-all after the charge, so any other message leaves the outcome open.
+// everything it wrote. Only these are known to come before any charge, so any
+// other result:false answer to a paid call leaves the outcome open.
 const PRE_CHARGE_CODES = new Set([95, 96, 97, 99, 101, 102, 103, 104, 105, 106, 107, 108, 109]);
 
 const PRE_CHARGE_REFUSALS: RegExp[] = [

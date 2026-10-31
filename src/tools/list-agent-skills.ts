@@ -16,8 +16,14 @@ import {
   toCredentialSetup,
   toSkillSummary,
   type CredentialSetup,
+  type CredentialSetupItem,
   type SkillSummary,
 } from '../utils/agent-catalog.js';
+import {
+  connectionModeRequirements,
+  parseCredentialMeta,
+  type ModeRequirement,
+} from '../utils/agent-config.js';
 import { formatUsd, toStringArray } from '../utils/user-agent.js';
 import { nextActionSchema } from './schemas.js';
 
@@ -65,10 +71,44 @@ function skillLine(skill: SkillSummary): string {
   return `- **${skill.title}** (\`${skill.name}\`): ${price}${credential}${deprecated}${skill.description ? `. ${skill.description}` : ''}`;
 }
 
-function setupLines(credential: CredentialSetup): string[] {
+interface CredentialEntry {
+  setup: CredentialSetup;
+  /** The modes that can be used now, with what each one needs. */
+  modes: ModeRequirement[];
+}
+
+function toCredentialEntry(credential: Record<string, unknown>, role: CredentialSetup['role']): CredentialEntry {
+  return {
+    setup: toCredentialSetup(credential, role),
+    modes: connectionModeRequirements(parseCredentialMeta(credential), null).filter(mode => mode.available),
+  };
+}
+
+/** The keys of a list's entries, one line each, with a list inside an entry indented below it. */
+function entryLines(items: CredentialSetupItem[], depth: number): string[] {
+  return items.flatMap(item => {
+    const notes = [
+      item.required === undefined ? undefined : item.required ? 'required' : 'optional',
+      item.type,
+      item.options ? `one of: ${item.options.map(option => option.value || '(empty)').join(', ')}` : undefined,
+    ].filter(Boolean).join(', ');
+    const help = item.help ? `: ${item.help.replace(/\n/g, ' ')}` : '';
+    const indent = '  '.repeat(depth);
+    return [
+      `${indent}- **${item.label ?? item.key}** (\`${item.key}\`${notes ? `, ${notes}` : ''})${help}`,
+      ...(item.itemFields ? [`${indent}  Each entry:`, ...entryLines(item.itemFields, depth + 1)] : []),
+    ];
+  });
+}
+
+function setupLines({ setup: credential, modes }: CredentialEntry): string[] {
   const lines = [`### ${credential.title} (\`${credential.key}\`, ${credential.role})`, ''];
-  if (credential.oauth) {
-    lines.push(`Connected with OAuth through connect_agent_oauth. Connection modes: ${credential.connectionModes.join(', ') || 'none listed'}${credential.wiroConnectAvailable ? '; one-click Wiro connect is available' : ''}.`);
+  if (credential.oauth && modes.length > 0) {
+    lines.push('How it connects (connect_agent_oauth or set_agent_credentials):');
+    for (const mode of modes) {
+      lines.push(`- **${mode.mode}**: ${mode.note}${mode.fields.length > 0 ? ` Fields: ${mode.fields.map(field => field.field).join(', ')}.` : ''}`);
+    }
+    lines.push('');
   }
   if (credential.note) lines.push(credential.note);
   if (credential.channel) {
@@ -83,6 +123,7 @@ function setupLines(credential: CredentialSetup): string[] {
     ].filter(Boolean).join(', ');
     lines.push(`- **${field.label}** (\`${field.key}\`, ${notes})`);
     if (field.help) lines.push(`  ${field.help.replace(/\n/g, ' ')}`);
+    if (field.itemFields) lines.push('  Each entry:', ...entryLines(field.itemFields, 1));
   }
   return lines;
 }
@@ -148,7 +189,7 @@ export function registerListAgentSkills(server: McpServer, client: WiroClient): 
           const key = name.trim();
           const detail = await client.post<ApiEnvelope & { skill?: unknown }>('/Skills/Detail', { name: key }, extra.signal);
           let skills: SkillSummary[] = [];
-          const credentials: CredentialSetup[] = [];
+          const credentials: CredentialEntry[] = [];
 
           if (detail?.result === true && isPlainObject(detail.skill)) {
             const skill = toSkillSummary(detail.skill);
@@ -162,7 +203,7 @@ export function registerListAgentSkills(server: McpServer, client: WiroClient): 
             for (const entry of keys) {
               if (isPlatformCredentialKey(entry.key)) continue;
               const credential = await readCredential(client, entry.key, extra.signal);
-              if (credential) credentials.push(toCredentialSetup(credential, entry.role));
+              if (credential) credentials.push(toCredentialEntry(credential, entry.role));
             }
           } else {
             const credential = await readCredential(client, key, extra.signal);
@@ -173,7 +214,7 @@ export function registerListAgentSkills(server: McpServer, client: WiroClient): 
                 {},
               );
             }
-            credentials.push(toCredentialSetup(credential, 'credential'));
+            credentials.push(toCredentialEntry(credential, 'credential'));
           }
 
           const lines: string[] = [];
@@ -190,7 +231,7 @@ export function registerListAgentSkills(server: McpServer, client: WiroClient): 
               channels: [],
               total: skills.length,
               ...(capabilities ? { capabilities } : {}),
-              setup: { credentials },
+              setup: { credentials: credentials.map(entry => entry.setup) },
               pricingNote: PRICING_NOTE,
             },
           };

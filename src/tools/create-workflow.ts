@@ -43,10 +43,11 @@ export function registerCreateWorkflow(server: McpServer, client: WiroClient): v
       title: 'Create a Wiro workflow',
       description: 'Save a new private workflow in the API key\'s workspace from a step graph. '
         + 'Read get_playbook topic "workflow-graph" first: it has the graph format, the reference '
-        + 'syntax and examples. Check every model\'s parameter ids with get_model_schema. Wiro '
-        + 'checks the graph against the live model catalog, fills catalog defaults and lays the '
-        + 'steps out before saving; every problem it finds comes back together, so fix them all '
-        + 'and call again. Set every model input you care about: a left-out one gets the model\'s '
+        + 'syntax and examples. Check every model\'s parameter ids and values with get_model_schema: '
+        + 'a model step\'s values, such as a duration, a size or an option, are checked when that '
+        + 'step runs. Wiro checks the graph against the live model catalog, fills catalog defaults '
+        + 'and lays the steps out before saving; every problem it finds comes back together, so fix '
+        + 'them all and call again. Set every model input you care about: a left-out one gets the model\'s '
         + 'default, which for some models is the sample prompt or sample images from its page '
         + '(the Notes in the result list what was filled). The graph can be at most 40 KB of JSON '
         + 'with those defaults. Free. Each call creates another workflow. The result gives the '
@@ -75,7 +76,8 @@ export function registerCreateWorkflow(server: McpServer, client: WiroClient): v
         const hidden = findHiddenValues(contents);
         if (hidden.length > 0) {
           throw new Error(`Some values are placeholders for hidden secrets (${hidden.join(', ')}). `
-            + 'Set real values or leave those inputs out.');
+            + 'Remove those values and keep the Start fields and steps they belong to. Never put a key, token or password there; '
+            + 'set a real value only when it is not secret.');
         }
 
         const saved = await createWorkflow(client, { title, contents, description, tags }, extra.signal);

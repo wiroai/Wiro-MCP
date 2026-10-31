@@ -37,7 +37,10 @@ export function registerGetWorkflow(server: McpServer, client: WiroClient): void
         + 'state, and the full step graph when you are allowed to see it. Read this before '
         + 'running a workflow, and before editing one with update_workflow (pass the returned '
         + '`updatetime` back as `loaded_updatetime`). Protected workflows from other creators '
-        + 'show only their inputs, but they can still be run.',
+        + 'show only their inputs, but they can still be run. Input lists and saved values hide '
+        + 'the values of fields named like api_key, token, secret or password, and values that '
+        + 'look like a provider key. Other saved values come back as saved: never repeat a key '
+        + 'you see there.',
       inputSchema: {
         slug: z.string().min(1)
           .describe('The full workflow slug ("<name>-<5 character id>") or the workflow page URL.'),
@@ -61,10 +64,13 @@ export function registerGetWorkflow(server: McpServer, client: WiroClient): void
         const row = await fetchWorkflowRow(client, fullSlug, extra.signal);
         const workflow = toWorkflowDetail(row, { includeGraph: include_graph });
 
-        // A protected workflow that is not the caller's or their team's runs only
-        // with the values the caller sends; the saved values it shows are not used.
+        // Wiro shows a protected workflow's graph only inside its own workspace. A
+        // run keeps the saved values for the owner and the team's members, whatever
+        // workspace their key is in, and leaves them out for anyone else. A caller
+        // outside the workflow's workspace can still own it or be in its team, so
+        // the text names both cases.
         const leftOut = workflow.graphHidden && !workflow.insider
-          ? 'This protected workflow is not yours or your team\'s, so a key you leave out uses its default, not its saved value; pass the saved value to use it.'
+          ? 'This protected workflow is outside this key\'s workspace. Unless you own it or are in its team, a key you leave out uses its default, not its saved value, so pass the saved values you want.'
           : 'A key you leave out uses its saved value or default.';
         const lines = [`## ${workflow.title}`, ''];
         lines.push(`**Slug:** \`${workflow.fullSlug}\``);

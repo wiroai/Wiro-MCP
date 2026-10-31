@@ -110,8 +110,8 @@ export function registerGetModelSchema(
       description: (runModel
         ? 'Get one model’s typed parameters, options, defaults, required '
           + 'fields, and pricing. Catalog fields such as `previousTaskToken` must be '
-          + 'discovered here; use it with `toolOutputs` for tool results, or with the same '
-          + '`session_id` and one new prompt/messages value for a stateful next turn. Fill required '
+          + 'discovered here; use it with the same `session_id` as the previous turn, plus '
+          + '`toolOutputs` for tool results or one new prompt/messages value for a stateful next turn. Fill required '
           + 'parameters and follow the returned `run_model` next action once when the user wants a run; '
           + 'for a price question, the price here is the answer. '
         : 'Get one model’s typed parameters, options, defaults, required '

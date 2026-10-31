@@ -225,8 +225,8 @@ function suggestSkills(name: string, registry: SkillRegistry): string[] {
 /**
  * Validates the requested names against the registry and, when asked, adds
  * the skills they depend on. The server refuses a change whose enabled set is
- * missing a dependency, and it never checks names: an unknown name turned off
- * is stored as a stray row, so names are checked here.
+ * missing a dependency. Names are checked against the registry here, so only
+ * known skills are sent.
  */
 export function planSkillChanges(
   input: Record<string, boolean>,
@@ -290,7 +290,7 @@ export interface SkillDiff {
   alreadySet: string[];
 }
 
-/** Only real changes are sent: the server would otherwise restart the agent for a no-op. */
+/** Only real changes are sent, since a skill change restarts a running agent. */
 export function diffSkills(requested: Record<string, boolean>, enabledNow: Iterable<string>): SkillDiff {
   const current = new Set(enabledNow);
   const diff: SkillDiff = { changes: {}, enable: [], disable: [], alreadySet: [] };
@@ -400,8 +400,8 @@ export function parseSkillChangeKey(key: string): { digest: string; priceTag: st
 
 /**
  * Keys minted by this package carry the fingerprint of their change. Wiro
- * replays a cached success for a reused key, so a key reused for a different
- * change would report success without applying it.
+ * answers a reused key with the saved result of the call that first used it,
+ * so a key is only sent with the change it was issued for.
  */
 export function idempotencyKeyMismatch(key: string, digest: string): boolean {
   const parsed = parseSkillChangeKey(key);
@@ -436,7 +436,7 @@ export function planBilling(row: Row): PlanBilling {
 
 /**
  * Wiro charges a prepaid plan the monthly difference for the days left in the
- * period. The period start is not exposed, so a 30-day period is assumed.
+ * period. The estimate assumes a 30-day period.
  */
 export function estimateProratedUsd(
   deltaUsd: number,
@@ -460,8 +460,25 @@ export interface SkillsApplyFailure {
   availableUsd?: number | null;
 }
 
-/** Turns a refused SkillsApply into an explanation and the step that fixes it. */
-export function describeSkillsApplyError(error: unknown): SkillsApplyFailure {
+const SKILL_PAYMENT_FAILED = 'The payment for this change did not go through, so the change was undone and nothing was charged.';
+const DEPOSIT_PAGE = 'https://wiro.ai/panel/wallet/deposit/credit-card (for a team project, select that team in the dashboard first)';
+
+/**
+ * What to do after a skill change whose payment failed, for the agent's plan
+ * when it is known. A wallet that does not cover the charge is refused before
+ * any payment (code 103), so a wallet plan needs no funds added here.
+ */
+function skillPaymentGuidance(plan?: PlanBilling['plan']): string {
+  if (plan === 'prepaid') return `${SKILL_PAYMENT_FAILED} The balance is not the cause, so no funds need to be added. Ask for a new quote and confirm it once the user approves.`;
+  if (plan === 'card') return `${SKILL_PAYMENT_FAILED} Update the card in the Wiro dashboard, then ask for a new quote.`;
+  return `${SKILL_PAYMENT_FAILED} For a plan paid by card, update the card in the Wiro dashboard first. Then ask for a new quote.`;
+}
+
+/**
+ * Turns a refused SkillsApply into an explanation and the step that fixes it.
+ * With the agent's plan, a payment failure names only the fix for that plan.
+ */
+export function describeSkillsApplyError(error: unknown, plan?: PlanBilling['plan']): SkillsApplyFailure {
   const message = error instanceof Error ? error.message : String(error);
   const body = error instanceof ApiResultError ? error.body : {};
   const codes = error instanceof ApiResultError ? error.codes.map(code => toNumber(code)) : [];
@@ -495,7 +512,7 @@ export function describeSkillsApplyError(error: unknown): SkillsApplyFailure {
         ...base,
         requiredUsd,
         availableUsd,
-        guidance: `The wallet does not cover the charge for the rest of this period${requiredUsd !== null ? `: it needs ${formatUsd(requiredUsd)}` : ''}${availableUsd !== null ? ` and has ${formatUsd(availableUsd)}` : ''}. Nothing was changed. Add funds to the wallet, then confirm again.`,
+        guidance: `The wallet does not cover the charge for the rest of this period${requiredUsd !== null ? `: it needs ${formatUsd(requiredUsd)}` : ''}${availableUsd !== null ? ` and has ${formatUsd(availableUsd)}` : ''}. Nothing was changed. Funds are added at ${DEPOSIT_PAGE}; once the user has added them and says yes, confirm again.`,
       };
     }
     case 104:
@@ -528,7 +545,7 @@ export function describeSkillsApplyError(error: unknown): SkillsApplyFailure {
     case 109:
       return {
         ...base,
-        guidance: 'The card payment failed and the change was rolled back. Update the card in the Wiro dashboard, then try again.',
+        guidance: skillPaymentGuidance(plan),
       };
     case 95:
     case 96:
@@ -549,10 +566,10 @@ export function describeSkillsApplyError(error: unknown): SkillsApplyFailure {
   return { ...base, guidance: workspaceHint(message) ?? '' };
 }
 
-/** The API names a dashboard concept ("team context"); for an API key the workspace is the key's project. */
+/** The API names a dashboard concept ("team context"); here the workspace is the connected project's. */
 export function workspaceHint(message: string): string | undefined {
   return /switch to the (team|personal)|different team|personal workspace/i.test(message)
-    ? 'Use an API key from a project in the workspace (personal or team) that owns this agent.'
+    ? 'Connect with a project in the workspace (personal or team) that owns this agent, by its API key or a browser sign-in.'
     : undefined;
 }
 
@@ -769,6 +786,11 @@ export function parseCredentialMeta(raw: Row): CredentialMeta {
   };
 }
 
+/** The modes a connection can use now: wiro is left out while the registry marks it pending. */
+export function usableConnectionModes(meta: Pick<CredentialMeta, 'connectionModes' | 'wiroPending'>): string[] {
+  return meta.connectionModes.filter(mode => mode !== 'wiro' || !meta.wiroPending);
+}
+
 /** Returns null when the registry has no credential with that key. */
 export async function loadCredentialMeta(
   client: WiroClient,
@@ -848,14 +870,28 @@ export function normalizeBase64FileValue(value: string): string {
   return Buffer.from(value, 'utf8').toString('base64');
 }
 
-/** A key file field's value as Wiro stores it, or why it is refused. */
-function keyFileValue(value: unknown, label: string): { value?: string; error?: string } {
+function isJsonObjectText(text: string): boolean {
+  try {
+    return isPlainObject(JSON.parse(text));
+  } catch {
+    return false;
+  }
+}
+
+/** A key file field's value as Wiro stores it, or why it is refused. The value itself is never repeated. */
+function keyFileValue(field: CredentialField, value: unknown, label: string): { value?: string; error?: string } {
   if (typeof value !== 'string') return { error: `${label} takes the file's content as text or base64.` };
   // Key files take the file's text; refuse a link before anything is saved.
   if (/^\s*https?:\/\//i.test(value)) {
     return { error: `${label} takes the file's content as text or base64, not a link. The user can paste the file's text or upload the file on the agent's page in the Wiro dashboard.` };
   }
-  return { value: normalizeBase64FileValue(value) };
+  const stored = normalizeBase64FileValue(value);
+  // A JSON key, such as a service account file, must hold a JSON object, so a
+  // path, a share link or an id is refused before anything is saved.
+  if (field.fileTypes?.includes('application/json') && !isJsonObjectText(Buffer.from(stored, 'base64').toString('utf8'))) {
+    return { error: `${label} takes the text of the JSON key file. This value is not JSON. The user can paste the file's text or upload the file on the agent's page in the Wiro dashboard.` };
+  }
+  return { value: stored };
 }
 
 export interface CredentialFieldInput {
@@ -954,10 +990,16 @@ function scalarValue(
   return problem ? { error: problem } : { value: text };
 }
 
+/**
+ * A list field's value. Items and rows are named the way Wiro names them,
+ * counting from 1: "Allowed Telegram DM User IDs #2" at the top level, and
+ * itemLabel names the items of a text list inside an entry.
+ */
 function listValue(
   field: CredentialField,
   value: unknown,
   label: string,
+  itemLabel: (index: number) => string = index => `${label} #${index + 1}`,
 ): { value?: unknown; error?: string } {
   const shape = credentialFieldShape(field);
   if (!Array.isArray(value)) return { error: `${label} takes a list (JSON array).` };
@@ -965,44 +1007,97 @@ function listValue(
     const items: string[] = [];
     for (const [index, item] of value.entries()) {
       if (typeof item !== 'string' && typeof item !== 'number') {
-        return { error: `${label} takes a list of text values; item ${index + 1} is not one.` };
+        return { error: `${field.label} takes a list of text values; ${itemLabel(index)} is not one.` };
       }
       const text = String(item).trim();
       if (!text) continue;
-      const problem = patternError(field, text, `${label} item ${index + 1}`);
+      const problem = patternError(field, text, itemLabel(index));
       if (problem) return { error: problem };
       items.push(text);
     }
     return { value: items };
   }
+  return rowsValue(field, value, index => `${label} #${index + 1}`);
+}
+
+function isListField(field: CredentialField): boolean {
+  const shape = credentialFieldShape(field);
+  return shape === 'object-array' || shape === 'string-array';
+}
+
+/**
+ * The rows of a list of objects, checked the way Wiro checks them: only the
+ * keys the item schema declares, each value by its own rules, and a list inside
+ * a row (such as the apps of one Firebase account) by its own shape. Errors
+ * name the row the way Wiro does: "App ID in Apps #2 in Firebase Accounts #1".
+ */
+function rowsValue(
+  field: CredentialField,
+  value: unknown[],
+  rowLabel: (index: number) => string,
+): { value?: Row[]; error?: string } {
   const allowed = new Set(field.itemSchema.map(item => item.key));
-  const keyFiles = field.itemSchema.filter(item => credentialFieldShape(item) === 'base64-file');
   const rows: Row[] = [];
   for (const [index, item] of value.entries()) {
-    if (!isPlainObject(item)) return { error: `${label} takes a list of objects; item ${index + 1} is not one.` };
+    const label = rowLabel(index);
+    if (!isPlainObject(item)) return { error: `${field.label} takes a list of objects; ${label} is not one.` };
     if (allowed.size > 0) {
       const unknown = Object.keys(item).filter(key => !allowed.has(key));
       if (unknown.length > 0) {
-        return { error: `${label} item ${index + 1} has unknown keys (${unknown.join(', ')}). Allowed: ${[...allowed].join(', ')}.` };
+        return { error: `${label} has unknown keys (${unknown.join(', ')}). Allowed: ${[...allowed].join(', ')}.` };
       }
     }
-    // Key files inside a row, such as each Firebase account's service account JSON, are stored like top-level ones.
     const row: Row = { ...item };
-    for (const keyFile of keyFiles) {
-      if (isEmptyValue(row[keyFile.key])) continue;
-      const checked = keyFileValue(row[keyFile.key], `${label} item ${index + 1} ${keyFile.label}`);
+    for (const entry of field.itemSchema) {
+      const checked = isListField(entry)
+        ? nestedListValue(entry, row[entry.key], label)
+        : rowFieldValue(entry, row[entry.key], `${entry.label} in ${label}`);
       if (checked.error) return { error: checked.error };
-      row[keyFile.key] = checked.value;
+      if (Object.prototype.hasOwnProperty.call(row, entry.key)) row[entry.key] = checked.value;
     }
     rows.push(row);
   }
   return { value: rows };
 }
 
+/** One value in a list row: required, options, length and pattern, as Wiro checks it. */
+function rowFieldValue(field: CredentialField, value: unknown, label: string): { value?: unknown; error?: string } {
+  if (!isFilledValue(value)) return field.required ? { error: `${label} is required.` } : { value };
+  const shape = credentialFieldShape(field);
+  // Key files inside a row, such as each Firebase account's service account JSON, are stored like top-level ones.
+  if (shape === 'base64-file') return keyFileValue(field, value, label);
+  if (typeof value === 'object') return { error: `${label} takes a single text value.` };
+  const text = String(value);
+  if (shape === 'select' && field.options && !field.options.includes(text)) {
+    return { error: `${label} must be one of: ${field.options.map(option => option || '(empty)').join(', ')}.` };
+  }
+  const problem = patternError(field, text, label);
+  return problem ? { error: problem } : { value };
+}
+
+/**
+ * A list inside one entry of a list, such as the apps of one Firebase account,
+ * in a whole write of the outer list or on its own with parent_field: rows
+ * checked against its item schema, or text items.
+ */
+function nestedListValue(field: CredentialField, value: unknown, entryLabel: string): { value?: unknown; error?: string } {
+  const label = `${field.label} in ${entryLabel}`;
+  if (!Array.isArray(value)) {
+    if (isFilledValue(value)) return { error: `${label} takes a list (JSON array).` };
+    return field.required ? { error: `${label} is required.` } : { value };
+  }
+  const checked = credentialFieldShape(field) === 'object-array'
+    ? rowsValue(field, value, index => `${field.label} #${index + 1} in ${entryLabel}`)
+    : listValue({ ...field, type: 'string-array' }, value, label, index => `${label}, item #${index + 1}`);
+  if (checked.error) return checked;
+  return field.required && Array.isArray(checked.value) && checked.value.length === 0
+    ? { error: `${label} is required.` }
+    : checked;
+}
+
 /**
  * Checks every requested field against the credential registry and builds the
- * API payload. Nothing is written when any field is refused: the API validates
- * the whole request too, but it silently stores names it does not know.
+ * API payload. Nothing is written when any field is refused.
  */
 export function prepareCredentialWrite(
   inputs: CredentialFieldInput[],
@@ -1040,10 +1135,11 @@ export function prepareCredentialWrite(
     }
 
     if (fieldName === 'authmethod') {
-      if (input.parent_field || meta.connectionModes.length === 0) {
+      const usable = usableConnectionModes(meta);
+      if (input.parent_field || usable.length === 0) {
         prepared.errors.push(`${meta.title} has no connection modes, so "authmethod" does not apply.`);
-      } else if (typeof input.value !== 'string' || !meta.connectionModes.includes(input.value)) {
-        prepared.errors.push(`${meta.title}: authmethod must be one of ${meta.connectionModes.join(', ')}.`);
+      } else if (typeof input.value !== 'string' || !usable.includes(input.value)) {
+        prepared.errors.push(`${meta.title}: authmethod must be one of ${usable.join(', ')}.`);
       } else {
         prepared.apiFields.push({ credentialkey: credential, fieldname: 'authmethod', fieldvalue: input.value });
       }
@@ -1051,10 +1147,17 @@ export function prepareCredentialWrite(
     }
 
     if (input.parent_field) {
-      const root = input.parent_field.split(/[.[\]]/)[0] ?? '';
+      const root = input.parent_field.split(/[.[\]]/)[0]?.trim() ?? '';
       const parent = meta.fields.find(field => field.key === root);
       if (!parent || credentialFieldShape(parent) !== 'object-array') {
         prepared.errors.push(`${meta.title} has no list field "${root}" for parent_field. List fields: ${meta.fields.filter(field => credentialFieldShape(field) === 'object-array').map(field => field.key).join(', ') || 'none'}.`);
+        continue;
+      }
+      // Wiro checks and stores an entry's field under the list's own key and
+      // the entry's position, so parent_field takes that key alone and the
+      // position goes in ordinal.
+      if (input.parent_field.trim() !== parent.key) {
+        prepared.errors.push(`${parent.label}: parent_field takes the list field's key alone ("${parent.key}"); pass the entry's position, from 0, as ordinal.`);
         continue;
       }
       if (!isWritableField(parent)) {
@@ -1063,20 +1166,22 @@ export function prepareCredentialWrite(
       }
       const item = parent.itemSchema.find(candidate => candidate.key === fieldName);
       if (parent.itemSchema.length > 0 && !item) {
-        prepared.errors.push(`${parent.label} items have no field "${fieldName}". Item fields: ${parent.itemSchema.map(candidate => candidate.key).join(', ')}.`);
+        prepared.errors.push(`${parent.label} entries have no field "${fieldName}". Entry fields: ${parent.itemSchema.map(candidate => candidate.key).join(', ')}.`);
         continue;
       }
       if (input.ordinal === undefined) {
-        prepared.errors.push(`${parent.label}: ordinal (the item's position, from 0) is required with parent_field.`);
+        prepared.errors.push(`${parent.label}: ordinal (the entry's position, from 0) is required with parent_field.`);
         continue;
       }
+      // The entry is named the way Wiro names it, counting from 1.
+      const entryLabel = `${parent.label} #${input.ordinal + 1}`;
       let value = input.value;
-      if (item && !isEmptyValue(value)) {
-        const checked = credentialFieldShape(item) === 'base64-file'
-          ? keyFileValue(value, `${parent.label} ${item.label}`)
-          : Array.isArray(value)
-            ? listValue({ ...item, type: 'string-array' }, value, `${parent.label} ${item.label}`)
-            : scalarValue(item, value, `${parent.label} ${item.label}`);
+      // An entry's field is checked as it is in a whole write of the list,
+      // empty values included, so a required one cannot be cleared.
+      if (item) {
+        const checked = isListField(item)
+          ? nestedListValue(item, isEmptyValue(value) ? [] : value, entryLabel)
+          : rowFieldValue(item, value, `${item.label} in ${entryLabel}`);
         if (checked.error) {
           prepared.errors.push(checked.error);
           continue;
@@ -1086,8 +1191,8 @@ export function prepareCredentialWrite(
       prepared.apiFields.push({
         credentialkey: credential,
         fieldname: fieldName,
-        fieldvalue: value ?? '',
-        parentfield: input.parent_field,
+        fieldvalue: item && !isFilledValue(value) ? (isListField(item) ? [] : '') : (value ?? ''),
+        parentfield: parent.key,
         ordinal: input.ordinal,
       });
       continue;
@@ -1137,7 +1242,7 @@ export function prepareCredentialWrite(
       continue;
     }
     if (shape === 'base64-file') {
-      const checked = keyFileValue(input.value, field.label);
+      const checked = keyFileValue(field, input.value, field.label);
       if (checked.error) {
         prepared.errors.push(checked.error);
         continue;
@@ -1679,10 +1784,10 @@ function isBareCustomSkillKey(key: string): boolean {
 }
 
 /**
- * The key an upsert writes. The API does not echo it, so it is computed with
- * the API's own rules. With the agent's entries, a bare key with no kind and
- * no interval names the existing entry of that name, as rename, delete,
- * history and revert do; the API would otherwise create a new cs- entry.
+ * The key an upsert writes, computed with the API's own rules. With the
+ * agent's entries, a bare key with no kind and no interval names the existing
+ * entry of that name, as rename, delete, history and revert do; the API would
+ * otherwise create a new cs- entry.
  */
 export function upsertCustomSkillKey(
   input: string,
@@ -1773,10 +1878,9 @@ export function templateTaskTextError(key: string): string {
 
 /**
  * Checks deploy_agent's custom_skills the way manage_agent_custom_skill
- * would. Deploy stores entries without validating them, so a broken
- * schedule or an entry without text would be paid for and never run. A bare
- * key names the template's own entry of that name when it has one. Without
- * the template's entries only the checks that need no template run.
+ * would, before the deploy is paid for. A bare key names the template's own
+ * entry of that name when it has one. Without the template's entries only the
+ * checks that need no template run.
  */
 export function resolveDeployCustomSkills(
   entries: DeployCustomSkillInput[],
@@ -1833,8 +1937,8 @@ export function resolveDeployCustomSkills(
       errors.push(`${key} is a new ${kind === 'scheduled_task' ? 'scheduled task, so it needs value: the prompt the agent runs on schedule' : 'custom skill, so it needs value: the instructions the agent follows'}.`);
       continue;
     }
-    // Wiro saves a scheduled task sent without a schedule on its weekly
-    // default, which would replace the template's own schedule.
+    // A scheduled task sent without a schedule is saved on the weekly
+    // default, so a template's own task is sent with its own schedule.
     const schedule = interval ?? (templateTask ? known.get(key)?.interval || undefined : undefined);
     skills.push({
       key,
@@ -1891,7 +1995,7 @@ export function customSkillEntries(row: Row): CustomSkillEntry[] {
   }).filter(entry => entry.key);
 }
 
-/** Readable text for the API's untranslated custom skill errors. */
+/** Readable text for the API's custom skill error codes. */
 export function customSkillErrorMessage(message: string): string {
   if (/invalid-cron-expression|invalid cron/i.test(message)) {
     return 'The schedule is not a valid cron expression. Use five fields: minute hour day-of-month month day-of-week, for example "0 9 * * 1-5".';

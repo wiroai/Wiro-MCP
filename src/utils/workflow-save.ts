@@ -10,6 +10,7 @@ import {
 import {
   fullSlugOf,
   isStrictlyEmpty,
+  looksLikeSecretValue,
   parseJsonValue,
   SENSITIVE_INPUT_KEY,
   workflowInputs,
@@ -184,6 +185,35 @@ export function filledDefaultNotes(
 }
 
 /**
+ * One note per saved Start value or Start field default that looks like a
+ * provider key. The value itself is never shown.
+ */
+export function keyLikeValueNotes(contents: Record<string, unknown>): PrepareIssue[] {
+  const notes: PrepareIssue[] = [];
+  const noKeyNeeded = 'Model steps on Wiro need no provider key.';
+  for (const [key, value] of Object.entries(savedStartValues(contents))) {
+    if (looksLikeSecretValue(value)) {
+      notes.push({
+        code: 'saved-value-looks-like-key',
+        message: `The saved value of \`${key}\` looks like a key. Everyone who can open this workflow can read saved `
+          + `values, and copies keep them. ${noKeyNeeded}`,
+      });
+    }
+  }
+  const fields = isPlainObject(contents.schema) && isPlainObject(contents.schema.input) ? contents.schema.input : {};
+  for (const [key, field] of Object.entries(fields)) {
+    if (isPlainObject(field) && looksLikeSecretValue(field.defaultValue)) {
+      notes.push({
+        code: 'default-looks-like-key',
+        message: `The default of \`${key}\` looks like a key. Everyone who can open this workflow can read its `
+          + `defaults, and copies keep them. ${noKeyNeeded}`,
+      });
+    }
+  }
+  return notes;
+}
+
+/**
  * Start field parts the caller changed that Wiro saves the editor's way instead
  * (a description, examples, required, name), as "`key` (part, part)".
  */
@@ -276,7 +306,11 @@ export async function createWorkflow(
     ...(asString(row.updatetime) ? { updatetime: asString(row.updatetime) } : {}),
     inputs: workflowInputs(prepared.contents),
     outputs: workflowOutputs(prepared.contents),
-    warnings: [...prepared.warnings, ...filledDefaultNotes(params.contents, prepared.contents)],
+    warnings: [
+      ...prepared.warnings,
+      ...filledDefaultNotes(params.contents, prepared.contents),
+      ...keyLikeValueNotes(prepared.contents),
+    ],
   };
 }
 
@@ -463,7 +497,9 @@ export function restoreStoredValues(
     const kept: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(storedValues)) {
       if (!Object.prototype.hasOwnProperty.call(fields, key)) continue;
-      if (SENSITIVE_INPUT_KEY.test(key) && !isStrictlyEmpty(value)) refuseIfMoved(key, `Saved value of Start field ${key}`);
+      if ((SENSITIVE_INPUT_KEY.test(key) || looksLikeSecretValue(value)) && !isStrictlyEmpty(value)) {
+        refuseIfMoved(key, `Saved value of Start field ${key}`);
+      }
       kept[key] = value;
     }
     if (Object.keys(kept).length > 0) inputMetadata.values = kept;
@@ -602,11 +638,10 @@ async function readEditableRow(
 }
 
 /**
- * Update and Delete may read a replica, so right after a create they can answer
- * "Workflow not found" for a row Detail (which reads the primary) just returned.
- * One retry after a short pause covers that window.
+ * Right after a create, Update and Delete can answer "Workflow not found" for
+ * a row Detail just returned. One retry after a short pause covers that window.
  */
-export async function postWithReplicaRetry<T extends ApiEnvelope>(
+export async function postWithNotFoundRetry<T extends ApiEnvelope>(
   client: WiroClient,
   path: string,
   body: Record<string, unknown>,
@@ -661,8 +696,12 @@ export async function updateWorkflow(
         const nodes = isPlainObject(stored.nodes) ? Object.keys(stored.nodes) : [];
         const anchors = ['input', ...nodes.filter(nodeId => nodeId !== 'output')];
         const prepared = await prepareWorkflowContents(client, restored, 'apply', anchors, signal);
-        warnings = [...prepared.warnings, ...filledDefaultNotes(restored, prepared.contents)];
-        // The server compares contents as text, so an unchanged graph must not be resent.
+        warnings = [
+          ...prepared.warnings,
+          ...filledDefaultNotes(restored, prepared.contents),
+          ...keyLikeValueNotes(prepared.contents),
+        ];
+        // An unchanged graph is not resent, so saving it again does not count as a change.
         if (JSON.stringify(prepared.contents) !== JSON.stringify(stored)) contentsToSave = prepared.contents;
         else discarded = droppedStartFieldChanges(restored, prepared.contents);
       }
@@ -752,7 +791,7 @@ export async function updateWorkflow(
   if (guard) body.loadedUpdatetime = guard;
   if (params.force) body.force = true;
 
-  const response = await postWithReplicaRetry<WorkflowRowResponse>(client, '/Workflow/Update', body, signal);
+  const response = await postWithNotFoundRetry<WorkflowRowResponse>(client, '/Workflow/Update', body, signal);
   if (response.result !== true) {
     if (response.currentUpdatetime !== undefined) {
       throw new WorkflowConflictError(

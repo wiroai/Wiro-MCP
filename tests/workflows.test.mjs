@@ -4,6 +4,8 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { WiroApiError } from '../dist/client.js';
 import { createMcpServer } from '../dist/server.js';
+import { PLAYBOOKS } from '../dist/playbooks.js';
+import { looksLikeSecretValue } from '../dist/utils/workflow.js';
 
 async function withClient(fakeWiroClient, callback, options) {
   const server = createMcpServer({ authType: 'apikey-only', ...fakeWiroClient }, options);
@@ -521,12 +523,16 @@ test('get_workflow says a protected gallery workflow from elsewhere runs left-ou
   await withClient(fake, async client => {
     const outside = await client.callTool({ name: 'get_workflow', arguments: { slug: 'fox-maker-Ab3xZ' } });
     assert.match(outside.content[0].text, /saved value: "saved prompt"/);
-    assert.match(outside.content[0].text, /a key you leave out uses its default, not its saved value; pass the saved value to use it/);
-    assert.match(outside.structuredContent.nextAction.reason, /for: prompt\. This protected workflow is not yours or your team's, so a key you leave out uses its default/);
+    // Outside its workspace the owner and team members still get the saved values, so the sentence names both cases.
+    const sentence = 'This protected workflow is outside this key\'s workspace. Unless you own it or are in its team, '
+      + 'a key you leave out uses its default, not its saved value, so pass the saved values you want.';
+    assert.ok(outside.content[0].text.includes(sentence), outside.content[0].text);
+    assert.ok(outside.structuredContent.nextAction.reason.endsWith(`for: prompt. ${sentence}`), outside.structuredContent.nextAction.reason);
+    assert.doesNotMatch(outside.content[0].text, /not yours or your team's/);
 
     const own = await client.callTool({ name: 'get_workflow', arguments: { slug: 'fox-maker-Zz9Yy' } });
     assert.match(own.structuredContent.nextAction.reason, /A key you leave out uses its saved value or default\./);
-    assert.doesNotMatch(own.content[0].text, /not yours or your team's/);
+    assert.doesNotMatch(own.content[0].text, /outside this key's workspace/);
   });
 });
 
@@ -642,6 +648,314 @@ test('a saved secret is not carried into a proposal that sends it to another mod
   });
 });
 
+// Key-shaped test values, built from parts so that no source line holds a whole one.
+const OPENAI_STYLE_KEY = ['sk', 'proj', 'Ab1Cd2Ef3Gh4Ij5Kl6Mn7'].join('-');
+const GOOGLE_STYLE_KEY = `AIza${'Sy'}Ab1Cd2Ef3Gh4Ij5Kl6Mn7Op8Qr9St0Uv`;
+
+test('looksLikeSecretValue knows common provider key shapes and nothing else', () => {
+  const body = 'Ab1Cd2Ef3Gh4Ij5Kl6Mn7Op8Qr9St0Uv';
+  const keys = [
+    OPENAI_STYLE_KEY,
+    ['sk', 'ant', 'api03', 'Ab1Cd2Ef3Gh4Ij5Kl6'].join('-'),
+    GOOGLE_STYLE_KEY,
+    `ghp_${body}`,
+    `gho_${body}`,
+    `ghu_${body}`,
+    `ghs_${body}`,
+    `ghr_${body}`,
+    `github_pat_11ABCDEFG0_${body}`,
+    `xoxb-${'1234567890'}-abcdefghij`,
+    `xoxp-${'1234567890'}`,
+    `AKIA${'IOSFODNN7EXAMPLE'}`,
+    `hf_${body}`,
+    `r8_${body}`,
+    `sk_live_${'Ab1Cd2Ef3Gh4Ij5Kl6'}`,
+    `rk_test_${'Ab1Cd2Ef3Gh4Ij5Kl6'}`,
+    `  ${OPENAI_STYLE_KEY}\n`,
+  ];
+  for (const key of keys) assert.equal(looksLikeSecretValue(key), true, key);
+
+  const others = [
+    'a fox in the snow',
+    `https://example.com/files/${OPENAI_STYLE_KEY}.png`,
+    `Bearer ${OPENAI_STYLE_KEY}`,
+    'sk-short',
+    'ghp_short',
+    'xoxb-123',
+    'AKIA1234',
+    'hf_abc',
+    'r8_abc',
+    'sk_live_short',
+    '',
+    '   ',
+    12345,
+    null,
+    undefined,
+    [OPENAI_STYLE_KEY],
+    { key: OPENAI_STYLE_KEY },
+  ];
+  for (const value of others) assert.equal(looksLikeSecretValue(value), false, String(value));
+});
+
+// A stored workflow with a key pasted as the saved value of a field whose name
+// does not look secret, and another as a Start field default.
+function keyRow() {
+  const row = storedRow();
+  const field = (name, label, defaultValue) => ({
+    name, label, type: 'string', description: 'A text field', required: false,
+    defaultValue, examples: [], ui: { field: 'textarea' }, modelId: null, sourceParamType: null,
+  });
+  row.contents.schema.input.openai_key = field('openai_key', 'OpenAI key', '');
+  row.contents.schema.input.backup_key = field('backup_key', 'Backup key', GOOGLE_STYLE_KEY);
+  row.contents.nodes['node-a1'].input.llmKey = '$input.openai_key';
+  row.contents.metadata.input.values = { prompt: 'saved prompt', openai_key: OPENAI_STYLE_KEY };
+  return row;
+}
+
+test('get_workflow hides a key-looking saved value or default from every caller, the owner included', async () => {
+  const fake = fakeClient({ '/Workflow/Detail': { result: true, errors: [], workflow: [keyRow()] } });
+  await withClient(fake, async client => {
+    const result = await client.callTool({ name: 'get_workflow', arguments: { slug: 'fox-maker-Ab3xZ' } });
+    assert.notEqual(result.isError, true);
+    const { workflow } = result.structuredContent;
+    assert.equal(workflow.insider, true);
+    const inputs = Object.fromEntries(workflow.inputs.map(input => [input.key, input]));
+    assert.equal(inputs.openai_key.savedValue, '[hidden]');
+    assert.equal(inputs.backup_key.default, '[hidden]');
+    assert.equal(inputs.prompt.savedValue, 'saved prompt');
+    const text = result.content[0].text;
+    assert.match(text, /- `openai_key` \(string, textarea\): OpenAI key \(saved value: "\[hidden\]"\)/);
+    assert.match(text, /- `backup_key` \(string, textarea\): Backup key \(default: "\[hidden\]"\)/);
+    assert.deepEqual(workflow.contents.metadata.input.values, { prompt: 'saved prompt', openai_key: '[hidden]' });
+    assert.equal(workflow.contents.schema.input.backup_key.defaultValue, '[hidden]');
+    assert.equal(workflow.contents.schema.input.prompt.defaultValue, 'a fox');
+    assert.equal(workflow.contents.nodes['node-a1'].input.llmKey, '$input.openai_key');
+    for (const key of [OPENAI_STYLE_KEY, GOOGLE_STYLE_KEY]) assert.equal(JSON.stringify(result).includes(key), false);
+  });
+});
+
+test('get_workflow hides secrets at any depth of the graph from a caller outside its workspace', async () => {
+  const row = keyRow();
+  delete row.rejectreason;
+  row.contents.schema.input.api_token = {
+    name: 'api_token', label: 'API token', type: 'string', description: 'A text field', required: false,
+    defaultValue: 'plain-default-token', examples: [], ui: {}, modelId: null, sourceParamType: null,
+  };
+  row.contents.metadata.input.values.api_token = 'plain-saved-token';
+  row.contents.nodes['node-a1'].input = {
+    prompt: '$input.prompt',
+    apiKey: '$input.api_token',
+    llmKey: '$input.openai_key',
+    config: {
+      headers: { Authorization: 'Bearer nested-secret', 'X-Trace': 'kept' },
+      retries: [{ token: 'listed-secret', delay: 2 }],
+      auth: { token: '$input.api_token' },
+    },
+  };
+  const fake = fakeClient({ '/Workflow/Detail': { result: true, errors: [], workflow: [row] } });
+  await withClient(fake, async client => {
+    const result = await client.callTool({ name: 'get_workflow', arguments: { slug: 'fox-maker-Ab3xZ' } });
+    assert.notEqual(result.isError, true);
+    const { workflow } = result.structuredContent;
+    assert.equal(workflow.insider, false);
+    assert.deepEqual(workflow.contents.nodes['node-a1'].input, {
+      prompt: '$input.prompt',
+      apiKey: '$input.api_token',
+      llmKey: '$input.openai_key',
+      config: {
+        headers: { Authorization: '[REDACTED]', 'X-Trace': 'kept' },
+        retries: [{ token: '[REDACTED]', delay: 2 }],
+        auth: { token: '$input.api_token' },
+      },
+    });
+    assert.deepEqual(workflow.contents.metadata.input.values, {
+      prompt: 'saved prompt',
+      openai_key: '[hidden]',
+      api_token: '[hidden]',
+    });
+    assert.equal(workflow.contents.schema.input.api_token.defaultValue, '[hidden]');
+    assert.equal(workflow.contents.schema.input.backup_key.defaultValue, '[hidden]');
+    assert.equal(workflow.contents.schema.input.prompt.defaultValue, 'a fox');
+    assert.equal(workflow.inputs.find(input => input.key === 'api_token').savedValue, '[hidden]');
+    for (const secret of ['nested-secret', 'listed-secret', 'plain-saved-token', 'plain-default-token', OPENAI_STYLE_KEY, GOOGLE_STYLE_KEY]) {
+      assert.equal(JSON.stringify(result).includes(secret), false, secret);
+    }
+  });
+});
+
+test('update_workflow restores the key-looking values get_workflow hid and notes them without showing them', async () => {
+  const fake = fakeClient({
+    '/Workflow/Detail': { result: true, errors: [], workflow: [keyRow()] },
+    '/Workflow/Prepare': body => ({ result: true, errors: [], contents: body.contents, warnings: [] }),
+    '/Workflow/Update': { result: true, errors: [], workflow: [{ ...keyRow(), updatetime: '1761700200' }] },
+  });
+  await withClient(fake, async client => {
+    const read = await client.callTool({ name: 'get_workflow', arguments: { slug: 'fox-maker-Ab3xZ' } });
+    const edited = read.structuredContent.workflow.contents;
+    edited.schema.input.prompt.label = 'Describe the fox';
+
+    const preview = await client.callTool({
+      name: 'update_workflow',
+      arguments: { slug: 'fox-maker-Ab3xZ', contents: edited, loaded_updatetime: '1761700000' },
+    });
+    assert.notEqual(preview.isError, true);
+    assert.equal(preview.structuredContent.preview, true);
+    const text = preview.content[0].text;
+    assert.match(text, /### Notes\n\n[\s\S]*- The saved value of `openai_key` looks like a key\. Everyone who can open this workflow can read saved values, and copies keep them\. Model steps on Wiro need no provider key\./);
+    assert.match(text, /- The default of `backup_key` looks like a key\. Everyone who can open this workflow can read its defaults, and copies keep them\. Model steps on Wiro need no provider key\./);
+    assert.match(text, /OpenAI key \(saved value: "\[hidden\]"\)/);
+    for (const key of [OPENAI_STYLE_KEY, GOOGLE_STYLE_KEY]) assert.equal(JSON.stringify(preview).includes(key), false);
+
+    const saved = await client.callTool({ name: 'update_workflow', arguments: preview.structuredContent.nextAction.arguments });
+    assert.notEqual(saved.isError, true);
+    const prepare = fake.calls.filter(call => call.path === '/Workflow/Prepare').at(-1);
+    assert.deepEqual(prepare.body.contents.metadata.input.values, { prompt: 'saved prompt', openai_key: OPENAI_STYLE_KEY });
+    assert.equal(prepare.body.contents.schema.input.backup_key.defaultValue, GOOGLE_STYLE_KEY);
+    assert.equal(prepare.body.contents.schema.input.prompt.label, 'Describe the fox');
+    assert.ok(fake.calls.find(call => call.path === '/Workflow/Update').body.contents.includes(OPENAI_STYLE_KEY));
+    for (const key of [OPENAI_STYLE_KEY, GOOGLE_STYLE_KEY]) assert.equal(JSON.stringify(saved).includes(key), false);
+  });
+});
+
+test('create_workflow notes a saved value or default that looks like a key and never shows it', async () => {
+  const fake = fakeClient({
+    '/Workflow/Prepare': body => ({ result: true, errors: [], contents: body.contents, warnings: [] }),
+    '/Workflow/Add': body => ({ result: true, errors: [], workflow: [{ slug: body.slug, slugid: 'Qw3rT', title: 'Fox maker' }] }),
+  });
+  await withClient(fake, async client => {
+    const result = await client.callTool({ name: 'create_workflow', arguments: { title: 'Fox maker', contents: keyRow().contents } });
+    assert.notEqual(result.isError, true);
+    const text = result.content[0].text;
+    assert.match(text, /- The saved value of `openai_key` looks like a key\. Everyone who can open this workflow can read saved values, and copies keep them\. Model steps on Wiro need no provider key\./);
+    assert.match(text, /- The default of `backup_key` looks like a key\./);
+    assert.match(text, /OpenAI key \(saved value: "\[hidden\]"\)/);
+    assert.deepEqual(result.structuredContent.warnings.map(warning => warning.code), ['saved-value-looks-like-key', 'default-looks-like-key']);
+    for (const key of [OPENAI_STYLE_KEY, GOOGLE_STYLE_KEY]) assert.equal(JSON.stringify(result).includes(key), false);
+    // The workflow is still saved as it was sent.
+    assert.ok(fake.calls.find(call => call.path === '/Workflow/Add').body.contents.includes(OPENAI_STYLE_KEY));
+  });
+});
+
+test('a key-looking saved value is not carried into a proposal that moves it', async () => {
+  const fake = fakeClient({
+    '/Workflow/Detail': { result: true, errors: [], workflow: [keyRow()] },
+    '/Workflow/Prepare': body => ({ result: true, errors: [], contents: body.contents, warnings: [] }),
+    '/Workflow/Update': { result: true, errors: [], workflow: [{ ...keyRow(), updatetime: '1761700200' }] },
+  });
+  const moved = proposalFrom(keyRow());
+  moved.nodes['node-b1'] = {
+    type: 'run', id: 'node-b1', tool: 'other-vendor/collector', depends: ['input'],
+    input: { text: '$input.openai_key' }, metadata: { position: { x: 400, y: 400 } },
+  };
+  const relabeled = proposalFrom(keyRow());
+  relabeled.schema.input.openai_key.label = 'Model key';
+  await withClient(fake, async client => {
+    const refused = await client.callTool({
+      name: 'update_workflow',
+      arguments: { slug: 'fox-maker-Ab3xZ', contents: moved, loaded_updatetime: '1761700000', confirm: true },
+    });
+    assert.equal(refused.isError, true);
+    assert.match(refused.content[0].text, /Saved value of Start field openai_key is hidden and the new steps use it in a different place \(node-b1 \(other-vendor\/collector\) text\)/);
+    assert.equal(JSON.stringify(refused).includes(OPENAI_STYLE_KEY), false);
+    assert.equal(fake.calls.some(call => call.path === '/Workflow/Prepare'), false);
+
+    const kept = await client.callTool({
+      name: 'update_workflow',
+      arguments: { slug: 'fox-maker-Ab3xZ', contents: relabeled, loaded_updatetime: '1761700000', confirm: true },
+    });
+    assert.notEqual(kept.isError, true);
+    const prepare = fake.calls.find(call => call.path === '/Workflow/Prepare');
+    assert.deepEqual(prepare.body.contents.metadata.input.values, { prompt: 'saved prompt', openai_key: OPENAI_STYLE_KEY });
+  });
+});
+
+// A stored workflow with a secret-named Start field whose saved value and
+// default are plain text, so only the name marks them.
+function apiKeyRow() {
+  const row = storedRow();
+  row.contents.schema.input.api_key = {
+    name: 'api_key', label: 'API key', type: 'string', description: 'A text field', required: false,
+    defaultValue: 'plain-default-key', examples: [], ui: { field: 'textarea' }, modelId: null, sourceParamType: null,
+  };
+  row.contents.nodes['node-a1'].input.providerKey = '$input.api_key';
+  row.contents.metadata.input.values = { prompt: 'saved prompt', api_key: 'plain-saved-key' };
+  return row;
+}
+
+test('get_workflow hides a secret-named saved value inside the workflow\'s workspace too, and update_workflow restores it', async () => {
+  const fake = fakeClient({
+    '/Workflow/Detail': { result: true, errors: [], workflow: [apiKeyRow()] },
+    '/Workflow/Prepare': body => ({ result: true, errors: [], contents: body.contents, warnings: [] }),
+    '/Workflow/Update': { result: true, errors: [], workflow: [{ ...apiKeyRow(), updatetime: '1761700200' }] },
+  });
+  const plain = ['plain-saved-key', 'plain-default-key'];
+  await withClient(fake, async client => {
+    const read = await client.callTool({ name: 'get_workflow', arguments: { slug: 'fox-maker-Ab3xZ' } });
+    assert.notEqual(read.isError, true);
+    const { workflow } = read.structuredContent;
+    assert.equal(workflow.insider, true);
+    assert.deepEqual(workflow.contents.metadata.input.values, { prompt: 'saved prompt', api_key: '[hidden]' });
+    assert.equal(workflow.contents.schema.input.api_key.defaultValue, '[hidden]');
+    assert.equal(workflow.contents.schema.input.prompt.defaultValue, 'a fox');
+    // Step inputs stay as saved for the workflow's own workspace.
+    assert.equal(workflow.contents.nodes['node-a1'].input.apiKey, 'real-secret');
+    assert.equal(workflow.contents.nodes['node-a1'].input.providerKey, '$input.api_key');
+    for (const value of plain) assert.equal(JSON.stringify(read).includes(value), false, value);
+
+    const edited = workflow.contents;
+    edited.schema.input.prompt.label = 'Describe the fox';
+    const preview = await client.callTool({
+      name: 'update_workflow',
+      arguments: { slug: 'fox-maker-Ab3xZ', contents: edited, loaded_updatetime: '1761700000' },
+    });
+    assert.notEqual(preview.isError, true, preview.content[0].text);
+    assert.equal(preview.structuredContent.preview, true);
+    const saved = await client.callTool({ name: 'update_workflow', arguments: preview.structuredContent.nextAction.arguments });
+    assert.notEqual(saved.isError, true, saved.content[0].text);
+    const prepare = fake.calls.filter(call => call.path === '/Workflow/Prepare').at(-1);
+    assert.deepEqual(prepare.body.contents.metadata.input.values, { prompt: 'saved prompt', api_key: 'plain-saved-key' });
+    assert.equal(prepare.body.contents.schema.input.api_key.defaultValue, 'plain-default-key');
+    assert.equal(prepare.body.contents.schema.input.prompt.label, 'Describe the fox');
+    for (const value of plain) {
+      assert.equal(JSON.stringify([preview, saved]).includes(value), false, value);
+    }
+
+    // The hidden value never moves to a step it did not reach before.
+    const moved = JSON.parse(JSON.stringify(read.structuredContent.workflow.contents));
+    moved.nodes['node-b2'] = {
+      type: 'run', id: 'node-b2', tool: 'other-vendor/collector', depends: ['input'],
+      input: { text: '$input.api_key' }, metadata: { position: { x: 400, y: 200 } },
+    };
+    const prepares = fake.calls.filter(call => call.path === '/Workflow/Prepare').length;
+    const refused = await client.callTool({
+      name: 'update_workflow',
+      arguments: { slug: 'fox-maker-Ab3xZ', contents: moved, loaded_updatetime: '1761700000', confirm: true },
+    });
+    assert.equal(refused.isError, true);
+    assert.match(refused.content[0].text, /api_key\S* is hidden and the new steps use it in a different place \(node-b2 \(other-vendor\/collector\) text\)/);
+    assert.equal(fake.calls.filter(call => call.path === '/Workflow/Prepare').length, prepares);
+    for (const value of plain) assert.equal(JSON.stringify(refused).includes(value), false, value);
+  });
+});
+
+test('a copy of your own workflow keeps the Start field of a hidden value, as the playbook says', async () => {
+  const fake = fakeClient({ '/Workflow/Detail': { result: true, errors: [], workflow: [apiKeyRow()] } });
+  await withClient(fake, async client => {
+    const read = await client.callTool({ name: 'get_workflow', arguments: { slug: 'fox-maker-Ab3xZ' } });
+    assert.equal(read.structuredContent.workflow.insider, true);
+    const copy = await client.callTool({
+      name: 'create_workflow',
+      arguments: { title: 'Fox maker copy', contents: read.structuredContent.workflow.contents },
+    });
+    assert.equal(copy.isError, true);
+    assert.ok(copy.content[0].text.includes('Some values are placeholders for hidden secrets (Start field api_key.defaultValue, '
+      + 'saved value of Start field api_key). Remove those values and keep the Start fields and steps they belong to. Never put a key, token or password there; set a real value only when it is not secret.'), copy.content[0].text);
+    assert.equal(fake.calls.some(call => call.path === '/Workflow/Prepare' || call.path === '/Workflow/Add'), false);
+  });
+  assert.ok(PLAYBOOKS.workflows.includes('- To duplicate a workflow of your own, save the `workflow.contents` from `get_workflow` with `create_workflow` under a new title. '
+    + '`create_workflow` refuses a value shown as "[hidden]": remove that default or saved value and keep its Start field. A key, token or password stays out of the copy, so never ask for one; ask the user only for a value that is not secret, if the copy needs it.'));
+});
+
 test('save notes do not call the author\'s own wiring a model default', async () => {
   const prepared = graph();
   prepared.nodes['node-a1'].input = { prompt: '$input.prompt', apiKey: 'k', inputDocumentUrlMultiple: ['$input.prompt'], outputType: 'json' };
@@ -700,6 +1014,7 @@ test('clone_workflow explains how to duplicate a workflow of your own', async ()
     assert.equal(result.isError, true);
     assert.match(result.content[0].text, /cannot be cloned into the workspace it already belongs to/);
     assert.match(result.content[0].text, /read it with get_workflow and save its workflow\.contents with create_workflow/);
+    assert.match(result.content[0].text, /create_workflow refuses a value shown as "\[hidden\]": remove that default or saved value and keep its Start field\. A key, token or password stays out of the copy, so never ask for one/);
     assert.doesNotMatch(result.content[0].text, /scope "public"/);
   });
 });
@@ -985,14 +1300,14 @@ test('get_account names the team that owns the wallet and where funds are added'
     assert.equal(JSON.stringify(result.structuredContent).includes('team-guid-1'), false);
   });
 
-  // Without a wallet the workspace cannot be told apart, so the deposit hint covers a team key too.
+  // Without a wallet the workspace cannot be told apart, so the deposit hint covers a team project too.
   const empty = fakeClient({
     '/Wallet/List': { result: true, errors: [], wallet: [] },
     '/Organization/List': { result: true, errors: [], organizations: [] },
   });
   await withClient(empty, async client => {
     const result = await client.callTool({ name: 'get_account', arguments: {} });
-    assert.match(result.content[0].text, /no wallet yet\. Add funds at https:\/\/wiro\.ai\/panel\/wallet\/deposit\/credit-card to start; for a team project's key, select that team in the Wiro dashboard first/);
+    assert.match(result.content[0].text, /no wallet yet\. Add funds at https:\/\/wiro\.ai\/panel\/wallet\/deposit\/credit-card to start; for a team project, select that team in the Wiro dashboard first/);
   });
 });
 
@@ -1342,6 +1657,32 @@ test('run_workflow refuses masked placeholder values as inputs', async () => {
     assert.equal(result.isError, true);
     assert.match(result.content[0].text, /placeholder/);
     assert.equal(fake.calls.length, 0);
+  });
+});
+
+test('run_workflow says where funds are added when the wallet is below the minimum', async () => {
+  const fake = fakeClient({
+    '/Workflow/Run': { result: false, errors: [{ code: 97, message: 'Insufficient wallet balance.' }] },
+  });
+  await withClient(fake, async client => {
+    const result = await client.callTool({ name: 'run_workflow', arguments: { slug: 'fox-maker-Ab3xZ', wait_seconds: 0 } });
+    assert.equal(result.isError, true);
+    assert.match(result.content[0].text, /Insufficient wallet balance\. The wallet does not cover this workflow's minimum balance\. Funds are added at https:\/\/wiro\.ai\/panel\/wallet\/deposit\/credit-card \(for a team project, select that team in the dashboard first\); get_account shows the balance\./);
+    assert.deepEqual(fake.calls.map(call => call.path), ['/Workflow/Run']);
+  });
+});
+
+test('workflow tool descriptions say where input keys come from and what saved values show', async () => {
+  await withClient(fakeClient({}), async client => {
+    const { tools } = await client.listTools();
+    const description = name => tools.find(tool => tool.name === name).description;
+    assert.match(description('run_workflow'), /Take the input keys from get_workflow, or from the create_workflow or save_workflow_from_agent result\./);
+    assert.doesNotMatch(description('run_workflow'), /Read the input keys with get_workflow first/);
+    assert.match(description('get_workflow'), /Input lists and saved values hide the values of fields named like api_key, token, secret or password, and values that look like a provider key\. Other saved values come back as saved: never repeat a key you see there\./);
+    assert.match(description('update_workflow'), /Leave metadata\.input\.values out to keep the saved input values; a value shown as \[hidden\] is restored from the saved workflow\. Everyone who can open the workflow can read its saved values, so never save a key or password in one\./);
+    assert.doesNotMatch(description('update_workflow'), /hidden secret inputs are kept/);
+    // A save checks ids and wiring; a model step's values are checked when the step runs.
+    assert.match(description('create_workflow'), /Check every model's parameter ids and values with get_model_schema: a model step's values, such as a duration, a size or an option, are checked when that step runs\./);
   });
 });
 

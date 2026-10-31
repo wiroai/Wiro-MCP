@@ -106,7 +106,7 @@ const DONE_STATES = new Set<ConnectionState>(['connected', 'pick_accounts', 'pic
 
 function oauthHint(message: string, meta: CredentialMeta): string | undefined {
   if (/not found or unauthorized/i.test(message)) {
-    return 'Integrations can only be connected with an API key from a project of the person who deployed the agent.';
+    return 'Integrations can only be connected with a project created by the person who deployed the agent: connect this server with such a project, by its API key or a browser sign-in.';
   }
   if (/credentials not configured/i.test(message)) {
     return `Save your own ${meta.title} app keys with set_agent_credentials first (call it with credential "${meta.key}" to see the fields).`;
@@ -122,10 +122,11 @@ function oauthHint(message: string, meta: CredentialMeta): string | undefined {
   return undefined;
 }
 
+/** Wiro's message, then the hint as a paragraph of its own, so the two read as separate sentences. */
 function withHint(error: unknown, meta?: CredentialMeta): Error {
   const message = errorText(error);
   const hint = meta ? oauthHint(message, meta) : undefined;
-  return new Error(hint ? `${message} ${hint}` : message);
+  return new Error(hint ? `${message}\n\n${hint}` : message);
 }
 
 function childStepOf(picker: PickerMeta | null, groups: DiscoveredGroup[], configured?: boolean) {
@@ -204,7 +205,7 @@ async function connect(
   };
 
   if (input.mode && !modes.some(mode => mode.mode === input.mode)) {
-    return errorResult(new Error(`${meta.title} cannot connect with mode ${input.mode}. Modes: ${modes.map(mode => mode.mode).join(', ')}.`));
+    return errorResult(new Error(`${meta.title} cannot connect with mode ${input.mode}. Modes: ${modes.filter(mode => mode.available).map(mode => mode.mode).join(', ')}.`));
   }
   const mode = input.mode ?? chooseConnectionMode(meta, modes);
   const requirement = modes.find(candidate => candidate.mode === mode);
@@ -558,7 +559,7 @@ export function registerConnectAgentOauth(server: McpServer, client: WiroClient)
         + 'confirm: true. A running agent restarts when a connection or selection is saved. '
         + 'Remove a connection with disconnect_agent_oauth. Connect only a credential that the agent\'s '
         + 'skills use (get_my_agent lists them). Only the person who deployed the agent can connect, so the '
-        + 'API key must come from a project that person created. The agents playbook (get_playbook) has the '
+        + 'connected project must be one that person created. The agents playbook (get_playbook) has the '
         + 'full setup walkthrough.',
       inputSchema: {
         action: z.enum(['connect', 'status', 'select_accounts']).default('connect')

@@ -22,8 +22,8 @@ export function registerGetMyAgent(server: McpServer, client: WiroClient): void 
     'get_my_agent',
     {
       title: 'Get a deployed Wiro agent',
-      description: 'Read the full state of one deployed agent: status (number and label), plan and credit '
-        + 'balance, time zone, skills, chat channels, model settings, scheduled tasks, custom instructions and the state '
+      description: 'Read the full state of one deployed agent: status (number and label), plan, its Starter and Pro '
+        + 'prices, credit balance, time zone, skills, chat channels, model settings, scheduled tasks, custom instructions and the state '
         + 'of each credential. Credential values are never returned, only whether each one is filled, '
         + 'connected or missing. With wait_seconds it keeps reading until the agent is no longer stopping, '
         + 'queued or starting; when the wait runs out, follow the returned nextAction instead of repeating '

@@ -21,8 +21,8 @@ export function registerGetAccount(server: McpServer, client: WiroClient): void 
     'get_account',
     {
       title: 'Get Wiro account balance and workspace',
-      description: 'Show which workspace the API key works in (personal, or a team) and that '
-        + 'workspace\'s wallet balance. Everything the key runs or buys is charged to this '
+      description: 'Show which workspace the connected project belongs to (personal, or a team) and that '
+        + 'workspace\'s wallet balance. Everything run or bought through this connection is charged to this '
         + 'wallet. Use it before paid work and when a call is refused for insufficient balance.',
       inputSchema: {},
       outputSchema: {
@@ -105,7 +105,7 @@ export function registerGetAccount(server: McpServer, client: WiroClient): void 
           if (balance.couponCreditUsd) lines.push(`- Coupon credit: $${balance.couponCreditUsd} (may be limited to certain models)`);
           if (balance.storeRevenueUsd) lines.push(`- Store revenue: $${balance.storeRevenueUsd}`);
         } else {
-          lines.push('**Balance:** no wallet yet. Add funds at https://wiro.ai/panel/wallet/deposit/credit-card to start; for a team project\'s key, select that team in the Wiro dashboard first.');
+          lines.push('**Balance:** no wallet yet. Add funds at https://wiro.ai/panel/wallet/deposit/credit-card to start; for a team project, select that team in the Wiro dashboard first.');
         }
         if (workspace.kind === 'team') {
           lines.push('', 'Team spend limits and the team\'s model rules can still refuse a run when the wallet has money.');

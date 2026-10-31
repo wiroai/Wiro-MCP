@@ -19,11 +19,11 @@ import {
 import { formatUpdatedWorkflow, updatedWorkflowSchema } from './update-workflow.js';
 
 // Remembers which proposal was already saved as a new workflow, so a repeated
-// call (a retry, or the model asking twice) does not create a copy. Wiro's
-// create endpoint has no idempotency key; it would save "Title-1". A create in
-// progress is shared with any concurrent call for the same proposal. This is
-// best effort: the memory is this process's, for an hour, so a server with
-// several processes or a restart can still save a second copy.
+// call (a retry, or the model asking twice) does not create a copy such as
+// "Title-1". A create in progress is shared with any concurrent call for the
+// same proposal. This is best effort: the memory is this process's, for an
+// hour, so a server with several processes or a restart can still save a
+// second copy.
 const CREATED = new Map<string, { fullSlug?: string; pending?: Promise<SavedWorkflow>; at: number }>();
 const CREATED_TTL_MS = 60 * 60 * 1000;
 const CREATED_MAX = 500;

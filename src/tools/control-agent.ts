@@ -198,9 +198,9 @@ export function registerControlAgent(server: McpServer, client: WiroClient): voi
             call = { path: '/UserAgent/Stop', fallback: 'The agent could not be stopped.' };
           }
         } else if (previous === 3 || previous === 4) {
-          // Wiro has no restart endpoint: an update of a starting or running
-          // agent stops it and queues it again. Only `result` is read; the
-          // rest of the response is the unfiltered agent row.
+          // A restart is an update: updating a starting or running agent stops
+          // it and queues it again. Only `result` is read; the rest of the
+          // response is the full agent row, which is not passed on.
           call = { path: '/UserAgent/Update', fallback: 'The agent could not be restarted.' };
         } else if (previous === 0 || previous === 5) {
           call = start;
@@ -216,7 +216,7 @@ export function registerControlAgent(server: McpServer, client: WiroClient): voi
           try {
             requireApiSuccess(await client.post(call.path, { guid }, extra.signal), call.fallback);
             const label = call.path === '/UserAgent/Start'
-              ? 'Start requested. The agent is queued and starts shortly.'
+              ? 'Start requested. The agent is queued and starts on its own; this can take a while.'
               : call.path === '/UserAgent/Stop'
                 ? `Stop requested. ${PLAN_KEEPS_RUNNING}`
                 : 'Restart requested. The agent stops and starts again with its current settings.';

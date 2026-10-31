@@ -139,7 +139,7 @@ export interface StudioRunWindow {
   to?: number;
 }
 
-/** Studio returns at most this many of its most recent runs, with no way to page further back. */
+/** Studio returns at most this many of its most recent runs. */
 export const STUDIO_RUNS_MAX = 100;
 
 export interface StudioRunPage {
@@ -181,20 +181,11 @@ export async function readStudioRunPage(
   };
 }
 
-export async function readStudioRuns(
-  client: WiroClient,
-  limit: number,
-  window: StudioRunWindow = {},
-  signal?: AbortSignal,
-): Promise<StudioRun[]> {
-  return (await readStudioRunPage(client, limit, window, signal)).runs;
-}
-
 export function formatStudioRun(run: StudioRun): string {
   const label = run.model ?? run.modelTitle ?? 'model';
   const parts = [`- \`${label}\` ${run.state}`];
   if (run.costUsd !== null && run.costUsd !== undefined && run.costUsd > 0) parts.push(`($${run.costUsd})`);
-  if (run.createdAt) parts.push(`started ${run.createdAt}`);
+  if (run.createdAt) parts.push(`created ${run.createdAt}`);
   const lines = [parts.join(' ')];
   if (run.prompt) lines.push(`  - Prompt: ${truncate(run.prompt.replace(/\s+/g, ' '), 120)}`);
   for (const output of run.outputs) lines.push(`  - ${output.url}`);

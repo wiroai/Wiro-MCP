@@ -61,7 +61,7 @@ export function registerUpdateAgent(server: McpServer, client: WiroClient): void
         team_session_mode: z.enum(['private', 'collaborative']).optional()
           .describe('private gives each person their own chat history; collaborative shares one history in team chats.'),
         chat_model: z.string().max(200).nullable().optional()
-          .describe('Model for chat turns, a slug from selectableModels in get_my_agent; null resets to the default.'),
+          .describe('Model for chat turns, a slug from selectableModels in get_my_agent; null resets to the default. Each model uses credits at its own rate; the plan price stays the same.'),
         cron_model: z.string().max(200).nullable().optional()
           .describe('Model for scheduled tasks; same rules as chat_model.'),
         voice_prep_model: z.string().max(200).nullable().optional()
@@ -122,8 +122,8 @@ export function registerUpdateAgent(server: McpServer, client: WiroClient): void
           settingNames.push(input);
         }
 
-        // Update restarts a running agent even with no field changes, so it is
-        // only sent for profile fields or to finish the setup of a status 6 agent.
+        // An update restarts a running agent, so it is only sent for profile
+        // fields or to finish the setup of a status 6 agent.
         const sendProfile = Object.keys(profile).length > 0 || previous === 6;
         const sendSettings = Object.keys(settings).length > 0;
         if (!sendProfile && !sendSettings) {

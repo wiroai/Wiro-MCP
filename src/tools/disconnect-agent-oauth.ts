@@ -26,7 +26,7 @@ const outputSchema = {
 function describeClear(title: string, ownAppKept: boolean): string {
   return `The saved ${title} sign-in, its selected accounts and the connection's settings are removed`
     + `${ownAppKept ? '; your own app keys are kept for reconnecting' : ''}. Scheduled tasks that need ${title} stop running, `
-    + 'and a running agent restarts. Reconnecting needs connect_agent_oauth again, usually with a browser sign-in.';
+    + `and a running agent restarts. Reconnecting needs connect_agent_oauth again, usually with a new ${title} sign-in.`;
 }
 
 export function registerDisconnectAgentOauth(server: McpServer, client: WiroClient): void {
@@ -123,8 +123,9 @@ export function registerDisconnectAgentOauth(server: McpServer, client: WiroClie
         };
       } catch (error) {
         const message = errorText(error);
+        // The hint follows Wiro's message as a paragraph of its own, as in connect_agent_oauth.
         return errorResult(new Error(/not found or unauthorized/i.test(message)
-          ? `${message} Integrations can only be changed with an API key from a project of the person who deployed the agent.`
+          ? `${message}\n\nIntegrations can only be changed with a project created by the person who deployed the agent: connect this server with such a project, by its API key or a browser sign-in.`
           : message));
       }
     },

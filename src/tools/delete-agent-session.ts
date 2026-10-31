@@ -106,10 +106,10 @@ export function registerDeleteAgentSession(server: McpServer, client: WiroClient
         }
         const base = { agent: target.agent, agentKind: target.kind, session };
 
-        // The delete call answers success for a session that never existed, so check
-        // the list first. Studio's and a deployed agent's main chat always exist. The
-        // list can lag behind a session started moments ago, so a missing session is
-        // looked up once more after a pause.
+        // The session is looked up in the list first, so a name that matches no
+        // session is reported instead of deleted. Studio's and a deployed agent's
+        // main chat always exist. A session started moments ago may not be listed
+        // yet, so a missing session is looked up once more after a pause.
         let found = await findSession(client, target, session, extra.signal);
         if (found && !found.listed && session !== 'default') {
           await new Promise(resolve => setTimeout(resolve, SESSION_RECHECK_MS));

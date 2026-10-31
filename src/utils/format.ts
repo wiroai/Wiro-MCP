@@ -26,14 +26,40 @@ function usdAmount(value: unknown): number | null {
 }
 
 /**
+ * A successful task that Wiro has not billed yet. It reads as finished a moment
+ * before its charge is recorded, so only the list price is known.
+ */
+export function awaitingCharge(task: Task): boolean {
+  const list = usdAmount(task.totalcost);
+  return task.status === 'task_postprocess_end' && task.pexit === '0'
+    && usdAmount(task.chargedcost) === null && list !== null && list > 0;
+}
+
+/**
+ * A cancelled task that no worker ever took, so it never ran and is never
+ * charged. A row without accepttime is not counted as one.
+ */
+export function cancelledWhileQueued(task: Task): boolean {
+  const accepted = task.accepttime;
+  return task.status === 'task_cancel'
+    && accepted !== undefined && accepted !== null && accepted !== ''
+    && Number(accepted) === 0;
+}
+
+/**
  * A task's cost for the user: what Wiro charged once it billed the task, with
  * the list price beside it when a discount made them differ. Before Wiro bills
- * it, the list price. A cancelled task can still be charged once work it had
- * already started ends, so $0 there is only the amount so far.
+ * a successful task, the list price, marked as such. A cancelled task can still
+ * be charged once work it had already started ends, so $0 there is only the
+ * amount so far, unless it was cancelled while queued.
  */
 export function formatTaskCost(task: Task): string | null {
   const list = usdAmount(task.totalcost);
   const charged = usdAmount(task.chargedcost);
+  if (cancelledWhileQueued(task) && !(charged !== null && charged > 0)) {
+    return '$0 (cancelled while queued, not charged)';
+  }
+  if (awaitingCharge(task)) return `$${list} list price; the charged amount is not recorded yet`;
   if (charged !== null) {
     if (charged === 0) return task.status === 'task_cancel' ? 'no charge recorded yet' : '$0 (not charged)';
     if (list !== null && list > 0 && Math.abs(list - charged) > 1e-9) {
@@ -389,9 +415,9 @@ export function parameterFallbackText(item: ToolParameterItem): string {
     : ` (sample: \`${shown(sample)}\`, used only by a workflow step that leaves it out)`;
 }
 
-// A run checks a range only on number and float parameters, and the run form
-// draws a slider only for those. Other types carry placeholder bounds in the
-// catalog (0 to 0 on a text or select field), so they get none.
+// Only number and float parameters get a range, as in the run form, which
+// draws a slider only for those. Bounds on other types, such as 0 to 0 on a
+// text or select field, are not limits, so they get none.
 const RANGE_TYPES = new Set(['number', 'float', 'range']);
 
 export function parameterRange(item: ToolParameterItem): { min?: number; max?: number; step?: number } {

@@ -13,6 +13,7 @@ import {
   unixToIso,
   type ApiEnvelope,
 } from '../utils/api.js';
+import { workspaceHint } from '../utils/agent-config.js';
 import { DEFAULT_WAIT_SECONDS } from '../utils/poll.js';
 import {
   AMOUNT_TOLERANCE_USD,
@@ -413,7 +414,7 @@ function planFor(
             'The plan could not be upgraded.',
           );
           if (asString(body.url)) {
-            // Wiro opened a card checkout after all. Its link is a payment page for the owner's card, so it is not passed on.
+            // A checkout link means the plan is paid by card. The link is a payment page for the owner's card, so it is not passed on.
             return { outcome: 'refused', message: cardPlan('upgrade it to Pro') };
           }
           const charged = toNumber(body.proratedCharge);
@@ -554,8 +555,8 @@ interface Observation {
 
 /**
  * After a charging request whose outcome is open, reads the agent again and
- * says what it shows. Wiro can fail after the wallet was charged, and Detail
- * is the only place the result shows up.
+ * says what it shows: the charge may have gone through, and the agent's
+ * detail is where its result shows.
  */
 async function observeOpenOutcome(
   client: WiroClient,
@@ -655,14 +656,13 @@ async function observeOpenOutcome(
 function annotateKnownRefusal(error: ApiResultError): Error {
   const text = error.message;
   if (/insufficient wallet balance/i.test(text)) {
-    return new Error(`${text}\n\nNothing was charged. Funds are added at https://wiro.ai/panel/wallet/deposit/credit-card (for a team key, select the team in the dashboard first); once the user has added them and says yes, try again. get_account shows the balance.`);
+    return new Error(`${text}\n\nNothing was charged. Funds are added at https://wiro.ai/panel/wallet/deposit/credit-card (for a team project, select that team in the dashboard first); once the user has added them and says yes, try again. get_account shows the balance.`);
   }
   if (/purchase request id was already used/i.test(text)) {
     return new Error(`${text}\n\nNothing was charged now. This request id belongs to an earlier purchase of another pack or at another price. For a new purchase, get a new quote without request_id. If an earlier call with this id said the wallet was charged but the purchase is still pending, do not buy again: that purchase can only be finished at its original price, so ask Wiro support to finish it.`);
   }
-  if (/switch to (the )?(team|personal) context|personal workspace|different team/i.test(text)) {
-    return new Error(`${text}\n\nBilling changes need an API key from the agent's own workspace: a team project's key for a team agent, a personal project's key for a personal agent.`);
-  }
+  const hint = workspaceHint(text);
+  if (hint) return new Error(`${text}\n\n${hint}`);
   return error;
 }
 
@@ -672,8 +672,8 @@ export function registerManageAgentBilling(server: McpServer, client: WiroClient
     {
       title: 'Manage a Wiro agent\'s plan and credits',
       description: 'Pay for, renew, upgrade or cancel a deployed agent\'s plan, or buy extra credits. Charges '
-        + 'come from the Wiro wallet of the agent\'s workspace (the team wallet for a team agent); the API key '
-        + 'must belong to that same workspace. Every call without confirm: true only returns what will happen '
+        + 'come from the Wiro wallet of the agent\'s workspace (the team wallet for a team agent); the connected '
+        + 'project must belong to that same workspace. Every call without confirm: true only returns what will happen '
         + 'and the amount (for a prorated upgrade, an estimate and its maximum). Show it to the user, get '
         + 'their approval, then repeat the call with confirm: true and confirm_charge_usd set to the quoted '
         + 'amount (for an upgrade, its maximum); if the price changed in between, nothing is charged and a '
@@ -823,9 +823,9 @@ export function registerManageAgentBilling(server: McpServer, client: WiroClient
         }
 
         // A request id that already completed a purchase is answered with
-        // success again, without a charge and without new credits. The
-        // purchase also expires any overdue pack, which can hide the new
-        // credits, so the agent's packs decide.
+        // success again, without a charge and without new credits. A purchase
+        // also retires any pack past its end date, so the extra credits can
+        // grow by less than the pack, and the agent's packs decide.
         const credits = plan.quote?.creditsAdded ?? 0;
         const extraBefore = toNumber(row.extracredits);
         const extraAfter = afterRead ? toNumber(after.extracredits) : null;

@@ -26,6 +26,7 @@ import {
   readUserAgent,
   redactSecrets,
   uploadFileName,
+  usableConnectionModes,
   type CredentialField,
   type CredentialMeta,
 } from '../utils/agent-config.js';
@@ -58,6 +59,16 @@ const channelStatusSchema = z.object({
   missingFields: z.array(z.string()),
 });
 
+const itemFieldSchema = z.object({
+  field: z.string(),
+  label: z.string(),
+  type: z.string(),
+  required: z.boolean(),
+  pattern: z.string().optional(),
+  options: z.array(z.string()).optional(),
+  help: z.string().optional(),
+});
+
 const fieldDescriptionSchema = z.object({
   field: z.string(),
   label: z.string(),
@@ -69,13 +80,8 @@ const fieldDescriptionSchema = z.object({
   modes: z.array(z.string()).optional(),
   pattern: z.string().optional(),
   options: z.array(z.string()).optional(),
-  itemFields: z.array(z.object({
-    field: z.string(),
-    label: z.string(),
-    type: z.string(),
-    required: z.boolean(),
-    pattern: z.string().optional(),
-  })).optional(),
+  // A list of objects lists its entries' keys, and the keys of a list inside an entry.
+  itemFields: z.array(itemFieldSchema.extend({ itemFields: z.array(itemFieldSchema).optional() })).optional(),
   fileTypes: z.array(z.string()).optional(),
   maxSizeKb: z.number().optional(),
   help: z.string().optional(),
@@ -153,6 +159,21 @@ function valueFormat(field: CredentialField): string {
   }
 }
 
+// Entry keys are shown two levels deep: a list's entries, and a list inside an entry.
+const ENTRY_KEY_DEPTH = 2;
+
+function describeItem(item: CredentialField) {
+  return {
+    field: item.key,
+    label: item.label,
+    type: item.type,
+    required: item.required,
+    ...(item.pattern ? { pattern: item.pattern } : {}),
+    ...(item.options ? { options: item.options } : {}),
+    ...(item.help ? { help: item.help } : {}),
+  };
+}
+
 function describeField(field: CredentialField) {
   return {
     field: field.key,
@@ -168,11 +189,8 @@ function describeField(field: CredentialField) {
     ...(field.itemSchema.length > 0
       ? {
         itemFields: field.itemSchema.map(item => ({
-          field: item.key,
-          label: item.label,
-          type: item.type,
-          required: item.required,
-          ...(item.pattern ? { pattern: item.pattern } : {}),
+          ...describeItem(item),
+          ...(item.itemSchema.length > 0 ? { itemFields: item.itemSchema.map(describeItem) } : {}),
         })),
       }
       : {}),
@@ -191,6 +209,30 @@ function credentialKind(meta: CredentialMeta): 'fields' | 'sign_in' | 'channel' 
 function firstSentence(text: string): string {
   const sentence = /^(.{20,200}?[.!?])(\s|$)/.exec(text)?.[1] ?? text;
   return sentence.length > 200 ? `${sentence.slice(0, 200)}...` : sentence;
+}
+
+/** A field's line in the Fields list; a list of objects the user fills is followed by the keys of its entries. */
+function fieldLines(field: CredentialField, depth = 0): string[] {
+  const entries = credentialFieldShape(field) === 'object-array' && depth < ENTRY_KEY_DEPTH && isWritableField(field)
+    ? field.itemSchema
+    : [];
+  const flags = [
+    entries.length > 0 ? 'list of objects' : valueFormat(field),
+    field.required ? 'required' : 'optional',
+    !isWritableField(field) ? (field.platformManaged ? 'managed by Wiro' : 'filled by the connection') : null,
+    field.onlyInModes ? `mode ${field.onlyInModes.join('/')}` : null,
+    field.pattern ? `pattern ${field.pattern}` : null,
+  ].filter(Boolean).join(', ');
+  const help = field.help ? `: ${firstSentence(field.help)}` : '';
+  const lead = entries.length > 0 ? `${help ? ' ' : '. '}Each entry:` : '';
+  return [
+    `${'  '.repeat(depth)}- \`${field.key}\` ${field.label} (${flags})${help}${lead}`,
+    ...entries.flatMap(entry => fieldLines(entry, depth + 1)),
+  ];
+}
+
+function keyList(keys: string[]): string {
+  return keys.length > 1 ? `${keys.slice(0, -1).join(', ')} and ${keys[keys.length - 1]}` : keys.join('');
 }
 
 function afterWriteNote(status: number | null): string {
@@ -374,18 +416,29 @@ export function registerSetAgentCredentials(server: McpServer, client: WiroClien
         }
         notes.unshift(afterWriteNote(status));
 
+        // Connect is offered only once the mode it uses has every field saved, as
+        // describe does; the agent read back after the write says which are.
         let nextAction;
         for (const key of keys) {
           const meta = metas.get(key);
           const state = statuses.find(entry => entry.key === key);
-          if (!meta?.oauth || state?.connected) continue;
+          if (!meta?.oauth || state?.connected || !row) continue;
           const written = new Set(prepared.apiFields.filter(field => field.credentialkey === key).map(field => field.fieldname));
           const authMethod = prepared.apiFields.find(field => field.credentialkey === key && field.fieldname === 'authmethod')?.fieldvalue;
-          const mode = connectModeFor(meta, written, typeof authMethod === 'string' ? authMethod : undefined);
-          if (mode === 'api_key' && !meta.oauth.directProbe) continue;
+          const modes = connectionModeRequirements(meta, credentialGroup(row, key));
+          const mode = connectModeFor(meta, written, typeof authMethod === 'string' ? authMethod : undefined)
+            ?? chooseConnectionMode(meta, modes);
+          if (!mode || (mode === 'api_key' && !meta.oauth.directProbe)) continue;
+          const missing = mode === 'wiro'
+            ? []
+            : (modes.find(candidate => candidate.mode === mode)?.fields ?? []).filter(field => !field.isSet);
+          if (missing.length > 0) {
+            notes.push(`Mode ${mode} needs ${keyList(missing.map(field => field.field))} saved first.`);
+            continue;
+          }
           nextAction = {
             tool: 'connect_agent_oauth',
-            arguments: { action: 'connect', agent_guid, credential: key, ...(mode ? { mode } : {}) },
+            arguments: { action: 'connect', agent_guid, credential: key, mode },
             reason: `Connect ${meta.title} now that its fields are saved.`,
           };
           break;
@@ -453,8 +506,9 @@ async function describeCredential(
   if (meta.channel) {
     notes.push(`${meta.title} turns on by itself once these are set: ${meta.channel.requiredFields.map(field => meta.fields.find(candidate => candidate.key === field)?.label ?? field).join(', ')}. Clearing one turns it off.`);
   }
-  if (meta.connectionModes.length > 0) {
-    notes.push(`To choose how it connects, set field authmethod to one of: ${meta.connectionModes.join(', ')}.`);
+  const usableModes = usableConnectionModes(meta);
+  if (usableModes.length > 0) {
+    notes.push(`To choose how it connects, set field authmethod to one of: ${usableModes.join(', ')}.`);
   }
   if (key === 'wiro') {
     notes.push('The value is a Wiro project API key. Model runs started by the agent are billed to the wallet of the workspace that owns that project. Only use a key the user gave you.');
@@ -464,13 +518,21 @@ async function describeCredential(
   if (meta.oauth && modes && !status?.connected) {
     const mode = chooseConnectionMode(meta, modes);
     if (mode && !(mode === 'api_key' && !meta.oauth.directProbe)) {
-      nextAction = {
-        tool: 'connect_agent_oauth',
-        arguments: { action: 'connect', agent_guid: agentGuid, credential: key, mode },
-        reason: mode === 'wiro'
-          ? `Start the ${meta.title} sign-in; the user approves it in a browser.`
-          : `Everything mode ${mode} needs is saved; connect ${meta.title}.`,
-      };
+      // The only usable mode is chosen even when its fields are not saved yet.
+      const missing = mode === 'wiro'
+        ? []
+        : (modes.find(candidate => candidate.mode === mode)?.fields ?? []).filter(field => !field.isSet);
+      if (missing.length > 0) {
+        notes.push(`Mode ${mode} needs ${keyList(missing.map(field => field.field))} saved first.`);
+      } else {
+        nextAction = {
+          tool: 'connect_agent_oauth',
+          arguments: { action: 'connect', agent_guid: agentGuid, credential: key, mode },
+          reason: mode === 'wiro'
+            ? `Start the ${meta.title} sign-in; the user approves it in a browser.`
+            : `Everything mode ${mode} needs is saved; connect ${meta.title}.`,
+        };
+      }
     }
   }
 
@@ -483,16 +545,7 @@ async function describeCredential(
     '',
     '### Fields',
     '',
-    ...meta.fields.map(field => {
-      const flags = [
-        valueFormat(field),
-        field.required ? 'required' : 'optional',
-        !isWritableField(field) ? (field.platformManaged ? 'managed by Wiro' : 'filled by the connection') : null,
-        field.onlyInModes ? `mode ${field.onlyInModes.join('/')}` : null,
-        field.pattern ? `pattern ${field.pattern}` : null,
-      ].filter(Boolean).join(', ');
-      return `- \`${field.key}\` ${field.label} (${flags})${field.help ? `: ${firstSentence(field.help)}` : ''}`;
-    }),
+    ...meta.fields.flatMap(field => fieldLines(field)),
     ...(modes
       ? ['', '### How it connects', '', ...modes.filter(mode => mode.available).map(mode => `- **${mode.mode}**: ${mode.note}${mode.fields.length > 0 ? ` Fields: ${mode.fields.map(field => `${field.field}${field.isSet ? ' (set)' : ''}`).join(', ')}.` : ''}`)]
       : []),

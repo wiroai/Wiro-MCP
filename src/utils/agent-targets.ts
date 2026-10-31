@@ -216,8 +216,9 @@ export function mapAgentHttpError(target: AgentTarget, error: unknown): unknown 
   }
   if (/workspace is not available/i.test(error.responseBody)) {
     return new ApiResultError(
-      'The Workflow Agent refused the workspace of this API key (HTTP 403). The key\'s project '
-        + 'decides the workspace; use a key from the workspace you want to work in.',
+      'The Workflow Agent refused the workspace of the connected project (HTTP 403). The connected project '
+        + 'decides the workspace: connect with a project from the workspace you want to work in, by its API key '
+        + 'or a browser sign-in.',
       [403],
       {},
     );
@@ -279,7 +280,7 @@ const DEPLOYED_STATUS_HELP: Record<number, string> = {
     + 'shows it running, then send the message again.',
   1: 'Your agent is stopping. Wait a moment, check get_my_agent, and start it again with control_agent '
     + 'if you still need it.',
-  2: 'Your agent is starting. Wait 30 to 60 seconds and send the message again; get_my_agent shows when it is running.',
+  2: 'Your agent is queued to start, which can take a while. Wait until get_my_agent shows it running, then send the message again.',
   3: 'Your agent is starting. Wait 30 to 60 seconds and send the message again; get_my_agent shows when it is running.',
   5: 'Your agent is in an error state. Restart it with control_agent (action "restart"); '
     + 'get_agent_activity (logs) can show what went wrong.',
@@ -342,8 +343,8 @@ export async function explainSendRefusal(
   );
   const message = error.message;
 
-  // The bare "temporarily unavailable" answer also covers a Send that timed out
-  // inside Wiro after the turn was already queued.
+  // A bare "temporarily unavailable" answer leaves open whether the turn was
+  // queued, so the text says to check before sending again.
   if (BARE_UNAVAILABLE_PATTERN.test(message)
     && response.agentstatus === undefined && response.agentbalance === undefined) {
     return `${target.name} is temporarily unavailable. The message may still have been queued. `
@@ -353,9 +354,9 @@ export async function explainSendRefusal(
   if (target.kind !== 'deployed' && hasErrorCode(error, 97)) {
     const walletUsd = toNumber(response.walletUsd);
     const minimum = toNumber(response.minTopup) ?? 10;
-    return `${target.name} needs at least ${formatUsd(minimum)} in the Wiro wallet of this API key's `
+    return `${target.name} needs at least ${formatUsd(minimum)} in the Wiro wallet of the connected project's `
       + `workspace to start a turn${walletUsd === null ? '' : `; the wallet has ${formatUsd(walletUsd)}`}. `
-      + `Funds are added at https://wiro.ai/panel/wallet/deposit/credit-card (for a team key, select the team in the dashboard first); then send the message again. The ${formatUsd(minimum)} is a minimum to start, `
+      + `Funds are added at https://wiro.ai/panel/wallet/deposit/credit-card (for a team project, select that team in the dashboard first); then send the message again. The ${formatUsd(minimum)} is a minimum to start, `
       + 'not a spending cap. get_account shows the current balance.';
   }
 
@@ -394,11 +395,11 @@ export async function explainSendRefusal(
       return DEPLOYED_STATUS_HELP[status] ?? `${message} Check the agent with get_my_agent.`;
     }
     if (/agent not found or access denied/i.test(message)) {
-      return `${message}. Check the guid with list_my_agents. An API key reaches only the agents of its own `
+      return `${message}. Check the guid with list_my_agents. The connected project reaches only the agents of its own `
         + 'workspace (personal or team).';
     }
     if (/belongs to a team|personal workspace|different team/i.test(message)) {
-      return `${message} The API key's project decides the workspace; use a key from the agent's workspace.`;
+      return `${message} The connected project decides the workspace: connect with a project from the agent's workspace, by its API key or a browser sign-in.`;
     }
   }
 

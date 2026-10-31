@@ -21,8 +21,10 @@ export const taskReferenceSchema = z.object({
   status: z.string().optional(),
   exitCode: z.string().optional(),
   durationSeconds: z.number().nullable().optional(),
-  costUsd: z.number().nullable().optional(),
-  chargedUsd: z.number().nullable().optional(),
+  costUsd: z.number().nullable().optional()
+    .describe('The model\'s list price for this task.'),
+  chargedUsd: z.number().nullable().optional()
+    .describe('What the payer was charged, after any discount.'),
 });
 
 export const taskFinishReasonSchema = z.enum([
@@ -213,7 +215,8 @@ export const taskPriceOutputSchema = {
   state: taskStateSchema,
   task: taskReferenceSchema,
   billed: z.boolean().nullable(),
-  costUsd: z.number().nullable(),
+  costUsd: z.number().nullable()
+    .describe('The amount charged so far; null while the task is active or a successful task\'s charge is not recorded yet. While billed is null, a later charge is still possible.'),
   nextAction: nextActionSchema.optional(),
 };
 

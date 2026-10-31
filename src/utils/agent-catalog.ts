@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { asString, isPlainObject, toNumber, truncate } from './api.js';
+import { usableConnectionModes } from './agent-config.js';
 import {
   agentTaskSchema,
   htmlToText,
@@ -115,7 +116,10 @@ function toCredentialRequirement(key: string, group: Record<string, unknown>): C
     title: asString(schema.title) ?? key,
     ...(mode ? { mode } : {}),
     oauth: isPlainObject(schema.oauth_provider),
-    connectionModes: toStringArray(schema.connection_modes),
+    connectionModes: usableConnectionModes({
+      connectionModes: toStringArray(schema.connection_modes),
+      wiroPending: schema.wiro_connect_pending === true,
+    }),
     fields: fields
       .filter(field => {
         const fieldKey = asString(field.key);
@@ -270,6 +274,18 @@ export function toSkillSummary(skill: Record<string, unknown>): SkillSummary {
   };
 }
 
+const setupOptionSchema = z.object({ value: z.string(), label: z.string().optional() });
+
+const setupItemFieldSchema = z.object({
+  key: z.string(),
+  label: z.string().optional(),
+  type: z.string().optional(),
+  required: z.boolean().optional(),
+  pattern: z.string().optional(),
+  options: z.array(setupOptionSchema).optional(),
+  help: z.string().optional(),
+});
+
 export const credentialSetupFieldSchema = z.object({
   key: z.string(),
   label: z.string(),
@@ -279,16 +295,13 @@ export const credentialSetupFieldSchema = z.object({
   secret: z.boolean(),
   onlyInModes: z.array(z.string()).optional(),
   pattern: z.string().optional(),
-  options: z.array(z.object({ value: z.string(), label: z.string().optional() })).optional(),
+  options: z.array(setupOptionSchema).optional(),
   help: z.string().optional(),
-  itemFields: z.array(z.object({
-    key: z.string(),
-    label: z.string().optional(),
-    type: z.string().optional(),
-    required: z.boolean().optional(),
-    pattern: z.string().optional(),
-  })).optional(),
+  // The keys of a list's entries, and of a list inside an entry.
+  itemFields: z.array(setupItemFieldSchema.extend({ itemFields: z.array(setupItemFieldSchema).optional() })).optional(),
 });
+
+export type CredentialSetupItem = z.infer<typeof setupItemFieldSchema> & { itemFields?: Array<z.infer<typeof setupItemFieldSchema>> };
 
 export const credentialSetupSchema = z.object({
   key: z.string(),
@@ -316,13 +329,51 @@ function itemSchemaOf(field: Record<string, unknown>): unknown[] | undefined {
   return undefined;
 }
 
+function setupOptions(field: Record<string, unknown>): Array<z.infer<typeof setupOptionSchema>> {
+  if (!Array.isArray(field.options)) return [];
+  return field.options.flatMap(option => {
+    if (isPlainObject(option)) {
+      const value = asString(option.value);
+      const label = asString(option.text) ?? asString(option.label);
+      return value !== undefined ? [{ value, ...(label ? { label } : {}) }] : [];
+    }
+    const value = asString(option);
+    return value !== undefined ? [{ value }] : [];
+  });
+}
+
+/** The keys of a list's entries, with a list inside an entry described one level further. */
+function setupItems(field: Record<string, unknown>, nested: boolean): CredentialSetupItem[] {
+  return (itemSchemaOf(field) ?? []).filter(isPlainObject).flatMap(item => {
+    const itemKey = asString(item.key);
+    if (!itemKey) return [];
+    const itemLabel = asString(item.label);
+    const itemType = asString(item.type);
+    const itemPattern = asString(item.pattern);
+    const options = setupOptions(item);
+    const help = htmlToText(item.help, 300);
+    const children = nested ? setupItems(item, false) : [];
+    return [{
+      key: itemKey,
+      ...(itemLabel ? { label: itemLabel } : {}),
+      ...(itemType ? { type: itemType } : {}),
+      ...(typeof item.required === 'boolean' ? { required: item.required } : {}),
+      ...(itemPattern ? { pattern: itemPattern } : {}),
+      ...(options.length > 0 ? { options } : {}),
+      ...(help ? { help } : {}),
+      ...(children.length > 0 ? { itemFields: children } : {}),
+    }];
+  });
+}
+
 /** A credential registry entry reduced to what a user is asked for. OAuth internals stay out. */
 export function toCredentialSetup(
   credential: Record<string, unknown>,
   role: CredentialSetup['role'],
 ): CredentialSetup {
   const key = asString(credential.key) ?? '';
-  const connectionModes = toStringArray(credential.connection_modes);
+  const listedModes = toStringArray(credential.connection_modes);
+  const wiroPending = credential.wiro_connect_pending === true;
   const channel = isPlainObject(credential.channel) ? credential.channel : null;
   const mode = asString(credential.credential_mode);
   const usedBy = toStringArray(credential.used_by_skills);
@@ -334,9 +385,9 @@ export function toCredentialSetup(
     title: asString(credential.title) ?? key,
     role: channel && role === 'credential' ? 'channel' : role,
     ...(mode ? { mode } : {}),
-    connectionModes,
+    connectionModes: usableConnectionModes({ connectionModes: listedModes, wiroPending }),
     oauth: isPlainObject(credential.oauth_provider),
-    wiroConnectAvailable: connectionModes.includes('wiro') && credential.wiro_connect_pending !== true,
+    wiroConnectAvailable: listedModes.includes('wiro') && !wiroPending,
     ...(channel
       ? { channel: { id: asString(channel.id) ?? key, requiredFields: toStringArray(channel.required_fields) } }
       : {}),
@@ -349,31 +400,8 @@ export function toCredentialSetup(
       const type = asString(field.type);
       const pattern = asString(field.pattern);
       const help = htmlToText(field.help, 600);
-      const options = Array.isArray(field.options)
-        ? field.options.flatMap(option => {
-          if (isPlainObject(option)) {
-            const value = asString(option.value);
-            const label = asString(option.text) ?? asString(option.label);
-            return value !== undefined ? [{ value, ...(label ? { label } : {}) }] : [];
-          }
-          const value = asString(option);
-          return value !== undefined ? [{ value }] : [];
-        })
-        : [];
-      const items = (itemSchemaOf(field) ?? []).filter(isPlainObject).flatMap(item => {
-        const itemKey = asString(item.key);
-        if (!itemKey) return [];
-        const itemLabel = asString(item.label);
-        const itemType = asString(item.type);
-        const itemPattern = asString(item.pattern);
-        return [{
-          key: itemKey,
-          ...(itemLabel ? { label: itemLabel } : {}),
-          ...(itemType ? { type: itemType } : {}),
-          ...(typeof item.required === 'boolean' ? { required: item.required } : {}),
-          ...(itemPattern ? { pattern: itemPattern } : {}),
-        }];
-      });
+      const options = setupOptions(field);
+      const items = setupItems(field, true);
       return {
         key: asString(field.key) ?? '',
         label: asString(field.label) ?? asString(field.key) ?? '',

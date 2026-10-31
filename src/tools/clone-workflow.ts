@@ -70,7 +70,9 @@ export function registerCloneWorkflow(server: McpServer, client: WiroClient): vo
       } catch (error) {
         if (error instanceof ApiResultError) {
           const duplicate = 'To duplicate a workflow of your own, read it with get_workflow and save its '
-            + 'workflow.contents with create_workflow under a new title.';
+            + 'workflow.contents with create_workflow under a new title. create_workflow refuses a value shown as '
+            + '"[hidden]": remove that default or saved value and keep its Start field. A key, token or password stays '
+            + 'out of the copy, so never ask for one; ask the user only for a value that is not secret, if the copy needs it.';
           // A published original that already lives in this key's workspace: a copy
           // there is a duplicate, not a clone.
           if (/already belongs to this workspace/i.test(error.message)) {

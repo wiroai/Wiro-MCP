@@ -452,6 +452,8 @@ test('list_agent_templates maps the sort, trims rows and chains to get_agent_tem
     assert.equal(result.structuredContent.nextAction.tool, 'get_agent_template');
     assert.equal(JSON.stringify(result.structuredContent).includes('samples'), false);
     assert.match(textOf(result), /pricing unavailable/);
+    const { tools } = await client.listTools();
+    assert.match(tools.find(tool => tool.name === 'list_agent_templates').description, /model runs it starts, for images, videos or voice calls, are billed to the wallet of the Wiro API key saved on the agent\./);
   });
 });
 
@@ -464,7 +466,9 @@ test('get_agent_template returns what to ask for without preset values', async (
     const template = result.structuredContent.template;
     assert.deepEqual(template.requiredCredentials.map(item => item.key), ['instagram']);
     assert.equal(template.requiredCredentials[0].oauth, true);
+    assert.deepEqual(template.requiredCredentials[0].connectionModes, ['wiro', 'own']);
     assert.match(textOf(result), /list_agent_skills with its key shows which, so tell the user before deploying/);
+    assert.match(textOf(result), /Credits pay for the agent's chat and scheduled tasks \(100 credits = 1 USD\)\. Model runs it starts, for images, videos or voice calls, are billed to the wallet of the Wiro API key saved on the agent\./);
     assert.deepEqual(template.requiredCredentials[0].fields.map(field => field.key), ['appid']);
     assert.deepEqual(template.optionalCredentials.map(item => item.key), ['var-website']);
     assert.equal(template.skills[0].credentialKey, 'instagram');
@@ -480,6 +484,16 @@ test('get_agent_template returns what to ask for without preset values', async (
       arguments: { template: 'instagram-manager', tier: 'starter' },
       reason: 'Get the exact deployment quote. Nothing is charged until the user approves and the call is repeated with confirm: true.',
     });
+  });
+});
+
+test('get_agent_template leaves out a Wiro sign-in that the registry marks pending', async () => {
+  const row = templateRow();
+  row.credentials.instagram._schema = { ...row.credentials.instagram._schema, wiro_connect_pending: true };
+  const fake = fakeClient({ '/Agent/Detail': { result: true, errors: [], agents: [row] } });
+  await withClient(fake, async client => {
+    const result = await call(client, 'get_agent_template', { template: 'instagram-manager' });
+    assert.deepEqual(result.structuredContent.template.requiredCredentials[0].connectionModes, ['own']);
   });
 });
 
@@ -567,10 +581,138 @@ test('list_agent_skills with a name returns the setup fields of every credential
     assert.equal(primary.role, 'primary');
     assert.equal(primary.oauth, true);
     assert.equal(primary.wiroConnectAvailable, false);
+    assert.deepEqual(primary.connectionModes, ['own']);
     assert.equal(primary.fields[0].help, '- Open Google Cloud Console (https://console.cloud.google.com/)');
     assert.equal(primary.fields[1].writable, false);
     assert.equal(additional.role, 'additional');
     assert.equal(JSON.stringify(result).includes('authorize'), false);
+    const googleAds = textOf(result).split('### Google Ads (`google-ads`, primary)')[1].split('### Merchant Center')[0];
+    assert.match(googleAds, /How it connects \(connect_agent_oauth or set_agent_credentials\):\n- \*\*own\*\*: Use your own Google Ads app: save its keys with set_agent_credentials, then connect with mode own and sign in\. Fields: clientid\.\n/);
+    assert.doesNotMatch(googleAds, /\*\*wiro\*\*|Connection modes/);
+  });
+});
+
+test('list_agent_skills lists only the ways a service can connect, with what each one needs', async () => {
+  const credentials = {
+    youtube: {
+      key: 'youtube',
+      title: 'YouTube',
+      credential_mode: 'oauth',
+      connection_modes: ['wiro', 'own'],
+      wiro_connect_pending: true,
+      oauth_provider: { oauth_flow: { callback_path: '/UserAgentOAuth/YTCallback' } },
+      credential_schema: [
+        { key: 'clientid', label: 'OAuth Client ID', type: 'text', required: true, oauth_managed: true, only_in_modes: ['own'] },
+        { key: 'clientsecret', label: 'OAuth Client Secret', type: 'password', required: true, encrypted: true, oauth_managed: true, only_in_modes: ['own'] },
+        { key: 'channelid', label: 'YouTube Channel ID', type: 'text', required: true, auto_filled_by_oauth: true },
+      ],
+    },
+    hubspot: {
+      key: 'hubspot',
+      title: 'HubSpot',
+      credential_mode: 'oauth',
+      connection_modes: ['wiro', 'own'],
+      wiro_connect_pending: false,
+      oauth_provider: { oauth_flow: { callback_path: '/UserAgentOAuth/HubSpotCallback' } },
+      credential_schema: [
+        { key: 'clientid', label: 'Client ID', type: 'text', required: true, oauth_managed: true, only_in_modes: ['own'] },
+        { key: 'clientsecret', label: 'Client Secret', type: 'password', required: true, encrypted: true, oauth_managed: true, only_in_modes: ['own'] },
+      ],
+    },
+    // An api_key mode without a token check has no connect step.
+    mailchimp: {
+      key: 'mailchimp',
+      title: 'Mailchimp',
+      credential_mode: 'hybrid',
+      connection_modes: ['wiro', 'own', 'api_key'],
+      wiro_connect_pending: false,
+      oauth_provider: { oauth_flow: { callback_path: '/UserAgentOAuth/MailchimpCallback' } },
+      credential_schema: [
+        { key: 'clientid', label: 'Client ID', type: 'text', required: false, oauth_managed: true, only_in_modes: ['own'] },
+        { key: 'clientsecret', label: 'Client Secret', type: 'password', required: false, encrypted: true, oauth_managed: true, only_in_modes: ['own'] },
+        { key: 'apikey', label: 'API Key (alternative)', type: 'password', required: false, encrypted: true, only_in_modes: ['api_key'] },
+      ],
+    },
+  };
+  const fake = fakeClient({
+    '/Skills/Detail': { result: false, errors: [{ code: 404, message: 'Skill not found' }] },
+    '/Credentials/Detail': body => ({ result: true, errors: [], credential: credentials[body.key] }),
+  });
+  await withClient(fake, async client => {
+    const youtube = await call(client, 'list_agent_skills', { name: 'youtube' });
+    assert.notEqual(youtube.isError, true, textOf(youtube));
+    assert.match(textOf(youtube), /- \*\*own\*\*: Use your own YouTube app: save its keys with set_agent_credentials and allow https:\/\/api\.wiro\.ai\/v1\/UserAgentOAuth\/YTCallback as a redirect URI in the app, then connect with mode own and sign in\. Fields: clientid, clientsecret\./);
+    assert.doesNotMatch(textOf(youtube), /\*\*wiro\*\*/);
+    assert.deepEqual(youtube.structuredContent.setup.credentials[0].connectionModes, ['own']);
+    assert.equal(youtube.structuredContent.setup.credentials[0].wiroConnectAvailable, false);
+
+    const hubspot = await call(client, 'list_agent_skills', { name: 'hubspot' });
+    assert.match(textOf(hubspot), /- \*\*wiro\*\*: Sign in through Wiro's own HubSpot app\. Nothing to set up first\.\n- \*\*own\*\*: Use your own HubSpot app/);
+    assert.deepEqual(hubspot.structuredContent.setup.credentials[0].connectionModes, ['wiro', 'own']);
+    assert.equal(hubspot.structuredContent.setup.credentials[0].wiroConnectAvailable, true);
+
+    const mailchimp = await call(client, 'list_agent_skills', { name: 'mailchimp' });
+    assert.match(textOf(mailchimp), /- \*\*api_key\*\*: Save these fields with set_agent_credentials together with authmethod api_key\. There is no sign-in or connect step for this mode\. Fields: apikey\./);
+  });
+});
+
+test('list_agent_skills lists the keys of a list\'s entries and of a list inside an entry', async () => {
+  const firebase = {
+    key: 'firebase',
+    title: 'Firebase',
+    credential_mode: 'sa',
+    connection_modes: [],
+    wiro_connect_pending: false,
+    oauth_provider: null,
+    credential_schema: [{
+      key: 'accounts',
+      type: 'custom:firebase-accounts-list',
+      label: 'Firebase Accounts',
+      required: true,
+      custom_component_config: {
+        max_accounts: 10,
+        per_account_schema: [
+          { key: 'appname', type: 'text', label: 'App Name', required: true, help: '<p>A friendly label that identifies this Firebase project.</p>' },
+          { key: 'serviceaccountjson', type: 'fileinput-base64', label: 'Service Account JSON', required: true, encrypted: true, filetypes: ['application/json'] },
+          {
+            key: 'apps',
+            type: 'array',
+            label: 'Apps',
+            required: false,
+            item_type: 'object',
+            item_schema: [
+              { key: 'platform', type: 'select', label: 'Platform', required: true, options: [{ value: 'ios', text: 'iOS' }, { value: 'android', text: 'Android' }] },
+              { key: 'id', type: 'text', label: 'App ID', required: true, help: '<p>The Android package name or the numeric Apple ID of the app.</p>' },
+            ],
+            help: '<p>The mobile apps registered under this Firebase project.</p>',
+          },
+        ],
+      },
+    }],
+  };
+  const fake = fakeClient({
+    '/Skills/Detail': { result: false, errors: [{ code: 404, message: 'Skill not found' }] },
+    '/Credentials/Detail': { result: true, errors: [], credential: firebase },
+  });
+  await withClient(fake, async client => {
+    const result = await call(client, 'list_agent_skills', { name: 'firebase' });
+    assert.notEqual(result.isError, true, textOf(result));
+    assert.ok(textOf(result).includes([
+      '- **Firebase Accounts** (`accounts`, required, custom:firebase-accounts-list)',
+      '  Each entry:',
+      '  - **App Name** (`appname`, required, text): A friendly label that identifies this Firebase project.',
+      '  - **Service Account JSON** (`serviceaccountjson`, required, fileinput-base64)',
+      '  - **Apps** (`apps`, optional, array): The mobile apps registered under this Firebase project.',
+      '    Each entry:',
+      '    - **Platform** (`platform`, required, select, one of: ios, android)',
+      '    - **App ID** (`id`, required, text): The Android package name or the numeric Apple ID of the app.',
+    ].join('\n')), textOf(result));
+    const [accounts] = result.structuredContent.setup.credentials[0].fields;
+    assert.deepEqual(accounts.itemFields.map(item => item.key), ['appname', 'serviceaccountjson', 'apps']);
+    assert.deepEqual(accounts.itemFields[2].itemFields, [
+      { key: 'platform', label: 'Platform', type: 'select', required: true, options: [{ value: 'ios', label: 'iOS' }, { value: 'android', label: 'Android' }] },
+      { key: 'id', label: 'App ID', type: 'text', required: true, help: 'The Android package name or the numeric Apple ID of the app.' },
+    ]);
   });
 });
 
@@ -627,6 +769,8 @@ test('deploy_agent quotes a template without deploying or echoing credentials', 
     assert.equal(content.nextAction.arguments.credentials, undefined);
     assert.match(content.nextAction.reason, /^Ask the user to approve this charge first\./);
     assert.match(textOf(result), /\$120\.00 now, then \$120\.00 every 30 days/);
+    assert.match(textOf(result), /Model runs it starts, for images, videos or voice calls, are billed to the wallet of the Wiro API key saved on the agent\./);
+    assert.equal(content.quote.paidFrom, 'The Wiro wallet of the connected project\'s workspace: the team wallet for a team project, otherwise the personal wallet.');
     assertNoSecrets(result);
   });
 });
@@ -658,6 +802,36 @@ test('deploy_agent checks custom skills and prices them with a draft preview', a
     assert.equal(quote.structuredContent.quote.kind, 'custom');
     assert.equal(quote.structuredContent.quote.priceUsd, 4);
     assert.deepEqual(quote.structuredContent.quote.skills, ['int-gmail-check', 'util-chat-markdown-reporting']);
+    assert.equal(fake.called('/UserAgent/Deploy').length, 0);
+  });
+});
+
+test('deploy_agent quotes the credentials of every skill in a custom build, dependencies included', async () => {
+  const registry = {
+    'int-twilio-channel': { name: 'int-twilio-channel', title: 'Twilio Voice Channel', requires_credentials: true, credential_key: 'twilio-voice', depends_on: ['util-voice-receptionist', 'util-voice-call-prep'], pricing: { monthly_price_weight_usd: 2 } },
+    'util-voice-receptionist': { name: 'util-voice-receptionist', title: 'Voice Receptionist Rules', requires_credentials: false, depends_on: ['int-wiro-aimodels'], pricing: {} },
+    'util-voice-call-prep': { name: 'util-voice-call-prep', title: 'Voice Call Prep', requires_credentials: false, depends_on: [], pricing: {} },
+    'int-wiro-aimodels': { name: 'int-wiro-aimodels', title: 'Wiro AI Models', requires_credentials: true, credential_key: 'wiro', depends_on: ['util-chat-markdown-reporting'], pricing: {} },
+    'util-chat-markdown-reporting': { name: 'util-chat-markdown-reporting', title: 'Chat Reporting', requires_credentials: false, depends_on: [], pricing: {} },
+  };
+  const closure = ['int-twilio-channel', 'util-voice-receptionist', 'util-voice-call-prep', 'int-wiro-aimodels', 'util-chat-markdown-reporting'];
+  const fake = fakeClient({
+    '/Skills/List': body => ({ result: true, errors: [], skills: body.name_in.filter(name => registry[name]).map(name => registry[name]) }),
+    '/UserAgent/PricingPreview': { result: true, errors: [], totalPriceUsd: 6, totalMonthlyCredits: 600, enabledSkills: closure },
+  });
+  await withClient(fake, async client => {
+    const quote = await call(client, 'deploy_agent', { custom: true, title: 'Front desk', tier: 'starter', skills: ['int-twilio-channel'] });
+    assert.notEqual(quote.isError, true, textOf(quote));
+    assert.deepEqual(quote.structuredContent.quote.skills, closure);
+    assert.deepEqual(quote.structuredContent.quote.credentialsNeeded, [
+      { key: 'twilio-voice', title: 'Twilio Voice Channel credentials' },
+      { key: 'wiro', title: 'Wiro AI Models credentials' },
+    ]);
+    assert.match(textOf(quote), /- After deployment the user must provide: Twilio Voice Channel credentials \(`twilio-voice`\), Wiro AI Models credentials \(`wiro`\)/);
+    // A voice build's calls run a model billed to the saved key's wallet, not to the plan.
+    assert.match(textOf(quote), /Model runs it starts, for images, videos or voice calls, are billed to the wallet of the Wiro API key saved on the agent\./);
+    // The named skills are checked first; the skills they bring are read once the build is known.
+    assert.deepEqual(fake.called('/Skills/List').map(item => item.body.name_in), [['int-twilio-channel'], closure.slice(1)]);
     assert.equal(fake.called('/UserAgent/Deploy').length, 0);
   });
 });
@@ -888,7 +1062,7 @@ test('deploy_agent explains a short wallet and a lost response', async () => {
     assert.equal(result.isError, true);
     assert.match(textOf(result), /Required: \$12\.00, Available: \$3\.00/);
     assert.match(textOf(result), /Nothing was created or charged/);
-    assert.match(textOf(result), /for a team key, select the team in the dashboard first/);
+    assert.match(textOf(result), /for a team project, select that team in the dashboard first/);
   });
 
   const timeout = fakeClient({
@@ -952,6 +1126,69 @@ test('get_my_agent returns the sanitized state and the next step', async () => {
   });
 });
 
+test('get_my_agent shows the agent\'s own prices and where a shortened entry is read in full', async () => {
+  const row = agentRow();
+  row.agent.tiers = { starter: { priceUsd: 15, credits: 1500 }, pro: { priceUsd: 150, credits: 15000 } };
+  const fake = fakeClient({ '/UserAgent/Detail': detailResponse(row) });
+  await withClient(fake, async client => {
+    const result = await call(client, 'get_my_agent', { agent_guid: 'ua-1' });
+    assert.notEqual(result.isError, true, textOf(result));
+    const lines = textOf(result).split('\n');
+    const prices = lines.findIndex(line => line.startsWith('**Prices now:**'));
+    assert.equal(lines[prices], '**Prices now:** Starter $15.00 per 30 days with 1,500 credits per month; Pro $150.00 per 30 days with 15,000 credits per month. A new plan or an upgrade uses these.');
+    assert.ok(lines[prices - 1].startsWith('**Credits:**'), 'the prices follow the credits line');
+    assert.deepEqual(result.structuredContent.agent.pricing, { starter: { priceUsd: 15, monthlyCredits: 1500 }, pro: { priceUsd: 150, monthlyCredits: 15000 } });
+    // The custom instruction is cut in the structured copy; the short scheduled task is not.
+    assert.ok(lines.includes('- `cs-content-strategy`: Content strategy (its text is long; manage_agent_custom_skill history shows it in full)'));
+    assert.ok(lines.includes('- `cs-cron-daily-scan` on, 0 9 * * *: Daily inbox scan'));
+
+    const { tools } = await client.listTools();
+    assert.match(tools.find(tool => tool.name === 'get_my_agent').description, /plan, its Starter and Pro prices, credit balance/);
+    assert.equal(
+      tools.find(tool => tool.name === 'update_agent').inputSchema.properties.chat_model.description,
+      'Model for chat turns, a slug from selectableModels in get_my_agent; null resets to the default. Each model uses credits at its own rate; the plan price stays the same.',
+    );
+  });
+
+  const unpriced = agentRow();
+  unpriced.agent.tiers = null;
+  const noPrices = fakeClient({ '/UserAgent/Detail': detailResponse(unpriced) });
+  await withClient(noPrices, async client => {
+    const result = await call(client, 'get_my_agent', { agent_guid: 'ua-1' });
+    assert.equal(result.structuredContent.agent.pricing, null);
+    assert.doesNotMatch(textOf(result), /Prices now/);
+  });
+});
+
+test('get_my_agent marks an entry cut by even one character', async () => {
+  const row = agentRow();
+  row.customskills = [{ ...row.customskills[0], value: 'x'.repeat(301) }];
+  const fake = fakeClient({ '/UserAgent/Detail': detailResponse(row) });
+  await withClient(fake, async client => {
+    const result = await call(client, 'get_my_agent', { agent_guid: 'ua-1' });
+    const [entry] = result.structuredContent.agent.customInstructions;
+    assert.equal(entry.instructionsTruncated, true);
+    assert.ok(textOf(result).split('\n').includes('- `cs-content-strategy`: Content strategy (its text is long; manage_agent_custom_skill history shows it in full)'));
+  });
+
+  // Exactly at the limit nothing is cut; three characters over it is.
+  const atLimit = toAgentDetail(agentRow({ customskills: [{ ...agentRow().customskills[0], value: 'x'.repeat(300) }] }));
+  assert.equal(atLimit.customInstructions[0].instructions.length, 300);
+  assert.equal(atLimit.customInstructions[0].instructionsTruncated, undefined);
+  const over = toAgentDetail(agentRow({ customskills: [{ ...agentRow().customskills[0], value: 'x'.repeat(303) }] }));
+  assert.equal(over.customInstructions[0].instructionsTruncated, true);
+});
+
+test('get_my_agent names the time zone that is set', async () => {
+  const fake = fakeClient({ '/UserAgent/Detail': detailResponse(agentRow({ timezone: 'Europe/Istanbul' })) });
+  await withClient(fake, async client => {
+    const result = await call(client, 'get_my_agent', { agent_guid: 'ua-1' });
+    assert.match(textOf(result), /\*\*Time zone:\*\* Europe\/Istanbul\. Scheduled tasks run in it\./);
+    assert.doesNotMatch(textOf(result), /UTC, the default/);
+    assert.equal(result.structuredContent.agent.timezone, 'Europe/Istanbul');
+  });
+});
+
 test('get_my_agent waits for a starting agent and hands back a continuation when time runs out', async () => {
   let reads = 0;
   const settling = fakeClient({
@@ -1012,6 +1249,7 @@ test('control_agent starts a stopped agent and waits for it', async () => {
     assert.equal(content.statusLabel, 'running');
     assert.equal(content.settled, true);
     assert.equal(content.nextAction, undefined);
+    assert.match(content.message, /^Start requested\. The agent is queued and starts on its own; this can take a while\./);
     assert.match(content.message, /The agent is running\. send_agent_message/);
   });
 });
@@ -1673,7 +1911,7 @@ test('manage_agent_billing explains a workspace mismatch', async () => {
     assert.equal(quote.structuredContent.quote.paidFrom, 'team_wallet');
     const result = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'renew', confirm_charge_usd: 12, confirm: true });
     assert.equal(result.isError, true);
-    assert.match(textOf(result), /API key from the agent's own workspace/);
+    assert.match(textOf(result), /Connect with a project in the workspace \(personal or team\) that owns this agent, by its API key or a browser sign-in\./);
     assertNoSecrets(result);
   });
 });
@@ -1774,8 +2012,15 @@ test('get_agent_activity logs strip people and explain an agent that is not runn
     assert.notEqual(logs.isError, true);
     assert.equal(logs.structuredContent.logs.available, false);
     assert.equal(logs.structuredContent.nextAction.tool, 'control_agent');
+    // Starting the agent runs its tasks on its credits, so the user decides.
+    const note = 'The activity log can be read while the agent runs. Ask the user before starting it with control_agent.';
+    assert.equal(logs.structuredContent.logs.note, note);
+    assert.match(textOf(logs), /Ask the user before starting it with control_agent\./);
+    assert.equal(logs.structuredContent.nextAction.reason, 'The log can be read once the agent runs. Start it only if the user agrees.');
     const dates = await call(client, 'get_agent_activity', { agent_guid: 'ua-1', kind: 'log_dates' });
     assert.equal(dates.structuredContent.logDates.available, false);
+    assert.equal(dates.structuredContent.logDates.note, note);
+    assert.equal(dates.structuredContent.nextAction.reason, 'The log can be read once the agent runs. Start it only if the user agrees.');
   });
 });
 
@@ -1824,6 +2069,8 @@ test('delete_agent turns a running container refusal into a stop step', async ()
     assert.notEqual(result.isError, true);
     assert.equal(result.structuredContent.deleted, false);
     assert.equal(result.structuredContent.nextAction.tool, 'control_agent');
+    // The agent shows an error, so the message must not call it running.
+    assert.equal(result.structuredContent.message, 'The agent has to be stopped first, even when it shows an error. Stop it with control_agent, wait until it shows stopped, then delete it.');
   });
 });
 
@@ -1904,7 +2151,7 @@ test('manage_agent_billing says nothing was charged when the wallet is short', a
     const result = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'subscribe', confirm_charge_usd: 12, confirm: true });
     assert.equal(result.isError, true);
     assert.match(textOf(result), /Nothing was charged/);
-    assert.match(textOf(result), /for a team key, select the team in the dashboard first/);
+    assert.match(textOf(result), /for a team project, select that team in the dashboard first/);
     assert.equal(fake.called('/UserAgent/CreateSubscriptionCheckout').length, 1);
   });
 });

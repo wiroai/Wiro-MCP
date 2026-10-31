@@ -96,7 +96,7 @@ const logDatesSchema = z.object({
 
 type Envelope = ApiEnvelope & Record<string, unknown>;
 
-const NOT_RUNNING_NOTE = 'The activity log can be read while the agent runs. Start it with control_agent to read it.';
+const NOT_RUNNING_NOTE = 'The activity log can be read while the agent runs. Ask the user before starting it with control_agent.';
 
 function tokenCounts(row: Record<string, unknown>): z.infer<typeof tokenCountsSchema> {
   const fields: Array<[keyof z.infer<typeof tokenCountsSchema>, unknown]> = [
@@ -208,7 +208,7 @@ export function registerGetAgentActivity(server: McpServer, client: WiroClient):
       const startAgent = {
         tool: 'control_agent',
         arguments: { agent_guid: guid, action: 'start' },
-        reason: 'The log can be read once the agent runs.',
+        reason: 'The log can be read once the agent runs. Start it only if the user agrees.',
       };
       try {
         if (kind === 'usage') {
@@ -232,7 +232,7 @@ export function registerGetAgentActivity(server: McpServer, client: WiroClient):
               remainingCredits: toNumber(summary.remainingcredits) ?? 0,
               ...(period ? { period } : {}),
             },
-            // Pack expiry dates are left out on purpose: the tools never surface credit expiry.
+            // Pack end dates are left out on purpose: no tool shows a pack's end date.
             extraPacks: (Array.isArray(summary.extrapacks) ? summary.extrapacks : []).filter(isPlainObject).map(pack => {
               const status = asString(pack.status);
               const purchasedAt = unixToIso(pack.purchasedat);

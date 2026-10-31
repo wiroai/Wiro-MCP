@@ -103,14 +103,25 @@ type SkillsApplyBody = ApiEnvelope & {
   tier?: string;
   stripeProrationApplied?: boolean;
   prepaidWalletDelta?: unknown;
+  warnings?: unknown;
 };
 
 const UNCHANGED_RESTART = 'Nothing changed, so the agent does not restart.';
+
+// A credit for skills turned off goes to the wallet with an end date: it can be
+// spent until the plan's current period ends.
+const CREDIT_SPEND_BY = 'It can be spent until this period ends.';
 
 function difference(next: number | null, current: number | null): number | null {
   return next === null || current === null ? null : Math.round((next - current) * 100) / 100;
 }
 
+/**
+ * The wallet of the agent's workspace, which Wiro charges or credits for a
+ * skill change: the team's for a team agent, else its owner's personal wallet.
+ * Only the owner can change a personal agent's skills, so that wallet is the
+ * caller's own.
+ */
 function walletName(billing: PlanBilling): string {
   return billing.wallet === 'team' ? 'the team wallet' : 'your personal wallet';
 }
@@ -136,7 +147,7 @@ function quoteBillingNote(billing: PlanBilling, delta: number | null, estimate: 
   }
   if (delta === null) {
     return billing.plan === 'prepaid'
-      ? `The difference for the rest of this period is taken from, or credited to, ${walletName(billing)} when the change is applied.${after}`
+      ? `The difference for the rest of this period is taken from, or credited to, ${walletName(billing)} when the change is applied. A credit can be spent until this period ends.${after}`
       : `Any prorated difference appears on the next invoice.${after}`;
   }
   if (Math.abs(delta) < 0.005) return 'The monthly price does not change, so nothing is charged.';
@@ -147,17 +158,17 @@ function quoteBillingNote(billing: PlanBilling, delta: number | null, estimate: 
   if (delta > 0) {
     return `About ${formatUsd(estimate ?? 0)} is taken from ${walletName(billing)} now${days}.${after}`;
   }
-  return `About ${formatUsd(Math.abs(estimate ?? 0))} is credited back to ${walletName(billing)} now${days}.${after}`;
+  return `About ${formatUsd(Math.abs(estimate ?? 0))} is credited back to ${walletName(billing)} now${days}. ${CREDIT_SPEND_BY}${after}`;
 }
 
-function appliedBillingNote(billing: PlanBilling, body: SkillsApplyBody): { note: string; charged: number | null } {
+function chargeNote(billing: PlanBilling, body: SkillsApplyBody): { note: string; charged: number | null } {
   const charged = toNumber(body.prepaidWalletDelta);
   const cancelled = billing.cancelAtPeriodEnd && billing.status === 'active' ? ` ${cancelledNote(billing)}` : '';
   if (charged !== null && charged > 0) {
     return { charged, note: `${formatUsd(charged)} was taken from ${walletName(billing)} for the rest of this period.${cancelled}` };
   }
   if (charged !== null && charged < 0) {
-    return { charged, note: `${formatUsd(Math.abs(charged))} was credited to ${walletName(billing)}.${cancelled}` };
+    return { charged, note: `${formatUsd(Math.abs(charged))} was credited to ${walletName(billing)}. ${CREDIT_SPEND_BY}${cancelled}` };
   }
   if (body.stripeProrationApplied === true) {
     return { charged: null, note: `The card subscription was updated; any prorated difference appears on the next invoice.${cancelled}` };
@@ -166,6 +177,15 @@ function appliedBillingNote(billing: PlanBilling, body: SkillsApplyBody): { note
     return { charged: null, note: 'Nothing was charged: the agent has no subscription yet.' };
   }
   return { charged: null, note: `Nothing was charged now.${cancelled}` };
+}
+
+/** What the change charged, then any notes Wiro adds about its billing, as Wiro wrote them. */
+function appliedBillingNote(billing: PlanBilling, body: SkillsApplyBody): { note: string; charged: number | null } {
+  const result = chargeNote(billing, body);
+  const warnings = (Array.isArray(body.warnings) ? body.warnings : [])
+    .map(warning => asString(warning)?.trim())
+    .filter((warning): warning is string => Boolean(warning));
+  return warnings.length > 0 ? { ...result, note: [result.note, ...warnings].join(' ') } : result;
 }
 
 function listLine(label: string, names: string[]): string | null {
@@ -205,8 +225,9 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
         + 'The key is tied to the quoted prices: if the price changed since the quote, nothing '
         + 'is applied and a new quote with a new key comes back. Reusing the key after a timeout '
         + 'is safe, the change is applied once. Billing: on a prepaid plan the monthly difference '
-        + 'for the days left in the period is taken from the wallet at once (or credited back '
-        + 'when the price drops); on a card plan it is added to the next invoice. A running agent '
+        + 'for the days left in the period is taken from the wallet at once, or credited to it '
+        + 'when the price drops, and that credit can be spent until the period ends; on a card '
+        + 'plan it is added to the next invoice. A running agent '
         + 'restarts once to load the skills. Newly enabled skills may still need credentials '
         + '(set_agent_credentials, connect_agent_oauth) and do not create scheduled tasks '
         + '(manage_agent_custom_skill does). Find skill names with list_agent_skills and the '
@@ -420,7 +441,7 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
         } catch (error) {
           if (extra.signal.aborted) throw error;
           if (!outcomeUnknown(error)) {
-            const failure = describeSkillsApplyError(error);
+            const failure = describeSkillsApplyError(error, billing.plan);
             const text = [
               '## Skill change not applied',
               '',
@@ -464,11 +485,11 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
             };
           }
 
-          // Wiro can answer with an error after the change was saved and
-          // charged, so the agent is read again before reporting anything.
+          // The outcome is open: the change may have been saved and charged,
+          // so the agent is read again before reporting anything.
           const holds = await changeHolds(client, agent_guid, plan.requested, tierChange, extra.signal);
           if (holds === true) {
-            const note = `Wiro answered with an error (${message}), but the agent's skills are now as requested, so the change was saved. ${billing.plan === 'prepaid' && billing.status === 'active' ? `The difference for the rest of this period was probably taken from, or credited to, ${walletName(billing)}; get_agent_activity with kind usage and get_account show it.` : 'Any price difference follows the plan\'s usual billing.'} Do not repeat the change.`;
+            const note = `Wiro answered with an error (${message}), but the agent's skills are now as requested, so the change was saved. ${billing.plan === 'prepaid' && billing.status === 'active' ? `The difference for the rest of this period was probably taken from, or credited to, ${walletName(billing)}, and a credit can be spent until this period ends; get_agent_activity with kind usage and get_account show it.` : 'Any price difference follows the plan\'s usual billing.'} Do not repeat the change.`;
             return {
               content: [{ type: 'text' as const, text: [
                 '## Skills updated (with an error report)',
@@ -506,8 +527,8 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
           };
         }
 
-        // Wiro replays the saved answer of an earlier call with the same key,
-        // whatever this request asked for, so the live agent is checked.
+        // A reused key gets the saved answer of the call that first used it,
+        // so the live agent is checked against this change.
         const holds = await changeHolds(client, agent_guid, plan.requested, tierChange, extra.signal);
         if (holds === false) {
           const note = 'Wiro answered with the saved result of an earlier call that used this idempotency_key, and the agent\'s skills are not as this change asks, so this change was probably not applied by this call. Check get_my_agent; if the skills are still not as requested, call apply_agent_skills again without idempotency_key to get a new quote.';

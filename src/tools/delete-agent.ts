@@ -133,7 +133,7 @@ export function registerDeleteAgent(server: McpServer, client: WiroClient): void
           );
         } catch (error) {
           if (error instanceof ApiResultError && /stop the agent/i.test(error.message)) {
-            const message = 'The agent is still running. Stop it with control_agent, wait until it is stopped, then delete it.';
+            const message = 'The agent has to be stopped first, even when it shows an error. Stop it with control_agent, wait until it shows stopped, then delete it.';
             return {
               content: [{ type: 'text' as const, text: `## Delete ${agent.title}: blocked\n\n${message}` }],
               structuredContent: {

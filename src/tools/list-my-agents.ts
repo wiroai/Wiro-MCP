@@ -24,8 +24,8 @@ export function registerListMyAgents(server: McpServer, client: WiroClient): voi
     'list_my_agents',
     {
       title: 'List my deployed Wiro agents',
-      description: 'List the agents deployed in the workspace this API key belongs to (a team project\'s key '
-        + 'lists the team\'s agents, any other key lists the personal ones). Each row shows the status, '
+      description: 'List the agents deployed in the connected project\'s workspace (a team project '
+        + 'lists the team\'s agents, a personal project the personal ones). Each row shows the status, '
         + 'whether setup is still required, the plan and the credit balance. Call get_my_agent with an '
         + 'agent_guid for the full state, including which credentials are missing.',
       inputSchema: {
@@ -64,7 +64,7 @@ export function registerListMyAgents(server: McpServer, client: WiroClient): voi
         );
         const rows = Array.isArray(body.useragents) ? body.useragents.filter(isPlainObject) : [];
         const agents = rows.map(toAgentSummary).filter(agent => agent.guid);
-        // The endpoint has no total, so a full page means there may be more.
+        // One page is read, so a full page means there may be more.
         const nextStart = rows.length >= limit ? start + rows.length : null;
         const first = agents[0];
 

@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { WiroClient } from '../client.js';
 import { errorResult, requireApiSuccess, type ApiEnvelope } from '../utils/api.js';
 import { parseWorkflowSlug, toWorkflowDetail } from '../utils/workflow.js';
-import { postWithReplicaRetry } from '../utils/workflow-save.js';
+import { postWithNotFoundRetry } from '../utils/workflow-save.js';
 import { fetchWorkflowRow } from './get-workflow.js';
 import { nextActionSchema } from './schemas.js';
 
@@ -60,7 +60,7 @@ export function registerDeleteWorkflow(server: McpServer, client: WiroClient): v
           };
         }
 
-        const response = await postWithReplicaRetry<ApiEnvelope>(client, '/Workflow/Delete', { slug: fullSlug }, extra.signal);
+        const response = await postWithNotFoundRetry<ApiEnvelope>(client, '/Workflow/Delete', { slug: fullSlug }, extra.signal);
         if (response.result !== true
           && (response.errors ?? []).some(error => /workflow not found/i.test(String(error?.message ?? '')))) {
           // Detail may still find it: report "not deleted yet" rather than "already gone".

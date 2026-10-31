@@ -32,9 +32,9 @@ const PLANNED_TOOLS = new Set([
 const NON_TOOL_IDENTIFIERS = new Set([
   'timeout_seconds', 'wait_seconds', 'call_id', 'function_call', 'custom_tool_call',
   'upgrade_to_pro', 'buy_credits', 'select_accounts', 'confirm_charge_usd', 'idempotency_key', 'redirect_url',
-  'session_id', 'debug_node_id',
-  // An example Start field key.
-  'product_photo',
+  'session_id', 'debug_node_id', 'custom_skills',
+  // An example Start field key, and an input name the Workflow Agent hides.
+  'product_photo', 'api_key',
 ]);
 
 const PROMPT_ARGUMENTS = {
@@ -216,7 +216,8 @@ test('the four prompts are listed and render a plan that starts from a playbook'
     );
 
     const expectations = {
-      build_workflow: ['create_workflow', 'run_workflow', '"workflows"'],
+      // A step in the last layer cannot be a breakpoint, so a one-layer workflow is not tested that way.
+      build_workflow: ['create_workflow', 'run_workflow', '"workflows"', 'more than one layer', 'outside the last layer'],
       deploy_agent: ['deploy_agent', 'confirm: true', '"agents"'],
       create_with_studio: ['list_studio_results', '$10', '"studio"'],
       talk_to_my_agent: ['list_my_agents', 'send_agent_message', '"agents"'],
@@ -377,6 +378,8 @@ test('the guidance and the README make no stale promises', async () => {
       assert.doesNotMatch(text, /200 MB/, `${label} states the old upload limit`);
       assert.doesNotMatch(text, /checkout/i, `${label} mentions a checkout page`);
       assert.doesNotMatch(text, /credit[^.\n]*expir|expir[^.\n]*credit/i, `${label} mentions credit expiry`);
+      // get_account and the balance refusals link the dashboard's deposit page.
+      assert.doesNotMatch(text, /returns?\s+a\s+payment\s+page/i, `${label} says no tool returns a payment page`);
     }
   });
   assert.equal(readme.includes('\u2014'), false, 'README contains an em dash');
@@ -384,4 +387,84 @@ test('the guidance and the README make no stale promises', async () => {
   const oauthRow = readme.split('\n').find(line => line.startsWith('| `connect_agent_oauth`'));
   assert.ok(oauthRow, 'README has no connect_agent_oauth row');
   assert.doesNotMatch(oauthRow, /gmail/i, 'Gmail connects with an app password, not a sign-in');
+});
+
+// An app connected with a browser sign-in has no API key of its own, so the rule
+// for the wallet and the workspace names the connected project.
+test('the wallet and workspace rule names the connected project, never the API key alone', async () => {
+  const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
+  assert.match(PLAYBOOKS.billing, /- The connected project decides\. A personal project spends from the personal wallet; a project created in a team spends from that team's wallet\. A tool call cannot switch wallets: paying from another wallet needs a key, or a browser sign-in, with a project in that workspace\./);
+  assert.match(PLAYBOOKS['getting-started'], /- The connected project, the key's or the one picked at a browser sign-in, belongs to one workspace, personal or a team/);
+  await withClient(async client => {
+    const { tools } = await client.listTools();
+    const texts = [
+      ...await guidanceTexts(client),
+      ['README', readme],
+      ...tools.map(tool => [`${tool.name} description`, tool.description ?? '']),
+    ];
+    for (const [label, text] of texts) {
+      assert.doesNotMatch(text, /API key decides|API key must belong|workspace this API key belongs to|wallet of this API key's workspace|workspace the API key works in|this key uses/i, label);
+    }
+    const description = name => tools.find(tool => tool.name === name).description;
+    assert.match(description('manage_agent_billing'), /the connected project must belong to that same workspace/);
+    assert.match(description('deploy_agent'), /the first 30 days are paid from the Wiro wallet of the connected project's workspace/);
+    assert.match(description('get_account'), /^Show which workspace the connected project belongs to/);
+  });
+});
+
+// send_agent_message turns Wiro's balance refusal for Studio and the Workflow
+// Agent into a sentence with the minimum and the wallet's balance. A Workflow
+// Agent reply lists each proposal's models, never its graph.
+test('the playbooks describe the refusals and results the tools return', () => {
+  for (const topic of ['studio', 'workflow-agent']) {
+    assert.doesNotMatch(PLAYBOOKS[topic], /Insufficient balance/, `${topic} quotes a refusal send_agent_message rewrites`);
+    assert.match(PLAYBOOKS[topic], /refused with the minimum and the wallet's balance, and nothing is charged/, topic);
+  }
+
+  const agent = PLAYBOOKS['workflow-agent'];
+  assert.match(agent, /Each proposal shows its title, the models its steps use, its step count/);
+  assert.doesNotMatch(agent, /a graph in the format/, 'a reply never carries a proposal graph');
+
+  const graph = PLAYBOOKS['workflow-graph'];
+  assert.doesNotMatch(graph, /multi-file parameter takes (all files|an array)/, 'a multi-file parameter takes one comma-separated string');
+  assert.match(graph, /`\.\.\.UrlMultiple` field, the one `get_model_schema` names; a reference in that field passes one file/);
+  assert.match(graph, /A model step's values, such as a duration, a size or an option, are checked when that step runs/);
+
+  // run_workflow's input schema refuses any other value type before a request is sent.
+  assert.doesNotMatch(PLAYBOOKS.workflows, /Invalid value type for input field/);
+});
+
+// A task's result can be read before its charge is recorded, a free question
+// comes before a paid Studio turn, and a save does not check a model step's values.
+test('the playbooks and the README say what the results and checks really cover', () => {
+  assert.match(PLAYBOOKS.models, /Right after a task ends, the result can show only the list price, marked as such: `get_task_price` a moment later gives the amount charged\./);
+  assert.match(PLAYBOOKS.billing, /A finished model task's result shows its cost, or its list price until the charge is recorded; `get_task_price` gives the cost of any task\./);
+  assert.match(PLAYBOOKS.studio, /A question the tools answer for free, such as which model fits or what a result costs, needs no turn even when the user names Studio: answer it, then offer the paid turn\./);
+  const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
+  const createRow = readme.split('\n').find(line => line.startsWith('| `create_workflow`'));
+  assert.match(createRow, /returns every problem it finds at once/);
+});
+
+// The keys set_agent_credentials lists for Firebase, one level into each entry.
+test('the agents playbook shows a list inside a list entry with the Firebase keys', () => {
+  const lines = PLAYBOOKS.agents.split('\n');
+  const keyFile = lines.findIndex(line => line.startsWith('- A key file, such as that JSON key'));
+  const firebase = lines[keyFile + 1];
+  assert.match(firebase, /^- A list of objects takes one object per entry, and an entry can hold a list of its own\./);
+  assert.match(firebase, /Firebase takes `accounts`, one entry per Firebase project: `appname` \(a short name; ask for one or propose one\), `serviceaccountjson` \(the key file's text\) and `apps`, one row per app: `platform` "android" with the package name as `id`, or `platform` "ios" with the numeric Apple ID\./);
+  assert.match(firebase, /`apps` and the FCM `topics` list are optional\.$/);
+});
+
+test('the README continuation example sends the session_id with the task token', () => {
+  const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
+  const example = [...readme.matchAll(/```json\n([\s\S]*?)```/g)]
+    .map(match => match[1])
+    .find(block => block.includes('"toolOutputs"'));
+  assert.ok(example, 'README has no tool-result continuation example');
+  const { tool, arguments: args } = JSON.parse(example);
+  assert.equal(tool, 'run_model');
+  assert.equal(typeof args.params.previousTaskToken, 'string');
+  assert.ok(typeof args.params.session_id === 'string' && args.params.session_id.length > 0, 'the example leaves out session_id');
+  assert.doesNotMatch(readme, /single continuation reference/);
+  assert.match(readme.replace(/\s+/g, ' '), /send the same `session_id` on every turn, the first one included/);
 });

@@ -37,7 +37,7 @@ export function registerSendAgentMessage(server: McpServer, client: WiroClient):
         + 'a bounded time for the reply. '
         + 'Studio ("studio") is Wiro\'s media agent: it picks and runs AI models for the request and returns '
         + 'their outputs as modelRuns. One message can start several paid model runs; they and the agent\'s own '
-        + 'usage are billed after the turn to the wallet of this API key\'s workspace (the team wallet for team '
+        + 'usage are billed after the turn to the wallet of the connected project\'s workspace (the team wallet for team '
         + 'projects), and the balance can go below zero. Studio and the Workflow Agent need at least $10 in that '
         + 'wallet to start; that is a minimum, not a cap. '
         + 'The Workflow Agent ("workflow-agent") designs Wiro workflows; its usage is billed to the same wallet. '

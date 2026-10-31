@@ -45,6 +45,7 @@ import {
   summarizeWorkflowReply,
   workflowArtifactSummarySchema,
   workflowListResultSchema,
+  workflowModelsText,
   workflowReplyProse,
   type AttachedWorkflow,
   type WorkflowArtifactSummary,
@@ -62,16 +63,14 @@ const MAX_PARTIAL_LENGTH = 2_000;
 const RUN_WINDOW_BEFORE_SECONDS = 5;
 const RUN_WINDOW_AFTER_SECONDS = 30;
 // Work handed to the background starts its runs after the turn has ended, and
-// Studio does not say which message started a run. A hand-off's runs are
-// therefore counted until the next message in its session, and for at most
-// this long. Until then get_agent_message keeps pointing to itself while no
+// runs are matched to a turn by time. A hand-off's runs are therefore counted
+// until the next message in its session, and for at most this long. Until then get_agent_message keeps pointing to itself while no
 // run has appeared; a text-only result cannot keep an assistant polling forever.
 const BACKGROUND_FOLLOW_UP_SECONDS = 30 * 60;
 // One short page of the session's history finds its next message.
 const NEXT_MESSAGE_HISTORY_LIMIT = 20;
-// A small page of Studio's recent runs covers most turns. Studio reads several
-// rows per run asked for, so the largest page is read only when the small one
-// does not reach back to the start of the turn.
+// A small page of Studio's recent runs covers most turns, so the largest page
+// is read only when the small one does not reach back to the start of the turn.
 const STUDIO_RUNS_PAGE = 30;
 // The first run of a hand-off is looked for less often: the reply has already
 // said that its results come later.
@@ -275,7 +274,7 @@ async function collectStudioRuns(
 ): Promise<CollectedRuns> {
   const createdAt = turnCreatedAt(options, row);
   const endedAt = toNumber(row.endedat);
-  // Studio's run list carries no session or message, so a turn's runs are found by time.
+  // A turn's runs are found by the time they were created.
   const window: StudioRunWindow = { from: createdAt - RUN_WINDOW_BEFORE_SECONDS };
   let endsAtNextMessage = false;
   if (background) {
@@ -470,7 +469,7 @@ export async function collectTurn(options: CollectTurnOptions): Promise<AgentTur
     agent: target.agent,
     message_id: messageId,
     ...(target.kind !== 'deployed' || options.session !== undefined ? { session } : {}),
-    // The attachment cannot be read back from Wiro, so it travels with the wait.
+    // The attached workflow travels with the wait, so the save step can still apply the proposal to it.
     ...(options.attachedWorkflow
       ? { workflow: options.attachedWorkflow.fullSlug, loaded_updatetime: options.attachedWorkflow.updatetime }
       : {}),
@@ -724,9 +723,11 @@ export function formatTurn(target: AgentTarget, result: AgentTurnResult): string
     lines.push('', '### Workflows in this reply', '');
     for (const workflow of result.workflows) {
       const name = workflow.title ? `**${workflow.title}**` : `Workflow ${workflow.index + 1}`;
-      const size = workflow.nodeCount !== undefined
-        ? ` (${workflow.nodeCount} step${workflow.nodeCount === 1 ? '' : 's'})`
-        : '';
+      const details = [
+        workflow.nodeCount !== undefined ? `${workflow.nodeCount} step${workflow.nodeCount === 1 ? '' : 's'}` : '',
+        workflowModelsText(workflow),
+      ].filter(Boolean).join(', ');
+      const size = details ? ` (${details})` : '';
       lines.push(`- ${name}${size}: ${workflow.valid ? 'valid' : workflow.status}`
         + (workflow.artifactHash ? `, artifact_hash \`${workflow.artifactHash}\`` : ''));
       for (const issue of workflow.issues) lines.push(`  - ${issue}`);

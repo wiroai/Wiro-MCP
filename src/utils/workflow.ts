@@ -18,9 +18,51 @@ export const RUN_TERMINAL_STATUSES = ['completed', 'failed', 'cancelled', 'stopp
 
 export class WorkflowInputError extends Error {}
 
-// Secret-looking keys, following the Workflow Agent's own rule: their values are
-// masked in summaries and blanked on workflows the caller does not own.
+// What the workflow tools hide, and where. A secret-looking name matches
+// SENSITIVE_INPUT_KEY (the Workflow Agent's own rule); a key-looking value
+// matches looksLikeSecretValue.
+// - Input lists (get_workflow and the save results): a Start field's default and
+//   saved value show as "[hidden]" under a secret-looking name or when the value
+//   looks like a key, for every caller.
+// - get_workflow contents, for every caller: a saved value (metadata.input.values)
+//   or Start field default under a secret-looking name or that looks like a key
+//   shows as "[hidden]". For a caller outside the workflow's workspace, values
+//   under a secret-looking key at any depth of a step's input also show as
+//   "[REDACTED]". "$" references are wiring, not values, and stay as they are.
+// - wait_for_workflow_run debug_node_id: the inputs a step received, under a
+//   secret-looking key at any depth ("[hidden]").
+// update_workflow restores "[hidden]" and "[REDACTED]" from the saved workflow.
 export const SENSITIVE_INPUT_KEY = /(^|[-_])(password|secret|api[-_]?key|authorization|credentials?|private[-_]?key|access[-_]?token|refresh[-_]?token|client[-_]?secret|bearer[-_]?token|token)([-_]|$)/i;
+
+// The shapes of common provider API keys, which a name check alone misses
+// (an "openai_key" field, say).
+const PROVIDER_KEY_SHAPES = [
+  /^sk-[A-Za-z0-9_-]{20,}$/, // OpenAI, Anthropic
+  /^AIza[0-9A-Za-z_-]{30,}$/, // Google API
+  /^(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}$/, // GitHub
+  /^github_pat_[A-Za-z0-9_]{20,}$/, // GitHub fine-grained
+  /^xox[abprs]-[A-Za-z0-9-]{10,}$/, // Slack
+  /^AKIA[0-9A-Z]{16}$/, // AWS access key id
+  /^hf_[A-Za-z0-9]{30,}$/, // Hugging Face
+  /^r8_[A-Za-z0-9]{30,}$/, // Replicate
+  /^(sk|rk)_(live|test)_[A-Za-z0-9]{16,}$/, // Stripe
+];
+
+/** True for a string shaped like a known provider's API key, whatever field holds it. */
+export function looksLikeSecretValue(value: unknown): boolean {
+  if (typeof value !== 'string') return false;
+  const text = value.trim();
+  return PROVIDER_KEY_SHAPES.some(shape => shape.test(text));
+}
+
+function isFilledValue(value: unknown): boolean {
+  return value !== '' && value !== null && value !== undefined;
+}
+
+/** Whether a Start field's default or saved value is shown as "[hidden]". */
+function hidesStartValue(key: string, value: unknown): boolean {
+  return isFilledValue(value) && (looksLikeSecretValue(value) || SENSITIVE_INPUT_KEY.test(key));
+}
 
 /** Accepts '<slug>-<slugid>' or a wiro.ai workflow URL and returns the full slug. */
 export function parseWorkflowSlug(input: string): string {
@@ -111,11 +153,9 @@ export function workflowInputs(contents: unknown): WorkflowInputSummary[] {
           text: String(option.text ?? option.value ?? ''),
         }))
       : undefined;
-    // A summary is for showing the inputs, so a secret-looking field's value is
-    // masked here; the graph itself keeps it.
-    const shown = (value: unknown) => (SENSITIVE_INPUT_KEY.test(key) && value !== '' && value !== null && value !== undefined
-      ? '[hidden]'
-      : value);
+    // A summary is for showing the inputs, so a secret-looking field's value and
+    // a value that looks like a key are masked here, for every caller.
+    const shown = (value: unknown) => (hidesStartValue(key, value) ? '[hidden]' : value);
     return {
       key,
       label: asString(field.label) || asString(field.name) || key,
@@ -218,17 +258,53 @@ export function toWorkflowSummary(
 }
 
 
-function redactNodeInputs(contents: Record<string, unknown>): Record<string, unknown> {
-  const copy = JSON.parse(JSON.stringify(contents)) as Record<string, unknown>;
-  if (!isPlainObject(copy.nodes)) return copy;
-  for (const node of Object.values(copy.nodes)) {
-    if (!isPlainObject(node) || !isPlainObject(node.input)) continue;
-    for (const [key, value] of Object.entries(node.input)) {
-      if (SENSITIVE_INPUT_KEY.test(key) && !(typeof value === 'string' && value.startsWith('$'))) {
-        node.input[key] = '[REDACTED]';
-      }
+/** Masks, in place, the Start field defaults and saved values under a secret-looking name or that look like a key. */
+function maskStartValues(contents: Record<string, unknown>): void {
+  const schema = isPlainObject(contents.schema) ? contents.schema : {};
+  if (isPlainObject(schema.input)) {
+    for (const [key, field] of Object.entries(schema.input)) {
+      if (isPlainObject(field) && hidesStartValue(key, field.defaultValue)) field.defaultValue = '[hidden]';
     }
   }
+  const metadata = isPlainObject(contents.metadata) ? contents.metadata : {};
+  const inputMetadata = isPlainObject(metadata.input) ? metadata.input : {};
+  if (isPlainObject(inputMetadata.values)) {
+    const values = inputMetadata.values;
+    for (const [key, value] of Object.entries(values)) {
+      if (hidesStartValue(key, value)) values[key] = '[hidden]';
+    }
+  }
+}
+
+/** A step input with every value under a secret-looking key blanked, at any depth. */
+function redactSecretKeys(value: unknown, secret = false): unknown {
+  if (typeof value === 'string') return secret && !value.startsWith('$') ? '[REDACTED]' : value;
+  if (Array.isArray(value)) return value.map(entry => redactSecretKeys(entry, secret));
+  if (isPlainObject(value)) {
+    return Object.fromEntries(Object.entries(value).map(([key, entry]) => [
+      key,
+      redactSecretKeys(entry, secret || SENSITIVE_INPUT_KEY.test(key)),
+    ]));
+  }
+  return secret && value !== null && value !== undefined ? '[REDACTED]' : value;
+}
+
+/** The graph as a caller outside the workflow's workspace sees it. */
+function redactNodeInputs(contents: Record<string, unknown>): Record<string, unknown> {
+  const copy = JSON.parse(JSON.stringify(contents)) as Record<string, unknown>;
+  if (isPlainObject(copy.nodes)) {
+    for (const node of Object.values(copy.nodes)) {
+      if (isPlainObject(node) && node.input !== undefined) node.input = redactSecretKeys(node.input);
+    }
+  }
+  maskStartValues(copy);
+  return copy;
+}
+
+/** The graph as the workflow's own workspace sees it: secret Start values are hidden, step inputs are not. */
+function hideStartValues(contents: Record<string, unknown>): Record<string, unknown> {
+  const copy = JSON.parse(JSON.stringify(contents)) as Record<string, unknown>;
+  maskStartValues(copy);
   return copy;
 }
 
@@ -285,7 +361,7 @@ export function toWorkflowDetail(
       }
       : {}),
     ...(options.includeGraph !== false && !graphHidden && isPlainObject(contents)
-      ? { contents: insider ? contentsObject : redactNodeInputs(contentsObject) }
+      ? { contents: insider ? hideStartValues(contentsObject) : redactNodeInputs(contentsObject) }
       : {}),
   };
 }

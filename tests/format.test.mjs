@@ -136,7 +136,9 @@ test('formatTaskResult shows the task token and what the wallet was charged', ()
     outputs: [],
   };
   assert.match(formatTaskResult(base), /\*\*Task Token:\*\* task-token/);
-  assert.match(formatTaskResult(base), /\*\*Cost:\*\* \$0\.05$/m);
+  // A successful task reads as finished a moment before its charge is recorded.
+  assert.match(formatTaskResult(base), /\*\*Cost:\*\* \$0\.05 list price; the charged amount is not recorded yet$/m);
+  assert.match(formatTaskResult({ ...base, chargedcost: null }), /\$0\.05 list price; the charged amount is not recorded yet/);
   assert.match(formatTaskResult({ ...base, chargedcost: '0.0400000' }), /\*\*Cost:\*\* \$0\.04 charged \(list price \$0\.05\)/);
   assert.match(formatTaskResult({ ...base, chargedcost: '0.05' }), /\*\*Cost:\*\* \$0\.05$/m);
   assert.match(formatTaskResult({ ...base, pexit: '1', chargedcost: '0' }), /\*\*Cost:\*\* \$0 \(not charged\)/);
@@ -144,6 +146,36 @@ test('formatTaskResult shows the task token and what the wallet was charged', ()
   const cancelled = formatTaskResult({ ...base, status: 'task_cancel', pexit: '', chargedcost: '0' });
   assert.match(cancelled, /\*\*Cost:\*\* no charge recorded yet/);
   assert.doesNotMatch(cancelled, /not charged/);
+});
+
+test('formatTaskResult calls a task cancelled while queued free, and only that one', () => {
+  const cancelled = {
+    id: '123',
+    socketaccesstoken: 'task-token',
+    parameters: {},
+    status: 'task_cancel',
+    pexit: '',
+    debugoutput: '',
+    starttime: '0',
+    endtime: '',
+    elapsedseconds: '0',
+    totalcost: '0.05',
+    chargedcost: '0',
+    outputs: [],
+  };
+  // No worker took it, so it never ran.
+  assert.match(formatTaskResult({ ...cancelled, accepttime: '0' }), /\*\*Cost:\*\* \$0 \(cancelled while queued, not charged\)$/m);
+  assert.match(formatTaskResult({ ...cancelled, accepttime: 0, chargedcost: undefined }), /\*\*Cost:\*\* \$0 \(cancelled while queued, not charged\)$/m);
+  // Stopped after a worker took it, even before it started: a charge can still come.
+  const running = formatTaskResult({ ...cancelled, accepttime: '1761700000' });
+  assert.match(running, /\*\*Cost:\*\* no charge recorded yet/);
+  assert.doesNotMatch(running, /not charged/);
+  // A row without accepttime is never shown as free.
+  const missing = formatTaskResult(cancelled);
+  assert.match(missing, /\*\*Cost:\*\* no charge recorded yet/);
+  assert.doesNotMatch(missing, /not charged/);
+  // A charge Wiro reports still shows.
+  assert.match(formatTaskResult({ ...cancelled, accepttime: '0', chargedcost: '0.05' }), /\*\*Cost:\*\* \$0\.05$/m);
 });
 
 test('formatTaskList keeps history concise and points to get_task', () => {

@@ -11,6 +11,7 @@ import {
   WORKFLOW_LIST_LIMIT_MAX,
   WORKFLOW_LIST_LIMIT_MIN,
   WORKFLOW_LIST_SEARCH_MAX_LENGTH,
+  WORKFLOW_TOOL_PATTERN,
   parseAgentChatArtifacts,
   utf8ByteLength,
   type AgentChatArtifactSegment,
@@ -58,11 +59,18 @@ export const workflowArtifactSummarySchema = z.object({
   title: z.string().optional(),
   description: z.string().optional(),
   nodeCount: z.number().int().nonnegative().optional(),
+  // The models its steps run (owner/model slugs); utility steps are left out.
+  models: z.array(z.string()).optional(),
   issues: z.array(z.string()),
   issueCount: z.number().int().nonnegative(),
 });
 
 export type WorkflowArtifactSummary = z.infer<typeof workflowArtifactSummarySchema>;
+
+/** "models `a`, `b`" for a proposal's summary line, or '' when it names no model. */
+export function workflowModelsText(summary: Pick<WorkflowArtifactSummary, 'models'>): string {
+  return summary.models?.length ? `models ${summary.models.map(model => `\`${model}\``).join(', ')}` : '';
+}
 
 export const workflowListResultSchema = z.object({
   search: z.string().optional(),
@@ -201,7 +209,23 @@ export async function loadWorkflowAgentContext(
 
 // ─── Reading a reply ────────────────────────────────────────────────
 
-function rawArtifactPreview(raw: string | undefined): { title?: string; nodeCount?: number } {
+/**
+ * The distinct models a graph's steps run, without the workflow-utilities
+ * steps. An invalid proposal is read from its raw JSON, so only values shaped
+ * like an owner/model slug are kept.
+ */
+function stepModels(nodes: Record<string, unknown>): string[] {
+  const models: string[] = [];
+  for (const node of Object.values(nodes)) {
+    const tool = isPlainObject(node) && typeof node.tool === 'string' ? node.tool.trim() : '';
+    if (WORKFLOW_TOOL_PATTERN.test(tool) && !tool.startsWith('workflow-utilities/') && !models.includes(tool)) {
+      models.push(tool);
+    }
+  }
+  return models;
+}
+
+function rawArtifactPreview(raw: string | undefined): { title?: string; nodeCount?: number; models?: string[] } {
   if (!raw) return {};
   try {
     const parsed = JSON.parse(raw) as unknown;
@@ -210,9 +234,12 @@ function rawArtifactPreview(raw: string | undefined): { title?: string; nodeCoun
       ? parsed.title.trim().slice(0, 160)
       : undefined;
     const nodes = isPlainObject(parsed.contents) && isPlainObject(parsed.contents.nodes)
-      ? Object.keys(parsed.contents.nodes).filter(key => key !== 'output').length
+      ? parsed.contents.nodes
       : undefined;
-    return { ...(title ? { title } : {}), ...(nodes !== undefined ? { nodeCount: nodes } : {}) };
+    return {
+      ...(title ? { title } : {}),
+      ...(nodes ? { nodeCount: Object.keys(nodes).filter(key => key !== 'output').length, models: stepModels(nodes) } : {}),
+    };
   } catch {
     return {};
   }
@@ -233,6 +260,7 @@ function summarizeArtifact(
   const nodeCount = artifact
     ? Object.keys(artifact.contents.nodes).filter(key => key !== 'output').length
     : preview.nodeCount;
+  const models = artifact ? stepModels(artifact.contents.nodes) : preview.models;
   return {
     index,
     status: segment.status,
@@ -241,6 +269,7 @@ function summarizeArtifact(
     ...(artifact?.title ?? preview.title ? { title: artifact?.title ?? preview.title } : {}),
     ...(artifact?.description ? { description: artifact.description } : {}),
     ...(nodeCount !== undefined ? { nodeCount } : {}),
+    ...(models !== undefined ? { models } : {}),
     issues: messages.slice(0, MAX_ISSUES),
     issueCount: messages.length,
   };

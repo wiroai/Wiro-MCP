@@ -6,6 +6,7 @@ import {
   type WiroClient,
 } from '../client.js';
 import type { RunModelResult } from '../types.js';
+import { errorText, isOutcomeUnknown } from '../utils/api.js';
 import {
   formatTaskPending,
   formatTaskResult,
@@ -34,7 +35,7 @@ export function registerRunModel(server: McpServer, client: WiroClient): void {
         + 'user-facing response instead of reporting only task metadata.',
       inputSchema: {
         model: z.string().describe('Model slug in "owner/model" format, e.g. "openai/sora-2", "google/nano-banana-pro"'),
-        params: z.record(z.string(), z.unknown()).describe('Model-specific parameters as key-value pairs. Use get_model_schema to discover available parameters. Pass json and json-array parameters as structured JSON values in this same object. File parameters take public URLs, no upload needed: one URL for fileinput, an array of URLs for combinefileinput, and for multifileinput the URLs comma-separated in its matching ...UrlMultiple field. A parameter you leave out gets the default get_model_schema shows for it. A run fills nothing for the ones it marks as samples (file fields, ids that contain "input", the prompt and the LLM chat fields), picks a random seed, and refuses a required parameter that is missing. Continue a completed turn with previousTaskToken: add toolOutputs rows with call_id and output for tool results, or send the same session_id as that turn and exactly one new prompt or non-empty messages value for a stateful next turn.'),
+        params: z.record(z.string(), z.unknown()).describe('Model-specific parameters as key-value pairs. Use get_model_schema to discover available parameters. Pass json and json-array parameters as structured JSON values in this same object. File parameters take public URLs, no upload needed: one URL for fileinput, an array of URLs for combinefileinput, and for multifileinput the URLs comma-separated in its matching ...UrlMultiple field. A parameter you leave out gets the default get_model_schema shows for it. A run fills nothing for the ones it marks as samples (file fields, ids that contain "input", the prompt and the LLM chat fields), picks a random seed, and refuses a required parameter that is missing. Continue a completed turn with previousTaskToken and the same session_id as that turn: add toolOutputs rows with call_id and output for tool results, or send exactly one new prompt or non-empty messages value for a stateful next turn.'),
         wait: z.boolean().default(true).describe('If true, poll until completion and return the result. If false, return the task identifiers immediately.'),
         timeout_seconds: z.number().int().min(10).max(600).default(45).describe('Maximum seconds to wait when wait=true. The 45-second default is safe for clients with a 60-second tool timeout.'),
       },
@@ -47,6 +48,16 @@ export function registerRunModel(server: McpServer, client: WiroClient): void {
       },
     },
     async ({ model, params, wait, timeout_seconds }, extra) => {
+      // The slug is checked before anything is sent, so any error the run call
+      // throws afterwards came once the request had gone out.
+      const [owner, ...rest] = model.split('/');
+      const project = rest.join('/');
+      if (!owner || !project) {
+        return {
+          content: [{ type: 'text' as const, text: '## Error\n\nModel must be in "owner/model" format, e.g. "openai/sora-2"' }],
+          isError: true,
+        };
+      }
       let runResult: RunModelResult | undefined;
 
       try {
@@ -59,8 +70,21 @@ export function registerRunModel(server: McpServer, client: WiroClient): void {
             isError: true,
           };
         }
-        if (!/^[A-Za-z0-9_.:-]{1,256}$/.test(runResult.socketaccesstoken)) {
-          throw new Error('Wiro task submission omitted socketaccesstoken');
+        if (!/^[A-Za-z0-9_.:-]{1,256}$/.test(runResult.socketaccesstoken ?? '')) {
+          // Wiro created the task, so it runs and can be charged; only this
+          // call cannot follow it.
+          const taskid = runResult.taskid ? String(runResult.taskid) : '';
+          return {
+            content: [{
+              type: 'text' as const,
+              text: taskid
+                ? `## Error\n\nThe task was created (task ID ${taskid}), but its task token did not come back, so this call cannot wait for it. `
+                  + `Do not run the model again: read the task with get_task and taskid "${taskid}", or find it with list_tasks.`
+                : '## Error\n\nThe task was created, but its task ID and token did not come back, so this call cannot wait for it. '
+                  + `Do not run the model again: find the task with list_tasks with model "${project}", then read it with get_task.`,
+            }],
+            isError: true,
+          };
         }
 
         if (!wait) {
@@ -172,6 +196,19 @@ export function registerRunModel(server: McpServer, client: WiroClient): void {
               }),
             }],
             structuredContent: structured,
+          };
+        }
+
+        // The request was sent, and no clear answer says whether Wiro created a task.
+        if (!runResult && isOutcomeUnknown(error)) {
+          return {
+            content: [{
+              type: 'text' as const,
+              text: `## Error\n\nThe run request was sent but no clear answer came back (${errorText(error)}). `
+                + 'The task may have started and may be charged. Before running it again, call list_tasks with model '
+                + `"${project}" and look for a task of ${model} that is queued or running, or that started in the last few minutes.`,
+            }],
+            isError: true,
           };
         }
 

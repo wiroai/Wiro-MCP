@@ -71,9 +71,10 @@ export function registerRunWorkflow(server: McpServer, client: WiroClient): void
         + 'A started run keeps going until it ends, so start it only when the user asked for this '
         + 'run, and tell them the estimate first. To try only the first steps, pass '
         + '`breakpoint_node_id`: the run stops after that step\'s layer and can be '
-        + 'continued with resume_workflow_run. Read the input keys with get_workflow '
-        + 'first. If the run is still going when the wait ends, continue with '
-        + 'wait_for_workflow_run; never call run_workflow again for the same job.',
+        + 'continued with resume_workflow_run. Take the input keys from get_workflow, or '
+        + 'from the create_workflow or save_workflow_from_agent result. If the run is still '
+        + 'going when the wait ends, continue with wait_for_workflow_run; never call '
+        + 'run_workflow again for the same job.',
       inputSchema: {
         slug: z.string().min(1)
           .describe('The full workflow slug ("<name>-<5 character id>") or the workflow page URL.'),
@@ -123,7 +124,8 @@ export function registerRunWorkflow(server: McpServer, client: WiroClient): void
         } catch (error) {
           if (hasErrorCode(error, 97)) {
             throw new Error(`${(error as Error).message} The wallet does not cover this workflow's `
-              + 'minimum balance. Check it with get_account and add funds on wiro.ai.');
+              + 'minimum balance. Funds are added at https://wiro.ai/panel/wallet/deposit/credit-card (for a team project, '
+              + 'select that team in the dashboard first); get_account shows the balance.');
           }
           if (!isOutcomeUnknown(error)) throw error;
           // The run may exist even though its answer was lost: look for it before

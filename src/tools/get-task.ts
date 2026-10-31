@@ -20,12 +20,13 @@ export function registerGetTask(server: McpServer, client: WiroClient): void {
     'get_task',
     {
       title: 'Get a Wiro task',
-      description: 'Get the current status and output of one task. By default '
+      description: 'Get the current status and output of one task. It does not '
+        + 'return the prompt or settings the task ran with. By default '
         + 'this is an immediate check. For an active task, follow the returned '
         + '`nextAction` instead of submitting another run. Completed tool-call '
         + 'turns expose ordered typed segments and a `run_model` continuation '
-        + 'template whose ordinary `params` contain `previousTaskToken` and '
-        + '`toolOutputs`. When the task is complete, present every returned '
+        + 'template whose ordinary `params` contain `previousTaskToken`, `toolOutputs` '
+        + 'and the turn\'s `session_id` when it had one. When the task is complete, present every returned '
         + 'media resource in the user-facing response instead of reporting only '
         + 'task metadata.',
       inputSchema: {

@@ -30,11 +30,11 @@ import {
   type AgentTier,
 } from '../utils/user-agent.js';
 import { resolveDeployCustomSkills, type DeployCustomSkill, type TemplateCustomSkill } from '../utils/agent-config.js';
-import { toSkillSummary, toTemplateDetail } from '../utils/agent-catalog.js';
+import { toSkillSummary, toTemplateDetail, type SkillSummary } from '../utils/agent-catalog.js';
 import { nextActionSchema } from './schemas.js';
 
-const PAID_FROM = 'The Wiro wallet of the workspace this API key belongs to: the team wallet for a team '
-  + 'project\'s key, otherwise the personal wallet.';
+const PAID_FROM = 'The Wiro wallet of the connected project\'s workspace: the team wallet for a team '
+  + 'project, otherwise the personal wallet.';
 
 const quoteCustomSkillSchema = z.object({
   key: z.string(),
@@ -102,7 +102,7 @@ function quoteText(quote: Quote): string {
     `- Agent: ${what}`,
     `- Tier: ${quote.tier === 'pro' ? 'Pro' : 'Starter'}`,
     `- Price: ${formatUsd(quote.priceUsd)} now, then ${formatUsd(quote.priceUsd)} every 30 days until the plan is cancelled`,
-    `- Monthly credits: ${formatCredits(quote.monthlyCredits)}. They pay for the agent's chat and scheduled tasks (100 credits = $1). Image and video runs it starts are billed to the wallet of the Wiro key saved on it.`,
+    `- Monthly credits: ${formatCredits(quote.monthlyCredits)}. They pay for the agent's chat and scheduled tasks (100 credits = $1). Model runs it starts, for images, videos or voice calls, are billed to the wallet of the Wiro API key saved on the agent.`,
     `- Paid from: ${quote.paidFrom} get_account shows the balance.`,
   ];
   if (quote.customSkills?.length) {
@@ -158,8 +158,8 @@ export function registerDeployAgent(server: McpServer, client: WiroClient): void
       title: 'Deploy a Wiro agent',
       description: 'Deploy a new agent from a template or as a custom build from chosen skills. In a team '
         + 'workspace only a team admin can deploy; anyone else is refused before anything is created or charged. This costs '
-        + 'money: the first 30 days are paid from the Wiro wallet of the workspace this API key belongs to '
-        + '(a team project\'s key pays from the team wallet), and the plan renews from that wallet every 30 '
+        + 'money: the first 30 days are paid from the Wiro wallet of the connected project\'s workspace '
+        + '(a team project pays from the team wallet), and the plan renews from that wallet every 30 '
         + 'days until it is cancelled. Without confirm: true the tool only returns the exact quote. Show it to '
         + 'the user, get their approval, then repeat the call with confirm: true and confirm_charge_usd set to '
         + 'the quoted price; if the price changed in between, nothing is charged and a new quote comes back. '
@@ -266,18 +266,20 @@ export function registerDeployAgent(server: McpServer, client: WiroClient): void
             credentialsNeeded: detail.requiredCredentials.map(item => ({ key: item.key, title: item.title })),
           };
         } else {
-          const credentialsNeeded = new Map<string, string>();
-          if (skillNames.length > 0) {
-            // Deploy stores unknown skill names without checking them and then
-            // fails half way, so every name is checked against the registry first.
+          const found = new Map<string, SkillSummary>();
+          const readSkills = async (names: string[]) => {
             const list = requireApiSuccess(
-              await client.post<ApiEnvelope & { skills?: unknown }>('/Skills/List', { name_in: skillNames }, extra.signal),
+              await client.post<ApiEnvelope & { skills?: unknown }>('/Skills/List', { name_in: names }, extra.signal),
               'The skill list could not be read.',
             );
-            const found = new Map((Array.isArray(list.skills) ? list.skills : [])
-              .filter(isPlainObject)
-              .map(toSkillSummary)
-              .map(skill => [skill.name, skill]));
+            for (const skill of (Array.isArray(list.skills) ? list.skills : []).filter(isPlainObject).map(toSkillSummary)) {
+              found.set(skill.name, skill);
+            }
+          };
+          if (skillNames.length > 0) {
+            // Every name is checked against the registry first, so an unknown
+            // skill is refused before anything is deployed or charged.
+            await readSkills(skillNames);
             const unknown = skillNames.filter(name => !found.has(name));
             if (unknown.length > 0) {
               throw new Error(`Unknown skill${unknown.length > 1 ? 's' : ''}: ${unknown.join(', ')}. Use names from list_agent_skills.`);
@@ -288,12 +290,6 @@ export function registerDeployAgent(server: McpServer, client: WiroClient): void
                 const replacement = found.get(name)?.replacement;
                 return replacement ? `${name} (use ${replacement})` : name;
               }).join(', ')}.`);
-            }
-            for (const name of skillNames) {
-              const skill = found.get(name);
-              if (skill?.requiresCredentials && skill.credentialKey && !credentialsNeeded.has(skill.credentialKey)) {
-                credentialsNeeded.set(skill.credentialKey, `${skill.title} credentials`);
-              }
             }
           }
           const preview = requireApiSuccess(
@@ -310,6 +306,18 @@ export function registerDeployAgent(server: McpServer, client: WiroClient): void
             throw new Error('The price of this build could not be computed. Try again later.');
           }
           const enabled = toStringArray(preview.enabledSkills);
+          const build = enabled.length > 0 ? enabled : skillNames;
+          // The quoted build includes the skills the named ones depend on, and
+          // their credentials are needed too.
+          const unread = build.filter(name => !found.has(name));
+          if (unread.length > 0) await readSkills(unread);
+          const credentialsNeeded = new Map<string, string>();
+          for (const name of build) {
+            const skill = found.get(name);
+            if (skill?.requiresCredentials && skill.credentialKey && !credentialsNeeded.has(skill.credentialKey)) {
+              credentialsNeeded.set(skill.credentialKey, `${skill.title} credentials`);
+            }
+          }
           quote = {
             kind: 'custom',
             title: args.title ?? '',
@@ -317,7 +325,7 @@ export function registerDeployAgent(server: McpServer, client: WiroClient): void
             priceUsd,
             monthlyCredits,
             paidFrom: PAID_FROM,
-            skills: enabled.length > 0 ? enabled : skillNames,
+            skills: build,
             credentialsNeeded: [...credentialsNeeded].map(([key, title]) => ({ key, title })),
           };
         }
@@ -411,9 +419,10 @@ export function registerDeployAgent(server: McpServer, client: WiroClient): void
               // The guid is still worth reporting when the row cannot be read.
             }
           }
-          // For a template, Wiro's 10-second guard ignores the title, so a second
-          // agent the user named differently is refused too although it is a
-          // new agent. Without a title of its own it counts as a repeat.
+          // Wiro refuses a second deploy of the same template within about 10
+          // seconds. An agent the user gave its own title is a new agent, so the
+          // text says to wait and repeat; without a title of its own it counts
+          // as a repeat.
           const existingTitle = existing?.title ?? /identical agent \("([^"]*)"\)/.exec((error as ApiResultError).message)?.[1];
           if (quote.kind === 'template' && args.title !== undefined && existingTitle !== undefined && existingTitle !== quote.title) {
             const message = `Wiro refused this deploy because another agent from the same template ("${existingTitle}") was deployed a few seconds ago. That check only blocks deploys made within about 10 seconds of each other, so nothing was created or charged for "${quote.title}". Wait about 10 seconds, then repeat the call.`;
@@ -491,7 +500,7 @@ export function registerDeployAgent(server: McpServer, client: WiroClient): void
           ));
         }
         if (error instanceof ApiResultError && /insufficient wallet balance/i.test(error.message)) {
-          return errorResult(new Error(`${error.message}\n\nNothing was created or charged. Give the user the amounts above. Funds are added at https://wiro.ai/panel/wallet/deposit/credit-card (for a team key, select the team in the dashboard first); once the user has added them and says yes, confirm the same quote again.`));
+          return errorResult(new Error(`${error.message}\n\nNothing was created or charged. Give the user the amounts above. Funds are added at https://wiro.ai/panel/wallet/deposit/credit-card (for a team project, select that team in the dashboard first); once the user has added them and says yes, confirm the same quote again.`));
         }
         return errorResult(error);
       }

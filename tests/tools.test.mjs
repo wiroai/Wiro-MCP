@@ -206,6 +206,7 @@ test('get_task_price reports the charged amount and leaves a cancelled task open
     assert.equal(result.structuredContent.task.chargedUsd, 0.08);
   });
 
+  // A row without accepttime keeps the "so far" answer.
   const cancelled = completedDetail();
   cancelled.tasklist[0].status = 'task_cancel';
   cancelled.tasklist[0].pexit = '';
@@ -230,6 +231,114 @@ test('get_task_price reports the charged amount and leaves a cancelled task open
     assert.match(result.content[0].text, /\*\*Cost:\*\* \$0\.1$/m);
     assert.equal(result.structuredContent.billed, true);
     assert.equal(result.structuredContent.costUsd, 0.1);
+  });
+});
+
+// get_task's result for a task detail.
+async function withTaskResult(detail) {
+  let result;
+  await withClient({ getTask: async () => detail }, async client => {
+    result = await client.callTool({ name: 'get_task', arguments: { taskid: '123' } });
+  });
+  return result;
+}
+
+test('get_task_price gives the list price until a finished task\'s charge is recorded', async () => {
+  // completedDetail has a list price and no chargedcost yet.
+  await withClient({ getTask: async () => completedDetail() }, async client => {
+    const result = await client.callTool({ name: 'get_task_price', arguments: { taskid: '123' } });
+    assert.notEqual(result.isError, true);
+    assert.match(result.content[0].text, /\*\*Cost:\*\* \$0\.02 list price; check again in a moment for the charged amount$/m);
+    assert.equal(result.structuredContent.billed, true);
+    assert.equal(result.structuredContent.costUsd, null);
+    assert.equal(result.structuredContent.task.costUsd, 0.02);
+  });
+
+  const task = await withTaskResult(completedDetail());
+  assert.match(task.content[0].text, /\*\*Cost:\*\* \$0\.02 list price; the charged amount is not recorded yet/);
+
+  await withClient({}, async client => {
+    const { tools } = await client.listTools();
+    const price = tools.find(tool => tool.name === 'get_task_price');
+    assert.equal(price.outputSchema.properties.costUsd.description, 'The amount charged so far; null while the task is active or a successful task\'s charge is not recorded yet. While billed is null, a later charge is still possible.');
+    // A result read right after the task ends can show only the list price.
+    assert.match(price.description, /use this for a task whose result you do not have, or whose result shows only the list price\./);
+    assert.equal(price.outputSchema.properties.task.properties.costUsd.description, 'The model\'s list price for this task.');
+    assert.equal(price.outputSchema.properties.task.properties.chargedUsd.description, 'What the payer was charged, after any discount.');
+  });
+});
+
+test('get_task_price tells a task cancelled while queued from one stopped after a worker took it', async () => {
+  const cancelledTask = overrides => {
+    const detail = completedDetail();
+    Object.assign(detail.tasklist[0], {
+      status: 'task_cancel', pexit: '', starttime: '0', totalcost: '0.1', chargedcost: '0', ...overrides,
+    });
+    return detail;
+  };
+
+  // No worker took it, so it never ran.
+  await withClient({ getTask: async () => cancelledTask({ accepttime: '0' }) }, async client => {
+    const result = await client.callTool({ name: 'get_task_price', arguments: { taskid: '123' } });
+    assert.match(result.content[0].text, /\*\*Cost:\*\* \$0 \(cancelled while queued, not charged\)$/m);
+    assert.equal(result.structuredContent.state, 'cancelled');
+    assert.equal(result.structuredContent.billed, false);
+    assert.equal(result.structuredContent.costUsd, 0);
+  });
+  const queued = await withTaskResult(cancelledTask({ accepttime: '0' }));
+  assert.match(queued.content[0].text, /\*\*Cost:\*\* \$0 \(cancelled while queued, not charged\)/);
+
+  // A worker took it, so it can still run and be charged even before it has a start time.
+  // A row without accepttime keeps the same answer.
+  for (const overrides of [{ accepttime: '1761700000' }, {}]) {
+    await withClient({ getTask: async () => cancelledTask(overrides) }, async client => {
+      const result = await client.callTool({ name: 'get_task_price', arguments: { taskid: '123' } });
+      assert.match(result.content[0].text, /\$0 so far \(a task stopped while running can still be charged when its work ends\)/);
+      assert.doesNotMatch(result.content[0].text, /not charged/);
+      assert.equal(result.structuredContent.billed, null);
+      assert.equal(result.structuredContent.costUsd, 0);
+    });
+  }
+});
+
+test('get_task_price shows the charge Wiro recorded for a failed task', async () => {
+  const failed = completedDetail();
+  failed.tasklist[0].pexit = '1';
+  failed.tasklist[0].totalcost = '0.03';
+  failed.tasklist[0].chargedcost = '0.03';
+  await withClient({ getTask: async () => failed }, async client => {
+    const result = await client.callTool({ name: 'get_task_price', arguments: { taskid: '123' } });
+    assert.notEqual(result.isError, true);
+    assert.match(result.content[0].text, /\*\*Result:\*\* Failed \(exit code: 1\)/);
+    assert.match(result.content[0].text, /\*\*Cost:\*\* \$0\.03$/m);
+    assert.equal(result.structuredContent.state, 'failed');
+    assert.equal(result.structuredContent.billed, true);
+    assert.equal(result.structuredContent.costUsd, 0.03);
+  });
+});
+
+test('task tool descriptions say which cancelled tasks are free and what get_task leaves out', async () => {
+  await withClient({}, async client => {
+    const { tools } = await client.listTools();
+    const cancel = tools.find(tool => tool.name === 'cancel_task');
+    assert.match(cancel.description, /A task cancelled while queued is never charged\.$/);
+    assert.doesNotMatch(cancel.description, /A cancelled task is not charged/);
+    const getTask = tools.find(tool => tool.name === 'get_task');
+    assert.match(getTask.description, /^Get the current status and output of one task\. It does not return the prompt or settings the task ran with\./);
+    const search = tools.find(tool => tool.name === 'search_models');
+    assert.match(search.inputSchema.properties.categories.description, /"image-to-video", "video-to-video", "speech-to-video"/);
+  });
+});
+
+test('model tool texts send the same session_id on a tool-result turn too', async () => {
+  await withClient({}, async client => {
+    const { tools } = await client.listTools();
+    const runModel = tools.find(tool => tool.name === 'run_model');
+    assert.match(runModel.inputSchema.properties.params.description, /Continue a completed turn with previousTaskToken and the same session_id as that turn: add toolOutputs rows with call_id and output for tool results, or send exactly one new prompt or non-empty messages value for a stateful next turn\./);
+    const schema = tools.find(tool => tool.name === 'get_model_schema');
+    assert.match(schema.description, /use it with the same `session_id` as the previous turn, plus `toolOutputs` for tool results or one new prompt\/messages value for a stateful next turn\./);
+    const getTask = tools.find(tool => tool.name === 'get_task');
+    assert.match(getTask.description, /`previousTaskToken`, `toolOutputs` and the turn's `session_id` when it had one\./);
   });
 });
 
@@ -543,6 +652,85 @@ test('tools tell a key-only caller of a signature-auth project what to enter', {
     });
   } finally {
     globalThis.fetch = originalFetch;
+  }
+});
+
+test('run_model says a task may exist when a sent run gets no clear answer', { concurrency: false }, async () => {
+  const originalFetch = globalThis.fetch;
+  const runOnce = async answer => {
+    const requests = [];
+    globalThis.fetch = async url => {
+      requests.push(String(url));
+      return answer();
+    };
+    let result;
+    await withClient(new WiroClient('api-key', undefined, 'https://api.example/v1'), async client => {
+      result = await client.callTool({
+        name: 'run_model',
+        arguments: { model: 'owner/model', params: { prompt: 'test' }, wait: false },
+      });
+    });
+    return { result, requests };
+  };
+
+  try {
+    const unclear = [
+      ['a 502 answer', () => new Response('<html>502 Bad Gateway</html>', { status: 502 }), /Wiro API error 502/],
+      ['a fetch that throws', () => { throw new TypeError('fetch failed'); }, /\(fetch failed\)/],
+      ['a 2xx answer that is not JSON', () => new Response('<html>ok</html>', { status: 200 }), /Invalid JSON response/],
+    ];
+    for (const [name, answer, reason] of unclear) {
+      const { result, requests } = await runOnce(answer);
+      const text = result.content[0].text;
+      assert.equal(result.isError, true, name);
+      assert.match(text, /The run request was sent but no clear answer came back/, name);
+      assert.match(text, reason, name);
+      assert.match(text, /The task may have started and may be charged\./, name);
+      assert.match(text, /call list_tasks with model "model" and look for a task of owner\/model that is queued or running, or that started in the last few minutes/, name);
+      assert.deepEqual(requests, ['https://api.example/v1/Run/owner/model'], name);
+    }
+
+    // A refusal is a clear answer: nothing was created.
+    const refused = await runOnce(() => new Response(JSON.stringify({
+      result: false,
+      errors: [{ code: 0, message: 'Invalid API key' }],
+    }), { status: 401, headers: { 'Content-Type': 'application/json' } }));
+    assert.equal(refused.result.isError, true);
+    assert.match(refused.result.content[0].text, /^## Error\n\nWiro API error 401/);
+    assert.doesNotMatch(refused.result.content[0].text, /no clear answer|may be charged/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  // A malformed slug is refused before anything is sent.
+  let sent = 0;
+  await withClient({ runModel: async () => { sent += 1; return {}; } }, async client => {
+    const result = await client.callTool({ name: 'run_model', arguments: { model: 'model-without-owner', params: {} } });
+    assert.equal(result.isError, true);
+    assert.match(result.content[0].text, /Model must be in "owner\/model" format/);
+    assert.doesNotMatch(result.content[0].text, /no clear answer/);
+  });
+  assert.equal(sent, 0);
+});
+
+test('run_model says the task was created when its token does not come back', async () => {
+  for (const [answer, expected] of [
+    [{ result: true, errors: [], taskid: '123' }, /The task was created \(task ID 123\), but its task token did not come back.*get_task and taskid "123"/s],
+    [{ result: true, errors: [] }, /The task was created, but its task ID and token did not come back.*list_tasks with model "model", then read it with get_task/s],
+  ]) {
+    let waited = false;
+    const fakeWiroClient = {
+      runModel: async () => answer,
+      waitForTask: async () => { waited = true; return completedDetail(); },
+    };
+    await withClient(fakeWiroClient, async client => {
+      const result = await client.callTool({ name: 'run_model', arguments: { model: 'owner/model', params: { prompt: 'test' } } });
+      assert.equal(result.isError, true);
+      assert.match(result.content[0].text, expected);
+      assert.match(result.content[0].text, /Do not run the model again/);
+      assert.doesNotMatch(result.content[0].text, /socketaccesstoken/);
+    });
+    assert.equal(waited, false);
   }
 });
 

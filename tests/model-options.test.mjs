@@ -115,3 +115,19 @@ test('text schemas list each option value with its label, and never "undefined"'
   assert.match(text, /Options: `666` \(someone\/flux-dev-fp8\)/);
   assert.doesNotMatch(text, /undefined/);
 });
+
+// A multi-file input takes its URLs in a matching ...UrlMultiple field.
+test('text schemas name the field a multi-file input takes its URLs in', () => {
+  const text = formatModelSchema({
+    cleanslugowner: 'owner',
+    cleanslugproject: 'reader',
+    title: 'Reader',
+    categories: [],
+    parameters: [{
+      title: '',
+      items: [{ id: 'inputDocumentMultiple', type: 'multifileinput', label: 'Documents' }],
+    }],
+  });
+  assert.match(text, /`inputDocumentMultiple`\*\* \(multifileinput\)/);
+  assert.match(text, /\n {2}Pass the URLs comma-separated in `inputDocumentUrlMultiple`\.\n/);
+});

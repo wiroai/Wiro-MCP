@@ -6,9 +6,12 @@ import test from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createMcpServer } from '../dist/server.js';
+import { PLAYBOOKS } from '../dist/playbooks.js';
+import { ApiResultError } from '../dist/utils/api.js';
 import {
   buildChainedSelections,
   credentialsNeededFor,
+  describeSkillsApplyError,
   buildPickerAccounts,
   connectionState,
   estimateProratedUsd,
@@ -63,7 +66,7 @@ const credentials = {
     credential_schema: [
       { key: 'bottoken', type: 'password', label: 'Telegram Bot Token', required: true, encrypted: true, help: '<p>Create a bot with <code>@BotFather</code> and copy its token. Keep it private.</p>' },
       { key: 'allowedusers', type: 'string-array', label: 'Allowed Telegram DM User IDs', required: true, pattern: '^\\d{5,}$' },
-      { key: 'groups', type: 'object-array', label: 'Allowed Telegram Groups', required: false, item_schema: [{ key: 'chatid', type: 'text', label: 'Group Chat ID', required: true, pattern: '^-\\d{5,}$' }, { key: 'allowedusers', type: 'string-array', label: 'Allowed users', required: false }] },
+      { key: 'groups', type: 'object-array', label: 'Allowed Telegram Groups', required: false, item_schema: [{ key: 'chatid', type: 'text', label: 'Group Chat ID', required: true, pattern: '^-\\d{5,}$' }, { key: 'allowedusers', type: 'string-array', label: 'Allowed User IDs', required: true, pattern: '^\\d{5,}$' }] },
     ],
     channel: { id: 'telegram', plugin: 'telegram', required_fields: ['bottoken', 'allowedusers'] },
     oauth_provider: null,
@@ -84,7 +87,16 @@ const credentials = {
     title: 'Google Play',
     connection_modes: [],
     credential_schema: [
-      { key: 'serviceaccountjson', type: 'fileinput-base64', label: 'Service account JSON', required: true, encrypted: true },
+      { key: 'serviceaccountjson', type: 'fileinput-base64', label: 'Service account JSON', required: true, encrypted: true, filetypes: ['application/json'] },
+    ],
+    oauth_provider: null,
+  },
+  'apple-appstore': {
+    key: 'apple-appstore',
+    title: 'App Store Connect',
+    connection_modes: [],
+    credential_schema: [
+      { key: 'privatekey', type: 'fileinput-base64', label: 'Private Key (.p8)', required: true, encrypted: true, filetypes: ['application/x-pem-file', '.p8', 'application/octet-stream', 'text/plain'] },
     ],
     oauth_provider: null,
   },
@@ -101,12 +113,41 @@ const credentials = {
       custom_component_config: {
         max_accounts: 10,
         per_account_schema: [
-          { key: 'appname', type: 'text', label: 'App Name', required: true },
-          { key: 'serviceaccountjson', type: 'fileinput-base64', label: 'Service Account JSON', required: true, encrypted: true },
+          { key: 'appname', type: 'text', label: 'App Name', required: true, help: '<p>A friendly label that identifies this Firebase project.</p>' },
+          { key: 'serviceaccountjson', type: 'fileinput-base64', label: 'Service Account JSON', required: true, encrypted: true, filetypes: ['application/json'] },
+          {
+            key: 'apps',
+            type: 'array',
+            label: 'Apps',
+            required: false,
+            item_type: 'object',
+            item_schema: [
+              { key: 'platform', type: 'select', label: 'Platform', required: true, options: [{ value: 'ios', text: 'iOS' }, { value: 'android', text: 'Android' }] },
+              { key: 'id', type: 'text', label: 'App ID', required: true, help: '<p>The Android package name or the numeric Apple ID of the app.</p>' },
+            ],
+            help: '<p>The mobile apps registered under this Firebase project.</p>',
+          },
         ],
       },
     }],
     oauth_provider: null,
+  },
+  'google-ads': {
+    key: 'google-ads',
+    title: 'Google Ads',
+    credential_mode: 'oauth',
+    connection_modes: ['wiro', 'own'],
+    wiro_connect_pending: true,
+    credential_schema: [
+      { key: 'clientid', type: 'text', label: 'OAuth Client ID', required: true, oauth_managed: true, only_in_modes: ['own'] },
+      { key: 'clientsecret', type: 'password', label: 'OAuth Client Secret', required: true, encrypted: true, oauth_managed: true, only_in_modes: ['own'] },
+      { key: 'developertoken', type: 'password', label: 'Developer Token', required: true, encrypted: true, oauth_managed: true, only_in_modes: ['own'] },
+      { key: 'customerid', type: 'text', label: 'Customer ID', required: true, auto_filled_by_oauth: true },
+    ],
+    oauth_provider: {
+      auth_method_value: 'wiro',
+      oauth_flow: { callback_path: '/UserAgentOAuth/GAdsCallback' },
+    },
   },
   'sys-openai': {
     key: 'sys-openai',
@@ -463,6 +504,7 @@ test('apply_agent_skills explains refusals with the server details', async () =>
     const result = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
     assert.equal(result.isError, true);
     assert.match(text(result), /needs \$3\.20 and has \$1\.10/);
+    assert.match(text(result), /Nothing was changed\. Funds are added at https:\/\/wiro\.ai\/panel\/wallet\/deposit\/credit-card \(for a team project, select that team in the dashboard first\); once the user has added them and says yes, confirm again\./);
     assert.equal(result.structuredContent.status, 'refused');
     assert.equal(result.structuredContent.error.code, 103);
     assert.equal(result.structuredContent.restart, 'Nothing changed, so the agent does not restart.');
@@ -478,6 +520,47 @@ test('apply_agent_skills explains refusals with the server details', async () =>
     assert.match(text(result), /same idempotency_key/);
     assert.match(text(result), /idempotency_key: `mcp-/);
   });
+});
+
+test('apply_agent_skills names only the fix for the agent\'s own plan when the payment fails', async () => {
+  const refused = {
+    result: false,
+    errors: [{ code: 109, message: 'Payment processing failed for this skill change. Your skills, tier, and pricing snapshot have been reverted to the previous state. Please update your card or top up your wallet, then retry.' }],
+  };
+  const failed = 'The payment for this change did not go through, so the change was undone and nothing was charged.';
+  // A short wallet is refused before any payment (code 103), so a wallet plan is not told to add funds.
+  const wallet = `${failed} The balance is not the cause, so no funds need to be added. Ask for a new quote and confirm it once the user approves.`;
+  const card = `${failed} Update the card in the Wiro dashboard, then ask for a new quote.`;
+
+  const prepaid = fakeClient(skillRoutes({ '/UserAgent/SkillsApply': refused }));
+  await withClient(prepaid, async client => {
+    const quote = await quoteInstagram(client);
+    const result = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
+    assert.equal(result.isError, true);
+    assert.equal(result.structuredContent.status, 'refused');
+    assert.equal(result.structuredContent.error.code, 109);
+    assert.equal(result.structuredContent.billing.note, wallet);
+    assert.doesNotMatch(result.structuredContent.billing.note, /deposit|add funds/i);
+    assert.ok(text(result).includes(wallet), text(result));
+    assert.doesNotMatch(text(result), /update the card/i);
+  });
+
+  const stripe = fakeClient(skillRoutes({
+    '/UserAgent/Detail': detail({ subscription: { status: 'active', provider: 'stripe', currentperiodend: NOW + 86400, daysremaining: 1 } }),
+    '/UserAgent/SkillsApply': refused,
+  }));
+  await withClient(stripe, async client => {
+    const quote = await quoteInstagram(client);
+    const result = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
+    assert.equal(result.structuredContent.billing.note, card);
+    assert.doesNotMatch(text(result), /add funds/i);
+  });
+
+  // Without the plan, only the card fix is named: a wallet plan needs nothing added.
+  const failure = describeSkillsApplyError(new ApiResultError(refused.errors[0].message, [109], refused));
+  assert.equal(failure.guidance, `${failed} For a plan paid by card, update the card in the Wiro dashboard first. Then ask for a new quote.`);
+  assert.doesNotMatch(failure.guidance, /deposit|add funds/i);
+  assert.equal(failure.retrySameKey, false);
 });
 
 test('apply_agent_skills applies only at the quoted price', async () => {
@@ -524,6 +607,7 @@ test('apply_agent_skills checks the live agent when Wiro answers with an error o
     assert.notEqual(result.isError, true, text(result));
     assert.equal(result.structuredContent.status, 'applied');
     assert.match(result.structuredContent.billing.note, /Connection reset while saving.*the change was saved.*Do not repeat the change/);
+    assert.match(result.structuredContent.billing.note, /probably taken from, or credited to, your personal wallet, and a credit can be spent until this period ends;/);
     assert.doesNotMatch(text(result), /Nothing changed/);
   });
 
@@ -597,10 +681,87 @@ test('apply_agent_skills tells a cancelled plan that nothing renews at the new p
       arguments: { agent_guid: AGENT, skills: { 'util-chat-markdown-reporting': false } },
     });
     const note = result.structuredContent.billing.note;
-    assert.match(note, /credited back to your personal wallet now for the 15 days left in this period/);
+    assert.match(note, /credited back to your personal wallet now for the 15 days left in this period\. It can be spent until this period ends\./);
     assert.match(note, /The plan is cancelled and ends about a day after .*, so this covers only the days left/);
     assert.doesNotMatch(note, /renews at|expire/);
   });
+});
+
+test('apply_agent_skills says once that a credit for skills turned off can be spent until the period ends', async () => {
+  // Turning the reporting skill off lowers the price from $42 to $40.
+  const removal = { agent_guid: AGENT, skills: { 'util-chat-markdown-reporting': false } };
+  const applied = (overrides = {}) => ({
+    result: true,
+    errors: [],
+    pricing: { previousPriceUsd: 42, newPriceUsd: 40, deltaUsd: -2, previousMonthlyCredits: 4200, newMonthlyCredits: 4000, deltaCredits: -200 },
+    tier: 'starter',
+    stripeProrationApplied: false,
+    ...overrides,
+  });
+  const routes = (detailOverrides, skillsApply) => skillRoutes({
+    '/UserAgent/Detail': (_body, calls) => detail({
+      ...detailOverrides,
+      ...(calls.some(call => call.path === '/UserAgent/SkillsApply') ? { skills: [], monthlypriceusd: '40.00' } : {}),
+    }),
+    '/UserAgent/PricingPreview': { result: true, errors: [], totalPriceUsd: 40, totalMonthlyCredits: 4000 },
+    '/UserAgent/SkillsApply': skillsApply,
+  });
+  const spendBy = /It can be spent until this period ends\./g;
+
+  const personal = fakeClient(routes({}, applied({ prepaidWalletDelta: -1 })));
+  await withClient(personal, async client => {
+    const quote = await client.callTool({ name: 'apply_agent_skills', arguments: removal });
+    assert.equal(quote.structuredContent.status, 'quote', text(quote));
+    assert.match(quote.structuredContent.billing.note, /^About \$1\.00 is credited back to your personal wallet now for the 15 days left in this period\. It can be spent until this period ends\.( |$)/);
+    assert.equal(text(quote).match(spendBy)?.length, 1, text(quote));
+
+    const result = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
+    assert.notEqual(result.isError, true, text(result));
+    assert.equal(result.structuredContent.status, 'applied');
+    assert.equal(result.structuredContent.billing.chargedNowUsd, -1);
+    assert.equal(result.structuredContent.billing.note, '$1.00 was credited to your personal wallet. It can be spent until this period ends.');
+    assert.equal(text(result).match(spendBy)?.length, 1, text(result));
+  });
+
+  // The agent's team wallet is credited for a team agent.
+  const team = fakeClient(routes({ teamguid: 'team-1' }, applied({ prepaidWalletDelta: -1 })));
+  await withClient(team, async client => {
+    const quote = await client.callTool({ name: 'apply_agent_skills', arguments: removal });
+    assert.match(quote.structuredContent.billing.note, /credited back to the team wallet now/);
+    const result = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
+    assert.equal(result.structuredContent.billing.note, '$1.00 was credited to the team wallet. It can be spent until this period ends.');
+    assert.doesNotMatch(JSON.stringify(result), /team-1/);
+  });
+
+  // A credit is reported only when Wiro reports one, and Wiro's own note on the billing is passed on.
+  const warning = 'The skill change is saved and the lower monthly price applies from the next renewal.';
+  const withNote = fakeClient(routes({}, applied({ prepaidWalletDelta: null, warnings: [warning] })));
+  await withClient(withNote, async client => {
+    const quote = await client.callTool({ name: 'apply_agent_skills', arguments: removal });
+    const result = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
+    assert.notEqual(result.isError, true, text(result));
+    assert.equal(result.structuredContent.billing.chargedNowUsd, null);
+    assert.equal(result.structuredContent.billing.note, `Nothing was charged now. ${warning}`);
+    assert.doesNotMatch(text(result), /was credited to/);
+  });
+
+  // With the current price unknown, the quote cannot tell a charge from a credit and says both once.
+  const unpriced = fakeClient(skillRoutes({ '/UserAgent/Detail': detail({ monthlypriceusd: null }) }));
+  await withClient(unpriced, async client => {
+    const quote = await client.callTool({ name: 'apply_agent_skills', arguments: { agent_guid: AGENT, skills: { 'int-instagram-post': true } } });
+    assert.equal(quote.structuredContent.status, 'quote', text(quote));
+    assert.equal(quote.structuredContent.pricing.deltaMonthlyUsd, null);
+    assert.equal(quote.structuredContent.billing.note, 'The difference for the rest of this period is taken from, or credited to, your personal wallet when the change is applied. A credit can be spent until this period ends. The plan then renews at $43.00 a month.');
+    assert.equal(text(quote).match(/can be spent until this period ends/g)?.length, 1, text(quote));
+  });
+
+  await withClient(fakeClient({}), async client => {
+    const { tools } = await client.listTools();
+    const description = tools.find(tool => tool.name === 'apply_agent_skills').description;
+    assert.match(description, /taken from the wallet at once, or credited to it when the price drops, and that credit can be spent until the period ends; on a card plan it is added to the next invoice\./);
+  });
+  assert.match(PLAYBOOKS.agents, /on a wallet plan, the difference for the rest of the period is charged at once, or credited to the wallet for use until the period ends\./);
+  assert.match(PLAYBOOKS.billing, /\| Agent skill change \| The price difference for the rest of the period, charged, or credited for use until the period ends \| When applied \|/);
 });
 
 test('apply_agent_skills checks names before anything is priced or written', async () => {
@@ -725,6 +886,163 @@ test('set_agent_credentials describes a credential without writing or leaking va
   });
 });
 
+test('set_agent_credentials describe offers connect only once the chosen mode has every field saved', async () => {
+  const empty = fakeClient({
+    '/Credentials/Detail': credentialDetail,
+    '/UserAgent/Detail': detail(),
+  });
+  await withClient(empty, async client => {
+    const result = await client.callTool({ name: 'set_agent_credentials', arguments: { agent_guid: AGENT, credential: 'google-ads' } });
+    assert.notEqual(result.isError, true, text(result));
+    assert.equal(result.structuredContent.nextAction, undefined);
+    assert.ok(result.structuredContent.notes.includes('Mode own needs clientid, clientsecret and developertoken saved first.'));
+    assert.match(text(result), /- Mode own needs clientid, clientsecret and developertoken saved first\./);
+    assert.doesNotMatch(text(result), /Everything mode own needs is saved/);
+    assert.deepEqual(empty.paths(), ['/Credentials/Detail', '/UserAgent/Detail']);
+  });
+
+  const saved = fakeClient({
+    '/Credentials/Detail': credentialDetail,
+    '/UserAgent/Detail': detail({
+      credentials: {
+        'google-ads': { clientid: '123-abc.apps.googleusercontent.com', clientsecret: 'own-secret-value', developertoken: 'own-dev-token', _connected: false, _filled: true, optional: false, _schema: { title: 'Google Ads' } },
+      },
+    }),
+  });
+  await withClient(saved, async client => {
+    const result = await client.callTool({ name: 'set_agent_credentials', arguments: { agent_guid: AGENT, credential: 'google-ads' } });
+    assert.deepEqual(result.structuredContent.nextAction, {
+      tool: 'connect_agent_oauth',
+      arguments: { action: 'connect', agent_guid: AGENT, credential: 'google-ads', mode: 'own' },
+      reason: 'Everything mode own needs is saved; connect Google Ads.',
+    });
+    assert.doesNotMatch(JSON.stringify(result), /own-secret-value|own-dev-token/);
+  });
+
+  // Wiro's own app needs nothing saved first.
+  const hubspot = fakeClient({
+    '/Credentials/Detail': credentialDetail,
+    '/UserAgent/Detail': detail(),
+  });
+  await withClient(hubspot, async client => {
+    const result = await client.callTool({ name: 'set_agent_credentials', arguments: { agent_guid: AGENT, credential: 'hubspot' } });
+    assert.equal(result.structuredContent.nextAction.arguments.mode, 'wiro');
+    assert.match(text(result), /- \*\*wiro\*\*: Sign in through Wiro's own HubSpot app/);
+  });
+});
+
+test('set_agent_credentials offers connect after a write only once the mode has every field saved', async () => {
+  const googleAds = fields => ({ ...fields, _connected: false, _filled: false, optional: false, _schema: { title: 'Google Ads' } });
+  const write = { agent_guid: AGENT, fields: [{ credential: 'google-ads', field: 'clientid', value: '123-abc.apps.googleusercontent.com' }] };
+
+  // Only the client ID is saved: connecting now would be refused, so no connect step is offered.
+  const partial = fakeClient({
+    '/Credentials/Detail': credentialDetail,
+    '/UserAgent/CredentialUpsert': { result: true, applied: 1 },
+    '/UserAgent/Detail': detail({ credentials: { 'google-ads': googleAds({ clientid: '123-abc.apps.googleusercontent.com', clientsecret: '', developertoken: '' }) } }),
+  });
+  await withClient(partial, async client => {
+    const result = await client.callTool({ name: 'set_agent_credentials', arguments: write });
+    assert.notEqual(result.isError, true, text(result));
+    assert.equal(result.structuredContent.nextAction, undefined);
+    assert.ok(result.structuredContent.notes.includes('Mode own needs clientsecret and developertoken saved first.'), text(result));
+    assert.match(text(result), /- Mode own needs clientsecret and developertoken saved first\./);
+    assert.doesNotMatch(text(result), /now that its fields are saved/);
+  });
+
+  // Every field of mode own is saved: connect with that mode.
+  const complete = fakeClient({
+    '/Credentials/Detail': credentialDetail,
+    '/UserAgent/CredentialUpsert': { result: true, applied: 1 },
+    '/UserAgent/Detail': detail({ credentials: { 'google-ads': googleAds({ clientid: '123-abc.apps.googleusercontent.com', clientsecret: 'own-secret-value', developertoken: 'own-dev-token' }) } }),
+  });
+  await withClient(complete, async client => {
+    const result = await client.callTool({ name: 'set_agent_credentials', arguments: write });
+    assert.deepEqual(result.structuredContent.nextAction, {
+      tool: 'connect_agent_oauth',
+      arguments: { action: 'connect', agent_guid: AGENT, credential: 'google-ads', mode: 'own' },
+      reason: 'Connect Google Ads now that its fields are saved.',
+    });
+    assert.doesNotMatch(JSON.stringify(result), /own-secret-value|own-dev-token/);
+  });
+
+  // The agent cannot be read back: nothing is claimed about the mode.
+  const unread = fakeClient({
+    '/Credentials/Detail': credentialDetail,
+    '/UserAgent/CredentialUpsert': { result: true, applied: 1 },
+    '/UserAgent/Detail': { result: false, errors: [{ code: 0, message: 'User agent not found' }] },
+  });
+  await withClient(unread, async client => {
+    const result = await client.callTool({ name: 'set_agent_credentials', arguments: write });
+    assert.equal(result.structuredContent.nextAction, undefined);
+    assert.ok(result.structuredContent.notes.includes('The agent could not be read afterwards; check it with get_my_agent.'));
+    assert.doesNotMatch(text(result), /saved first/);
+  });
+});
+
+test('set_agent_credentials offers only the modes that can be used', async () => {
+  const fake = fakeClient({
+    '/Credentials/Detail': credentialDetail,
+    '/UserAgent/Detail': detail(),
+  });
+  await withClient(fake, async client => {
+    const metaAds = await client.callTool({ name: 'set_agent_credentials', arguments: { agent_guid: AGENT, credential: 'meta-ads' } });
+    assert.notEqual(metaAds.isError, true, text(metaAds));
+    const howItConnects = text(metaAds).split('### How it connects')[1];
+    assert.ok(howItConnects, 'the describe text has a How it connects section');
+    assert.match(howItConnects, /^- \*\*api_key\*\*: /m);
+    assert.match(howItConnects, /^- \*\*own\*\*: /m);
+    assert.doesNotMatch(howItConnects, /- \*\*wiro\*\*/);
+    assert.ok(metaAds.structuredContent.notes.includes('To choose how it connects, set field authmethod to one of: api_key, own.'));
+
+    const googleAds = await client.callTool({ name: 'set_agent_credentials', arguments: { agent_guid: AGENT, credential: 'google-ads' } });
+    assert.ok(googleAds.structuredContent.notes.includes('To choose how it connects, set field authmethod to one of: own.'));
+    assert.doesNotMatch(text(googleAds), /- \*\*wiro\*\*/);
+
+    const wiro = await client.callTool({
+      name: 'set_agent_credentials',
+      arguments: { agent_guid: AGENT, fields: [{ credential: 'google-ads', field: 'authmethod', value: 'wiro' }] },
+    });
+    assert.equal(wiro.isError, true);
+    assert.match(text(wiro), /Google Ads: authmethod must be one of own\./);
+
+    const unknownMode = await client.callTool({ name: 'connect_agent_oauth', arguments: { agent_guid: AGENT, credential: 'google-ads', mode: 'api_key' } });
+    assert.equal(unknownMode.isError, true);
+    assert.match(text(unknownMode), /Google Ads cannot connect with mode api_key\. Modes: own\./);
+    assert.equal(fake.paths().includes('/UserAgent/CredentialUpsert'), false);
+    assert.equal(fake.paths().includes('/UserAgentOAuth/OAuthConnect'), false);
+  });
+});
+
+test('set_agent_credentials describe lists the keys of a list\'s entries and of a list inside an entry', async () => {
+  const fake = fakeClient({
+    '/Credentials/Detail': credentialDetail,
+    '/UserAgent/Detail': detail(),
+  });
+  await withClient(fake, async client => {
+    const result = await client.callTool({ name: 'set_agent_credentials', arguments: { agent_guid: AGENT, credential: 'firebase' } });
+    assert.notEqual(result.isError, true, text(result));
+    const fields = text(result).split('### Fields\n\n')[1];
+    assert.ok(fields.startsWith([
+      '- `accounts` Firebase Accounts (list of objects, required). Each entry:',
+      '  - `appname` App Name (text, required): A friendly label that identifies this Firebase project.',
+      '  - `serviceaccountjson` Service Account JSON (the file content, as text or base64, required)',
+      '  - `apps` Apps (list of objects, optional): The mobile apps registered under this Firebase project. Each entry:',
+      '    - `platform` Platform (one of: ios, android, required)',
+      '    - `id` App ID (text, required): The Android package name or the numeric Apple ID of the app.',
+    ].join('\n')), fields);
+    const accounts = result.structuredContent.credential.fields.find(field => field.field === 'accounts');
+    assert.deepEqual(accounts.itemFields.map(item => item.field), ['appname', 'serviceaccountjson', 'apps']);
+    const apps = accounts.itemFields.find(item => item.field === 'apps');
+    assert.equal(apps.required, false);
+    assert.equal(apps.help, 'The mobile apps registered under this Firebase project.');
+    assert.deepEqual(apps.itemFields, [
+      { field: 'platform', label: 'Platform', type: 'select', required: true, options: ['ios', 'android'] },
+      { field: 'id', label: 'App ID', type: 'text', required: true, help: 'The Android package name or the numeric Apple ID of the app.' },
+    ]);
+  });
+});
+
 test('set_agent_credentials writes typed values, reports the channel and never echoes secrets', async () => {
   let written = false;
   const fake = fakeClient({
@@ -793,10 +1111,11 @@ test('set_agent_credentials refuses bad fields before writing anything', async (
     assert.equal(result.isError, true);
     const message = text(result);
     assert.match(message, /Telegram has no field "botoken"\. Fields you can set: bottoken, allowedusers, groups/);
-    assert.match(message, /Allowed Telegram DM User IDs item 1 has an invalid format/);
+    assert.match(message, /Allowed Telegram DM User IDs #1 has an invalid format/);
     assert.match(message, /Ad Account ID is filled when the account is connected/);
     assert.match(message, /"accesstoken" is filled by the connection itself/);
-    assert.match(message, /authmethod must be one of api_key, own, wiro/);
+    // wiro_connect_pending leaves wiro out of the choices.
+    assert.match(message, /Meta Ads: authmethod must be one of api_key, own\./);
     assert.match(message, /OpenAI is managed by Wiro/);
     assert.match(message, /Unknown credential "nope"/);
     assert.doesNotMatch(message, /AAHsecret/);
@@ -914,7 +1233,7 @@ test('set_agent_credentials refuses a link in a key file inside a list without s
       arguments: { agent_guid: AGENT, fields: [{ credential: 'firebase', field: 'accounts', value: [{ appname: 'My App', serviceaccountjson: 'https://drive.example.com/key.json' }] }] },
     });
     assert.equal(list.isError, true);
-    assert.match(text(list), /Firebase Accounts item 1 Service Account JSON takes the file's content as text or base64, not a link/);
+    assert.match(text(list), /Service Account JSON in Firebase Accounts #1 takes the file's content as text or base64, not a link/);
 
     const entry = await client.callTool({
       name: 'set_agent_credentials',
@@ -923,6 +1242,223 @@ test('set_agent_credentials refuses a link in a key file inside a list without s
     assert.equal(entry.isError, true);
     assert.match(text(entry), /not a link/);
     assert.equal(fake.calls.some(call => call.path === '/UserAgent/CredentialUpsert'), false);
+  });
+});
+
+test('set_agent_credentials refuses a JSON key file that is not JSON, wherever it is', async () => {
+  const fake = fakeClient({
+    '/Credentials/Detail': credentialDetail,
+    '/UserAgent/CredentialUpsert': { result: true, applied: 1 },
+    '/UserAgent/Detail': detail(),
+  });
+  // A local path, and an id that looks like base64 but is not a key file.
+  const values = ['~/Downloads/firebase-adminsdk.json', 'AbCdEfGhIjKlMnOpQrStUvWxYz012345'];
+  await withClient(fake, async client => {
+    for (const value of values) {
+      const calls = [
+        { credential: 'firebase', field: 'accounts', value: [{ appname: 'My App', serviceaccountjson: value }] },
+        { credential: 'firebase', field: 'serviceaccountjson', parent_field: 'accounts', ordinal: 0, value },
+        { credential: 'google-play', field: 'serviceaccountjson', value },
+      ];
+      for (const field of calls) {
+        const result = await client.callTool({ name: 'set_agent_credentials', arguments: { agent_guid: AGENT, fields: [field] } });
+        assert.equal(result.isError, true, `${value} in ${field.credential}.${field.field}`);
+        assert.match(text(result), /takes the text of the JSON key file\. This value is not JSON\. The user can paste the file's text or upload the file on the agent's page in the Wiro dashboard\./);
+        assert.equal(JSON.stringify(result).includes(value), false, 'the value is never repeated');
+      }
+    }
+    const row = await client.callTool({
+      name: 'set_agent_credentials',
+      arguments: { agent_guid: AGENT, fields: [{ credential: 'firebase', field: 'accounts', value: [{ appname: 'My App', serviceaccountjson: { type: 'service_account' } }] }] },
+    });
+    assert.equal(row.isError, true);
+    assert.match(text(row), /Service Account JSON in Firebase Accounts #1 takes the file's content as text or base64\./);
+    assert.equal(fake.calls.some(call => call.path === '/UserAgent/CredentialUpsert'), false);
+  });
+});
+
+test('set_agent_credentials checks the rows of a list inside a list entry and names them the way Wiro does', async () => {
+  const fake = fakeClient({
+    '/Credentials/Detail': credentialDetail,
+    '/UserAgent/CredentialUpsert': body => ({ result: true, errors: [], applied: body.fields.length }),
+    '/UserAgent/Detail': detail(),
+  });
+  const json = '{"type":"service_account","project_id":"my-app"}';
+  const account = apps => ({ appname: 'My App', serviceaccountjson: json, apps });
+  const writeAccounts = (client, accounts) => client.callTool({
+    name: 'set_agent_credentials',
+    arguments: { agent_guid: AGENT, fields: [{ credential: 'firebase', field: 'accounts', value: accounts }] },
+  });
+  await withClient(fake, async client => {
+    const missingId = await writeAccounts(client, [account([{ platform: 'android', id: 'com.acme.app' }, { platform: 'ios' }])]);
+    assert.equal(missingId.isError, true);
+    assert.match(text(missingId), /Nothing was saved:\n\n- App ID in Apps #2 in Firebase Accounts #1 is required\./);
+
+    const unknownKey = await writeAccounts(client, [account([{ platform: 'ios', id: '1234567890', bundleid: 'com.acme.app' }])]);
+    assert.equal(unknownKey.isError, true);
+    assert.match(text(unknownKey), /Apps #1 in Firebase Accounts #1 has unknown keys \(bundleid\)\. Allowed: platform, id\./);
+
+    const badPlatform = await writeAccounts(client, [account([{ platform: 'windows', id: 'com.acme.app' }])]);
+    assert.match(text(badPlatform), /Platform in Apps #1 in Firebase Accounts #1 must be one of: ios, android\./);
+
+    const notAList = await writeAccounts(client, [account({ platform: 'android', id: 'com.acme.app' })]);
+    assert.match(text(notAList), /Apps in Firebase Accounts #1 takes a list \(JSON array\)\./);
+
+    // The entry's own keys are checked the same way.
+    const noName = await writeAccounts(client, [{ serviceaccountjson: json, apps: [] }]);
+    assert.match(text(noName), /App Name in Firebase Accounts #1 is required\./);
+    assert.equal(fake.calls.some(call => call.path === '/UserAgent/CredentialUpsert'), false);
+
+    const valid = await writeAccounts(client, [account([{ platform: 'android', id: 'com.acme.app' }, { platform: 'ios', id: '1234567890' }])]);
+    assert.notEqual(valid.isError, true, text(valid));
+    const upsert = fake.calls.filter(call => call.path === '/UserAgent/CredentialUpsert').at(-1);
+    assert.deepEqual(upsert.body.fields, [{
+      credentialkey: 'firebase',
+      fieldname: 'accounts',
+      fieldvalue: [{
+        appname: 'My App',
+        serviceaccountjson: Buffer.from(json).toString('base64'),
+        apps: [{ platform: 'android', id: 'com.acme.app' }, { platform: 'ios', id: '1234567890' }],
+      }],
+    }]);
+    assert.doesNotMatch(JSON.stringify(valid), /service_account/);
+  });
+});
+
+test('set_agent_credentials writes a list inside one entry with parent_field and ordinal', async () => {
+  const fake = fakeClient({
+    '/Credentials/Detail': credentialDetail,
+    '/UserAgent/CredentialUpsert': body => ({ result: true, errors: [], applied: body.fields.length }),
+    '/UserAgent/Detail': detail(),
+  });
+  const write = (client, field) => client.callTool({ name: 'set_agent_credentials', arguments: { agent_guid: AGENT, fields: [field] } });
+  await withClient(fake, async client => {
+    // Rows go out as a list of objects under the list's own key and the entry's position.
+    const apps = await write(client, { credential: 'firebase', field: 'apps', parent_field: 'accounts', ordinal: 1, value: [{ platform: 'android', id: 'com.acme.app' }] });
+    assert.notEqual(apps.isError, true, text(apps));
+    assert.deepEqual(fake.calls.filter(call => call.path === '/UserAgent/CredentialUpsert').at(-1).body.fields, [{
+      credentialkey: 'firebase',
+      fieldname: 'apps',
+      fieldvalue: [{ platform: 'android', id: 'com.acme.app' }],
+      parentfield: 'accounts',
+      ordinal: 1,
+    }]);
+
+    // A text list keeps its text items.
+    const users = await write(client, { credential: 'telegram', field: 'allowedusers', parent_field: 'groups', ordinal: 0, value: ['761381461', 761381462] });
+    assert.notEqual(users.isError, true, text(users));
+    assert.deepEqual(fake.calls.filter(call => call.path === '/UserAgent/CredentialUpsert').at(-1).body.fields, [{
+      credentialkey: 'telegram',
+      fieldname: 'allowedusers',
+      fieldvalue: ['761381461', '761381462'],
+      parentfield: 'groups',
+      ordinal: 0,
+    }]);
+    const upserts = fake.calls.filter(call => call.path === '/UserAgent/CredentialUpsert').length;
+
+    const badRow = await write(client, { credential: 'firebase', field: 'apps', parent_field: 'accounts', ordinal: 1, value: [{ platform: 'android' }] });
+    assert.equal(badRow.isError, true);
+    assert.match(text(badRow), /App ID in Apps #1 in Firebase Accounts #2 is required\./);
+
+    const textRow = await write(client, { credential: 'firebase', field: 'apps', parent_field: 'accounts', ordinal: 0, value: ['com.acme.app'] });
+    assert.match(text(textRow), /Apps takes a list of objects; Apps #1 in Firebase Accounts #1 is not one\./);
+
+    const path = await write(client, { credential: 'firebase', field: 'apps', parent_field: 'accounts.0', ordinal: 0, value: [{ platform: 'ios', id: '1234567890' }] });
+    assert.match(text(path), /Firebase Accounts: parent_field takes the list field's key alone \("accounts"\); pass the entry's position, from 0, as ordinal\./);
+    assert.equal(fake.calls.filter(call => call.path === '/UserAgent/CredentialUpsert').length, upserts);
+  });
+});
+
+test('set_agent_credentials checks one entry\'s field with parent_field as strictly as a whole write', async () => {
+  const fake = fakeClient({
+    '/Credentials/Detail': credentialDetail,
+    '/UserAgent/CredentialUpsert': body => ({ result: true, errors: [], applied: body.fields.length }),
+    '/UserAgent/Detail': detail(),
+  });
+  const write = (client, field) => client.callTool({ name: 'set_agent_credentials', arguments: { agent_guid: AGENT, fields: [field] } });
+  const upserts = () => fake.calls.filter(call => call.path === '/UserAgent/CredentialUpsert');
+  await withClient(fake, async client => {
+    // A required field of an entry cannot be cleared on its own either.
+    for (const value of [null, '', []]) {
+      const cleared = await write(client, { credential: 'telegram', field: 'allowedusers', parent_field: 'groups', ordinal: 0, value });
+      assert.equal(cleared.isError, true, JSON.stringify(value));
+      assert.match(text(cleared), /Allowed User IDs in Allowed Telegram Groups #1 is required\./);
+    }
+    const noChat = await write(client, { credential: 'telegram', field: 'chatid', parent_field: 'groups', ordinal: 0, value: null });
+    assert.equal(noChat.isError, true);
+    assert.match(text(noChat), /Group Chat ID in Allowed Telegram Groups #1 is required\./);
+
+    // A value is checked as it is sent, the same way in both kinds of write.
+    const spaced = '-1001234567890 ';
+    const entry = await write(client, { credential: 'telegram', field: 'chatid', parent_field: 'groups', ordinal: 0, value: spaced });
+    const whole = await write(client, { credential: 'telegram', field: 'groups', value: [{ chatid: spaced, allowedusers: ['761381461'] }] });
+    for (const result of [entry, whole]) {
+      assert.equal(result.isError, true);
+      assert.match(text(result), /Group Chat ID in Allowed Telegram Groups #1 has an invalid format \(expected pattern \^-\\d\{5,\}\$\)\./);
+    }
+    assert.equal(upserts().length, 0);
+
+    // An optional list inside an entry is cleared as an empty list.
+    for (const value of [null, '', '  ']) {
+      const apps = await write(client, { credential: 'firebase', field: 'apps', parent_field: 'accounts', ordinal: 0, value });
+      assert.notEqual(apps.isError, true, text(apps));
+      assert.deepEqual(upserts().at(-1).body.fields, [{ credentialkey: 'firebase', fieldname: 'apps', fieldvalue: [], parentfield: 'accounts', ordinal: 0 }]);
+    }
+  });
+});
+
+test('set_agent_credentials names list items and entries the way Wiro does', async () => {
+  const fake = fakeClient({ '/Credentials/Detail': credentialDetail });
+  const write = (client, field) => client.callTool({ name: 'set_agent_credentials', arguments: { agent_guid: AGENT, fields: [field] } });
+  await withClient(fake, async client => {
+    const top = await write(client, { credential: 'telegram', field: 'allowedusers', value: ['761381461', '12'] });
+    assert.equal(top.isError, true);
+    assert.match(text(top), /Allowed Telegram DM User IDs #2 has an invalid format \(expected pattern \^\\d\{5,\}\$\)\./);
+
+    // A text list inside an entry names its items after the entry, in a whole write and with parent_field.
+    const nested = 'Allowed User IDs in Allowed Telegram Groups #1, item #2 has an invalid format (expected pattern ^\\d{5,}$).';
+    const whole = await write(client, { credential: 'telegram', field: 'groups', value: [{ chatid: '-1001234567890', allowedusers: ['761381461', '12'] }] });
+    const entry = await write(client, { credential: 'telegram', field: 'allowedusers', parent_field: 'groups', ordinal: 0, value: ['761381461', '12'] });
+    for (const result of [whole, entry]) {
+      assert.equal(result.isError, true);
+      assert.ok(text(result).includes(nested), text(result));
+      assert.doesNotMatch(text(result), / item \d+ /);
+    }
+    const notText = await write(client, { credential: 'telegram', field: 'allowedusers', parent_field: 'groups', ordinal: 0, value: [{ id: '761381461' }] });
+    assert.ok(text(notText).includes('Allowed User IDs takes a list of text values; Allowed User IDs in Allowed Telegram Groups #1, item #1 is not one.'), text(notText));
+
+    const unknownField = await write(client, { credential: 'firebase', field: 'bundleid', parent_field: 'accounts', ordinal: 0, value: 'com.acme.app' });
+    assert.match(text(unknownField), /Firebase Accounts entries have no field "bundleid"\. Entry fields: appname, serviceaccountjson, apps\./);
+    const noOrdinal = await write(client, { credential: 'firebase', field: 'appname', parent_field: 'accounts', value: 'My App' });
+    assert.match(text(noOrdinal), /Firebase Accounts: ordinal \(the entry's position, from 0\) is required with parent_field\./);
+    assert.equal(fake.paths().includes('/UserAgent/CredentialUpsert'), false);
+  });
+});
+
+test('set_agent_credentials accepts JSON text, base64 JSON, a data URL and a key that is not JSON', async () => {
+  const fake = fakeClient({
+    '/Credentials/Detail': credentialDetail,
+    '/UserAgent/CredentialUpsert': { result: true, applied: 1 },
+    '/UserAgent/Detail': detail(),
+  });
+  const json = '{"type":"service_account","project_id":"my-app"}';
+  const encoded = Buffer.from(json).toString('base64');
+  const p8 = '-----BEGIN PRIVATE KEY-----\nMIGTAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBHkwdwIBAQQg\n-----END PRIVATE KEY-----';
+  await withClient(fake, async client => {
+    for (const value of [json, encoded, `data:application/json;base64,${encoded}`]) {
+      const result = await client.callTool({
+        name: 'set_agent_credentials',
+        arguments: { agent_guid: AGENT, fields: [{ credential: 'google-play', field: 'serviceaccountjson', value }] },
+      });
+      assert.notEqual(result.isError, true, text(result));
+      assert.equal(fake.calls.filter(call => call.path === '/UserAgent/CredentialUpsert').at(-1).body.fields[0].fieldvalue, encoded);
+    }
+    const key = await client.callTool({
+      name: 'set_agent_credentials',
+      arguments: { agent_guid: AGENT, fields: [{ credential: 'apple-appstore', field: 'privatekey', value: p8 }] },
+    });
+    assert.notEqual(key.isError, true, text(key));
+    assert.equal(fake.calls.filter(call => call.path === '/UserAgent/CredentialUpsert').at(-1).body.fields[0].fieldvalue, Buffer.from(p8).toString('base64'));
   });
 });
 
@@ -1296,6 +1832,33 @@ test('disconnect_agent_oauth asks first and disconnects only with confirm', asyn
   });
 });
 
+test('connect_agent_oauth and disconnect_agent_oauth say whose project can change a connection', async () => {
+  const refusal = { result: false, errors: [{ code: 0, message: 'User agent not found or unauthorized' }] };
+  const fake = fakeClient({
+    '/Credentials/Detail': credentialDetail,
+    '/UserAgent/Detail': detail(),
+    '/UserAgentOAuth/OAuthStatus': { result: true, connected: true, accounts: [], connectedat: '2026-10-01T00:00:00Z', tokenexpiresat: '' },
+    '/UserAgentOAuth/OAuthConnect': refusal,
+    '/UserAgentOAuth/OAuthDisconnect': refusal,
+  });
+  await withClient(fake, async client => {
+    // The hint says to connect this server with the deployer's project, and starts after Wiro's own sentence.
+    const connect = await client.callTool({ name: 'connect_agent_oauth', arguments: { agent_guid: AGENT, credential: 'hubspot', confirm: true } });
+    assert.equal(connect.isError, true);
+    assert.ok(text(connect).includes('User agent not found or unauthorized\n\nIntegrations can only be connected with a project created by the person who deployed the agent: connect this server with such a project, by its API key or a browser sign-in.'), text(connect));
+
+    const disconnect = await client.callTool({ name: 'disconnect_agent_oauth', arguments: { agent_guid: AGENT, credential: 'hubspot', confirm: true } });
+    assert.equal(disconnect.isError, true);
+    assert.ok(text(disconnect).includes('User agent not found or unauthorized\n\nIntegrations can only be changed with a project created by the person who deployed the agent: connect this server with such a project, by its API key or a browser sign-in.'), text(disconnect));
+    for (const result of [connect, disconnect]) assert.doesNotMatch(text(result), /unauthorized Integrations/);
+
+    const { tools } = await client.listTools();
+    const description = tools.find(tool => tool.name === 'connect_agent_oauth').description;
+    assert.match(description, /Only the person who deployed the agent can connect, so the connected project must be one that person created\./);
+  });
+  assert.match(PLAYBOOKS.agents, /Only the person who deployed the agent can connect, so the connected project must be one that person created\./);
+});
+
 // ---------------------------------------------------------------------------
 // manage_agent_custom_skill
 // ---------------------------------------------------------------------------
@@ -1467,6 +2030,49 @@ test('manage_agent_custom_skill history shows saved states without who changed t
     assert.equal(out.presetDefault, null);
     assert.deepEqual(out.templates, [{ title: 'Daily digest', description: 'A short daily summary', value: 'Summarize today.', interval: '0 9 * * *' }]);
     assert.doesNotMatch(JSON.stringify(result), /owner@example\.com|uuid-secret|Ada|Older/);
+  });
+});
+
+test('manage_agent_custom_skill history returns the whole current text of a long entry', async () => {
+  const policy = `${'Ask the owner before you reply to a refund request or post anything in public. '.repeat(30)}End of policy.`;
+  const fake = fakeClient({
+    '/UserAgent/Detail': detail({
+      customskills: [{ key: 'cs-approval-policy', description: 'Approval rules', value: policy, enabled: true, requires_credentials: [], _source: 'preset-strategy', _editable: true }],
+    }),
+    '/UserAgent/CustomSkillHistory': {
+      result: true,
+      entries: [{ guid: 'v1', operation: 'update', changedat: 1767225600, after_value: policy, after_enabled: true, changed_fields: ['value'] }],
+      preset_default: null,
+    },
+    '/UserAgent/CustomSkillAlternatives': { result: true, alternatives: [] },
+  });
+  assert.ok(policy.length > 2_000);
+  await withClient(fake, async client => {
+    const result = await client.callTool({ name: 'manage_agent_custom_skill', arguments: { action: 'history', agent_guid: AGENT, key: 'cs-approval-policy' } });
+    assert.notEqual(result.isError, true, text(result));
+    const out = result.structuredContent;
+    assert.equal(out.entry.value, policy);
+    assert.equal(out.entry.valueTruncated, undefined);
+    assert.ok(text(result).includes(`**Current text:**\n\n\`\`\`text\n${policy}\n\`\`\``));
+    // Earlier versions stay shortened.
+    assert.equal(out.history[0].valueTruncated, true);
+    assert.ok(out.history[0].value.length < policy.length);
+
+    const { tools } = await client.listTools();
+    const description = tools.find(tool => tool.name === 'manage_agent_custom_skill').description;
+    assert.match(description, /history shows the current text in full/);
+    assert.match(description, /Entries from the agent's template, cs-approval-policy and the scheduled tasks its skills brought cannot be deleted or renamed: set enabled false instead\./);
+  });
+});
+
+test('agent configuration tools say which connection reaches an agent of another workspace', async () => {
+  const fake = fakeClient({
+    '/UserAgent/Detail': { result: false, errors: [{ code: 0, message: 'This agent belongs to a team. Switch to the team context to access it.' }] },
+  });
+  await withClient(fake, async client => {
+    const result = await client.callTool({ name: 'manage_agent_custom_skill', arguments: { action: 'history', agent_guid: AGENT, key: 'cs-approval-policy' } });
+    assert.equal(result.isError, true);
+    assert.match(text(result), /Switch to the team context to access it\. Connect with a project in the workspace \(personal or team\) that owns this agent, by its API key or a browser sign-in\./);
   });
 });
 
