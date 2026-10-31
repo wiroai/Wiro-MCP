@@ -48,7 +48,7 @@ export function formatUpdatedWorkflow(saved: UpdatedWorkflow, heading: string): 
   if (saved.unchanged) {
     lines.push('', saved.discarded?.length
       ? `Wiro saves Start fields the way the wiro.ai editor writes them, so your change to ${saved.discarded.join(', ')} `
-        + 'is not kept. Nothing else changed, so nothing was saved. Put guidance for people in the field\'s label or in '
+        + 'is not kept. Nothing else changed, so nothing was saved. Put guidance for people in '
         + 'the workflow description.'
       : 'The workflow already matches this change, so nothing was saved.');
   }
@@ -91,7 +91,7 @@ export function registerUpdateWorkflow(server: McpServer, client: WiroClient): v
       inputSchema: {
         slug: z.string().min(1).describe('The full workflow slug or the workflow page URL.'),
         title: z.string().trim().min(1).max(160).optional().describe('New title.'),
-        description: z.string().min(1).max(1000).optional().describe('New description (it cannot be cleared).'),
+        description: z.string().min(1).max(1000).optional().describe('New description, 1 to 1000 characters.'),
         tags: z.array(z.string()).max(20).optional().describe('Replaces the tags.'),
         contents: workflowContentsInputSchema.optional(),
         loaded_updatetime: z.string().optional()

@@ -186,7 +186,7 @@ A workflow is a saved chain of steps. Each step runs one Wiro model or one built
 ## Run a workflow
 
 1. Read the Start fields with \`get_workflow\`. Right after \`create_workflow\`, use the inputs its result lists.
-2. Tell the user the expected cost (see Money). Then call \`run_workflow\` with the full slug and the input values: strings, numbers, booleans or arrays of strings. Files are public URLs, up to about 100 MB each. A field you leave out uses the saved value, then its default. An unknown field is refused with "Unknown input field(s)", and a value of another type with "Invalid value type for input field".
+2. Tell the user the expected cost (see Money). Then call \`run_workflow\` with the full slug and the input values: strings, numbers, booleans or arrays of strings. Files are public URLs, up to about 100 MB each. A field you leave out uses the saved value, then its default. On a protected gallery workflow that is not yours or your team's, a left-out field uses its default, not its saved value; pass the saved value \`get_workflow\` shows to use it. An unknown field is refused with "Unknown input field(s)", and a value of another type with "Invalid value type for input field".
 3. If the run is still going when the wait ends, follow its \`nextAction\` (\`wait_for_workflow_run\`) until the status is final: \`completed\`, \`failed\`, \`stopped\` or \`cancelled\`. A video step can take many minutes. Never start the run again because a wait ran out.
 4. Show the files and texts of the End fields, and the cost.
 
@@ -194,9 +194,9 @@ A workflow is a saved chain of steps. Each step runs one Wiro model or one built
 
 - Nothing is charged up front. Each model step is billed like a model run when it finishes. Utility steps are free, and failed steps are not charged.
 - To start, the wallet must hold $0.50 for each model step that will run, or the run is refused with "Insufficient balance".
-- The expected cost of a run is the sum of the model prices from \`get_model_schema\` for the settings each step uses. Only a protected workflow comes with an estimate from \`get_workflow\`. If the workflow ran before, \`list_workflow_runs\` shows what each run cost.
+- The expected cost of a run is the sum of the model prices from \`get_model_schema\` for the settings each step uses. For a protected workflow, \`get_workflow\` gives an estimate. If the workflow ran before, \`list_workflow_runs\` shows what each run cost.
 - The run result shows the cost so far and, once the run settles, the amount charged.
-- A started run cannot be cancelled, and \`cancel_task\` and \`kill_task\` refuse a workflow's steps. Start a run only when the user asked for it.
+- A started run keeps going until it ends; \`cancel_task\` and \`kill_task\` do not apply to its steps. Start a run only when the user asked for it.
 
 ## Test the first steps with a breakpoint
 
@@ -223,7 +223,7 @@ When the key can edit the workflow (it is in the key's workspace and is not a pr
 - With new \`contents\`, the first call checks the graph, reports problems and the defaults it filled, and returns a summary of the change. Nothing is saved: show it, then repeat the call with \`confirm: true\` once the user agrees. A new graph replaces the old one, with no undo. Title, description and tag changes without \`contents\` are saved at once.
 - If someone saved the workflow in the meantime, the update is refused instead of overwriting their work. Read it again, redo the edit on top, and overwrite only if the user says so.
 - The 40 KB limit applies to the new graph of an edit. A workflow built larger in the wiro.ai editor can have its steps edited here once the new graph fits, for example after removing steps; its title, description and tags can always be changed.
-- A description can be replaced but not cleared. Tags that start with \`wiro-\` are reserved. These tools keep workflows private; publishing happens on wiro.ai.
+- Tags that start with \`wiro-\` are reserved. These tools keep workflows private; publishing happens on wiro.ai.
 - Changing the title, description, tags or graph of a published workflow sends it back to review, and it leaves the public gallery until it is approved again. Tell the user first.
 - Files uploaded into a workflow in the wiro.ai editor can be deleted once a new graph stops using them.
 
@@ -233,8 +233,8 @@ When the key can edit the workflow (it is in the key's workspace and is not a pr
 - If several gallery workflows fit, show the user two or three with what they do and their inputs, and clone only the one they pick. A Start field such as a style can change on every run without editing the steps.
 - A clone of a protected workflow keeps its graph hidden, even from you: you can run it and change its title, description and tags, not its steps.
 - To duplicate a workflow of your own, save the \`workflow.contents\` from \`get_workflow\` with \`create_workflow\` under a new title.
-- \`delete_workflow\` removes a workflow for everyone, with no undo: it leaves every list and the gallery and can no longer be run. Runs already started finish, and clones keep working. With a team key the list holds the whole team's workflows, and any member can delete them: check before deleting what may be a teammate's.
-- Right after \`create_workflow\`, a list can miss the new workflow for a moment. \`get_workflow\` finds it at once.
+- \`delete_workflow\` removes a workflow for everyone, with no undo: it leaves every list and the gallery and can no longer be run. Runs already started finish, and clones keep working. With a team key the list holds the whole team's workflows: check before deleting what may be a teammate's.
+- Right after \`create_workflow\`, read the new workflow with \`get_workflow\`.
 `;
 
 const WORKFLOW_GRAPH = `# Workflow graphs: steps, inputs and references
@@ -263,7 +263,7 @@ Each step is \`"node-<id>": { "id", "type", "tool", "depends", "input", "metadat
 
 ## Start fields
 
-Each key in \`schema.input\` is that input's name at run time. Give each field \`label\` (the display name), \`type\`, \`defaultValue\` and \`ui\` (an object). Wiro fills in the rest the way the wiro.ai editor does, and the label also becomes the field's \`name\`. Put guidance for people in the label or in the workflow's description.
+Each key in \`schema.input\` is that input's name at run time. Give each field \`label\`, \`type\`, \`defaultValue\` and \`ui\` (an object). Wiro fills in the rest the way the wiro.ai editor does, and the label also becomes the field's \`name\`. wiro.ai titles each field with its key, in the run form and on the Start node, so use a short readable key such as \`product_photo\` (lowercase with underscores, as the editor makes them); people running the workflow do not see the label. Put guidance for people in the workflow's description.
 
 - Text: \`"type": "string"\` with \`"ui": { "field": "textarea" }\`.
 - Choice list: \`"type": "string"\` with \`"ui": { "field": "select", "options": [{ "value": "16:9", "text": "Wide" }] }\`.
@@ -358,7 +358,7 @@ Use it when the user wants help choosing models and wiring the steps. When you a
 ## Money
 
 - The wallet of the key's workspace must hold at least $10 to send a message, or it is refused with "Insufficient balance" and nothing is charged.
-- $10 is a minimum to start, not a cap. Each turn's chat usage is billed to the same wallet after the turn, and the reply shows it as Agent usage, in dollars. It can appear a moment after the reply.
+- $10 is a minimum to start, not a cap. Each turn's chat usage is billed to the same wallet after the turn, and the reply shows it as Agent usage, in dollars. If it is not in the reply yet, read the message again with \`get_agent_message\`.
 - The agent only reads the catalog, so its turns start no model runs. Running a saved workflow is billed separately.
 - Before the first message, tell the user this in one line and check the balance with \`get_account\`.
 
@@ -404,8 +404,8 @@ Example, "ask the workflow agent for something that turns a recipe into a short 
 ## Sessions and history
 
 - Each session is a separate conversation with its own memory. Keep using one to refine its proposals; start a new one for an unrelated task. Session names use letters, digits, dots, dashes and underscores, at most 100 characters.
-- Sessions started with an API key belong to that key's project, and anyone using a key of that project sees them. They are separate from the user's own Workflow Agent chats on wiro.ai, which these tools cannot open. "default" is the project's own main session.
-- If the user wants to continue a chat from wiro.ai, say in one line that it cannot be opened here. If they saved a workflow in it, find it with \`list_workflows\` and attach it to a new session. If it is not listed, \`get_account\` shows which workspace this key works in.
+- Sessions started with an API key belong to that key's project, and anyone using a key of that project sees them. They are separate from the user's own Workflow Agent chats on wiro.ai. "default" is the project's own main session.
+- To pick up a chat from wiro.ai, start a new session here and put where that chat left off in the first message. If the user saved a workflow in it, find it with \`list_workflows\` and attach it. If it is not listed, \`get_account\` shows which workspace this key works in.
 - \`get_agent_conversation\` reads a session's messages, newest first. A proposal in an earlier reply can still be saved later.
 - \`cancel_agent_message\` stops a turn that is queued or running; usage already spent is billed. \`delete_agent_session\` deletes a session's messages and resets the agent's memory of it; "default" cannot be deleted.
 `;

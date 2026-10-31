@@ -511,6 +511,25 @@ test('get_workflow explains a protected copy and offers editing only to insiders
   });
 });
 
+test('get_workflow says a protected gallery workflow from elsewhere runs left-out keys with their defaults', async () => {
+  const gallery = storedRow({ isprotected: 1, ispublic: 1, estimatedcost: { type: 'fixed', value: 0.04 } });
+  gallery.contents = { version: '1', nodes: {}, schema: graph().schema, metadata: { input: { position: { x: 0, y: 0 }, values: { prompt: 'saved prompt' } } } };
+  delete gallery.rejectreason;
+  const fake = fakeClient({
+    '/Workflow/Detail': body => ({ result: true, errors: [], workflow: [body.slug === 'fox-maker-Ab3xZ' ? gallery : storedRow()] }),
+  });
+  await withClient(fake, async client => {
+    const outside = await client.callTool({ name: 'get_workflow', arguments: { slug: 'fox-maker-Ab3xZ' } });
+    assert.match(outside.content[0].text, /saved value: "saved prompt"/);
+    assert.match(outside.content[0].text, /a key you leave out uses its default, not its saved value; pass the saved value to use it/);
+    assert.match(outside.structuredContent.nextAction.reason, /for: prompt\. This protected workflow is not yours or your team's, so a key you leave out uses its default/);
+
+    const own = await client.callTool({ name: 'get_workflow', arguments: { slug: 'fox-maker-Zz9Yy' } });
+    assert.match(own.structuredContent.nextAction.reason, /A key you leave out uses its saved value or default\./);
+    assert.doesNotMatch(own.content[0].text, /not yours or your team's/);
+  });
+});
+
 test('list_workflows counts only gallery runs and leaves out an empty count', async () => {
   const fake = fakeClient({
     '/Workflow/List': {

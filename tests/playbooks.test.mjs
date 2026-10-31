@@ -33,6 +33,8 @@ const NON_TOOL_IDENTIFIERS = new Set([
   'timeout_seconds', 'wait_seconds', 'call_id', 'function_call', 'custom_tool_call',
   'upgrade_to_pro', 'buy_credits', 'select_accounts', 'confirm_charge_usd', 'idempotency_key', 'redirect_url',
   'session_id', 'debug_node_id',
+  // An example Start field key.
+  'product_photo',
 ]);
 
 const PROMPT_ARGUMENTS = {

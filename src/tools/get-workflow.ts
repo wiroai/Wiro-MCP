@@ -61,6 +61,11 @@ export function registerGetWorkflow(server: McpServer, client: WiroClient): void
         const row = await fetchWorkflowRow(client, fullSlug, extra.signal);
         const workflow = toWorkflowDetail(row, { includeGraph: include_graph });
 
+        // A protected workflow that is not the caller's or their team's runs only
+        // with the values the caller sends; the saved values it shows are not used.
+        const leftOut = workflow.graphHidden && !workflow.insider
+          ? 'This protected workflow is not yours or your team\'s, so a key you leave out uses its default, not its saved value; pass the saved value to use it.'
+          : 'A key you leave out uses its saved value or default.';
         const lines = [`## ${workflow.title}`, ''];
         lines.push(`**Slug:** \`${workflow.fullSlug}\``);
         lines.push(`**Page:** ${workflow.url}`);
@@ -74,6 +79,7 @@ export function registerGetWorkflow(server: McpServer, client: WiroClient): void
             : `${count}hidden by the creator`}`);
         if (workflow.description) lines.push('', workflow.description);
         lines.push('', '### Inputs', '', ...formatWorkflowInputs(workflow.inputs));
+        if (workflow.graphHidden && !workflow.insider && workflow.inputs.length > 0) lines.push('', leftOut);
         const outputs = Object.keys(workflow.outputs);
         if (outputs.length > 0) lines.push('', `### Outputs`, '', ...outputs.map(key => `- \`${key}\``));
         if (workflow.estimatedCost?.valueUsd !== undefined && workflow.estimatedCost.valueUsd !== null) {
@@ -92,7 +98,7 @@ export function registerGetWorkflow(server: McpServer, client: WiroClient): void
               arguments: { slug: workflow.fullSlug },
               reason: 'Run it only if the user asked for a run, after telling them the estimate; otherwise ask the user first (each model step is charged). Pass input values'
                 + (workflow.inputs.length > 0
-                  ? ` for: ${workflow.inputs.map(input => input.key).join(', ')}. A key you leave out uses its saved value or default.`
+                  ? ` for: ${workflow.inputs.map(input => input.key).join(', ')}. ${leftOut}`
                   : '. It has no inputs.'),
             },
           },

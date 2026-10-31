@@ -68,7 +68,7 @@ export function registerRunWorkflow(server: McpServer, client: WiroClient): void
       description: 'Start a workflow run and wait for it up to `wait_seconds`. Costs money: '
         + 'every model step is charged to the wallet like a normal model run when it '
         + 'finishes, and the run needs at least $0.50 of balance per model step to start. '
-        + 'A started run cannot be cancelled, so start it only when the user asked for this '
+        + 'A started run keeps going until it ends, so start it only when the user asked for this '
         + 'run, and tell them the estimate first. To try only the first steps, pass '
         + '`breakpoint_node_id`: the run stops after that step\'s layer and can be '
         + 'continued with resume_workflow_run. Read the input keys with get_workflow '
@@ -80,7 +80,9 @@ export function registerRunWorkflow(server: McpServer, client: WiroClient): void
         input: z.record(z.string(), workflowInputValueSchema).optional()
           .describe('Values for the workflow\'s inputs, keyed exactly as get_workflow lists them. '
             + 'File inputs take public http(s) URLs; a file that is only on the user\'s device needs a public link first. '
-            + 'Omitted inputs use the saved value, then the default.'),
+            + 'Omitted inputs use the saved value, then the default. On a protected gallery workflow that is not '
+            + 'yours or your team\'s, an omitted input uses its default, not its saved value; pass the saved value '
+            + 'get_workflow shows to use it.'),
         breakpoint_node_id: z.string().max(100).optional()
           .describe('Optional step id ("node-...") to stop after, for testing the first steps. '
             + 'Only for workflows you can edit. Not the last step.'),
