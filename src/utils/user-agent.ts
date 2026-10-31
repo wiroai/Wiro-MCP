@@ -624,8 +624,28 @@ export function formatAgentSummaryLines(agent: AgentSummary): string[] {
 
 const SHORTENED_NOTE = ' (its text is long; manage_agent_custom_skill history shows it in full)';
 
+/** A scheduled task as a list line: key, on or off, schedule and description, then shortenedNote if its text was cut. */
+export function formatScheduledTaskLine(task: AgentTask, shortenedNote = ''): string {
+  return `- \`${task.key}\` ${task.enabled ? 'on' : 'off'}${task.interval ? `, ${task.interval}` : ''}${task.description ? `: ${task.description}` : ''}${task.instructionsTruncated ? shortenedNote : ''}`;
+}
+
+/** A custom instruction as a list line: key, on or off and description, then shortenedNote if its text was cut. */
+export function formatCustomInstructionLine(task: AgentTask, shortenedNote = ''): string {
+  return `- \`${task.key}\` ${task.enabled ? 'on' : 'off'}${task.description ? `: ${task.description}` : ''}${task.instructionsTruncated ? shortenedNote : ''}`;
+}
+
 function formatRate(credits: number): string {
   return credits.toLocaleString('en-US', { maximumFractionDigits: 3 });
+}
+
+/** Each model with its credits per 1M input and output tokens, separated by semicolons. */
+export function formatModelRates(models: readonly SelectableModel[]): string {
+  return models.map(model => {
+    const name = model.label ? `${model.label} (${model.slug})` : model.slug;
+    return model.inputCreditsPer1M !== undefined && model.outputCreditsPer1M !== undefined
+      ? `${name} ${formatRate(model.inputCreditsPer1M)} and ${formatRate(model.outputCreditsPer1M)}`
+      : `${name} rate unknown`;
+  }).join('; ');
 }
 
 /** The chat and scheduled-task models, then every model the agent can switch to with its rates. */
@@ -635,13 +655,7 @@ function formatModelsLine(agent: AgentDetail): string | null {
   const parts: string[] = [];
   if (agent.models) parts.push(`chat ${nameOf(agent.models.chat)}, scheduled tasks ${nameOf(agent.models.cron)}.`);
   if (choices.length > 0) {
-    const rates = choices.map(model => {
-      const name = model.label ? `${model.label} (${model.slug})` : model.slug;
-      return model.inputCreditsPer1M !== undefined && model.outputCreditsPer1M !== undefined
-        ? `${name} ${formatRate(model.inputCreditsPer1M)} and ${formatRate(model.outputCreditsPer1M)}`
-        : `${name} rate unknown`;
-    });
-    parts.push(`Models you can switch to, in credits per 1M input and output tokens: ${rates.join('; ')}.`);
+    parts.push(`Models you can switch to, in credits per 1M input and output tokens: ${formatModelRates(choices)}.`);
   }
   return parts.length > 0 ? `**Models:** ${parts.join(' ')}` : null;
 }
@@ -682,15 +696,11 @@ export function formatAgentDetail(agent: AgentDetail): string {
   }
   if (agent.scheduledTasks.length > 0) {
     lines.push('', '### Scheduled tasks', '');
-    for (const task of agent.scheduledTasks) {
-      lines.push(`- \`${task.key}\` ${task.enabled ? 'on' : 'off'}${task.interval ? `, ${task.interval}` : ''}${task.description ? `: ${task.description}` : ''}${task.instructionsTruncated ? SHORTENED_NOTE : ''}`);
-    }
+    for (const task of agent.scheduledTasks) lines.push(formatScheduledTaskLine(task, SHORTENED_NOTE));
   }
   if (agent.customInstructions.length > 0) {
     lines.push('', '### Custom instructions', '');
-    for (const task of agent.customInstructions) {
-      lines.push(`- \`${task.key}\`${task.description ? `: ${task.description}` : ''}${task.instructionsTruncated ? SHORTENED_NOTE : ''}`);
-    }
+    for (const task of agent.customInstructions) lines.push(formatCustomInstructionLine(task, SHORTENED_NOTE));
   }
   lines.push('', `Dashboard: ${agent.dashboardUrl}`);
   return lines.join('\n');

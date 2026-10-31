@@ -475,6 +475,7 @@ test('get_agent_template returns what to ask for without preset values', async (
     assert.equal(template.skills[0].credentialKey, 'instagram');
     assert.deepEqual(template.models.selectable.map(model => model.slug), ['openai/gpt-5.6-sol']);
     assert.equal(template.models.selectable[0].inputCreditsPer1M, 625);
+    assert.ok(textOf(result).split('\n').includes('**Chat models:** default GPT-5.6 Sol. Models it can use, in credits per 1M input and output tokens: GPT-5.6 Sol (openai/gpt-5.6-sol) 625 and 3,750.'), textOf(result));
     assert.deepEqual(template.channels, [{ id: 'telegram', title: 'Telegram', credentialKey: 'telegram', requiredFields: ['bottoken', 'allowedusers'] }]);
     const serialized = JSON.stringify(result);
     for (const leaked of ['preset-app-id-value', 'https://preset.example', 'authorize_url', 'icon.svg']) {
@@ -498,12 +499,49 @@ test('get_agent_template leaves out a Wiro sign-in that the registry marks pendi
   });
 });
 
-test('get_agent_template looks a guid up by guid and asks for tasks when told to', async () => {
-  const fake = fakeClient({ '/Agent/Detail': { result: true, errors: [], agents: [templateRow({ scheduledskills: [{ key: 'cs-cron-x', value: 'Run', interval: '0 9 * * *', enabled: true }], customskills: [] })] } });
+test('get_agent_template looks a guid up by guid, asks for tasks when told to and prints them', async () => {
+  // Rows shaped like the template's own entries: the API returns them only for type 'full'.
+  const withTasks = templateRow({
+    scheduledskills: [
+      { key: 'cs-cron-x', value: 'Run', interval: '0 9 * * *', enabled: true },
+      { key: 'cs-cron-ga4-attribution-auditor', value: 'Audit the conversion tracking. '.repeat(20), description: 'Weekly conversion tracking audit', interval: '0 11 * * 1', enabled: false, _editable: true },
+    ],
+    customskills: [
+      { key: 'cs-approval-policy', value: '# Approval Policy\n\n' + 'Wait for the operator. '.repeat(20), description: 'Approval policy: how the agent should gate publish/send/modify actions before executing them.', interval: null, enabled: true, _editable: true },
+      { key: 'cs-adjust-strategy', value: 'Adjust rules.', description: 'Adjust attribution strategy', interval: null, enabled: false, _editable: true },
+    ],
+  });
+  const fake = fakeClient({ '/Agent/Detail': body => ({ result: true, errors: [], agents: [body.type === 'full' ? withTasks : templateRow()] }) });
   await withClient(fake, async client => {
     const result = await call(client, 'get_agent_template', { template: '0b3c2f1e-1a2b-4c3d-8e4f-5a6b7c8d9e0f', include_tasks: true });
     assert.deepEqual(fake.calls[0].body, { guid: '0b3c2f1e-1a2b-4c3d-8e4f-5a6b7c8d9e0f', type: 'full' });
     assert.equal(result.structuredContent.template.scheduledTasks[0].interval, '0 9 * * *');
+    assert.equal(result.structuredContent.template.customInstructions[0].instructionsTruncated, true);
+
+    // Without the flag nothing is added; with it the two sections come before About.
+    const plain = await call(client, 'get_agent_template', { template: '0b3c2f1e-1a2b-4c3d-8e4f-5a6b7c8d9e0f' });
+    assert.deepEqual(fake.calls[1].body, { guid: '0b3c2f1e-1a2b-4c3d-8e4f-5a6b7c8d9e0f' });
+    assert.doesNotMatch(textOf(plain), /### Scheduled tasks|### Custom instructions/);
+    const sections = [
+      '### Scheduled tasks',
+      '',
+      '- `cs-cron-x` on, 0 9 * * *',
+      '- `cs-cron-ga4-attribution-auditor` off, 0 11 * * 1: Weekly conversion tracking audit',
+      '',
+      '### Custom instructions',
+      '',
+      '- `cs-approval-policy` on: Approval policy: how the agent should gate publish/send/modify actions before executing them.',
+      '- `cs-adjust-strategy` off: Adjust attribution strategy',
+      '',
+      'A task or instruction that needs a credential switches on when that credential is saved.',
+    ].join('\n');
+    assert.equal(textOf(result), textOf(plain).replace('\n\n### About\n', `\n\n${sections}\n\n### About\n`));
+  });
+
+  const empty = fakeClient({ '/Agent/Detail': { result: true, errors: [], agents: [templateRow({ scheduledskills: [], customskills: [] })] } });
+  await withClient(empty, async client => {
+    const result = await call(client, 'get_agent_template', { template: 'instagram-manager', include_tasks: true });
+    assert.match(textOf(result), /\n### Scheduled tasks\n\nNone\.\n\n### Custom instructions\n\nNone\.\n\n### About\n/);
   });
 });
 
@@ -1201,7 +1239,7 @@ test('get_my_agent shows the agent\'s own prices and where a shortened entry is 
     assert.ok(lines[prices - 1].startsWith('**Credits:**'), 'the prices follow the credits line');
     assert.deepEqual(result.structuredContent.agent.pricing, { starter: { priceUsd: 15, monthlyCredits: 1500 }, pro: { priceUsd: 150, monthlyCredits: 15000 } });
     // The custom instruction is cut in the structured copy; the short scheduled task is not.
-    assert.ok(lines.includes('- `cs-content-strategy`: Content strategy (its text is long; manage_agent_custom_skill history shows it in full)'));
+    assert.ok(lines.includes('- `cs-content-strategy` on: Content strategy (its text is long; manage_agent_custom_skill history shows it in full)'));
     assert.ok(lines.includes('- `cs-cron-daily-scan` on, 0 9 * * *: Daily inbox scan'));
 
     const { tools } = await client.listTools();
@@ -1230,7 +1268,7 @@ test('get_my_agent marks an entry cut by even one character', async () => {
     const result = await call(client, 'get_my_agent', { agent_guid: 'ua-1' });
     const [entry] = result.structuredContent.agent.customInstructions;
     assert.equal(entry.instructionsTruncated, true);
-    assert.ok(textOf(result).split('\n').includes('- `cs-content-strategy`: Content strategy (its text is long; manage_agent_custom_skill history shows it in full)'));
+    assert.ok(textOf(result).split('\n').includes('- `cs-content-strategy` on: Content strategy (its text is long; manage_agent_custom_skill history shows it in full)'));
   });
 
   // Exactly at the limit nothing is cut; three characters over it is.

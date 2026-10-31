@@ -8,7 +8,14 @@ import {
   type CredentialRequirement,
   type TemplateDetail,
 } from '../utils/agent-catalog.js';
-import { formatCredits, formatUsd, isGuid } from '../utils/user-agent.js';
+import {
+  formatCredits,
+  formatCustomInstructionLine,
+  formatModelRates,
+  formatScheduledTaskLine,
+  formatUsd,
+  isGuid,
+} from '../utils/user-agent.js';
 import { nextActionSchema } from './schemas.js';
 
 function credentialLine(credential: CredentialRequirement): string {
@@ -50,7 +57,24 @@ function formatTemplate(template: TemplateDetail): string {
     lines.push('', `**Chat channels (optional):** ${template.channels.map(channel => `${channel.title} (${channel.requiredFields.join(', ')})`).join('; ')}`);
   }
   if (template.models.selectable.length > 0) {
-    lines.push('', `**Chat models:** ${template.models.selectable.map(model => model.label ?? model.slug).join(', ')}${template.models.default ? ` (default ${template.models.default})` : ''}`);
+    const { default: defaultModel, selectable } = template.models;
+    const defaultName = defaultModel ? selectable.find(model => model.slug === defaultModel)?.label ?? defaultModel : null;
+    lines.push('', `**Chat models:** ${defaultName ? `default ${defaultName}. ` : ''}`
+      + `Models it can use, in credits per 1M input and output tokens: ${formatModelRates(selectable)}.`);
+  }
+  // Only a read with include_tasks returns these.
+  if (template.scheduledTasks) {
+    lines.push('', '### Scheduled tasks', '');
+    if (template.scheduledTasks.length === 0) lines.push('None.');
+    for (const task of template.scheduledTasks) lines.push(formatScheduledTaskLine(task));
+  }
+  if (template.customInstructions) {
+    lines.push('', '### Custom instructions', '');
+    if (template.customInstructions.length === 0) lines.push('None.');
+    for (const task of template.customInstructions) lines.push(formatCustomInstructionLine(task));
+  }
+  if ((template.scheduledTasks?.length ?? 0) + (template.customInstructions?.length ?? 0) > 0) {
+    lines.push('', 'A task or instruction that needs a credential switches on when that credential is saved.');
   }
   if (template.description) lines.push('', '### About', '', template.description);
   return lines.join('\n');
