@@ -24,6 +24,7 @@ import {
   resolveExistingCustomSkillKey,
   restartNote,
   templateTaskTextError,
+  textBlock,
   toIsoTime,
   upsertCustomSkillKey,
   workspaceHint,
@@ -128,13 +129,6 @@ function toEntry(entry: CustomSkillEntry, full = false) {
     enabled: entry.enabled,
     origin: entry.userCreated ? 'user' as const : 'agent' as const,
   };
-}
-
-/** Text in a fence longer than any run of backticks inside it, so it shows as is. */
-function textBlock(value: string): string[] {
-  let fence = '```';
-  while (value.includes(fence)) fence += '`';
-  return [`${fence}text`, value, fence];
 }
 
 function kindLabel(kind: CustomSkillKind): string {
@@ -567,8 +561,9 @@ export function registerManageAgentCustomSkill(server: McpServer, client: WiroCl
         + 'Entries from the agent\'s template, cs-approval-policy and the scheduled tasks its skills '
         + 'brought cannot be deleted or renamed: set enabled false instead. The agent '
         + 'restarts when the text, schedule or on/off state changes. get_my_agent lists the '
-        + 'current entries. Registry skills are switched with apply_agent_skills instead. The agents '
-        + 'playbook (get_playbook) covers custom skills and schedules.',
+        + 'current entries. Registry skills are switched with apply_agent_skills instead. On a team agent '
+        + 'this needs a team admin or the person who deployed it; other team members read each entry in full '
+        + 'with get_my_agent (entry). The agents playbook (get_playbook) covers custom skills and schedules.',
       inputSchema: {
         action: z.enum(['upsert', 'rename', 'delete', 'history', 'revert'])
           .describe('What to do.'),

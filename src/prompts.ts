@@ -89,7 +89,7 @@ function talkToMyAgentText(agentName: string | undefined, message: string | unde
     '1. Call `list_my_agents` and find the agent by name. If there is no clear match, show me the list and ask.',
     '2. Call `get_my_agent`. The agent must be running (status 4) and have credits left. If it is stopped, ask me before starting it with `control_agent`, then wait until it runs. If it has no credits, tell me and stop there.',
     '3. Call `send_agent_message` with agent set to the agent\'s guid and the message. Use its main session ("default") unless I name another one.',
-    '4. If the reply is not ready, follow its `nextAction` with `get_agent_message`. If the agent moves the work to the background, read the result later with `get_agent_conversation`.',
+    '4. If the reply is not ready, follow its `nextAction` with `get_agent_message`. If the agent moves the work to the background, read the result later with `get_agent_conversation`, unless the turn\'s notes say it will not appear for this project.',
     '5. Show me the reply and any files.',
     '',
     'Each message uses the agent\'s credits. Confirm with me before any action that costs money, such as buying credits or renewing the plan.',

@@ -11,6 +11,7 @@ import {
   unixToIso,
   type ApiEnvelope,
 } from './api.js';
+import { planEndsWithPeriod } from './user-agent.js';
 
 // Helpers for configuring a deployed agent: its registry skills, credentials,
 // sign-in connections and custom skills. The pure functions mirror the server
@@ -415,8 +416,8 @@ export interface PlanBilling {
   periodEnd: number | null;
   daysRemaining: number | null;
   wallet: 'team' | 'personal';
-  /** Cancelled: the plan ends with this period and is not renewed. */
-  cancelAtPeriodEnd: boolean;
+  /** true: the plan ends with this period; false: it renews; null: not known, for a card plan without its card state. */
+  cancelAtPeriodEnd: boolean | null;
 }
 
 export function planBilling(row: Row): PlanBilling {
@@ -431,7 +432,7 @@ export function planBilling(row: Row): PlanBilling {
     periodEnd: toNumber(subscription.currentperiodend),
     daysRemaining: toNumber(subscription.daysremaining),
     wallet,
-    cancelAtPeriodEnd: subscription.pendingdowngrade === 'cancel' || row.stripecancelatperiodend === true,
+    cancelAtPeriodEnd: planEndsWithPeriod(subscription, row.stripecancelatperiodend),
   };
 }
 
@@ -1976,6 +1977,13 @@ export interface CustomSkillEntry {
   source: string;
   userCreated: boolean;
   requiresCredentials: string[];
+}
+
+/** Text in a fence longer than any run of backticks inside it, so it shows as is. */
+export function textBlock(value: string): string[] {
+  let fence = '```';
+  while (value.includes(fence)) fence += '`';
+  return [`${fence}text`, value, fence];
 }
 
 export function customSkillEntries(row: Row): CustomSkillEntry[] {

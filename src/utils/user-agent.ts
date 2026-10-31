@@ -79,8 +79,26 @@ export function describeAgentStatus(status: number | null | undefined): string {
     : `${STATUS_TEXT[label]} (${status})`;
 }
 
-export function agentStatusHint(status: number | null | undefined): string {
-  return STATUS_HINT[agentStatusLabel(status)];
+// On a team agent a team admin or the person who deployed it starts, changes
+// and pays for it (the organization's owner can also pay for it). Other members
+// can read it and message it, so their hints say who can act instead of naming
+// a call they cannot make.
+const TEAM_AGENT_MANAGERS = 'a team admin or the person who deployed it';
+// Connected accounts are the exception: Wiro lets only the person who
+// deployed the agent connect them (connect_agent_oauth).
+export const MEMBER_SETUP_HELP = `On this team agent, ${TEAM_AGENT_MANAGERS} saves credentials and pays for the plan. `
+  + 'Only the person who deployed it can connect accounts, such as Instagram or Google Ads.';
+
+const MEMBER_STATUS_HINT: Partial<Record<AgentStatusLabel, string>> = {
+  stopped: `It is not running. On this team agent, ${TEAM_AGENT_MANAGERS} can start it.`,
+  error: `The start failed or the agent stopped unexpectedly. On this team agent, ${TEAM_AGENT_MANAGERS} can start it again and read its logs.`,
+  setup_required: `${STATUS_HINT.setup_required} ${MEMBER_SETUP_HELP}`,
+};
+
+/** plainMember: the connection acts as a member of the agent's team without admin rights. */
+export function agentStatusHint(status: number | null | undefined, plainMember = false): string {
+  const label = agentStatusLabel(status);
+  return (plainMember ? MEMBER_STATUS_HINT[label] : undefined) ?? STATUS_HINT[label];
 }
 
 /** Stopping, queued and starting move on by themselves; every other status stays until someone acts. */
@@ -157,22 +175,40 @@ export const subscriptionSchema = z.object({
   periodEndsAt: z.string().optional(),
   daysRemaining: z.number().nullable(),
   cancelAtPeriodEnd: z.boolean(),
+  atPeriodEnd: z.enum(['renews', 'ends', 'unknown']).optional()
+    .describe('For an active plan, what happens at periodEndsAt: it renews, it ends, or unknown for a card plan whose renewal is managed in the Wiro dashboard.'),
 });
 
 export type AgentSubscription = z.infer<typeof subscriptionSchema>;
 
-export function toSubscription(value: unknown, cancelAtPeriodEnd?: unknown): AgentSubscription | null {
+/**
+ * Whether a plan ends with its current period: true when it ends, false when
+ * it renews, null when that is not known. A wallet plan says so itself, and a
+ * card plan moving to wallet billing renews from the wallet. Any other card
+ * plan is known only when the row carries its card state (cardEnds).
+ */
+export function planEndsWithPeriod(subscription: Record<string, unknown>, cardEnds?: unknown): boolean | null {
+  if (subscription.pendingdowngrade === 'cancel' || cardEnds === true) return true;
+  if (subscription.provider === 'prepaid' || subscription.nextprovider === 'prepaid' || cardEnds === false) return false;
+  return null;
+}
+
+export function toSubscription(value: unknown, cardEnds?: unknown): AgentSubscription | null {
   if (!isPlainObject(value)) return null;
   const provider = asString(value.provider) ?? 'stripe';
   const periodEndsAt = unixToIso(value.currentperiodend);
+  const status = asString(value.status) ?? 'expired';
+  const ends = planEndsWithPeriod(value, cardEnds);
   return {
-    status: asString(value.status) ?? 'expired',
+    status,
     billing: provider === 'prepaid' ? 'wallet' : 'card',
     switchingToWallet: provider !== 'prepaid' && value.nextprovider === 'prepaid',
     amountUsd: toNumber(value.amount),
     ...(periodEndsAt ? { periodEndsAt } : {}),
     daysRemaining: toNumber(value.daysremaining),
-    cancelAtPeriodEnd: value.pendingdowngrade === 'cancel' || cancelAtPeriodEnd === true,
+    // True only when the plan is known to end; atPeriodEnd also tells a plan that renews from an unknown one.
+    cancelAtPeriodEnd: ends === true,
+    ...(status === 'active' ? { atPeriodEnd: ends === true ? 'ends' as const : ends === false ? 'renews' as const : 'unknown' as const } : {}),
   };
 }
 
@@ -591,36 +627,67 @@ export function toAgentDetail(row: Record<string, unknown>): AgentDetail {
   };
 }
 
-export function formatSubscriptionLine(subscription: AgentSubscription | null): string {
-  if (!subscription) return 'No plan. manage_agent_billing with action subscribe starts one.';
+export function formatSubscriptionLine(subscription: AgentSubscription | null, plainMember = false): string {
+  if (!subscription) {
+    return plainMember
+      ? 'No plan. On this team agent, a team admin, the organization\'s owner or the person who deployed it can start one.'
+      : 'No plan. manage_agent_billing with action subscribe starts one.';
+  }
   const parts = [`${subscription.status}, billed ${subscription.billing === 'wallet' ? 'from the wallet' : 'by card'}`];
   if (subscription.amountUsd !== null) parts.push(`${formatUsd(subscription.amountUsd)} per 30 days`);
   if (subscription.periodEndsAt) {
+    const atPeriodEnd = subscription.atPeriodEnd ?? (subscription.cancelAtPeriodEnd ? 'ends' : 'renews');
     if (subscription.status !== 'active') {
       parts.push(`period ended ${subscription.periodEndsAt}`);
+    } else if (atPeriodEnd === 'ends') {
+      parts.push(`cancelled, ends after ${subscription.periodEndsAt}`);
+    } else if (atPeriodEnd === 'renews') {
+      parts.push(`renews after ${subscription.periodEndsAt}`);
     } else {
-      parts.push(subscription.cancelAtPeriodEnd
-        ? `cancelled, ends after ${subscription.periodEndsAt}`
-        : `renews after ${subscription.periodEndsAt}`);
+      // Whether this card plan renews is not known here.
+      parts.push(`paid through ${subscription.periodEndsAt}`);
     }
   }
   if (subscription.switchingToWallet) parts.push('switching to wallet billing at period end');
   return parts.join(', ');
 }
 
-export function formatAgentSummaryLines(agent: AgentSummary): string[] {
+/** Without an active plan, an agent starts only on the extra credits it has left. */
+export function startNeedsPlan(agent: Pick<AgentSummary, 'subscription' | 'credits'>): boolean {
+  return agent.subscription?.status !== 'active' && agent.credits.extra <= 0;
+}
+
+/** renew brings back an expired wallet plan; any other agent without an active plan takes a new one. */
+function planActionForStart(agent: Pick<AgentSummary, 'subscription'>): 'renew' | 'subscribe' {
+  return agent.subscription?.status === 'expired' && agent.subscription.billing === 'wallet' ? 'renew' : 'subscribe';
+}
+
+function noPlanStartHint(agent: Pick<AgentSummary, 'subscription'>): string {
+  return 'It has no active plan and no extra credits left, so it cannot start. '
+    + (planActionForStart(agent) === 'renew'
+      ? 'Its wallet plan has expired; manage_agent_billing with action renew restarts it.'
+      : 'manage_agent_billing with action subscribe pays for a plan and starts the agent.');
+}
+
+export function formatAgentSummaryLines(agent: AgentSummary, plainMember = false): string[] {
   const template = agent.template.custom
     ? 'custom build'
     : `template ${agent.template.title ?? agent.template.slug ?? agent.template.guid}`;
+  const hint = !plainMember && (agent.status === 0 || agent.status === 5) && startNeedsPlan(agent)
+    ? `${agent.status === 5 ? 'The start failed or the agent stopped unexpectedly.' : 'It is not running.'} ${noPlanStartHint(agent)}`
+    : agentStatusHint(agent.status, plainMember);
   return [
     `**Agent:** ${agent.title} (\`${agent.guid}\`), ${template}, ${agent.workspace} workspace`,
-    `**Status:** ${describeAgentStatus(agent.status)}. ${agentStatusHint(agent.status)}`,
-    `**Plan:** ${agent.tier ?? 'no tier'}; ${formatSubscriptionLine(agent.subscription)}`,
+    `**Status:** ${describeAgentStatus(agent.status)}. ${hint}`,
+    `**Plan:** ${agent.tier ?? 'no tier'}; ${formatSubscriptionLine(agent.subscription, plainMember)}`,
     `**Credits:** ${formatCredits(agent.credits.remaining)} left (monthly ${formatCredits(agent.credits.monthly)}, extra ${formatCredits(agent.credits.extra)}, used ${formatCredits(agent.credits.used)})`,
   ];
 }
 
-const SHORTENED_NOTE = ' (its text is long; manage_agent_custom_skill history shows it in full)';
+/** Where an entry the list shortens is read in full. */
+function shortenedNote(key: string): string {
+  return ` (its text is long; get_my_agent with entry "${key}" shows it in full)`;
+}
 
 /** A scheduled task as a list line: key, on or off, schedule and description, then shortenedNote if its text was cut. */
 export function formatScheduledTaskLine(task: AgentTask, shortenedNote = ''): string {
@@ -658,8 +725,8 @@ function formatModelsLine(agent: AgentDetail): string | null {
   return parts.length > 0 ? `**Models:** ${parts.join(' ')}` : null;
 }
 
-export function formatAgentDetail(agent: AgentDetail): string {
-  const lines = formatAgentSummaryLines(agent);
+export function formatAgentDetail(agent: AgentDetail, plainMember = false): string {
+  const lines = formatAgentSummaryLines(agent, plainMember);
   if (agent.pricing) {
     // Today's Starter and Pro prices for this agent's own skills, which can
     // differ from its template's and from the price its plan pays.
@@ -695,11 +762,11 @@ export function formatAgentDetail(agent: AgentDetail): string {
   }
   if (agent.scheduledTasks.length > 0) {
     lines.push('', '### Scheduled tasks', '');
-    for (const task of agent.scheduledTasks) lines.push(formatScheduledTaskLine(task, SHORTENED_NOTE));
+    for (const task of agent.scheduledTasks) lines.push(formatScheduledTaskLine(task, shortenedNote(task.key)));
   }
   if (agent.customInstructions.length > 0) {
     lines.push('', '### Custom instructions', '');
-    for (const task of agent.customInstructions) lines.push(formatCustomInstructionLine(task, SHORTENED_NOTE));
+    for (const task of agent.customInstructions) lines.push(formatCustomInstructionLine(task, shortenedNote(task.key)));
   }
   lines.push('', `Dashboard: ${agent.dashboardUrl}`);
   return lines.join('\n');
@@ -831,8 +898,20 @@ export function missingCredentialStep(agent: Pick<AgentDetail, 'guid' | 'missing
     };
 }
 
-/** The most useful next call for an agent in this state, if any. */
-export function nextStepForAgent(agent: AgentDetail, waitSeconds: number): NextAction | undefined {
+/**
+ * The most useful next call for an agent in this state, if any. For a team
+ * member without admin rights it is only the wait for a status that moves on
+ * by itself.
+ */
+export function nextStepForAgent(agent: AgentDetail, waitSeconds: number, plainMember = false): NextAction | undefined {
+  const wait = isTransitionalStatus(agent.status)
+    ? {
+      tool: 'get_my_agent',
+      arguments: { agent_guid: agent.guid, wait_seconds: waitSeconds },
+      reason: 'Wait until the agent has settled. Do not repeat the action that started it.',
+    }
+    : undefined;
+  if (plainMember) return wait;
   if (agent.status === 6 && agent.subscription?.status !== 'active') {
     return {
       tool: 'manage_agent_billing',
@@ -842,11 +921,12 @@ export function nextStepForAgent(agent: AgentDetail, waitSeconds: number): NextA
   }
   const missing = agent.missingCredentials[0];
   if (missing) return missingCredentialStep(agent);
-  if (isTransitionalStatus(agent.status)) {
+  if (wait) return wait;
+  if ((agent.status === 0 || agent.status === 5) && startNeedsPlan(agent)) {
     return {
-      tool: 'get_my_agent',
-      arguments: { agent_guid: agent.guid, wait_seconds: waitSeconds },
-      reason: 'Wait until the agent has settled. Do not repeat the action that started it.',
+      tool: 'manage_agent_billing',
+      arguments: { agent_guid: agent.guid, action: planActionForStart(agent) },
+      reason: 'The agent has no active plan and no extra credits left, so it cannot start. This returns the price; nothing is charged without confirm: true.',
     };
   }
   if (agent.status === 0 || agent.status === 5) {
@@ -907,8 +987,17 @@ export function outcomeUnknown(error: unknown): boolean {
   return true;
 }
 
-/** Advice for a status reached after a start, renew or deploy. */
-export function settledStatusAdvice(status: number | null): string {
+/** Advice for a status reached after a start, renew or deploy. With the agent, a failed agent without a plan or extra credits is sent to billing. */
+export function settledStatusAdvice(status: number | null, plainMember = false, agent?: Pick<AgentSummary, 'subscription' | 'credits'>): string {
+  if (!plainMember && agent && status === 5 && startNeedsPlan(agent)) {
+    return `The agent failed to start. ${noPlanStartHint(agent)}`;
+  }
+  if (plainMember && status === 5) {
+    return `The agent failed to start. On this team agent, ${TEAM_AGENT_MANAGERS} can start it again and read its logs.`;
+  }
+  if (plainMember && status === 6) {
+    return `The agent needs setup: it has no paid plan, or required credentials are missing. ${MEMBER_SETUP_HELP}`;
+  }
   switch (status) {
     case 4:
       return 'The agent is running. send_agent_message with agent set to its guid talks to it.';
@@ -919,6 +1008,6 @@ export function settledStatusAdvice(status: number | null): string {
     case 6:
       return 'The agent needs setup: it has no paid plan, or required credentials are missing.';
     default:
-      return agentStatusHint(status);
+      return agentStatusHint(status, plainMember);
   }
 }

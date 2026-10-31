@@ -32,6 +32,7 @@ import {
 } from '../utils/agent-config.js';
 import { fetchPublicFile, type RemoteFile } from '../utils/remote-file.js';
 import { toAgentDetail } from '../utils/user-agent.js';
+import { isPlainTeamMember } from '../utils/workspace.js';
 import { nextActionSchema } from './schemas.js';
 
 const credentialValueSchema = z.union([
@@ -303,6 +304,8 @@ export function registerSetAgentCredentials(server: McpServer, client: WiroClien
         + 'Google Ads, YouTube, Meta and HubSpot) are then connected with connect_agent_oauth; Gmail, Google '
         + 'Calendar and Google Drive are not sign-ins and are set here. Only save a Wiro project API '
         + 'key (credential "wiro") that the user gave you: model runs are billed to its wallet. '
+        + 'On a team agent this needs a team admin or the person who deployed it; other team members can read '
+        + 'the agent with get_my_agent and message it, so do not ask them for values they cannot save. '
         + 'The agents playbook (get_playbook) has the full setup walkthrough.',
       inputSchema: {
         agent_guid: z.string().min(1).describe('The deployed agent\'s guid, from list_my_agents.'),
@@ -519,6 +522,12 @@ async function describeCredential(
   const redirectUri = meta.oauth && meta.connectionModes.includes('own') ? ownAppRedirectUri(meta) : undefined;
   const fields = meta.fields.map(describeField);
 
+  if (row && await isPlainTeamMember(client, row, signal)) {
+    notes.push('This connection acts as a member of this agent\'s team without admin rights, so it can save credentials '
+      + 'here only if the person who created the connected project deployed the agent. Before asking for any value, ask '
+      + 'the user whether they created this project and deployed the agent. If not, a team admin or the person who '
+      + 'deployed it saves them in the Wiro dashboard.');
+  }
   if (meta.platformOnly) notes.push(`${meta.title} is managed by Wiro; there is nothing to set.`);
   if (meta.channel) {
     notes.push(`${meta.title} turns on by itself once these are set: ${meta.channel.requiredFields.map(field => meta.fields.find(candidate => candidate.key === field)?.label ?? field).join(', ')}. Clearing one turns it off.`);

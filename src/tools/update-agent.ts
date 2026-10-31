@@ -44,7 +44,8 @@ export function registerUpdateAgent(server: McpServer, client: WiroClient): void
         + 'running or starting agent restarts to apply the change. Calling it with only agent_guid refreshes '
         + 'the setup status of an agent waiting for setup, after its credentials were set. Skills, credentials and '
         + 'custom instructions have their own tools (apply_agent_skills, set_agent_credentials, '
-        + 'manage_agent_custom_skill).',
+        + 'manage_agent_custom_skill). On a team agent this needs a team admin or the person who deployed it; '
+        + 'other team members can read the agent with get_my_agent and message it.',
       inputSchema: {
         agent_guid: z.string().min(1).max(100)
           .describe('The deployed agent\'s guid, from list_my_agents or deploy_agent.'),

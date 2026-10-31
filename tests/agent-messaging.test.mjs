@@ -388,6 +388,35 @@ test('deployed agent refusals explain the fix and point to the right tool', asyn
   }
 });
 
+test('deployed agent refusals say who can act on a team agent without reading the agent', async () => {
+  const cases = [
+    [0, 'Agent is stopped. Start it from the agent panel before sending messages.', /On a team agent, starting it needs a team admin or the person who deployed it\.$/],
+    [5, 'Agent is in error state. Restart it from the agent panel before sending messages.', /On a team agent, both need a team admin or the person who deployed it\.$/],
+    [6, 'Agent setup is incomplete. Complete the setup before sending messages.', /On a team agent, a team admin or the person who deployed it saves credentials and pays for the plan, and only the person who deployed it can use connect_agent_oauth\.$/],
+  ];
+  for (const [agentstatus, message, expect] of cases) {
+    const fake = fakeClient({ '/UserAgent/Message/Send': { result: false, errors: [{ code: 0, message }], agentstatus } });
+    await withClient(fake, async client => {
+      const result = await client.callTool({ name: 'send_agent_message', arguments: { agent: 'agent-guid-1', message: 'hello' } });
+      assert.match(textOf(result), expect);
+      assert.deepEqual(fake.calls.map(call => call.path), ['/UserAgent/Message/Send']);
+    });
+  }
+  const credits = fakeClient({
+    '/UserAgent/Message/Send': {
+      result: false,
+      errors: [{ code: 0, message: 'Agent has no remaining credits. Renew your subscription or buy a credit pack to continue.' }],
+      agentstatus: 4,
+      agentbalance: { monthlycredits: 1000, extracredits: 0, usedcredits: 1000, remainingcredits: 0 },
+    },
+  });
+  await withClient(credits, async client => {
+    const result = await client.callTool({ name: 'send_agent_message', arguments: { agent: 'agent-guid-1', message: 'hello' } });
+    assert.match(textOf(result), /then send the message again\. On a team agent, paying needs a team admin, the organization's owner or the person who deployed it\.$/);
+    assert.equal(credits.calls.length, 1);
+  });
+});
+
 test('Studio wallet and availability refusals say what to do without repeating credit numbers', async () => {
   const wallet = fakeClient({
     '/Studio/Message/Send': {
@@ -1325,6 +1354,96 @@ test('a background hand-off points to the conversation instead of a resend', asy
       useragentguid: 'agent-guid-1',
       sessionkey: 'default',
     });
+  });
+});
+
+// A message sent from a team project names the team; the agent row says whose
+// chats are private and who deployed the agent.
+const HAND_OFF_REPLY = 'Working on it in the background. The result will appear in this chat when it is ready.';
+
+function teamAgentDetail(overrides = {}) {
+  return {
+    result: true,
+    errors: [],
+    useragents: [{ guid: 'agent-guid-1', uuid: 'owner-uuid-1234', teamguid: 'team-guid-1', teamsessionmode: 'private', ...overrides }],
+  };
+}
+
+async function handOff({ sender, detail, metadata = { teamguid: 'team-guid-1' } }) {
+  const fake = fakeClient({
+    '/UserAgent/Message/Detail': {
+      result: true,
+      errors: [],
+      data: messageRow({ guid: 'msg-9', uuid: sender, sessionkey: 'default', status: 'agent_end', response: HAND_OFF_REPLY, metadata, user: { uuid: sender } }),
+    },
+    ...(detail === undefined ? {} : { '/UserAgent/Detail': detail }),
+  });
+  let result;
+  await withClient(fake, async client => {
+    result = await client.callTool({
+      name: 'get_agent_message',
+      arguments: { agent: 'agent-guid-1', message_id: 'msg-9', session: 'default' },
+    });
+  });
+  assert.notEqual(result.isError, true, textOf(result));
+  assertNoSecrets(result);
+  assert.doesNotMatch(JSON.stringify(result), /team-guid-1|member-uuid-5678/);
+  return { output: result.structuredContent, fake };
+}
+
+test('a member who did not deploy a private team agent is told its later result will not appear', async () => {
+  const { output, fake } = await handOff({ sender: 'member-uuid-5678', detail: teamAgentDetail() });
+  assert.equal(output.background, true);
+  assert.equal(output.nextAction, undefined);
+  const notes = output.notes.join(' ');
+  assert.match(notes, /This team agent keeps a private chat for each member, and its result will not appear for this project: tell the user so instead of waiting for it\. Do not send the request again\./);
+  assert.match(notes, /update_agent \(team_session_mode\)/);
+  assert.doesNotMatch(notes, /only with a project|show only to/);
+  assert.equal(fake.callsTo('/UserAgent/Detail').length, 1);
+});
+
+test('the person who deployed a private team agent keeps the plain hand-off note', async () => {
+  const { output } = await handOff({ sender: 'owner-uuid-1234', detail: teamAgentDetail() });
+  assert.equal(output.nextAction.tool, 'get_agent_conversation');
+  assert.doesNotMatch(output.notes.join(' '), /private chat/);
+});
+
+test('a collaborative team agent and a personal agent keep the plain hand-off note', async () => {
+  const collaborative = await handOff({ sender: 'member-uuid-5678', detail: teamAgentDetail({ teamsessionmode: 'collaborative' }) });
+  assert.equal(collaborative.output.nextAction.tool, 'get_agent_conversation');
+  assert.doesNotMatch(collaborative.output.notes.join(' '), /private chat/);
+
+  // A message sent from a personal project names no team, so the agent is not read.
+  const personal = await handOff({ sender: 'owner-uuid-1234', metadata: {} });
+  assert.equal(personal.output.nextAction.tool, 'get_agent_conversation');
+  assert.doesNotMatch(personal.output.notes.join(' '), /private chat/);
+  assert.equal(personal.fake.callsTo('/UserAgent/Detail').length, 0);
+});
+
+test('when the deployer of a private team agent cannot be told, the note says a later result may not be listed', async () => {
+  const { output } = await handOff({ sender: 'member-uuid-5678', detail: teamAgentDetail({ uuid: undefined }) });
+  assert.equal(output.nextAction.tool, 'get_agent_conversation');
+  assert.match(output.notes.join(' '), /read it with get_agent_conversation\. Do not send the request again\. On a team agent with private chats, a result that arrives later may not be listed for this project; if it does not appear, tell the user so\./);
+});
+
+test('a team agent that cannot be read keeps the plain hand-off note', async () => {
+  const { output } = await handOff({ sender: 'member-uuid-5678', detail: { result: false, errors: [{ code: 0, message: 'User agent not found' }] } });
+  assert.equal(output.nextAction.tool, 'get_agent_conversation');
+  assert.doesNotMatch(output.notes.join(' '), /private chat/);
+});
+
+test('get_agent_conversation and the agent prompt cover later results of a private team chat', async () => {
+  await withClient(fakeClient({}), async client => {
+    const { tools } = await client.listTools();
+    const conversation = tools.find(tool => tool.name === 'get_agent_conversation');
+    assert.match(conversation.description, /On a team agent with private chats, results that arrive later and scheduled task reports may not be listed here for every member's project\./);
+    assert.doesNotMatch(conversation.description, /only with a project/);
+    const playbook = await client.callTool({ name: 'get_playbook', arguments: { topics: ['agents'] } });
+    assert.match(textOf(playbook), /they may not be listed for every member's project: when a turn says its result will not appear for this project, tell the user so instead of waiting\./);
+    assert.doesNotMatch(textOf(playbook), /only with a project/);
+    assert.equal(/[\u2013\u2014]/.test(conversation.description), false);
+    const prompt = await client.getPrompt({ name: 'talk_to_my_agent', arguments: { agent_name: 'Blog poster', message: 'Hi' } });
+    assert.match(prompt.messages[0].content.text, /unless the turn's notes say it will not appear for this project/);
   });
 });
 

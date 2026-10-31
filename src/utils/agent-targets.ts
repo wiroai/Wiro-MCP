@@ -273,18 +273,24 @@ export async function readAgentMessage(
 
 // ─── Send refusals ──────────────────────────────────────────────────
 
+// These texts serve personal and team agents alike, so each one also names
+// who can take its steps on a team agent.
 const DEPLOYED_STATUS_HELP: Record<number, string> = {
   0: 'Your agent is stopped. Start it with control_agent (action "start"), wait until get_my_agent '
-    + 'shows it running, then send the message again.',
+    + 'shows it running, then send the message again. On a team agent, starting it needs a team admin or the '
+    + 'person who deployed it.',
   1: 'Your agent is stopping. Wait a moment, check get_my_agent, and start it again with control_agent '
     + 'if you still need it.',
   2: 'Your agent is queued to start, which can take a while. Wait until get_my_agent shows it running, then send the message again.',
   3: 'Your agent is starting. Wait 30 to 60 seconds and send the message again; get_my_agent shows when it is running.',
   5: 'Your agent is in an error state. Restart it with control_agent (action "restart"); '
-    + 'get_agent_activity (logs) can show what went wrong.',
+    + 'get_agent_activity (logs) can show what went wrong. On a team agent, both need a team admin or the '
+    + 'person who deployed it.',
   6: 'Your agent\'s setup is incomplete. get_my_agent lists the missing credentials or connections; '
     + 'complete them with set_agent_credentials or connect_agent_oauth, then start the agent. If get_my_agent '
-    + 'shows no active plan, pay for one with manage_agent_billing (action subscribe), which returns the price first.',
+    + 'shows no active plan, pay for one with manage_agent_billing (action subscribe), which returns the price first. '
+    + 'On a team agent, a team admin or the person who deployed it saves credentials and pays for the plan, '
+    + 'and only the person who deployed it can use connect_agent_oauth.',
 };
 
 export interface SelectableModels {
@@ -385,7 +391,8 @@ export async function explainSendRefusal(
         + (monthly !== null || extra !== null || used !== null
           ? ` (monthly ${monthly ?? 0}, extra ${extra ?? 0}, used ${used ?? 0})`
           : '')
-        + '. Renew the subscription or buy a credit pack with manage_agent_billing, then send the message again.';
+        + '. Renew the subscription or buy a credit pack with manage_agent_billing, then send the message again. '
+        + 'On a team agent, paying needs a team admin, the organization\'s owner or the person who deployed it.';
     }
     const status = toNumber(response.agentstatus);
     if (status !== null) {

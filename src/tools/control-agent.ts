@@ -9,6 +9,7 @@ import {
   agentSummarySchema,
   describeAgentStatus,
   isTransitionalStatus,
+  MEMBER_SETUP_HELP,
   missingCredentialStep,
   nextStepForAgent,
   readAgentDetail,
@@ -20,6 +21,7 @@ import {
   type AgentDetail,
   type NextAction,
 } from '../utils/user-agent.js';
+import { isPlainTeamMember } from '../utils/workspace.js';
 import { nextActionSchema } from './schemas.js';
 
 type Outcome = 'requested' | 'not_needed' | 'refused';
@@ -41,7 +43,13 @@ function waitAction(guid: string): NextAction {
   };
 }
 
-function setupRefusal(agent: AgentDetail): Decision {
+function setupRefusal(agent: AgentDetail, plainMember = false): Decision {
+  if (plainMember) {
+    return {
+      outcome: 'refused',
+      message: `The agent cannot start until it has a paid plan and its setup is finished. ${MEMBER_SETUP_HELP}`,
+    };
+  }
   if (agent.subscription?.status !== 'active') {
     return {
       outcome: 'refused',
@@ -134,7 +142,9 @@ export function registerControlAgent(server: McpServer, client: WiroClient): voi
         + '30 days and starts the agent again, so cancel the plan with manage_agent_billing to stop paying. '
         + 'A restart reloads the agent with its current settings. The change finishes in the background: pass '
         + 'wait_seconds, or follow the returned nextAction, to see the result. When a start is refused, the '
-        + 'result says what to do next (subscribe, renew, buy credits or finish setup).',
+        + 'result says what to do next (subscribe, renew, buy credits or finish setup). On a team agent this '
+        + 'needs a team admin or the person who deployed it; other team members can read the agent with '
+        + 'get_my_agent and message it.',
       inputSchema: {
         agent_guid: z.string().min(1).max(100)
           .describe('The deployed agent\'s guid, from list_my_agents or deploy_agent.'),
@@ -169,6 +179,7 @@ export function registerControlAgent(server: McpServer, client: WiroClient): voi
         const before = await readAgentDetail(client, guid, extra.signal);
         const previous = readAgentStatus(before);
         const current = toAgentDetail(before);
+        const plainMember = await isPlainTeamMember(client, before, extra.signal);
 
         let call: { path: string; fallback: string } | null = null;
         let decision: Decision | null = null;
@@ -185,7 +196,7 @@ export function registerControlAgent(server: McpServer, client: WiroClient): voi
           } else if (previous === 1) {
             decision = stillStopping;
           } else if (previous === 6) {
-            decision = setupRefusal(current);
+            decision = setupRefusal(current, plainMember);
           } else {
             call = start;
           }
@@ -209,7 +220,7 @@ export function registerControlAgent(server: McpServer, client: WiroClient): voi
         } else if (previous === 1) {
           decision = stillStopping;
         } else {
-          decision = setupRefusal(current);
+          decision = setupRefusal(current, plainMember);
         }
 
         if (call) {
@@ -263,8 +274,8 @@ export function registerControlAgent(server: McpServer, client: WiroClient): voi
           if (!settled) {
             nextAction = waitAction(guid);
           } else {
-            if (waitedSeconds !== undefined) message += ` ${settledStatusAdvice(status)}`;
-            nextAction = action === 'stop' ? undefined : nextAction ?? nextStepForAgent(afterView, DEFAULT_WAIT_SECONDS);
+            if (waitedSeconds !== undefined) message += ` ${settledStatusAdvice(status, plainMember)}`;
+            nextAction = action === 'stop' ? undefined : nextAction ?? nextStepForAgent(afterView, DEFAULT_WAIT_SECONDS, plainMember);
           }
         }
 

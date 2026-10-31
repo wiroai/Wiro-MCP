@@ -9,6 +9,7 @@ import {
   formatSubscriptionLine,
   toAgentSummary,
 } from '../utils/user-agent.js';
+import { isPlainTeamMember } from '../utils/workspace.js';
 import { nextActionSchema } from './schemas.js';
 
 const SORTS = {
@@ -67,6 +68,8 @@ export function registerListMyAgents(server: McpServer, client: WiroClient): voi
         // One page is read, so a full page means there may be more.
         const nextStart = rows.length >= limit ? start + rows.length : null;
         const first = agents[0];
+        // Every listed agent belongs to the connected project's workspace, so one lookup covers the page.
+        const plainMember = rows[0] ? await isPlainTeamMember(client, rows[0], extra.signal) : false;
 
         const lines = [`## My agents (${agents.length})`, ''];
         if (agents.length === 0) {
@@ -77,7 +80,7 @@ export function registerListMyAgents(server: McpServer, client: WiroClient): voi
         for (const agent of agents) {
           lines.push(
             `- **${agent.title}** (\`${agent.guid}\`): ${describeAgentStatus(agent.status)}${agent.setupRequired ? ', setup required' : ''}; `
-            + `${agent.tier ?? 'no tier'}; ${formatCredits(agent.credits.remaining)} credits left; ${formatSubscriptionLine(agent.subscription)}`,
+            + `${agent.tier ?? 'no tier'}; ${formatCredits(agent.credits.remaining)} credits left; ${formatSubscriptionLine(agent.subscription, plainMember)}`,
           );
         }
         if (nextStart !== null) lines.push('', `More agents may exist: call list_my_agents with start ${nextStart}.`);

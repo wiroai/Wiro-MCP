@@ -1,14 +1,11 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { WiroClient } from '../client.js';
-import { asString, errorResult, isPlainObject, requireApiSuccess, type ApiEnvelope } from '../utils/api.js';
+import { asString, errorResult, requireApiSuccess, type ApiEnvelope } from '../utils/api.js';
+import { primaryWallet, readTeamMemberships, type TeamRole } from '../utils/workspace.js';
 
 interface WalletListResponse extends ApiEnvelope {
   wallet?: Array<Record<string, unknown>>;
-}
-
-interface OrganizationListResponse extends ApiEnvelope {
-  organizations?: Array<Record<string, unknown>>;
 }
 
 function money(value: unknown): number {
@@ -23,13 +20,15 @@ export function registerGetAccount(server: McpServer, client: WiroClient): void 
       title: 'Get Wiro account balance and workspace',
       description: 'Show which workspace the connected project belongs to (personal, or a team) and that '
         + 'workspace\'s wallet balance. Everything run or bought through this connection is charged to this '
-        + 'wallet. Use it before paid work and when a call is refused for insufficient balance.',
+        + 'wallet. In a team it also gives the team role calls act with, admin or member. Use it before paid '
+        + 'work and when a call is refused for insufficient balance.',
       inputSchema: {},
       outputSchema: {
         workspace: z.object({
           kind: z.enum(['personal', 'team', 'unknown']),
           teamName: z.string().optional(),
           organizationName: z.string().optional(),
+          role: z.enum(['admin', 'member']).optional(),
         }),
         balance: z.object({
           currency: z.literal('USD'),
@@ -54,7 +53,7 @@ export function registerGetAccount(server: McpServer, client: WiroClient): void 
         if (walletResult.result !== true && wallets.length === 0) {
           requireApiSuccess(walletResult, 'Could not read the wallet.');
         }
-        const wallet = wallets.find(row => row.symbol === 'USD') ?? wallets[0];
+        const wallet = primaryWallet(wallets);
         const balance = wallet
           ? (() => {
             const depositUsd = money(wallet.amount);
@@ -70,27 +69,25 @@ export function registerGetAccount(server: McpServer, client: WiroClient): void 
           })()
           : null;
 
-        // Team wallets are keyed by the team id, personal wallets by the user id,
-        // so the wallet's owner tells which workspace the key belongs to.
-        let workspace: { kind: 'personal' | 'team' | 'unknown'; teamName?: string; organizationName?: string } = { kind: 'unknown' };
+        // The wallet's owner is the team for a team project.
+        let workspace: {
+          kind: 'personal' | 'team' | 'unknown';
+          teamName?: string;
+          organizationName?: string;
+          role?: TeamRole;
+        } = { kind: 'unknown' };
         const walletOwner = wallet ? asString(wallet.uuid) : undefined;
         try {
-          const organizations = await client.post<OrganizationListResponse>('/Organization/List', {}, extra.signal);
-          if (organizations.result === true) {
-            workspace = { kind: 'personal' };
-            for (const organization of organizations.organizations ?? []) {
-              const teams = Array.isArray(organization.teams) ? organization.teams.filter(isPlainObject) : [];
-              const team = teams.find(candidate => walletOwner && candidate.guid === walletOwner);
-              if (team) {
-                workspace = {
-                  kind: 'team',
-                  ...(asString(team.name) ? { teamName: asString(team.name) } : {}),
-                  ...(asString(organization.name) ? { organizationName: asString(organization.name) } : {}),
-                };
-                break;
-              }
+          const teams = await readTeamMemberships(client, extra.signal);
+          const team = walletOwner ? teams.find(candidate => candidate.guid === walletOwner) : undefined;
+          workspace = team
+            ? {
+              kind: 'team',
+              ...(team.teamName ? { teamName: team.teamName } : {}),
+              ...(team.organizationName ? { organizationName: team.organizationName } : {}),
+              ...(team.role ? { role: team.role } : {}),
             }
-          }
+            : { kind: 'personal' };
         } catch {
           // The balance is still useful without the workspace name.
         }
@@ -99,6 +96,7 @@ export function registerGetAccount(server: McpServer, client: WiroClient): void 
         lines.push(`**Workspace:** ${workspace.kind === 'team'
           ? `team ${workspace.teamName ?? ''}${workspace.organizationName ? ` (${workspace.organizationName})` : ''}`.trim()
           : workspace.kind}`);
+        if (workspace.role) lines.push(`**Role in this team:** ${workspace.role}`);
         if (balance) {
           lines.push(`**Balance:** $${balance.totalUsd}`);
           lines.push(`- Deposits: $${balance.depositUsd}`);
@@ -109,6 +107,10 @@ export function registerGetAccount(server: McpServer, client: WiroClient): void 
         }
         if (workspace.kind === 'team') {
           lines.push('', 'Team spend limits and the team\'s model rules can still refuse a run when the wallet has money.');
+        }
+        if (workspace.role === 'member') {
+          lines.push('Only a team admin can deploy an agent in this team. Starting, changing or paying for a team agent '
+            + 'needs a team admin or the person who deployed it (for payments also the organization\'s owner).');
         }
 
         return {

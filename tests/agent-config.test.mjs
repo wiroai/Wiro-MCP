@@ -964,7 +964,99 @@ test('apply_agent_skills tells a card plan that nothing is charged now', async (
     assert.equal(result.structuredContent.billing.wallet, 'team');
     assert.equal(result.structuredContent.billing.estimatedChargeNowUsd, null);
     assert.match(result.structuredContent.billing.note, /Nothing is charged now.*next invoice/);
+    // The Detail row carries no card state here, so the note does not say the plan renews.
+    assert.match(result.structuredContent.billing.note, /The new monthly price is \$\d/);
+    assert.doesNotMatch(result.structuredContent.billing.note, /renews/);
     assert.doesNotMatch(JSON.stringify(result.structuredContent), /team-1/);
+  });
+});
+
+// The connected project's creator in the team that owns the agent.
+function teamRole(role) {
+  return {
+    result: true,
+    errors: [],
+    organizations: [{ guid: 'org-1', name: 'Acme', status: 1, teams: [{ guid: 'team-1', name: 'Growth', status: 1, role }] }],
+  };
+}
+
+const TEAM_ADMIN_REQUIRED = { result: false, errors: [{ code: 97, message: 'Only a team admin can perform this action on a team-owned agent.' }] };
+
+test('apply_agent_skills stops a team member who cannot change the skills before the quote', async () => {
+  const member = fakeClient(skillRoutes({
+    '/UserAgent/Detail': detail({ teamguid: 'team-1' }),
+    '/Organization/List': teamRole('member'),
+    '/UserAgent/TransactionList': TEAM_ADMIN_REQUIRED,
+  }));
+  await withClient(member, async client => {
+    const result = await client.callTool({ name: 'apply_agent_skills', arguments: { agent_guid: AGENT, skills: { 'int-instagram-post': true } } });
+    assert.equal(result.isError, true);
+    assert.equal(result.structuredContent.status, 'refused');
+    assert.equal(result.structuredContent.error.code, 97);
+    assert.equal(result.structuredContent.idempotencyKey, undefined);
+    assert.equal(result.structuredContent.restart, 'Nothing changed, so the agent does not restart.');
+    assert.match(text(result), /^## Skill change not possible\n\nOnly a team admin or the person who deployed this agent can change its skills, and this connection acts as a team member without those rights\. Nothing was quoted, changed or charged\./);
+    assert.equal(member.paths().includes('/UserAgent/PricingPreview'), false);
+    assert.equal(member.paths().includes('/UserAgent/SkillsApply'), false);
+    assert.doesNotMatch(JSON.stringify(result), /team-1/);
+  });
+
+  // The member who deployed the agent, and a team admin, get the quote.
+  const deployer = fakeClient(skillRoutes({
+    '/UserAgent/Detail': detail({ teamguid: 'team-1' }),
+    '/Organization/List': teamRole('member'),
+    '/UserAgent/TransactionList': { result: true, errors: [], transactions: [], summary: null, total: 0 },
+  }));
+  await withClient(deployer, async client => {
+    await quoteInstagram(client);
+  });
+  const admin = fakeClient(skillRoutes({ '/UserAgent/Detail': detail({ teamguid: 'team-1' }), '/Organization/List': teamRole('admin') }));
+  await withClient(admin, async client => {
+    await quoteInstagram(client);
+    assert.equal(admin.paths().includes('/UserAgent/TransactionList'), false);
+  });
+
+  // A personal agent needs no team lookup.
+  const personal = fakeClient(skillRoutes());
+  await withClient(personal, async client => {
+    await quoteInstagram(client);
+    assert.equal(personal.paths().includes('/Organization/List'), false);
+  });
+});
+
+test('apply_agent_skills keeps the quote for a team member when the change check fails for another reason', async () => {
+  const member = fakeClient(skillRoutes({
+    '/UserAgent/Detail': detail({ teamguid: 'team-1' }),
+    '/Organization/List': teamRole('member'),
+    '/UserAgent/TransactionList': { result: false, errors: [{ code: 0, message: 'Unexpected error' }] },
+  }));
+  await withClient(member, async client => {
+    await quoteInstagram(client);
+    assert.equal(member.paths().filter(path => path === '/UserAgent/TransactionList').length, 1);
+  });
+});
+
+test('set_agent_credentials asks whether a team member may save credentials before asking for values', async () => {
+  const member = fakeClient({
+    '/Credentials/Detail': credentialDetail,
+    '/UserAgent/Detail': detail({ teamguid: 'team-1' }),
+    '/Organization/List': teamRole('member'),
+  });
+  await withClient(member, async client => {
+    const result = await client.callTool({ name: 'set_agent_credentials', arguments: { agent_guid: AGENT, credential: 'telegram' } });
+    assert.notEqual(result.isError, true, text(result));
+    assert.equal(result.structuredContent.notes[0], 'This connection acts as a member of this agent\'s team without admin rights, so it can save credentials here only if the person who created the connected project deployed the agent. Before asking for any value, ask the user whether they created this project and deployed the agent. If not, a team admin or the person who deployed it saves them in the Wiro dashboard.');
+    assert.doesNotMatch(JSON.stringify(result), /team-1/);
+  });
+
+  const admin = fakeClient({
+    '/Credentials/Detail': credentialDetail,
+    '/UserAgent/Detail': detail({ teamguid: 'team-1' }),
+    '/Organization/List': teamRole('admin'),
+  });
+  await withClient(admin, async client => {
+    const result = await client.callTool({ name: 'set_agent_credentials', arguments: { agent_guid: AGENT, credential: 'telegram' } });
+    assert.doesNotMatch(text(result), /without admin rights/);
   });
 });
 

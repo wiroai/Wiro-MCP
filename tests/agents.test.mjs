@@ -1240,7 +1240,7 @@ test('get_my_agent shows the agent\'s own prices and where a shortened entry is 
     assert.ok(lines[prices - 1].startsWith('**Credits:**'), 'the prices follow the credits line');
     assert.deepEqual(result.structuredContent.agent.pricing, { starter: { priceUsd: 15, monthlyCredits: 1500 }, pro: { priceUsd: 150, monthlyCredits: 15000 } });
     // The custom instruction is cut in the structured copy; the short scheduled task is not.
-    assert.ok(lines.includes('- `cs-content-strategy` on: Content strategy (its text is long; manage_agent_custom_skill history shows it in full)'));
+    assert.ok(lines.includes('- `cs-content-strategy` on: Content strategy (its text is long; get_my_agent with entry "cs-content-strategy" shows it in full)'));
     assert.ok(lines.includes('- `cs-cron-daily-scan` on, 0 9 * * *: Daily inbox scan'));
 
     const { tools } = await client.listTools();
@@ -1269,7 +1269,7 @@ test('get_my_agent marks an entry cut by even one character', async () => {
     const result = await call(client, 'get_my_agent', { agent_guid: 'ua-1' });
     const [entry] = result.structuredContent.agent.customInstructions;
     assert.equal(entry.instructionsTruncated, true);
-    assert.ok(textOf(result).split('\n').includes('- `cs-content-strategy` on: Content strategy (its text is long; manage_agent_custom_skill history shows it in full)'));
+    assert.ok(textOf(result).split('\n').includes('- `cs-content-strategy` on: Content strategy (its text is long; get_my_agent with entry "cs-content-strategy" shows it in full)'));
   });
 
   // Exactly at the limit nothing is cut; three characters over it is.
@@ -1435,6 +1435,35 @@ test('control_agent turns start refusals into the billing step to take', async (
       arguments: { agent_guid: 'ua-1', credential: 'gmail' },
       reason: 'Provide the missing credentials (gmail). This lists the Gmail fields to ask the user for.',
     });
+  });
+});
+
+test('get_my_agent sends a stopped agent without a plan or extra credits to billing, not to start', async () => {
+  const ended = { monthlycredits: 0, extracredits: 0, usedcredits: 0, remainingcredits: 0, credentials: {} };
+  for (const [status, sub, action] of [
+    [0, subscription({ status: 'expired' }), 'renew'],
+    [5, subscription({ status: 'expired' }), 'renew'],
+    [0, subscription({ status: 'expired', provider: 'stripe' }), 'subscribe'],
+    [0, null, 'subscribe'],
+  ]) {
+    const fake = fakeClient({ '/UserAgent/Detail': detailResponse(agentRow({ status, subscription: sub, ...ended })) });
+    await withClient(fake, async client => {
+      const result = await call(client, 'get_my_agent', { agent_guid: 'ua-1' });
+      assert.deepEqual(result.structuredContent.nextAction.tool, 'manage_agent_billing');
+      assert.deepEqual(result.structuredContent.nextAction.arguments, { agent_guid: 'ua-1', action });
+      assert.match(result.structuredContent.nextAction.reason, /nothing is charged without confirm: true/);
+      assert.match(textOf(result), new RegExp(`no active plan and no extra credits left, so it cannot start\\. .*manage_agent_billing with action ${action}`));
+      assert.doesNotMatch(textOf(result), /control_agent with action start/);
+      assert.doesNotMatch(result.structuredContent.advice, /control_agent with action start/);
+    });
+  }
+
+  // Extra credits left still let an agent without a plan start.
+  const extras = fakeClient({ '/UserAgent/Detail': detailResponse(agentRow({ status: 0, subscription: subscription({ status: 'expired' }), ...ended, extracredits: 500, remainingcredits: 500 })) });
+  await withClient(extras, async client => {
+    const result = await call(client, 'get_my_agent', { agent_guid: 'ua-1' });
+    assert.equal(result.structuredContent.nextAction.tool, 'control_agent');
+    assert.match(textOf(result), /It is not running\. control_agent with action start starts it\./);
   });
 });
 
@@ -2007,11 +2036,55 @@ test('manage_agent_billing does not say a card plan set to stop will renew', asy
     assert.match(renew.structuredContent.message, /is set to stop renewing after .*where it can be kept: https:\/\/wiro\.ai\/panel\/agents\/ua-1$/);
     assert.doesNotMatch(renew.structuredContent.message, /renews by itself/);
   });
-  const renewing = fakeClient({ '/UserAgent/Detail': detailResponse(agentRow({ subscription: card })) });
+  const renewing = fakeClient({ '/UserAgent/Detail': detailResponse(agentRow({ subscription: card, stripecancelatperiodend: false })) });
   await withClient(renewing, async client => {
     const renew = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'renew' });
     assert.match(renew.structuredContent.message, /renews by itself/);
   });
+  // Without the card state, as for a personal card plan, neither renewing nor ending is claimed.
+  const unknown = fakeClient({ '/UserAgent/Detail': detailResponse(agentRow({ subscription: card })) });
+  await withClient(unknown, async client => {
+    const renew = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'renew' });
+    assert.equal(renew.structuredContent.outcome, 'refused');
+    assert.match(renew.structuredContent.message, /is paid through .*renewed or cancelled from the dashboard: https:\/\/wiro\.ai\/panel\/agents\/ua-1$/);
+    assert.doesNotMatch(renew.structuredContent.message, /renews by itself|stop renewing/);
+  });
+});
+
+test('list_my_agents and get_my_agent do not say a card plan renews when its card state is not returned', async () => {
+  const card = subscription({ provider: 'stripe' });
+  const fake = fakeClient({
+    '/UserAgent/MyAgents': { result: true, errors: [], useragents: [agentRow({ subscription: card })] },
+    '/UserAgent/Detail': detailResponse(agentRow({ subscription: card })),
+  });
+  await withClient(fake, async client => {
+    const list = await call(client, 'list_my_agents', {});
+    assert.match(textOf(list), /billed by card, \$12\.00 per 30 days, paid through /);
+    assert.doesNotMatch(textOf(list), /renews after|ends after/);
+    assert.equal(list.structuredContent.agents[0].subscription.atPeriodEnd, 'unknown');
+    assert.equal(list.structuredContent.agents[0].subscription.cancelAtPeriodEnd, false);
+
+    const detail = await call(client, 'get_my_agent', { agent_guid: 'ua-1' });
+    assert.match(textOf(detail), /\*\*Plan:\*\* starter; active, billed by card, \$12\.00 per 30 days, paid through /);
+    assert.doesNotMatch(textOf(detail), /renews after|ends after/);
+    assert.equal(detail.structuredContent.agent.subscription.atPeriodEnd, 'unknown');
+  });
+
+  // Where the state is known, the line says so: a team admin's card plan with its card state, and a wallet plan.
+  for (const [row, line, atPeriodEnd] of [
+    [agentRow({ subscription: card, stripecancelatperiodend: true }), /cancelled, ends after /, 'ends'],
+    [agentRow({ subscription: card, stripecancelatperiodend: false }), /billed by card, \$12\.00 per 30 days, renews after /, 'renews'],
+    [agentRow(), /billed from the wallet, \$12\.00 per 30 days, renews after /, 'renews'],
+    [agentRow({ subscription: subscription({ pendingdowngrade: 'cancel' }) }), /cancelled, ends after /, 'ends'],
+  ]) {
+    const known = fakeClient({ '/UserAgent/Detail': detailResponse(row) });
+    await withClient(known, async client => {
+      const detail = await call(client, 'get_my_agent', { agent_guid: 'ua-1' });
+      assert.match(textOf(detail), line);
+      assert.equal(detail.structuredContent.agent.subscription.atPeriodEnd, atPeriodEnd);
+      assert.equal(detail.structuredContent.agent.subscription.cancelAtPeriodEnd, atPeriodEnd === 'ends');
+    });
+  }
 });
 
 test('manage_agent_billing cancels and undoes a wallet plan with confirmation', async () => {
@@ -2369,5 +2442,302 @@ test('manage_agent_billing says nothing was charged when the wallet is short', a
     assert.match(textOf(result), /Nothing was charged/);
     assert.match(textOf(result), /for a team project, select that team in the dashboard first/);
     assert.equal(fake.called('/UserAgent/CreateSubscriptionCheckout').length, 1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Team members without admin rights
+// ---------------------------------------------------------------------------
+
+// The connected project's creator in the team that owns the agent: a plain
+// member, or an admin. Organization/List carries the role of each team.
+function organizations(role, teamGuid = 'team-guid-secret') {
+  return {
+    result: true,
+    errors: [],
+    organizations: [{
+      guid: 'org-1',
+      name: 'Acme',
+      owneruuid: 'org-owner',
+      status: 1,
+      teams: [{ guid: teamGuid, name: 'Growth', status: 1, role, memberguid: 'm-1', walletbalance: 50 }],
+    }],
+  };
+}
+
+const REFUSED_97 = { result: false, errors: [{ code: 97, message: 'Only a team admin can perform this action on a team-owned agent.' }] };
+
+function teamAgentRow(overrides = {}) {
+  return agentRow({ teamguid: 'team-guid-secret', ...overrides });
+}
+
+test('get_account gives the team role, and tells a member what needs a team admin', async () => {
+  const wallet = { result: true, errors: [], wallet: [{ symbol: 'USD', uuid: 'team-guid-secret', amount: '50', giftedamount: '0', storeamount: '0' }] };
+  const member = { ...fakeClient({ '/Wallet/List': wallet, '/Organization/List': organizations('member') }), authType: 'apikey-only' };
+  await withClient(member, async client => {
+    const result = await call(client, 'get_account', {});
+    assert.notEqual(result.isError, true, textOf(result));
+    assert.deepEqual(result.structuredContent.workspace, { kind: 'team', teamName: 'Growth', organizationName: 'Acme', role: 'member' });
+    const lines = textOf(result).split('\n');
+    assert.equal(lines[lines.indexOf('**Workspace:** team Growth (Acme)') + 1], '**Role in this team:** member');
+    assert.ok(lines.includes('Only a team admin can deploy an agent in this team. Starting, changing or paying for a team agent needs a team admin or the person who deployed it (for payments also the organization\'s owner).'));
+    assertNoSecrets(result);
+  });
+
+  const admin = { ...fakeClient({ '/Wallet/List': wallet, '/Organization/List': organizations('admin') }), authType: 'apikey-only' };
+  await withClient(admin, async client => {
+    const result = await call(client, 'get_account', {});
+    assert.equal(result.structuredContent.workspace.role, 'admin');
+    assert.match(textOf(result), /\*\*Role in this team:\*\* admin/);
+    assert.doesNotMatch(textOf(result), /Only a team admin can deploy/);
+  });
+
+  const personal = {
+    ...fakeClient({
+      '/Wallet/List': { result: true, errors: [], wallet: [{ symbol: 'USD', uuid: 'user-uuid-1', amount: '5', giftedamount: '0', storeamount: '0' }] },
+      '/Organization/List': organizations('member'),
+    }),
+    authType: 'apikey-only',
+  };
+  await withClient(personal, async client => {
+    const result = await call(client, 'get_account', {});
+    assert.deepEqual(result.structuredContent.workspace, { kind: 'personal' });
+    assert.doesNotMatch(textOf(result), /Role in this team|Only a team admin/);
+  });
+});
+
+test('deploy_agent tells a team member that only a team admin deploys there, before any quote', async () => {
+  const routes = role => ({
+    '/Organization/List': organizations(role),
+    '/Wallet/List': { result: true, errors: [], wallet: [{ symbol: 'USD', uuid: 'team-guid-secret', amount: '50', giftedamount: '0', storeamount: '0' }] },
+    '/Agent/Detail': { result: true, errors: [], agents: [templateRow()] },
+  });
+  const member = fakeClient(routes('member'));
+  await withClient(member, async client => {
+    const result = await call(client, 'deploy_agent', { template: 'instagram-manager', tier: 'starter' });
+    assert.equal(result.isError, true);
+    assert.match(textOf(result), /Only a team admin can deploy an agent in this team, and this connection acts as a team member without admin rights\. Nothing was quoted, created or charged\./);
+    assert.equal(member.called('/Agent/Detail').length, 0);
+    assert.equal(member.called('/UserAgent/Deploy').length, 0);
+    assertNoSecrets(result);
+  });
+
+  // A team admin gets the quote, and the wallet is not read when no team has the member role.
+  const admin = fakeClient(routes('admin'));
+  await withClient(admin, async client => {
+    const result = await call(client, 'deploy_agent', { template: 'instagram-manager', tier: 'starter' });
+    assert.equal(result.structuredContent.stage, 'quote', textOf(result));
+    assert.equal(admin.called('/Wallet/List').length, 0);
+  });
+
+  // A member of a team who connects with a personal project deploys in the personal workspace.
+  const elsewhere = fakeClient({
+    ...routes('member'),
+    '/Wallet/List': { result: true, errors: [], wallet: [{ symbol: 'USD', uuid: 'user-uuid-1', amount: '50', giftedamount: '0', storeamount: '0' }] },
+  });
+  await withClient(elsewhere, async client => {
+    const result = await call(client, 'deploy_agent', { template: 'instagram-manager', tier: 'starter' });
+    assert.equal(result.structuredContent.stage, 'quote', textOf(result));
+  });
+
+  // When the teams cannot be read, the quote comes back as before.
+  const unreadable = fakeClient({ '/Agent/Detail': { result: true, errors: [], agents: [templateRow()] } });
+  await withClient(unreadable, async client => {
+    const result = await call(client, 'deploy_agent', { template: 'instagram-manager', tier: 'starter' });
+    assert.equal(result.structuredContent.stage, 'quote', textOf(result));
+  });
+});
+
+test('manage_agent_billing stops a team member who cannot pay before the quote', async () => {
+  const unpaid = teamAgentRow({ status: 6, subscription: null });
+  const member = fakeClient({
+    '/UserAgent/Detail': detailResponse(unpaid),
+    '/Organization/List': organizations('member'),
+    '/UserAgent/TransactionList': REFUSED_97,
+  });
+  await withClient(member, async client => {
+    const result = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'subscribe' });
+    assert.notEqual(result.isError, true, textOf(result));
+    assert.equal(result.structuredContent.outcome, 'refused');
+    assert.equal(result.structuredContent.quote, undefined);
+    assert.equal(result.structuredContent.nextAction, undefined);
+    assert.match(result.structuredContent.message, /^Only a team admin, the organization's owner or the person who deployed this agent can pay for or change its plan, and this connection acts as a team member without those rights\. Nothing was quoted or charged\./);
+    assert.match(textOf(result), /\*\*Plan:\*\* starter; No plan\. On this team agent, a team admin, the organization's owner or the person who deployed it can start one\./);
+    assert.deepEqual(member.called('/UserAgent/TransactionList')[0].body, { useragentguid: 'ua-1', limit: 1 });
+    assert.equal(member.called('/UserAgent/CreateSubscriptionCheckout').length, 0);
+    assertNoSecrets(result);
+  });
+
+  // A member who deployed the agent may pay for it, so the quote comes back.
+  const deployer = fakeClient({
+    '/UserAgent/Detail': detailResponse(unpaid),
+    '/Organization/List': organizations('member'),
+    '/UserAgent/TransactionList': { result: true, errors: [], transactions: [], summary: null, total: 0 },
+  });
+  await withClient(deployer, async client => {
+    const result = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'subscribe' });
+    assert.equal(result.structuredContent.outcome, 'quote', textOf(result));
+    assert.equal(result.structuredContent.nextAction.arguments.confirm, true);
+  });
+
+  // A team admin is not asked about, and a personal agent needs no team lookup.
+  const admin = fakeClient({ '/UserAgent/Detail': detailResponse(unpaid), '/Organization/List': organizations('admin') });
+  await withClient(admin, async client => {
+    const result = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'subscribe' });
+    assert.equal(result.structuredContent.outcome, 'quote', textOf(result));
+    assert.match(textOf(result), /No plan\. manage_agent_billing with action subscribe starts one\./);
+  });
+  const personal = fakeClient({ '/UserAgent/Detail': detailResponse(agentRow({ status: 6, subscription: null })) });
+  await withClient(personal, async client => {
+    const result = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'subscribe' });
+    assert.equal(result.structuredContent.outcome, 'quote', textOf(result));
+    assert.deepEqual(personal.calls.map(item => item.path), ['/UserAgent/Detail']);
+  });
+});
+
+test('manage_agent_billing keeps the quote for a team member when the payment check fails for another reason', async () => {
+  const unpaid = teamAgentRow({ status: 6, subscription: null });
+  for (const answer of [
+    { result: false, errors: [{ code: 0, message: 'Unexpected error' }] },
+    () => { throw new WiroApiError(502, 'Bad gateway'); },
+  ]) {
+    const member = fakeClient({
+      '/UserAgent/Detail': detailResponse(unpaid),
+      '/Organization/List': organizations('member'),
+      '/UserAgent/TransactionList': answer,
+    });
+    await withClient(member, async client => {
+      const result = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'subscribe' });
+      assert.equal(result.structuredContent.outcome, 'quote', textOf(result));
+      assert.equal(result.structuredContent.nextAction.arguments.confirm, true);
+      assert.equal(member.called('/UserAgent/TransactionList').length, 1);
+    });
+  }
+});
+
+test('get_my_agent, list_my_agents and control_agent give a team member no call it cannot make', async () => {
+  const cases = [
+    { row: teamAgentRow({ status: 0 }), hint: /\*\*Status:\*\* Stopped \(0\)\. It is not running\. On this team agent, a team admin or the person who deployed it can start it\./ },
+    { row: teamAgentRow({ status: 5 }), hint: /\*\*Status:\*\* Error \(5\)\. The start failed or the agent stopped unexpectedly\. On this team agent, a team admin or the person who deployed it can start it again and read its logs\./ },
+    { row: teamAgentRow({ status: 6, subscription: null }), hint: /On this team agent, a team admin or the person who deployed it saves credentials and pays for the plan\. Only the person who deployed it can connect accounts, such as Instagram or Google Ads\./ },
+  ];
+  for (const { row, hint } of cases) {
+    const member = fakeClient({ '/UserAgent/Detail': detailResponse(row), '/Organization/List': organizations('member') });
+    await withClient(member, async client => {
+      const result = await call(client, 'get_my_agent', { agent_guid: 'ua-1' });
+      assert.notEqual(result.isError, true, textOf(result));
+      assert.match(textOf(result), hint);
+      assert.equal(result.structuredContent.nextAction, undefined, JSON.stringify(result.structuredContent.nextAction));
+      assert.doesNotMatch(textOf(result), /control_agent with action start|manage_agent_billing with action subscribe/);
+      assertNoSecrets(result);
+    });
+  }
+
+  // An agent that is starting still gets the wait.
+  const starting = fakeClient({ '/UserAgent/Detail': detailResponse(teamAgentRow({ status: 3 })), '/Organization/List': organizations('member') });
+  await withClient(starting, async client => {
+    const result = await call(client, 'get_my_agent', { agent_guid: 'ua-1' });
+    assert.equal(result.structuredContent.nextAction.tool, 'get_my_agent');
+  });
+
+  // A team admin, a team list that cannot be read and a personal agent keep the usual steps.
+  for (const routes of [
+    { '/UserAgent/Detail': detailResponse(teamAgentRow({ status: 0, credentials: {} })), '/Organization/List': organizations('admin') },
+    { '/UserAgent/Detail': detailResponse(teamAgentRow({ status: 0, credentials: {} })), '/Organization/List': { result: false, errors: [{ code: 0, message: 'Lock timeout' }] } },
+    { '/UserAgent/Detail': detailResponse(agentRow({ status: 0, credentials: {} })) },
+  ]) {
+    const fake = fakeClient(routes);
+    await withClient(fake, async client => {
+      const result = await call(client, 'get_my_agent', { agent_guid: 'ua-1' });
+      assert.match(textOf(result), /It is not running\. control_agent with action start starts it\./);
+      assert.equal(result.structuredContent.nextAction.tool, 'control_agent');
+    });
+  }
+  const personal = fakeClient({ '/UserAgent/Detail': detailResponse(agentRow({ status: 0 })) });
+  await withClient(personal, async client => {
+    await call(client, 'get_my_agent', { agent_guid: 'ua-1' });
+    assert.equal(personal.called('/Organization/List').length, 0);
+  });
+
+  // list_my_agents looks the role up once for the page.
+  const list = fakeClient({
+    '/UserAgent/MyAgents': { result: true, errors: [], useragents: [teamAgentRow({ status: 6, subscription: null }), teamAgentRow({ guid: 'ua-2', status: 6, subscription: null })] },
+    '/Organization/List': organizations('member'),
+  });
+  await withClient(list, async client => {
+    const result = await call(client, 'list_my_agents', {});
+    assert.equal(textOf(result).match(/No plan\. On this team agent, a team admin, the organization's owner or the person who deployed it can start one\./g)?.length, 2);
+    assert.equal(list.called('/Organization/List').length, 1);
+    assertNoSecrets(result);
+  });
+
+  // control_agent does not send a member to the plan or the credentials of an agent waiting for setup.
+  const control = fakeClient({ '/UserAgent/Detail': detailResponse(teamAgentRow({ status: 6, subscription: null })), '/Organization/List': organizations('member') });
+  await withClient(control, async client => {
+    const result = await call(client, 'control_agent', { agent_guid: 'ua-1', action: 'start' });
+    assert.equal(result.structuredContent.outcome, 'refused');
+    assert.equal(result.structuredContent.message, 'The agent cannot start until it has a paid plan and its setup is finished. On this team agent, a team admin or the person who deployed it saves credentials and pays for the plan. Only the person who deployed it can connect accounts, such as Instagram or Google Ads.');
+    assert.equal(result.structuredContent.nextAction, undefined);
+    assert.equal(control.called('/UserAgent/Start').length, 0);
+  });
+});
+
+test('agent tools say which ones need a team admin or the person who deployed the agent', async () => {
+  await withClient(fakeClient({}), async client => {
+    const { tools } = await client.listTools();
+    const description = name => tools.find(tool => tool.name === name).description;
+    for (const name of ['control_agent', 'update_agent', 'delete_agent', 'set_agent_credentials', 'manage_agent_custom_skill']) {
+      assert.match(description(name), /On a team agent this needs a team admin or the person who deployed it/, name);
+    }
+    assert.match(description('apply_agent_skills'), /On a team agent only a team admin or the person who deployed the agent can change its skills/);
+    assert.match(description('manage_agent_billing'), /On a team agent only a team admin, the organization's owner or the person who deployed the agent can pay for it or change its plan/);
+    assert.match(description('get_agent_activity'), /On a team agent, logs and usage need a team admin or the person who deployed it, and the organization's owner can also read usage; other team members are refused\./);
+    assert.match(description('get_account'), /team role calls act with, admin or member/);
+  });
+});
+
+test('get_my_agent with entry gives the whole text of an entry the list shortens', async () => {
+  const row = teamAgentRow();
+  const full = row.customskills[0].value;
+  const member = fakeClient({
+    '/UserAgent/Detail': detailResponse(row),
+    '/Organization/List': organizations('member'),
+    '/UserAgent/CustomSkillHistory': REFUSED_97,
+  });
+  await withClient(member, async client => {
+    const result = await call(client, 'get_my_agent', { agent_guid: 'ua-1', entry: 'content-strategy' });
+    assert.notEqual(result.isError, true, textOf(result));
+    const text = textOf(result);
+    assert.ok(text.includes(`### \`cs-content-strategy\` in full\n\n\`\`\`text\n${full}\n\`\`\``), text);
+    assert.match(text, /- `cs-content-strategy` on: Content strategy \(its text is long; get_my_agent with entry "cs-content-strategy" shows it in full\)/);
+    assert.deepEqual(result.structuredContent.entry, {
+      key: 'cs-content-strategy',
+      kind: 'custom_instruction',
+      description: 'Content strategy',
+      enabled: true,
+      interval: null,
+      text: full,
+    });
+    assert.equal(member.called('/UserAgent/CustomSkillHistory').length, 0);
+
+    const task = await call(client, 'get_my_agent', { agent_guid: 'ua-1', entry: 'cs-cron-daily-scan' });
+    assert.equal(task.structuredContent.entry.kind, 'scheduled_task');
+    assert.equal(task.structuredContent.entry.interval, '0 9 * * *');
+    assert.equal(task.structuredContent.entry.text, 'Scan the inbox.');
+
+    const missing = await call(client, 'get_my_agent', { agent_guid: 'ua-1', entry: 'cs-nope' });
+    assert.equal(missing.isError, true);
+    assert.match(textOf(missing), /This agent has no custom instruction or scheduled task named "cs-nope"\. get_my_agent without entry lists its keys\./);
+    const bad = await call(client, 'get_my_agent', { agent_guid: 'ua-1', entry: 'BAD KEY' });
+    assert.equal(bad.isError, true);
+    assert.match(textOf(bad), /Invalid key "BAD KEY"/);
+  });
+
+  // Without entry the answer has no full text.
+  const plain = fakeClient({ '/UserAgent/Detail': detailResponse(agentRow()) });
+  await withClient(plain, async client => {
+    const result = await call(client, 'get_my_agent', { agent_guid: 'ua-1' });
+    assert.equal(result.structuredContent.entry, undefined);
+    assert.doesNotMatch(textOf(result), /in full\n/);
   });
 });

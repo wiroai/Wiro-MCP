@@ -173,7 +173,8 @@ export function registerGetAgentActivity(server: McpServer, client: WiroClient):
         + '(tool calls, turns, scheduled runs, errors). kind log_dates lists the days that have a log. Logs '
         + 'can be read while the agent is running or in error; for a stopped agent the call says so (start it '
         + 'only if the user agrees). Names and emails of the people who '
-        + 'acted are never returned.',
+        + 'acted are never returned. On a team agent, logs and usage need a team admin or the person who '
+        + 'deployed it, and the organization\'s owner can also read usage; other team members are refused.',
       inputSchema: {
         agent_guid: z.string().min(1).max(100)
           .describe('The deployed agent\'s guid, from list_my_agents or deploy_agent.'),

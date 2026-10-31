@@ -36,6 +36,7 @@ import {
 } from '../utils/agent-config.js';
 import { asTier, outcomeUnknown, toTierPricing } from '../utils/user-agent.js';
 import { DEFAULT_WAIT_SECONDS } from '../utils/poll.js';
+import { isPlainTeamMember, teamAgentBillingRefused } from '../utils/workspace.js';
 import { nextActionSchema } from './schemas.js';
 
 const pricingSchema = z.object({
@@ -158,9 +159,14 @@ function cancelledNote(billing: PlanBilling): string {
 }
 
 function quoteBillingNote(billing: PlanBilling, delta: number | null, estimate: number | null, nextPrice: number | null): string {
-  const after = billing.cancelAtPeriodEnd
+  // A card plan whose renewal is not known gets the new price without a renewal claim.
+  const after = billing.cancelAtPeriodEnd === true
     ? ` ${cancelledNote(billing)}`
-    : nextPrice !== null ? ` The plan then renews at ${formatUsd(nextPrice)} a month.` : '';
+    : nextPrice === null
+      ? ''
+      : billing.cancelAtPeriodEnd === false
+        ? ` The plan then renews at ${formatUsd(nextPrice)} a month.`
+        : ` The new monthly price is ${formatUsd(nextPrice)}.`;
   if (billing.plan === 'none') {
     return 'The agent has no subscription yet, so nothing is charged now. The new monthly price applies once it is subscribed.';
   }
@@ -185,7 +191,7 @@ function quoteBillingNote(billing: PlanBilling, delta: number | null, estimate: 
 
 function chargeNote(billing: PlanBilling, body: SkillsApplyBody): { note: string; charged: number | null } {
   const charged = toNumber(body.prepaidWalletDelta);
-  const cancelled = billing.cancelAtPeriodEnd && billing.status === 'active' ? ` ${cancelledNote(billing)}` : '';
+  const cancelled = billing.cancelAtPeriodEnd === true && billing.status === 'active' ? ` ${cancelledNote(billing)}` : '';
   if (charged !== null && charged > 0) {
     return { charged, note: `${formatUsd(charged)} was taken from ${walletName(billing)} for the rest of this period.${cancelled}` };
   }
@@ -240,6 +246,8 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
       title: 'Change an agent\'s skills',
       description: 'Turn registry skills on or off for a deployed agent, and optionally move it '
         + 'from Starter to Pro, as one billed change. Skills set the agent\'s monthly price and monthly credits. '
+        + 'On a team agent only a team admin or the person who deployed the agent can change its skills; other '
+        + 'members are refused and nothing is charged. '
         + 'Steps: 1) call without confirm. The tool checks the names, adds the skills they '
         + 'depend on, and returns the current and new monthly price, an estimate of what is '
         + 'charged now and an idempotency_key. Nothing changes yet. 2) Show the price to the '
@@ -349,6 +357,28 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
         const currentPrice = toNumber(row.monthlypriceusd);
         const currentCredits = toNumber(row.monthlycredits);
         const key = idempotency_key?.trim() ?? '';
+
+        // Every team member can read a team agent and price a change, but only a
+        // team admin or the person who deployed it can apply one. The credit
+        // history check refuses the other members up front; the organization's
+        // owner passes it and gets Wiro's answer on confirm.
+        if (!nothingToDo && await isPlainTeamMember(client, row, extra.signal)
+          && await teamAgentBillingRefused(client, agent_guid, extra.signal)) {
+          const message = 'Only a team admin or the person who deployed this agent can change its skills, and this '
+            + 'connection acts as a team member without those rights. Nothing was quoted, changed or charged. Ask a '
+            + 'team admin or the person who deployed the agent to make the change.';
+          return {
+            content: [{ type: 'text' as const, text: `## Skill change not possible\n\n${message}` }],
+            structuredContent: {
+              ...base,
+              status: 'refused' as const,
+              billing: { ...billingBase, note: message },
+              restart: UNCHANGED_RESTART,
+              error: { code: 97, message },
+            },
+            isError: true,
+          };
+        }
 
         if (!nothingToDo) {
           const preview = requireApiSuccess(

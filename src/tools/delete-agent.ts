@@ -30,7 +30,8 @@ export function registerDeleteAgent(server: McpServer, client: WiroClient): void
         + 'once, its data is removed later and there is no restore. The order is: cancel the plan with manage_agent_billing (no '
         + 'refund for the rest of the period), stop the agent with control_agent, then delete it. Without '
         + 'confirm: true the tool only checks what is still in the way and describes the deletion; repeat '
-        + 'the call with confirm: true after the user agrees.',
+        + 'the call with confirm: true after the user agrees. On a team agent this needs a team admin or the '
+        + 'person who deployed it.',
       inputSchema: {
         agent_guid: z.string().min(1).max(100)
           .describe('The deployed agent\'s guid, from list_my_agents.'),

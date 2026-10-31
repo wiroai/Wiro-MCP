@@ -31,6 +31,7 @@ import {
 } from '../utils/user-agent.js';
 import { resolveDeployCustomSkills, type DeployCustomSkill, type TemplateCustomSkill } from '../utils/agent-config.js';
 import { toSkillSummary, toTemplateDetail, type SkillSummary } from '../utils/agent-catalog.js';
+import { connectedAsPlainMember } from '../utils/workspace.js';
 import { nextActionSchema } from './schemas.js';
 
 const PAID_FROM = 'The Wiro wallet of the connected project\'s workspace: the team wallet for a team '
@@ -231,6 +232,15 @@ export function registerDeployAgent(server: McpServer, client: WiroClient): void
         const syntax = resolveDeployCustomSkills(requestedCustomSkills, null);
         if (syntax.errors.length > 0) {
           throw new Error(`Nothing was deployed. Fix custom_skills:\n\n- ${syntax.errors.join('\n- ')}`);
+        }
+
+        // Every member of a team can read what a quote needs, but only a team
+        // admin can deploy there, so a member gets the answer before a quote.
+        if (await connectedAsPlainMember(client, extra.signal)) {
+          throw new Error('Only a team admin can deploy an agent in this team, and this connection acts as a team member '
+            + 'without admin rights. Nothing was quoted, created or charged. A team admin can deploy it or grant admin '
+            + 'rights, or the user can deploy in the personal workspace with a personal project, by its API key or a '
+            + 'browser sign-in.');
         }
 
         let quote: Quote;

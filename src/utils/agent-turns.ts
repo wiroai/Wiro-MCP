@@ -31,6 +31,7 @@ import {
 } from './agent-targets.js';
 import { createMediaContent, guessMimeType, isWiroHostedUrl, type MediaItem } from './media.js';
 import { defaultInterval, pollUntil, reportProgress, type ToolCallContext } from './poll.js';
+import { readAgentDetail } from './user-agent.js';
 import {
   STUDIO_RUNS_MAX,
   formatStudioRun,
@@ -337,13 +338,54 @@ async function collectStudioRuns(
   }
 }
 
-function backgroundNote(target: AgentTarget): string {
+interface PrivateTeamChat {
+  /** Whether the connection is the person who deployed the agent; undefined when that cannot be told. */
+  deployer?: boolean;
+}
+
+/**
+ * For a message to a team agent whose chats are private, whether this
+ * connection deployed the agent, which picks the note on a result that arrives
+ * later. A message sent from a team project names its team and its sender,
+ * and the agent row names who deployed it. A personal agent needs no lookup,
+ * and an agent that cannot be read keeps the usual note.
+ */
+async function privateTeamChat(
+  options: CollectTurnOptions,
+  row: Record<string, unknown>,
+): Promise<PrivateTeamChat | undefined> {
+  const guid = options.target.agentGuid;
+  const metadata = isPlainObject(row.metadata) ? row.metadata : {};
+  if (options.target.kind !== 'deployed' || !guid || !asString(metadata.teamguid)) return undefined;
+  try {
+    const agent = await readAgentDetail(options.client, guid, options.extra?.signal);
+    if (!asString(agent.teamguid) || asString(agent.teamsessionmode) !== 'private') return undefined;
+    const deployedBy = asString(agent.uuid);
+    const sentBy = asString(row.uuid);
+    return { deployer: deployedBy && sentBy ? deployedBy === sentBy : undefined };
+  } catch (error) {
+    if (options.extra?.signal.aborted) throw error;
+    return undefined;
+  }
+}
+
+const PRIVATE_TEAM_CHAT_NOTE = 'On a team agent with private chats, a result that arrives later may not be listed '
+  + 'for this project; if it does not appear, tell the user so.';
+
+function backgroundNote(target: AgentTarget, chat?: PrivateTeamChat): string {
   if (target.kind === 'studio') {
     return 'Studio handed this work to the background, so its results come later. get_agent_message collects the '
       + 'model runs it starts there; use list_studio_results for Studio\'s late results. Do not send the request again.';
   }
+  if (chat?.deployer === false) {
+    return 'The agent handed this work to the background. This team agent keeps a private chat for each member, and '
+      + 'its result will not appear for this project: tell the user so instead of waiting for it. Do not send the '
+      + 'request again. A team admin or the person who deployed it can switch the agent to collaborative chats with '
+      + 'update_agent (team_session_mode), which shows every member\'s messages in its chats to the whole team.';
+  }
   return 'The agent handed this work to the background. Its result arrives later as a separate message in this '
-    + 'session: read it with get_agent_conversation. Do not send the request again.';
+    + 'session: read it with get_agent_conversation. Do not send the request again.'
+    + (chat && chat.deployer === undefined ? ` ${PRIVATE_TEAM_CHAT_NOTE}` : '');
 }
 
 const FOLLOW_UP_MINUTES = BACKGROUND_FOLLOW_UP_SECONDS / 60;
@@ -386,6 +428,8 @@ interface TurnState {
   runsUnread: boolean;
   /** A Studio hand-off whose runs are still counted and whose first model run has not appeared yet. */
   awaitingBackgroundRuns: boolean;
+  /** A hand-off whose turn says its result will not appear for this project: no nextAction to read it. */
+  laterResultUnreadable: boolean;
 }
 
 export async function collectTurn(options: CollectTurnOptions): Promise<AgentTurnResult> {
@@ -474,6 +518,7 @@ export async function collectTurn(options: CollectTurnOptions): Promise<AgentTur
     afterSendFailure: readFailure !== undefined,
     runsUnread: false,
     awaitingBackgroundRuns: false,
+    laterResultUnreadable: false,
   };
 
   if (options.sessionCreated) {
@@ -512,7 +557,9 @@ export async function collectTurn(options: CollectTurnOptions): Promise<AgentTur
       && isBackgroundHandOff(result.message.reply, result.message.toolsUsed);
     if (background) {
       result.background = true;
-      notes.push(backgroundNote(target));
+      const chat = target.kind === 'deployed' ? await privateTeamChat(options, row) : undefined;
+      if (chat?.deployer === false) state.laterResultUnreadable = true;
+      notes.push(backgroundNote(target, chat));
     }
 
     if (target.kind === 'studio') {
@@ -642,6 +689,7 @@ function chooseNextAction(
           + 'for the runs it starts; list_studio_results lists them too. Do not send the request again.',
       };
     }
+    if (state.laterResultUnreadable) return undefined;
     return {
       tool: 'get_agent_conversation',
       arguments: { agent: target.agent, session: result.session, limit: 5 },

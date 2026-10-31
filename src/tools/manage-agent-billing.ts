@@ -15,6 +15,7 @@ import {
 } from '../utils/api.js';
 import { workspaceHint } from '../utils/agent-config.js';
 import { DEFAULT_WAIT_SECONDS } from '../utils/poll.js';
+import { isPlainTeamMember, teamAgentBillingRefused } from '../utils/workspace.js';
 import {
   AMOUNT_TOLERANCE_USD,
   agentDashboardUrl,
@@ -235,12 +236,16 @@ function planFor(
       if (active) {
         if (!prepaid) {
           // A card plan can be set to stop at its period end.
+          const atPeriodEnd = agent.subscription?.atPeriodEnd;
           return {
             outcome: 'refused',
-            message: agent.subscription?.cancelAtPeriodEnd
+            message: atPeriodEnd === 'ends'
               ? `This plan is billed by card and is set to stop renewing after ${periodEnd}. Card plans are managed `
                 + `from the dashboard, where it can be kept: ${agent.dashboardUrl}`
-              : `This plan is billed by card and renews by itself. It is managed from the dashboard: ${agent.dashboardUrl}`,
+              : atPeriodEnd === 'renews'
+                ? `This plan is billed by card and renews by itself. It is managed from the dashboard: ${agent.dashboardUrl}`
+                : `This plan is billed by card and is paid through ${periodEnd}. Card plans are renewed or cancelled `
+                  + `from the dashboard: ${agent.dashboardUrl}`,
           };
         }
         if (!cancelled) {
@@ -681,7 +686,9 @@ export function registerManageAgentBilling(server: McpServer, client: WiroClient
         + 'wallet plan; upgrade_to_pro charges the prorated difference now; buy_credits adds a credit pack '
         + '(Pro only); cancel stops renewals with no refund. Plans renew every 30 days until cancelled. An '
         + 'agent whose plan is billed by card is upgraded and topped up in the Wiro dashboard, and a personal '
-        + 'card plan is cancelled there; the tool returns the link and charges nothing.',
+        + 'card plan is cancelled there; the tool returns the link and charges nothing. On a team agent only a team '
+        + 'admin, the organization\'s owner or the person who deployed the agent can pay for it or change its plan; '
+        + 'other members are refused and nothing is charged.',
       inputSchema: {
         agent_guid: z.string().min(1).max(100)
           .describe('The deployed agent\'s guid, from list_my_agents or deploy_agent.'),
@@ -724,6 +731,7 @@ export function registerManageAgentBilling(server: McpServer, client: WiroClient
       let sentAtMs = 0;
       let before: AgentDetail | undefined;
       let plan: Plan | undefined;
+      let plainMember = false;
 
       const respond = (payload: {
         outcome: Outcome;
@@ -738,7 +746,7 @@ export function registerManageAgentBilling(server: McpServer, client: WiroClient
         agentStale?: boolean;
       }) => {
         const summary = toAgentSummary(payload.agentRow);
-        const summaryLines = formatAgentSummaryLines(summary);
+        const summaryLines = formatAgentSummaryLines(summary, plainMember);
         const dashboardUrl = before?.dashboardUrl ?? agentDashboardUrl(guid);
         const heading = {
           quote: 'Quote (nothing done yet)',
@@ -778,11 +786,23 @@ export function registerManageAgentBilling(server: McpServer, client: WiroClient
         const row = await readAgentDetail(client, guid, extra.signal);
         const agent = toAgentDetail(row);
         before = agent;
+        plainMember = await isPlainTeamMember(client, row, extra.signal);
         const raw = isPlainObject(row.subscription) ? row.subscription : null;
         plan = planFor(client, action, agent, raw, { tier, pack, requestId: requestId ?? '' });
 
         if (plan.outcome !== 'quote' || !plan.perform) {
           return respond({ outcome: plan.outcome, message: plan.message, nextAction: plan.nextAction, agentRow: row });
+        }
+        // A team member without admin rights can still be the person who
+        // deployed the agent, who may pay for it, so Wiro is asked before a quote.
+        if (plainMember && await teamAgentBillingRefused(client, guid, extra.signal)) {
+          return respond({
+            outcome: 'refused',
+            message: 'Only a team admin, the organization\'s owner or the person who deployed this agent can pay for '
+              + 'or change its plan, and this connection acts as a team member without those rights. Nothing was '
+              + 'quoted or charged. Ask a team admin or the person who deployed the agent to do it.',
+            agentRow: row,
+          });
         }
         const problem = confirm ? approvalProblem(action, plan.quote, confirm_charge_usd) : null;
         if (!confirm || problem) {
