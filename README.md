@@ -459,7 +459,7 @@ const client = new WiroClient(apiKey, apiSecret, undefined, {
 
 | Export | Description |
 |--------|-------------|
-| `createMcpServer(client, options?)` | Creates an McpServer with the tools, prompts and server instructions registered. `options.toolsets` picks tool groups and the prompts that use them; `options.instructions` replaces the instructions; `options.wrapTool(tool, handler)` returns the handler to register for each tool, for your own logging or permission checks |
+| `createMcpServer(client, options?)` | Creates an McpServer with the tools, prompts and server instructions registered. `options.toolsets` picks tool groups and the prompts that use them; `options.instructions` replaces the instructions; `options.wrapTool(tool, handler)` returns the handler to register for each tool, for your own logging or permission checks; `options.maxToolInputElements` caps the array elements and object members one tool call may carry (default 10000, `Infinity` turns the check off) |
 | `WiroClient` | API client with both auth types; `post(path, body)` calls any Wiro API endpoint with the same credentials |
 | `registerTools(server, client, options?)` | Register tools on an existing McpServer |
 | `parseToolsets(value)` | Parse a `WIRO_TOOLSETS`-style list such as `"models,agents"` |

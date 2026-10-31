@@ -1,7 +1,7 @@
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 
 /**
- * MCP SDK 1.30 still advertises Zod tool schemas as JSON Schema draft-07.
+ * MCP SDK 1.32 still advertises Zod tool schemas as JSON Schema draft-07.
  * Claude and other 2020-12-only clients reject those tools before dispatch.
  * Rewrite the tools/list payload at the transport boundary instead of
  * depending on an SDK target option that is not currently passed through.

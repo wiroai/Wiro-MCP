@@ -32,6 +32,11 @@ const { version } = require('../package.json') as { version: string };
 export interface CreateMcpServerOptions extends RegisterToolsOptions {
   /** Guidance sent to the client when it connects. Defaults to Wiro's own. */
   instructions?: string;
+  /**
+   * Largest number of array elements and object members one tool call may carry.
+   * Defaults to 10000; Infinity turns the check off.
+   */
+  maxToolInputElements?: number;
 }
 
 export function createMcpServer(
@@ -45,6 +50,7 @@ export function createMcpServer(
     },
     {
       instructions: options.instructions ?? SERVER_INSTRUCTIONS,
+      maxToolInputElements: options.maxToolInputElements ?? 10_000,
     },
   );
 

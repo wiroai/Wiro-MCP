@@ -240,6 +240,10 @@ test('the four prompts are listed and render a plan that starts from a playbook'
     const bare = await client.getPrompt({ name: 'talk_to_my_agent', arguments: {} });
     assert.match(bare.messages[0].content.text, /ask me which one/);
     assert.match(bare.messages[0].content.text, /ask me what to send/);
+
+    // A request may leave out the optional arguments field.
+    const noArguments = await client.getPrompt({ name: 'talk_to_my_agent' });
+    assert.equal(noArguments.messages[0].content.text, bare.messages[0].content.text);
   });
 });
 
