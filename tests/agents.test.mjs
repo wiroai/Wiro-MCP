@@ -657,6 +657,40 @@ test('list_agent_skills lists only the ways a service can connect, with what eac
   });
 });
 
+test('list_agent_skills and set_agent_credentials show a field\'s setup help in full, last step included', async () => {
+  const lastStep = 'Finally, share the calendars you want the agent to read with the service account email and give it permission to make changes to events.';
+  const help = `${'Create a service account in Google Cloud, enable the Calendar API and download its JSON key. '.repeat(7)}${lastStep}`;
+  assert.ok(help.length > 600);
+  const calendar = {
+    key: 'google-calendar',
+    title: 'Google Calendar',
+    credential_mode: 'fields',
+    credential_schema: [
+      { key: 'serviceaccountjson', label: 'Service Account JSON', type: 'fileinput-base64', required: true, filetypes: ['application/json'], help },
+      { key: 'calendarid', label: 'Calendar ID', type: 'text', required: true },
+      { key: 'timezone', label: 'Time zone', type: 'text', required: false },
+    ],
+  };
+  const fake = fakeClient({
+    '/Skills/Detail': { result: false, errors: [{ code: 404, message: 'Skill not found' }] },
+    '/Credentials/Detail': { result: true, errors: [], credential: calendar },
+    '/UserAgent/Detail': detailResponse(agentRow()),
+  });
+  await withClient(fake, async client => {
+    const listed = await call(client, 'list_agent_skills', { name: 'google-calendar' });
+    assert.notEqual(listed.isError, true, textOf(listed));
+    assert.ok(textOf(listed).includes(lastStep), textOf(listed));
+
+    const described = await call(client, 'set_agent_credentials', { agent_guid: 'ua-1', credential: 'google-calendar' });
+    assert.notEqual(described.isError, true, textOf(described));
+    assert.ok(textOf(described).includes(lastStep), textOf(described));
+
+    const playbook = await call(client, 'get_playbook', { topics: ['agents'] });
+    assert.match(textOf(playbook), /The user also shares the calendar with the service account's email, with permission to make changes to events/);
+    assert.match(textOf(playbook), /Save the calendar's time zone too, such as Europe\/Berlin: without one, free times and new events use UTC\./);
+  });
+});
+
 test('list_agent_skills lists the keys of a list\'s entries and of a list inside an entry', async () => {
   const firebase = {
     key: 'firebase',

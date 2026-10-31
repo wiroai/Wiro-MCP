@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { asString, isPlainObject, toNumber, truncate } from './api.js';
-import { usableConnectionModes } from './agent-config.js';
+import { FIELD_HELP_MAX, usableConnectionModes } from './agent-config.js';
 import {
   agentTaskSchema,
   htmlToText,
@@ -351,7 +351,7 @@ function setupItems(field: Record<string, unknown>, nested: boolean): Credential
     const itemType = asString(item.type);
     const itemPattern = asString(item.pattern);
     const options = setupOptions(item);
-    const help = htmlToText(item.help, 300);
+    const help = htmlToText(item.help, FIELD_HELP_MAX);
     const children = nested ? setupItems(item, false) : [];
     return [{
       key: itemKey,
@@ -399,7 +399,7 @@ export function toCredentialSetup(
       const onlyInModes = toStringArray(field.only_in_modes);
       const type = asString(field.type);
       const pattern = asString(field.pattern);
-      const help = htmlToText(field.help, 600);
+      const help = htmlToText(field.help, FIELD_HELP_MAX);
       const options = setupOptions(field);
       const items = setupItems(field, true);
       return {

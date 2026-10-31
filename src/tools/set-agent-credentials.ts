@@ -207,11 +207,6 @@ function credentialKind(meta: CredentialMeta): 'fields' | 'sign_in' | 'channel' 
   return meta.oauth ? 'sign_in' : 'fields';
 }
 
-function firstSentence(text: string): string {
-  const sentence = /^(.{20,200}?[.!?])(\s|$)/.exec(text)?.[1] ?? text;
-  return sentence.length > 200 ? `${sentence.slice(0, 200)}...` : sentence;
-}
-
 /** A field's line in the Fields list; a list of objects the user fills is followed by the keys of its entries. */
 function fieldLines(field: CredentialField, depth = 0): string[] {
   const entries = credentialFieldShape(field) === 'object-array' && depth < ENTRY_KEY_DEPTH && isWritableField(field)
@@ -224,7 +219,7 @@ function fieldLines(field: CredentialField, depth = 0): string[] {
     field.onlyInModes ? `mode ${field.onlyInModes.join('/')}` : null,
     field.pattern ? `pattern ${field.pattern}` : null,
   ].filter(Boolean).join(', ');
-  const help = field.help ? `: ${firstSentence(field.help)}` : '';
+  const help = field.help ? `: ${field.help}` : '';
   const lead = entries.length > 0 ? `${help ? ' ' : '. '}Each entry:` : '';
   return [
     `${'  '.repeat(depth)}- \`${field.key}\` ${field.label} (${flags})${help}${lead}`,

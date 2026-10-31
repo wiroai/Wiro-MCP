@@ -641,6 +641,10 @@ export interface CredentialMeta {
   platformOnly: boolean;
 }
 
+// A field's setup help is shown whole: its last steps, such as sharing a
+// calendar with the service account, are part of the setup.
+export const FIELD_HELP_MAX = 4_000;
+
 export function htmlToText(value: unknown, maxLength = 400): string | undefined {
   const html = asString(value);
   if (!html) return undefined;
@@ -699,7 +703,7 @@ export function parseCredentialField(raw: Row): CredentialField {
     ...(toNumber(raw.maxsize) !== null ? { maxSizeKb: toNumber(raw.maxsize) as number } : {}),
     ...(asString(raw.item_type) ? { itemType: asString(raw.item_type) } : {}),
     itemSchema: itemSchemaOf(raw).map(parseCredentialField).filter(field => field.key),
-    ...(htmlToText(raw.help) ? { help: htmlToText(raw.help) } : {}),
+    ...(htmlToText(raw.help, FIELD_HELP_MAX) ? { help: htmlToText(raw.help, FIELD_HELP_MAX) } : {}),
     ...(asString(raw.placeholder) ? { placeholder: asString(raw.placeholder) } : {}),
   };
 }

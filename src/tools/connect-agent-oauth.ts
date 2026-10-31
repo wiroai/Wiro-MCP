@@ -544,9 +544,10 @@ export function registerConnectAgentOauth(server: McpServer, client: WiroClient)
     'connect_agent_oauth',
     {
       title: 'Connect an agent integration',
-      description: 'Connect a sign-in based integration (Google Ads, GA4, YouTube, Google Business, '
+      description: 'Connect an outside account (Google Ads, GA4, YouTube, Google Business, '
         + 'Merchant Center, Meta Ads, Instagram, Facebook Pages, TikTok, LinkedIn, X, HubSpot, '
-        + 'Mailchimp, Reddit, Shopify) to a deployed agent. action connect: with Wiro\'s own app '
+        + 'Mailchimp, Reddit, Shopify) to a deployed agent, with a sign-in link or a saved token, as list_agent_skills '
+        + 'shows for each service. action connect: with Wiro\'s own app '
         + '(mode wiro) or the user\'s own app (mode own) it returns a sign-in link that the user '
         + 'must open in their own browser and approve within 15 minutes; never open it for them. '
         + 'With mode api_key it checks a token saved earlier with set_agent_credentials and returns '
