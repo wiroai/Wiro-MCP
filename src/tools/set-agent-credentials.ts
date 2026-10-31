@@ -242,6 +242,8 @@ function afterWriteNote(status: number | null): string {
       return 'The agent restarts shortly to load the new values.';
     case 6:
       return 'The agent still needs setup before it can start; get_my_agent shows what is missing.';
+    case 5:
+      return 'The agent stopped with an error; the values are used when it starts.';
     case null:
       return 'Check the agent with get_my_agent.';
     default:

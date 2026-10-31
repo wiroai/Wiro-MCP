@@ -52,6 +52,15 @@ const DEFAULT_MAX_CONSECUTIVE_ERRORS = 5;
 const DEFAULT_MISSING_SECRET_HINT = 'This project uses signature-based auth. '
   + 'Pass its API secret to WiroClient along with the API key.';
 const MAX_UPLOAD_BYTES = Math.floor(0.1 * 1024 ** 3);
+// The upload endpoint unpacks a .zip archive into a folder of its files, and a
+// folder has no single link, so uploadFile does not send one.
+const ARCHIVE_MEDIA_TYPES = new Set([
+  'application/zip',
+  'application/x-zip-compressed',
+  'application/x-zip',
+]);
+const ARCHIVE_UPLOAD_MESSAGE = 'A .zip archive cannot be uploaded as one file. '
+  + 'Pass the archive\'s public URL to the model directly, or upload its files one at a time.';
 
 export interface TaskReference {
   tasktoken?: string;
@@ -81,13 +90,56 @@ export interface WiroClientOptions {
   missingSecretHint?: string;
 }
 
+const MAX_PAGE_TEXT = 200;
+const PAGE_MARKUP = /<\/?(?:!doctype|html|head|body|title|h[1-6]|center|div|p|pre|hr|br)\b/i;
+const PAGE_ENTITIES: Record<string, string> = {
+  '&nbsp;': ' ',
+  '&lt;': '<',
+  '&gt;': '>',
+  '&quot;': '"',
+  '&#39;': '\'',
+  '&amp;': '&',
+};
+
+function pageText(html: string): string {
+  return html
+    .replace(/<(script|style)\b[\s\S]*?<\/\1\s*>/gi, ' ')
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/&(?:nbsp|lt|gt|quot|#39|amp);/g, entity => PAGE_ENTITIES[entity] ?? entity)
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * An answer body as an error message shows it. JSON and plain text stay as
+ * they are. A web page, such as the error page of a proxy between the client
+ * and the API, becomes one short line: its title, or else its text.
+ * `responseBody` keeps the full answer.
+ */
+function bodyForMessage(body: string, status?: number): string {
+  try {
+    JSON.parse(body);
+    return body;
+  } catch {
+    // Not JSON.
+  }
+  if (!PAGE_MARKUP.test(body)) return body;
+  const title = pageText(/<title[^>]*>([\s\S]*?)<\/title\s*>/i.exec(body)?.[1] ?? '');
+  const full = title || pageText(body);
+  // "504 Gateway Time-out" after "Wiro API error 504:" would repeat the code.
+  const text = (status !== undefined ? full.replace(new RegExp(`^${status}\\b\\s*:?\\s*`), '') : '') || full;
+  if (!text) return 'the answer was a web page with no text';
+  return text.length > MAX_PAGE_TEXT ? `${text.slice(0, MAX_PAGE_TEXT)}...` : text;
+}
+
 export class WiroApiError extends Error {
   readonly status: number;
   readonly responseBody: string;
   readonly hint?: string;
 
   constructor(status: number, responseBody: string, hint?: string) {
-    super(`Wiro API error ${status}: ${hint ?? responseBody}`);
+    super(`Wiro API error ${status}: ${hint ?? bodyForMessage(responseBody, status)}`);
     this.name = 'WiroApiError';
     this.status = status;
     this.responseBody = responseBody;
@@ -255,7 +307,7 @@ export class WiroClient {
     try {
       return JSON.parse(text) as T;
     } catch {
-      throw new Error(`Invalid JSON response: ${text}`);
+      throw new Error(`Invalid JSON response: ${bodyForMessage(text)}`);
     }
   }
 
@@ -297,7 +349,7 @@ export class WiroClient {
     try {
       return JSON.parse(text) as T;
     } catch {
-      throw new Error(`Invalid JSON response: ${text}`);
+      throw new Error(`Invalid JSON response: ${bodyForMessage(text)}`);
     }
   }
 
@@ -416,6 +468,10 @@ export class WiroClient {
     // refuses files over 0.1 GiB, so a bigger one is not downloaded at all.
     const remote = await fetchPublicFile(fileUrl, { maxBytes: MAX_UPLOAD_BYTES });
     const blob = new Blob([remote.data], remote.contentType ? { type: remote.contentType } : {});
+    // blob.type is what the upload sends: lowercased, with any parameters.
+    if (ARCHIVE_MEDIA_TYPES.has((blob.type.split(';')[0] ?? '').trim())) {
+      throw new Error(ARCHIVE_UPLOAD_MESSAGE);
+    }
     const resolvedName = fileName
       ?? fileUrl.split('/').pop()?.split('?')[0]
       ?? 'upload';

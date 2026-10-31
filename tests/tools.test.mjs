@@ -411,6 +411,55 @@ test('get_task omits invalid typed transport without public parser state', async
   });
 });
 
+test('get_task passes on an output link whatever its file name, and a client that checks schemas accepts it', async () => {
+  // Output names come from the model's own files, so the link is passed through as given.
+  for (const name of ['my output.png', 'çıktı.png', 'frame[1].png', 'report 100%.pdf']) {
+    const detail = completedDetail();
+    detail.tasklist[0].outputs = [{
+      name,
+      contenttype: name.endsWith('.pdf') ? 'application/pdf' : 'image/png',
+      size: '2048',
+      url: `https://cdn.example/files/${name}`,
+    }];
+    await withClient({ getTask: async () => detail }, async client => {
+      // After listTools, the SDK client checks every result against the tool's output schema.
+      await client.listTools();
+      const result = await client.callTool({ name: 'get_task', arguments: { taskid: '123' } });
+      assert.equal(result.isError, undefined, name);
+      assert.equal(result.structuredContent.outputs[0].url, `https://cdn.example/files/${name}`, name);
+    });
+  }
+});
+
+test('upload_file says an archive stored as a folder has no link and must not be uploaded again', async () => {
+  const folder = {
+    result: true,
+    errors: [],
+    list: [{ id: 'enc-folder', name: 'archive-3141', contenttype: 'folder', size: '0', addedtime: '1761900000', filecount: '3' }],
+  };
+  await withClient({ uploadFile: async () => folder }, async client => {
+    const result = await client.callTool({ name: 'upload_file', arguments: { url: 'https://files.example.com/archive.zip' } });
+    assert.equal(result.isError, true);
+    assert.match(result.content[0].text, /unpacked into the folder "archive-3141" in your Wiro files, so there is no single link for it\. Do not upload it again\./);
+    assert.doesNotMatch(result.content[0].text, /Upload succeeded/);
+  });
+
+  const missingLink = { result: true, errors: [], list: [{ id: 'enc-file', name: 'photo.png', contenttype: 'image/png', size: '10' }] };
+  await withClient({ uploadFile: async () => missingLink }, async client => {
+    const result = await client.callTool({ name: 'upload_file', arguments: { url: 'https://files.example.com/photo.png' } });
+    assert.equal(result.isError, true);
+    assert.equal(result.content[0].text, '## Error\n\nUpload succeeded but no reusable file URL was returned.');
+  });
+
+  const stored = { result: true, errors: [], list: [{ id: 'enc-file', name: 'photo.png', contenttype: 'image/png', size: '10', url: 'https://cdn.example/k/photo.png' }] };
+  await withClient({ uploadFile: async () => stored }, async client => {
+    await client.listTools();
+    const result = await client.callTool({ name: 'upload_file', arguments: { url: 'https://files.example.com/photo.png' } });
+    assert.notEqual(result.isError, true);
+    assert.equal(result.structuredContent.file.url, 'https://cdn.example/k/photo.png');
+  });
+});
+
 test('run_model returns custom tool calls without exposing debug transport', async () => {
   const detail = completedDetail();
   detail.tasklist[0].outputs = [{
@@ -889,9 +938,9 @@ test('run_model says a task may exist when a sent run gets no clear answer', { c
 
   try {
     const unclear = [
-      ['a 502 answer', () => new Response('<html>502 Bad Gateway</html>', { status: 502 }), /Wiro API error 502/],
+      ['a 502 answer', () => new Response('<html>502 Bad Gateway</html>', { status: 502 }), /\(Wiro API error 502: Bad Gateway\)\./],
       ['a fetch that throws', () => { throw new TypeError('fetch failed'); }, /\(fetch failed\)/],
-      ['a 2xx answer that is not JSON', () => new Response('<html>ok</html>', { status: 200 }), /Invalid JSON response/],
+      ['a 2xx answer that is not JSON', () => new Response('<html>ok</html>', { status: 200 }), /\(Invalid JSON response: ok\)\./],
     ];
     for (const [name, answer, reason] of unclear) {
       const { result, requests } = await runOnce(answer);

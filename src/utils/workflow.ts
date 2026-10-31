@@ -705,12 +705,14 @@ export function formatWorkflowRun(run: WorkflowRun): string {
     lines.push(`**Cost so far (list price):** $${run.listPriceUsd}`);
   }
 
+  const unavailable = new Set((run.unresolvedOutputs ?? []).map(missing => missing.field));
   const fields = Object.entries(run.outputs);
   if (fields.length > 0) {
     lines.push('', '### Outputs', '');
     for (const [field, values] of fields) {
       if (values.length === 0) {
-        lines.push(`- **${field}:** (empty)`);
+        // A field fed by a step that did not finish is listed once, below, as not available.
+        if (!unavailable.has(field)) lines.push(`- **${field}:** (empty)`);
         continue;
       }
       for (const value of values) {
@@ -727,10 +729,11 @@ export function formatWorkflowRun(run: WorkflowRun): string {
   if (problems.length > 0) {
     lines.push('', '### Steps that did not finish', '');
     for (const step of problems) {
+      // A cause that only repeats the status, as a cancelled step's does, is left out.
       const reason = step.status === 'aborted'
-        ? 'skipped because an earlier step failed'
-        : step.error || step.cause || step.status;
-      lines.push(`- \`${step.nodeId}\`${step.tool ? ` (${step.tool})` : ''}: ${step.status}, ${reason}`);
+        ? `skipped because an earlier step ${step.cause === 'earlier-cancellation-in-run' ? 'was cancelled' : 'failed'}`
+        : step.error || (step.cause && step.cause !== step.status ? step.cause : '');
+      lines.push(`- \`${step.nodeId}\`${step.tool ? ` (${step.tool})` : ''}: ${step.status}${reason ? `, ${reason}` : ''}`);
     }
   }
   if (run.canResume) {

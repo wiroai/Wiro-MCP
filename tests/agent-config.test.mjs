@@ -473,6 +473,33 @@ test('apply_agent_skills applies with the quoted key and reports the wallet char
   });
 });
 
+test('apply_agent_skills says when the skill change takes effect on an agent that is not running', async () => {
+  for (const [status, restart] of [
+    [6, 'The agent still needs setup; the skill change takes effect once it starts.'],
+    [0, 'The agent is stopped, so the skill change takes effect the next time it starts.'],
+    [5, 'The agent stopped with an error, so the skill change takes effect the next time it starts.'],
+  ]) {
+    const fake = fakeClient(skillRoutes({
+      '/UserAgent/Detail': detailAfterApply({ status }),
+      '/UserAgent/SkillsApply': {
+        result: true,
+        errors: [],
+        pricing: { previousPriceUsd: 42, newPriceUsd: 43, deltaUsd: 1, previousMonthlyCredits: 4200, newMonthlyCredits: 4300, deltaCredits: 100 },
+        tier: 'starter',
+        prepaidWalletDelta: 0.5,
+      },
+    }));
+    await withClient(fake, async client => {
+      const quote = await quoteInstagram(client);
+      assert.equal(quote.structuredContent.restart, restart, `status ${status}`);
+      const result = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
+      assert.notEqual(result.isError, true, text(result));
+      assert.equal(result.structuredContent.restart, restart, `status ${status}`);
+      assert.ok(text(result).includes(`**Restart:** ${restart}`), `status ${status}`);
+    });
+  }
+});
+
 test('apply_agent_skills refuses a key that was issued for a different change', async () => {
   const fake = fakeClient(skillRoutes({ '/UserAgent/SkillsApply': { result: true } }));
   await withClient(fake, async client => {
@@ -1215,6 +1242,18 @@ test('set_agent_credentials names the credentials the setup still waits for afte
     assert.doesNotMatch(JSON.stringify(result), /service_account|wiro-project-key-value/);
   });
 
+  // A stopped agent, and one that stopped with an error, use the values when they start.
+  for (const [status, note] of [
+    [0, 'The agent is stopped; the values are used when it starts.'],
+    [5, 'The agent stopped with an error; the values are used when it starts.'],
+  ]) {
+    await withClient(afterWrite({ status, setuprequired: false, credentials: { firebase, wiro: wiro(true) } }), async client => {
+      const result = await client.callTool({ name: 'set_agent_credentials', arguments: write });
+      assert.notEqual(result.isError, true, text(result));
+      assert.deepEqual(result.structuredContent.notes, [note], `status ${status}`);
+    });
+  }
+
   // At status 6 with no credential named, the general note stays.
   await withClient(afterWrite({ status: 6, setuprequired: true, credentials: { firebase, wiro: wiro(true) } }), async client => {
     const result = await client.callTool({ name: 'set_agent_credentials', arguments: write });
@@ -1943,6 +1982,7 @@ test('connect_agent_oauth saves accounts and runs the chained page step', async 
       accounts: [{ adaccountid: '1234', adaccountname: 'Acme Ads' }, { adaccountid: '5678', adaccountname: 'Beta Ads' }],
     });
     assert.equal(saved.structuredContent.state, 'connected');
+    assert.match(saved.structuredContent.message, /^Saved 2 accounts: .* A running agent restarts to use the accounts\.$/);
     assert.deepEqual(saved.structuredContent.nextAction.arguments, { action: 'select_accounts', agent_guid: AGENT, credential: 'meta-ads', picker: 'pages' });
 
     const listed = await client.callTool({ name: 'connect_agent_oauth', arguments: saved.structuredContent.nextAction.arguments });
@@ -1968,7 +2008,7 @@ test('connect_agent_oauth saves accounts and runs the chained page step', async 
         { parentvalue: '5678', items: [] },
       ],
     });
-    assert.match(chained.structuredContent.message, /Nothing was chosen for Beta Ads \(5678\)/);
+    assert.equal(chained.structuredContent.message, 'Saved the Facebook Pages selection (1 selected). Nothing was chosen for Beta Ads (5678). A running agent restarts to use it.');
     assert.deepEqual(chained.structuredContent.childStep.groups[0].items, [{ id: '555', name: 'Acme Page' }]);
 
     const unknown = await client.callTool({
@@ -1977,6 +2017,21 @@ test('connect_agent_oauth saves accounts and runs the chained page step', async 
     });
     assert.equal(unknown.isError, true);
     assert.match(text(unknown), /"999" is not available under Acme Ads/);
+  });
+});
+
+test('connect_agent_oauth names one saved account in the singular', async () => {
+  const fake = fakeClient({
+    '/Credentials/Detail': credentialDetail,
+    '/UserAgentOAuth/SetPickerAccounts': { result: true, accounts: [{ id: '1234', name: 'Acme Ads' }] },
+  });
+  await withClient(fake, async client => {
+    const saved = await client.callTool({
+      name: 'connect_agent_oauth',
+      arguments: { action: 'select_accounts', agent_guid: AGENT, credential: 'meta-ads', accounts: [{ id: '1234', name: 'Acme Ads' }] },
+    });
+    assert.notEqual(saved.isError, true, text(saved));
+    assert.equal(saved.structuredContent.message, 'Saved 1 account: Acme Ads (1234). Optionally, also choose Facebook Pages. A running agent restarts to use the account.');
   });
 });
 

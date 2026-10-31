@@ -501,7 +501,7 @@ async function selectAccounts(
       ? ` Nothing was chosen for ${accountsLine(built.skippedParents)}.`
       : '';
     return result('select_accounts', context, 'connected',
-      `Saved ${mappings.length} ${next.label}.${skipped} A running agent restarts to use them.`,
+      `Saved the ${next.label} selection (${mappings.length} selected).${skipped} A running agent restarts to use it.`,
       { childStep: { ...childStepOf(picker, savedGroups, mappings.length > 0) } });
   }
 
@@ -522,7 +522,7 @@ async function selectAccounts(
   const next = picker.next;
   if (next) {
     return result('select_accounts', context, next.optional ? 'connected' : 'pick_child_items',
-      `Saved ${accounts.length} account${accounts.length === 1 ? '' : 's'}: ${accountsLine(accounts)}. ${next.optional ? `Optionally, also choose ${next.label}.` : `Next, choose the ${next.label} for each account.`} A running agent restarts to use the accounts.`,
+      `Saved ${accounts.length} account${accounts.length === 1 ? '' : 's'}: ${accountsLine(accounts)}. ${next.optional ? `Optionally, also choose ${next.label}.` : `Next, choose the ${next.label} for each account.`} A running agent restarts to use the account${accounts.length === 1 ? '' : 's'}.`,
       {
         accounts,
         nextAction: {
@@ -535,7 +535,7 @@ async function selectAccounts(
       });
   }
   return result('select_accounts', context, 'connected',
-    `Saved ${accounts.length} account${accounts.length === 1 ? '' : 's'}: ${accountsLine(accounts)}. A running agent restarts to use them.`,
+    `Saved ${accounts.length} account${accounts.length === 1 ? '' : 's'}: ${accountsLine(accounts)}. A running agent restarts to use the account${accounts.length === 1 ? '' : 's'}.`,
     { accounts });
 }
 

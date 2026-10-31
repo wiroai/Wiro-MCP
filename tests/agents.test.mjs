@@ -2268,6 +2268,79 @@ test('control_agent keeps a successful start when the follow-up read fails', asy
     assert.equal(result.structuredContent.outcome, 'requested');
     assert.match(result.structuredContent.message, /could not be read; get_my_agent shows it/);
     assert.equal(result.structuredContent.nextAction.tool, 'get_my_agent');
+    assert.equal(result.structuredContent.status, null);
+    assert.match(textOf(result), /\*\*Status:\*\* Stopped \(0\) before, Unknown now\./);
+  });
+});
+
+test('control_agent does not show the status from before the action as the new one when no read-back answers', async () => {
+  for (const [action, before, label] of [['start', 0, 'Stopped \\(0\\)'], ['stop', 4, 'Running \\(4\\)']]) {
+    let reads = 0;
+    const fake = fakeClient({
+      '/UserAgent/Detail': () => {
+        reads += 1;
+        if (reads > 1) throw new WiroApiError(502, 'Bad gateway');
+        return detailResponse(agentRow({ status: before, credentials: {} }));
+      },
+      '/UserAgent/Start': { result: true, errors: [], useragents: [] },
+      '/UserAgent/Stop': { result: true, errors: [], useragents: [] },
+    });
+    await withClient(fake, async client => {
+      const result = await call(client, 'control_agent', { agent_guid: 'ua-1', action });
+      assert.notEqual(result.isError, true, action);
+      const output = result.structuredContent;
+      assert.equal(output.outcome, 'requested', action);
+      assert.equal(output.previousStatus, before, action);
+      assert.equal(output.status, null, action);
+      assert.equal(output.statusLabel, 'unknown', action);
+      assert.equal(output.agent.status, null, action);
+      assert.equal(output.agent.statusLabel, 'unknown', action);
+      assert.equal(output.settled, false, action);
+      assert.match(output.message, /The new status could not be read; get_my_agent shows it\./, action);
+      assert.equal(output.nextAction.tool, 'get_my_agent', action);
+      assert.match(textOf(result), new RegExp(`\\*\\*Status:\\*\\* ${label} before, Unknown now\\.`), action);
+    });
+  }
+});
+
+test('manage_agent_billing does not show the plan from before a paid change when the agent cannot be read afterwards', async () => {
+  let reads = 0;
+  const fake = fakeClient({
+    '/UserAgent/Detail': () => {
+      reads += 1;
+      if (reads > 1) throw new WiroApiError(502, 'Bad gateway');
+      return detailResponse(agentRow());
+    },
+    '/UserAgent/UpgradeTier': { result: true, errors: [], tier: 'pro', previousTier: 'starter', newPriceUsd: 120, newMonthlyCredits: 12000, proratedCharge: 54 },
+  });
+  await withClient(fake, async client => {
+    const result = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'upgrade_to_pro', confirm_charge_usd: 108, confirm: true });
+    assert.notEqual(result.isError, true, textOf(result));
+    assert.equal(result.structuredContent.outcome, 'done');
+    assert.equal(result.structuredContent.result.tier, 'pro');
+    assert.match(result.structuredContent.message, /The agent could not be read afterwards; get_my_agent shows its new status, plan and credits\.$/);
+    const text = textOf(result);
+    assert.match(text, /\*\*Agent:\*\* My Bot \(`ua-1`\)/);
+    assert.doesNotMatch(text, /\*\*Plan:\*\*|\*\*Status:\*\*|\*\*Credits:\*\*/);
+    assert.match(text, /Dashboard: https:\/\/wiro\.ai\/panel\/agents\/ua-1/);
+    assert.equal(fake.called('/UserAgent/UpgradeTier').length, 1);
+  });
+
+  // With the read-back, the summary shows the new plan.
+  let upgraded = false;
+  const fresh = fakeClient({
+    '/UserAgent/Detail': () => detailResponse(agentRow(upgraded ? { tier: 'pro', monthlypriceusd: 120, subscription: subscription({ amount: 120 }) } : {})),
+    '/UserAgent/UpgradeTier': () => {
+      upgraded = true;
+      return { result: true, errors: [], tier: 'pro', previousTier: 'starter', newPriceUsd: 120, newMonthlyCredits: 12000, proratedCharge: 54 };
+    },
+  });
+  await withClient(fresh, async client => {
+    const result = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'upgrade_to_pro', confirm_charge_usd: 108, confirm: true });
+    assert.equal(result.structuredContent.outcome, 'done');
+    assert.doesNotMatch(result.structuredContent.message, /could not be read/);
+    assert.match(textOf(result), /\*\*Plan:\*\* pro;/);
+    assert.equal(result.structuredContent.agent.tier, 'pro');
   });
 });
 

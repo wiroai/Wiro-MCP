@@ -245,6 +245,8 @@ export function registerControlAgent(server: McpServer, client: WiroClient): voi
             after = waited.row;
             settled = waited.settled;
             if (wait_seconds > 0) waitedSeconds = Math.round(waited.elapsedMs / 1000);
+            // Without a new read, the row is the one from before the action.
+            if (!waited.fresh) readFailed = true;
           } catch (error) {
             if (extra.signal.aborted) throw error;
             // The action itself went through; only the follow-up read failed.
@@ -254,7 +256,7 @@ export function registerControlAgent(server: McpServer, client: WiroClient): voi
         }
 
         const afterView = toAgentDetail(after);
-        const status = readAgentStatus(after);
+        const status = readFailed ? null : readAgentStatus(after);
         let message = result.message + (readFailed ? ' The new status could not be read; get_my_agent shows it.' : '');
         let nextAction = result.nextAction;
         if (result.outcome === 'requested' || result.outcome === 'not_needed') {
@@ -282,7 +284,9 @@ export function registerControlAgent(server: McpServer, client: WiroClient): voi
             settled,
             ...(waitedSeconds !== undefined ? { waitedSeconds } : {}),
             message,
-            agent: toAgentSummary(after),
+            agent: readFailed
+              ? { ...toAgentSummary(after), status: null, statusLabel: agentStatusLabel(null) }
+              : toAgentSummary(after),
             ...(nextAction ? { nextAction } : {}),
           },
         };

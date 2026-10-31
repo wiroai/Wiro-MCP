@@ -12,8 +12,9 @@ export function registerUploadFile(server: McpServer, client: WiroClient): void 
       title: 'Upload a file to Wiro',
       description: 'Copy a file from a public http(s) URL to Wiro, up to about 100 MB, '
         + 'and get a Wiro link back. Model file fields take public URLs directly, so use '
-        + 'this only when the same file feeds several runs. A file that is only attached '
-        + 'in the chat has no URL: ask the user for a public link.',
+        + 'this only when the same file feeds several runs. Single files only, not .zip '
+        + 'archives. A file that is only attached in the chat has no URL: ask the user for '
+        + 'a public link.',
       inputSchema: {
         url: z.string().url().describe('URL of the file to upload (image, audio, video, or document).'),
         file_name: z.string().optional().describe('Optional filename. Defaults to the URL filename.'),
@@ -40,11 +41,14 @@ export function registerUploadFile(server: McpServer, client: WiroClient): void 
 
         const file = result.list[0];
         if (!file.url) {
+          // An archive is stored as a folder of its files, which has no link.
+          const text = file.contenttype === 'folder'
+            ? `## Error\n\nThe archive was unpacked into the folder "${file.name}" in your Wiro files, `
+              + 'so there is no single link for it. Do not upload it again. Pass the archive\'s '
+              + 'public URL to the model directly, or upload its files one at a time.'
+            : '## Error\n\nUpload succeeded but no reusable file URL was returned.';
           return {
-            content: [{
-              type: 'text' as const,
-              text: '## Error\n\nUpload succeeded but no reusable file URL was returned.',
-            }],
+            content: [{ type: 'text' as const, text }],
             isError: true,
           };
         }

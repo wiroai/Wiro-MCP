@@ -1282,6 +1282,58 @@ test('wait_for_workflow_run offers resume for a failed run that can be resumed',
   });
 });
 
+/** The text wait_for_workflow_run prints for a run with these steps. */
+async function runText(status, nodes) {
+  const fake = fakeClient({
+    '/Workflow/RunDetail': {
+      result: true,
+      errors: [],
+      workflowrun: { workflowtoken: 'run-token-5', status, contents: graph() },
+      workflowrunnodes: nodes,
+    },
+  });
+  let result;
+  await withClient(fake, async client => {
+    result = await client.callTool({
+      name: 'wait_for_workflow_run',
+      arguments: { workflowtoken: 'run-token-5', wait_seconds: 0 },
+    });
+  });
+  assert.notEqual(result.isError, true);
+  return { text: result.content.map(block => block.text ?? '').join('\n'), run: result.structuredContent.run };
+}
+
+test('wait_for_workflow_run lists an output of a step that did not finish once, as not available', async () => {
+  const failed = await runText('failed', [{ nodeId: 'node-a1', tool: 'owner/image-model', kind: 'tool', status: 'failed', cause: 'tool-error', error: 'Task could not be completed.' }]);
+  assert.doesNotMatch(failed.text, /\*\*image:\*\* \(empty\)/);
+  assert.match(failed.text, /^- \*\*image:\*\* not available \(Step node-a1 is failed\)$/m);
+  assert.match(failed.text, /^- `node-a1` \(owner\/image-model\): failed, Task could not be completed\.$/m);
+  assert.deepEqual(failed.run.outputs, { image: [] });
+  assert.deepEqual(failed.run.unresolvedOutputs, [{ field: 'image', reason: 'Step node-a1 is failed' }]);
+
+  // A step that finished without output is still shown as empty.
+  const empty = await runText('completed', [{ nodeId: 'node-a1', tool: 'owner/image-model', kind: 'tool', status: 'completed', outputs: [] }]);
+  assert.match(empty.text, /^- \*\*image:\*\* \(empty\)$/m);
+  assert.doesNotMatch(empty.text, /not available/);
+});
+
+test('wait_for_workflow_run says why a step did not finish without repeating its status', async () => {
+  const cancelled = await runText('cancelled', [
+    { nodeId: 'node-a1', tool: 'owner/image-model', kind: 'tool', status: 'cancelled', cause: 'cancelled', error: null },
+    { nodeId: 'node-b2', tool: 'owner/video-model', kind: 'tool', status: 'aborted', cause: 'earlier-cancellation-in-run', error: null },
+  ]);
+  assert.match(cancelled.text, /^- `node-a1` \(owner\/image-model\): cancelled$/m);
+  assert.match(cancelled.text, /^- `node-b2` \(owner\/video-model\): aborted, skipped because an earlier step was cancelled$/m);
+
+  // A run of a workflow whose graph is hidden sends each step's status alone.
+  const masked = await runText('failed', [
+    { nodeId: 'node-a1', status: 'failed' },
+    { nodeId: 'node-b2', status: 'aborted' },
+  ]);
+  assert.match(masked.text, /^- `node-a1`: failed$/m);
+  assert.match(masked.text, /^- `node-b2`: aborted, skipped because an earlier step failed$/m);
+});
+
 test('wait_for_workflow_run prints the inputs a failed step received and hides secrets', async () => {
   const fake = fakeClient({
     '/Workflow/RunDetail': {

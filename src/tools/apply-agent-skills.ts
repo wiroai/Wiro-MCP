@@ -375,7 +375,7 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
             const quoteKey = givenKey?.priceTag === priceTag ? key : newSkillChangeKey(digest, priceTag);
             const priceChanged = confirm && givenKey !== null;
             const blocked = billing.plan !== 'none' && billing.status !== 'active';
-            const restart = restartNote(status, 'new skills');
+            const restart = restartNote(status, 'skill change');
             const priceNote = todayPriceNote(row, billing, currentPrice, currentCredits, tierChange);
             const pricing = {
               currentMonthlyUsd: currentPrice,
@@ -524,14 +524,14 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
                 listLine('Turned on', changes.enable),
                 listLine('Turned off', changes.disable),
                 `**Billing:** ${note}`,
-                `**Restart:** ${restartNote(status, 'new skills')}`,
+                `**Restart:** ${restartNote(status, 'skill change')}`,
               ].filter((line): line is string => line !== null).join('\n') }],
               structuredContent: {
                 ...base,
                 status: 'applied' as const,
                 idempotencyKey: key,
                 billing: { ...billingBase, chargedNowUsd: null, note },
-                restart: restartNote(status, 'new skills'),
+                restart: restartNote(status, 'skill change'),
               },
             };
           }
@@ -598,7 +598,7 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
           : charge.note;
         const restart = applied.noOp || replayed
           ? UNCHANGED_RESTART
-          : restartNote(status, 'new skills');
+          : restartNote(status, 'skill change');
         const firstCredential = credentialsNeeded[0]?.credentials[0];
         const nextAction = applied.noOp || replayed
           ? undefined

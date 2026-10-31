@@ -108,7 +108,8 @@ export const taskOutputSchema = z.object({
   name: z.string().optional(),
   mimeType: z.string(),
   sizeBytes: z.number().int().nonnegative().nullable(),
-  url: z.string().url().optional(),
+  // A link keeps the file name the model wrote, so no uri format is declared.
+  url: z.string().optional(),
   kind: z.enum(['image', 'video', 'audio', 'text', 'file']),
   text: z.string().optional(),
   segments: z.array(taskSegmentSchema).optional(),
@@ -241,7 +242,7 @@ export const uploadedFileOutputSchema = {
     name: z.string(),
     mimeType: z.string(),
     sizeBytes: z.number().int().nonnegative().nullable(),
-    url: z.string().url(),
+    url: z.string(),
   }),
 };
 

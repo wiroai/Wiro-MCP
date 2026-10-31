@@ -76,8 +76,9 @@ export function restartNote(status: number | null, what = 'change'): string {
     case 6:
       return `The agent still needs setup; the ${what} takes effect once it starts.`;
     case 0:
+      return `The agent is stopped, so the ${what} takes effect the next time it starts.`;
     case 5:
-      return `The agent is ${agentStatusLabel(status)}, so the ${what} takes effect the next time it starts.`;
+      return `The agent stopped with an error, so the ${what} takes effect the next time it starts.`;
     default:
       return `The ${what} takes effect the next time the agent starts.`;
   }

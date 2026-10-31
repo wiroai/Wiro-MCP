@@ -734,8 +734,11 @@ export function registerManageAgentBilling(server: McpServer, client: WiroClient
         nextAction?: NextAction;
         agentRow: Record<string, unknown>;
         withRequestId?: boolean;
+        /** The row is from before the change, so only its identity line is shown. */
+        agentStale?: boolean;
       }) => {
         const summary = toAgentSummary(payload.agentRow);
+        const summaryLines = formatAgentSummaryLines(summary);
         const dashboardUrl = before?.dashboardUrl ?? agentDashboardUrl(guid);
         const heading = {
           quote: 'Quote (nothing done yet)',
@@ -751,7 +754,7 @@ export function registerManageAgentBilling(server: McpServer, client: WiroClient
               '',
               payload.message,
               '',
-              ...formatAgentSummaryLines(summary),
+              ...(payload.agentStale ? summaryLines.slice(0, 1) : summaryLines),
               `Dashboard: ${dashboardUrl}`,
             ].join('\n'),
           }],
@@ -849,13 +852,18 @@ export function registerManageAgentBilling(server: McpServer, client: WiroClient
             agentRow: after,
           });
         }
+        // Without the read-back, the row shows the agent as it was before the change.
+        const stale = !afterRead && performed.outcome === 'done';
         return respond({
           outcome: performed.outcome,
-          message: performed.message,
+          message: stale
+            ? `${performed.message} The agent could not be read afterwards; get_my_agent shows its new status, plan and credits.`
+            : performed.message,
           quote: plan.quote,
           result: performed.result,
           nextAction: performed.nextAction,
           agentRow: after,
+          agentStale: stale,
         });
       } catch (error) {
         if (error instanceof ApiResultError && requestId && /still pending\. Retry with the same request id/i.test(error.message)) {

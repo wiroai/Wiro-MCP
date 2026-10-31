@@ -773,6 +773,8 @@ export function agentPollInterval(elapsedMs: number): number {
 
 export interface AgentWaitResult {
   row: Record<string, unknown>;
+  /** False when no read succeeded, so row is the fallback row passed in. */
+  fresh: boolean;
   settled: boolean;
   elapsedMs: number;
 }
@@ -799,6 +801,7 @@ export async function waitForAgentToSettle(
   });
   return {
     row: result.value ?? fallbackRow,
+    fresh: result.value !== undefined,
     settled: result.done,
     elapsedMs: result.elapsedMs,
   };

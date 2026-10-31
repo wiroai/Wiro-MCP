@@ -8,6 +8,7 @@ import {
   WiroApiError,
   WiroClient,
 } from '../dist/client.js';
+import { errorText } from '../dist/utils/api.js';
 
 function jsonResponse(payload, status = 200) {
   return new Response(JSON.stringify(payload), {
@@ -460,6 +461,50 @@ test('other 401s keep the API message', { concurrency: false }, async () => {
       assert.equal(error.message, `Wiro API error 401: ${JSON.stringify(body)}`);
       return true;
     });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('a web page answer is one short line in the error message and stays whole in responseBody', { concurrency: false }, async () => {
+  const page = '<html>\r\n<head><title>504 Gateway Time-out</title></head>\r\n<body>\r\n'
+    + '<center><h1>504 Gateway Time-out</h1></center>\r\n<hr><center>proxy</center>\r\n</body>\r\n</html>\r\n';
+  const error = new WiroApiError(504, page);
+  assert.equal(error.message, 'Wiro API error 504: Gateway Time-out');
+  assert.equal(errorText(error), 'Wiro API error 504: Gateway Time-out');
+  assert.equal(error.responseBody, page);
+
+  // Without a title the page's text is used, without markup, scripts or styles, and cut to 200 characters.
+  assert.equal(new WiroApiError(502, '<html>502 Bad Gateway</html>').message, 'Wiro API error 502: Bad Gateway');
+  const long = `<!DOCTYPE html><html><head><style>body{color:red}</style><script>var x = 1;</script></head><body><p>${'word '.repeat(200)}</p></body></html>`;
+  const message = new WiroApiError(520, long).message;
+  assert.doesNotMatch(message, /[<>]|color:red|var x/);
+  assert.ok(message.length <= 'Wiro API error 520: '.length + 203, String(message.length));
+  assert.equal(new WiroApiError(503, '<html><title>503</title></html>').message, 'Wiro API error 503: 503');
+  assert.equal(new WiroApiError(500, '<html><body></body></html>').message, 'Wiro API error 500: the answer was a web page with no text');
+
+  // JSON, plain text and hints are shown as before.
+  const json = JSON.stringify({ result: false, errors: [{ code: 0, message: 'Some refusal.' }] });
+  assert.equal(new WiroApiError(401, json).message, `Wiro API error 401: ${json}`);
+  assert.equal(errorText(new WiroApiError(401, json)), 'Wiro API error 401: Some refusal.');
+  assert.equal(new WiroApiError(502, 'Bad gateway').message, 'Wiro API error 502: Bad gateway');
+  assert.equal(new WiroApiError(500, 'a < b and c > d').message, 'Wiro API error 500: a < b and c > d');
+  assert.equal(new WiroApiError(401, '{"result":false}', 'A hint.').message, 'Wiro API error 401: A hint.');
+
+  // The same holds for the client's own requests, and for a 2xx page that is not JSON.
+  const originalFetch = globalThis.fetch;
+  let answer;
+  globalThis.fetch = async () => answer();
+  try {
+    answer = () => new Response(page, { status: 504, headers: { 'Content-Type': 'text/html' } });
+    await assert.rejects(new WiroClient('api-key').listTasks(), thrown => {
+      assert.ok(thrown instanceof WiroApiError);
+      assert.equal(thrown.message, 'Wiro API error 504: Gateway Time-out');
+      assert.equal(thrown.responseBody, page);
+      return true;
+    });
+    answer = () => new Response('<html><body><h1>Maintenance</h1></body></html>', { status: 200 });
+    await assert.rejects(new WiroClient('api-key').listTasks(), { message: 'Invalid JSON response: Maintenance' });
   } finally {
     globalThis.fetch = originalFetch;
   }
