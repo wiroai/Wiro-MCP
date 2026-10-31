@@ -28,13 +28,14 @@ function usdAmount(value: unknown): number | null {
 /**
  * A task's cost for the user: what Wiro charged once it billed the task, with
  * the list price beside it when a discount made them differ. Before Wiro bills
- * it, the list price.
+ * it, the list price. A cancelled task can still be charged once work it had
+ * already started ends, so $0 there is only the amount so far.
  */
 export function formatTaskCost(task: Task): string | null {
   const list = usdAmount(task.totalcost);
   const charged = usdAmount(task.chargedcost);
   if (charged !== null) {
-    if (charged === 0) return '$0 (not charged)';
+    if (charged === 0) return task.status === 'task_cancel' ? 'no charge recorded yet' : '$0 (not charged)';
     if (list !== null && list > 0 && Math.abs(list - charged) > 1e-9) {
       return `$${charged} charged (list price $${list})`;
     }

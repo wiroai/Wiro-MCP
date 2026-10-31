@@ -140,6 +140,10 @@ test('formatTaskResult shows the task token and what the wallet was charged', ()
   assert.match(formatTaskResult({ ...base, chargedcost: '0.0400000' }), /\*\*Cost:\*\* \$0\.04 charged \(list price \$0\.05\)/);
   assert.match(formatTaskResult({ ...base, chargedcost: '0.05' }), /\*\*Cost:\*\* \$0\.05$/m);
   assert.match(formatTaskResult({ ...base, pexit: '1', chargedcost: '0' }), /\*\*Cost:\*\* \$0 \(not charged\)/);
+  // A cancelled task can still be charged when work it had started ends.
+  const cancelled = formatTaskResult({ ...base, status: 'task_cancel', pexit: '', chargedcost: '0' });
+  assert.match(cancelled, /\*\*Cost:\*\* no charge recorded yet/);
+  assert.doesNotMatch(cancelled, /not charged/);
 });
 
 test('formatTaskList keeps history concise and points to get_task', () => {

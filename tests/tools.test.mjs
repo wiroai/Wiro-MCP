@@ -194,7 +194,7 @@ test('get_task returns a function-call continuation in run_model params', async 
   });
 });
 
-test('get_task_price reports the charged amount and a cancelled task as free', async () => {
+test('get_task_price reports the charged amount and leaves a cancelled task open until it is charged', async () => {
   const charged = completedDetail();
   charged.tasklist[0].totalcost = '0.1';
   charged.tasklist[0].chargedcost = '0.08';
@@ -213,9 +213,39 @@ test('get_task_price reports the charged amount and a cancelled task as free', a
   await withClient({ getTask: async () => cancelled }, async client => {
     const result = await client.callTool({ name: 'get_task_price', arguments: { taskid: '123' } });
     assert.match(result.content[0].text, /\*\*Result:\*\* Cancelled/);
-    assert.match(result.content[0].text, /\$0 \(cancelled tasks are not charged\)/);
+    assert.match(result.content[0].text, /\$0 so far \(a task stopped while running can still be charged when its work ends\)/);
     assert.equal(result.structuredContent.state, 'cancelled');
+    assert.equal(result.structuredContent.billed, null);
     assert.equal(result.structuredContent.costUsd, 0);
+  });
+
+  // A task stopped while running whose model still finished the work.
+  const billedCancel = completedDetail();
+  billedCancel.tasklist[0].status = 'task_cancel';
+  billedCancel.tasklist[0].totalcost = '0.1';
+  billedCancel.tasklist[0].chargedcost = '0.1';
+  await withClient({ getTask: async () => billedCancel }, async client => {
+    const result = await client.callTool({ name: 'get_task_price', arguments: { taskid: '123' } });
+    assert.match(result.content[0].text, /\*\*Result:\*\* Cancelled/);
+    assert.match(result.content[0].text, /\*\*Cost:\*\* \$0\.1$/m);
+    assert.equal(result.structuredContent.billed, true);
+    assert.equal(result.structuredContent.costUsd, 0.1);
+  });
+});
+
+test('kill_task never promises that a stopped running task is free', async () => {
+  await withClient({ killTask: async () => ({ result: true, errors: [] }) }, async client => {
+    const { tools } = await client.listTools();
+    const kill = tools.find(tool => tool.name === 'kill_task');
+    assert.match(kill.description, /A queued task is cancelled and never charged/);
+    assert.match(kill.description, /already running can still be charged for its run/);
+
+    const result = await client.callTool({ name: 'kill_task', arguments: { taskid: '123' } });
+    assert.notEqual(result.isError, true);
+    assert.match(result.content[0].text, /^Stop requested; the task now shows as cancelled\./);
+    assert.match(result.content[0].text, /already running can still be charged for its run/);
+    assert.equal(result.structuredContent.message, result.content[0].text);
+    assert.doesNotMatch(`${kill.description} ${result.content[0].text}`, /stopped task is not charged|work is lost/);
   });
 });
 

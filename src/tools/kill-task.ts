@@ -3,16 +3,19 @@ import { z } from 'zod';
 import type { WiroClient } from '../client.js';
 import { taskActionOutputSchema } from './schemas.js';
 
+const STOP_REQUESTED = 'Stop requested; the task now shows as cancelled. A task that was still queued is not '
+  + 'charged; one that was already running can still be charged for its run.';
+
 export function registerKillTask(server: McpServer, client: WiroClient): void {
   server.registerTool(
     'kill_task',
     {
       title: 'Stop a Wiro task',
-      description: 'Stop a model task that has not finished: a running task stops '
-        + 'and its work is lost, and a queued one is cancelled. A stopped task is '
-        + 'not charged. If the task finished first, the call is refused with "Process ended": '
-        + 'read it with get_task and show the result. Not for the steps of a workflow run or '
-        + 'the runs Studio starts.',
+      description: 'Stop a model task that has not finished. A queued task is cancelled and '
+        + 'never charged. A task that was already running can still be charged for its run, '
+        + 'and get_task_price shows any charge once the run ends. If the task finished first, '
+        + 'the call is refused with "Process ended": read it with get_task and show the result. '
+        + 'Not for the steps of a workflow run or the runs Studio starts.',
       inputSchema: {
         tasktoken: z.string().optional().describe('The task token returned from run_model.'),
         taskid: z.string().optional().describe('The task ID (alternative to tasktoken).'),
@@ -46,7 +49,7 @@ export function registerKillTask(server: McpServer, client: WiroClient): void {
           };
         }
         return {
-          content: [{ type: 'text' as const, text: 'Task stopped. It ends as cancelled and is not charged.' }],
+          content: [{ type: 'text' as const, text: STOP_REQUESTED }],
           structuredContent: {
             action: 'kill',
             success: true,
@@ -54,7 +57,7 @@ export function registerKillTask(server: McpServer, client: WiroClient): void {
               ...(taskid ? { id: taskid } : {}),
               ...(tasktoken ? { token: tasktoken } : {}),
             },
-            message: 'Task stopped. It ends as cancelled and is not charged.',
+            message: STOP_REQUESTED,
           },
         };
       } catch (error) {

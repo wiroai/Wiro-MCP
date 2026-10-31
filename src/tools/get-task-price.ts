@@ -15,7 +15,8 @@ export function registerGetTaskPrice(server: McpServer, client: WiroClient): voi
       title: 'Get a Wiro task price',
       description: 'Get one task’s cost: the amount charged once Wiro has billed it, with the '
         + 'model\'s list price beside it when a discount made them differ. Successful tasks are '
-        + 'billed; failed and cancelled tasks are not. A finished task\'s result already '
+        + 'billed; failed tasks and tasks cancelled while queued are not, and a task stopped '
+        + 'while running can still be charged once its work ends. A finished task\'s result already '
         + 'shows its cost, so use this for a task whose result you do not have. If the '
         + 'task is active, follow the returned `wait_for_task` next action.',
       inputSchema: {
@@ -75,7 +76,7 @@ export function registerGetTaskPrice(server: McpServer, client: WiroClient): voi
           lines.push(`**Cost:** ${charged ?? '$0 (failed tasks are not charged)'}`);
         } else if (state === 'cancelled') {
           lines.push(`**Result:** Cancelled`);
-          lines.push(`**Cost:** ${charged ?? '$0 (cancelled tasks are not charged)'}`);
+          lines.push(`**Cost:** ${charged ?? '$0 so far (a task stopped while running can still be charged when its work ends)'}`);
         } else {
           lines.push(`**Result:** In progress`);
           lines.push(`**Cost:** Not yet determined (task still running)`);
@@ -91,13 +92,16 @@ export function registerGetTaskPrice(server: McpServer, client: WiroClient): voi
         });
         const successful = state === 'completed';
         const terminal = successful || state === 'failed' || state === 'cancelled';
+        // Work a cancelled task had already started can still be charged when it
+        // ends, so with no charge yet it is not known whether it will be billed.
+        const pendingCancel = state === 'cancelled' && charged === null;
 
         return {
           content: [{ type: 'text' as const, text: lines.join('\n') }],
           structuredContent: {
             state,
             task: structuredTask.task,
-            billed: terminal ? successful || charged !== null : null,
+            billed: terminal && !pendingCancel ? successful || charged !== null : null,
             costUsd: terminal
               ? (chargedUsd !== null && Number.isFinite(chargedUsd)
                 ? chargedUsd

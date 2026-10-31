@@ -132,8 +132,8 @@ Example, "a 10 second clip of a city street at night with Kling": \`search_model
 
 ## Stop a task
 
-- \`kill_task\` stops a model task that has not finished: a running task stops and its work is lost, a queued one is cancelled. \`cancel_task\` works only while the task is queued.
-- A stopped task ends as \`cancelled\` and is not charged. The user's request to stop is the go-ahead.
+- \`kill_task\` stops a model task that has not finished; \`cancel_task\` works only while it is queued. A task stopped while queued is never charged.
+- A task stopped while it was running can still be charged for its run. Say so when you stop a running task, and never promise that it is free. \`get_task_price\` shows any charge once the run ends. The user's request to stop is the go-ahead.
 - Neither works on the steps of a workflow run or on the runs Studio starts.
 
 ## Files
@@ -145,7 +145,7 @@ Example, "a 10 second clip of a city street at night with Kling": \`search_model
 ## Prices and limits
 
 - The price is a fixed price per run, a price per unit (per second of video, per character, per token, per output and so on), or a rate per second of run time. A range means it depends on inputs such as resolution or duration: \`get_model_schema\` shows which. Quote the price at the size and count the user wants, or at the schema default, and say which.
-- Successful tasks are billed. Failed and cancelled tasks are not.
+- Successful tasks are billed. Failed tasks and tasks cancelled while queued are not; a task stopped while running can still be charged.
 - A finished task's result shows its cost: the amount charged, and the list price when the two differ. \`get_task_price\` gives the cost of a task whose result you do not have.
 - A run is refused with "Insufficient balance" when the spendable balance for that model is under $0.50. Tell the user the balance from \`get_account\`.
 - With a balance of $250 or less, a wallet can have one unfinished task per $10 of balance, at least 1: $50 allows 5. A run over that is refused with "You have reached your concurrent task limit" and nothing is charged: start it again once a task finishes. Above $250 there is no such limit.
@@ -606,7 +606,7 @@ Everything on Wiro is paid from a prepaid wallet in USD; only agent plans can be
 
 | Product | What is charged | When |
 | --- | --- | --- |
-| Model run | The model's price for that run | When the task succeeds. Failed and cancelled tasks are free. |
+| Model run | The model's price for that run | When the task succeeds. Failed tasks and tasks cancelled while queued are free; one stopped while running can still be charged. |
 | Workflow run | Each model step, like a model run. Utility steps are free. | As each step finishes. Nothing up front. |
 | Studio | The chat tokens of each turn, plus each model run Studio starts that succeeds | After the turn |
 | Workflow Agent | The chat tokens of each turn | After the turn |
