@@ -848,6 +848,16 @@ export function normalizeBase64FileValue(value: string): string {
   return Buffer.from(value, 'utf8').toString('base64');
 }
 
+/** A key file field's value as Wiro stores it, or why it is refused. */
+function keyFileValue(value: unknown, label: string): { value?: string; error?: string } {
+  if (typeof value !== 'string') return { error: `${label} takes the file's content as text or base64.` };
+  // Key files take the file's text; refuse a link before anything is saved.
+  if (/^\s*https?:\/\//i.test(value)) {
+    return { error: `${label} takes the file's content as text or base64, not a link. The user can paste the file's text or upload the file on the agent's page in the Wiro dashboard.` };
+  }
+  return { value: normalizeBase64FileValue(value) };
+}
+
 export interface CredentialFieldInput {
   credential: string;
   field: string;
@@ -966,6 +976,8 @@ function listValue(
     return { value: items };
   }
   const allowed = new Set(field.itemSchema.map(item => item.key));
+  const keyFiles = field.itemSchema.filter(item => credentialFieldShape(item) === 'base64-file');
+  const rows: Row[] = [];
   for (const [index, item] of value.entries()) {
     if (!isPlainObject(item)) return { error: `${label} takes a list of objects; item ${index + 1} is not one.` };
     if (allowed.size > 0) {
@@ -974,8 +986,17 @@ function listValue(
         return { error: `${label} item ${index + 1} has unknown keys (${unknown.join(', ')}). Allowed: ${[...allowed].join(', ')}.` };
       }
     }
+    // Key files inside a row, such as each Firebase account's service account JSON, are stored like top-level ones.
+    const row: Row = { ...item };
+    for (const keyFile of keyFiles) {
+      if (isEmptyValue(row[keyFile.key])) continue;
+      const checked = keyFileValue(row[keyFile.key], `${label} item ${index + 1} ${keyFile.label}`);
+      if (checked.error) return { error: checked.error };
+      row[keyFile.key] = checked.value;
+    }
+    rows.push(row);
   }
-  return { value };
+  return { value: rows };
 }
 
 /**
@@ -1051,9 +1072,11 @@ export function prepareCredentialWrite(
       }
       let value = input.value;
       if (item && !isEmptyValue(value)) {
-        const checked = Array.isArray(value)
-          ? listValue({ ...item, type: 'string-array' }, value, `${parent.label} ${item.label}`)
-          : scalarValue(item, value, `${parent.label} ${item.label}`);
+        const checked = credentialFieldShape(item) === 'base64-file'
+          ? keyFileValue(value, `${parent.label} ${item.label}`)
+          : Array.isArray(value)
+            ? listValue({ ...item, type: 'string-array' }, value, `${parent.label} ${item.label}`)
+            : scalarValue(item, value, `${parent.label} ${item.label}`);
         if (checked.error) {
           prepared.errors.push(checked.error);
           continue;
@@ -1114,20 +1137,12 @@ export function prepareCredentialWrite(
       continue;
     }
     if (shape === 'base64-file') {
-      if (typeof input.value !== 'string') {
-        prepared.errors.push(`${field.label} takes the file's content as text or base64.`);
+      const checked = keyFileValue(input.value, field.label);
+      if (checked.error) {
+        prepared.errors.push(checked.error);
         continue;
       }
-      // A link would be saved as the key itself. Key files are never fetched from a URL.
-      if (/^\s*https?:\/\//i.test(input.value)) {
-        prepared.errors.push(`${field.label} takes the file's content as text or base64, not a link. The user can paste the file's text or upload the file on the agent's page in the Wiro dashboard.`);
-        continue;
-      }
-      prepared.apiFields.push({
-        credentialkey: credential,
-        fieldname: fieldName,
-        fieldvalue: normalizeBase64FileValue(input.value),
-      });
+      prepared.apiFields.push({ credentialkey: credential, fieldname: fieldName, fieldvalue: checked.value });
       continue;
     }
     const checked = shape === 'string-array' || shape === 'object-array'

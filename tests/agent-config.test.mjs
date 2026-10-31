@@ -88,6 +88,26 @@ const credentials = {
     ],
     oauth_provider: null,
   },
+  firebase: {
+    key: 'firebase',
+    title: 'Firebase',
+    credential_mode: 'sa',
+    connection_modes: [],
+    credential_schema: [{
+      key: 'accounts',
+      type: 'custom:firebase-accounts-list',
+      label: 'Firebase Accounts',
+      required: true,
+      custom_component_config: {
+        max_accounts: 10,
+        per_account_schema: [
+          { key: 'appname', type: 'text', label: 'App Name', required: true },
+          { key: 'serviceaccountjson', type: 'fileinput-base64', label: 'Service Account JSON', required: true, encrypted: true },
+        ],
+      },
+    }],
+    oauth_provider: null,
+  },
   'sys-openai': {
     key: 'sys-openai',
     title: 'OpenAI',
@@ -841,6 +861,67 @@ test('set_agent_credentials refuses a link in a key file field without saving it
     });
     assert.equal(result.isError, true);
     assert.match(text(result), /not a link/);
+    assert.equal(fake.calls.some(call => call.path === '/UserAgent/CredentialUpsert'), false);
+  });
+});
+
+test('set_agent_credentials encodes key files inside a list, as a whole list or one entry', async () => {
+  const fake = fakeClient({
+    '/Credentials/Detail': credentialDetail,
+    '/UserAgent/CredentialUpsert': { result: true, applied: 1 },
+    '/UserAgent/Detail': detail(),
+  });
+  const json = '{"type":"service_account","project_id":"my-app","token_uri":"https://oauth2.googleapis.com/token"}';
+  const encoded = Buffer.from('{"type":"service_account","project_id":"staging"}').toString('base64');
+  await withClient(fake, async client => {
+    const accounts = [
+      { appname: 'My App', serviceaccountjson: json },
+      { appname: 'Staging', serviceaccountjson: encoded },
+    ];
+    const list = await client.callTool({
+      name: 'set_agent_credentials',
+      arguments: { agent_guid: AGENT, fields: [{ credential: 'firebase', field: 'accounts', value: accounts }] },
+    });
+    assert.notEqual(list.isError, true, text(list));
+    const listUpsert = fake.calls.filter(call => call.path === '/UserAgent/CredentialUpsert').at(-1);
+    assert.deepEqual(listUpsert.body.fields[0].fieldvalue, [
+      { appname: 'My App', serviceaccountjson: Buffer.from(json).toString('base64') },
+      { appname: 'Staging', serviceaccountjson: encoded },
+    ]);
+
+    const entry = await client.callTool({
+      name: 'set_agent_credentials',
+      arguments: { agent_guid: AGENT, fields: [{ credential: 'firebase', field: 'serviceaccountjson', parent_field: 'accounts', ordinal: 0, value: json }] },
+    });
+    assert.notEqual(entry.isError, true, text(entry));
+    const entryUpsert = fake.calls.filter(call => call.path === '/UserAgent/CredentialUpsert').at(-1);
+    assert.equal(entryUpsert.body.fields[0].fieldvalue, Buffer.from(json).toString('base64'));
+    assert.equal(entryUpsert.body.fields[0].parentfield, 'accounts');
+    assert.equal(entryUpsert.body.fields[0].ordinal, 0);
+    assert.doesNotMatch(JSON.stringify([list, entry]), /service_account/);
+  });
+});
+
+test('set_agent_credentials refuses a link in a key file inside a list without saving it', async () => {
+  const fake = fakeClient({
+    '/Credentials/Detail': credentialDetail,
+    '/UserAgent/CredentialUpsert': { result: true, applied: 1 },
+    '/UserAgent/Detail': detail(),
+  });
+  await withClient(fake, async client => {
+    const list = await client.callTool({
+      name: 'set_agent_credentials',
+      arguments: { agent_guid: AGENT, fields: [{ credential: 'firebase', field: 'accounts', value: [{ appname: 'My App', serviceaccountjson: 'https://drive.example.com/key.json' }] }] },
+    });
+    assert.equal(list.isError, true);
+    assert.match(text(list), /Firebase Accounts item 1 Service Account JSON takes the file's content as text or base64, not a link/);
+
+    const entry = await client.callTool({
+      name: 'set_agent_credentials',
+      arguments: { agent_guid: AGENT, fields: [{ credential: 'firebase', field: 'serviceaccountjson', parent_field: 'accounts', ordinal: 0, value: ' HTTPS://drive.example.com/key.json' }] },
+    });
+    assert.equal(entry.isError, true);
+    assert.match(text(entry), /not a link/);
     assert.equal(fake.calls.some(call => call.path === '/UserAgent/CredentialUpsert'), false);
   });
 });
