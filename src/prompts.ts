@@ -25,7 +25,7 @@ function buildWorkflowText(goal: string | undefined): string {
   return [
     `I want a Wiro workflow for this goal: ${goal ?? '(not given yet, ask me first)'}`,
     '',
-    'Before anything else, call `get_playbook` with the topics "workflows" and "workflow-agent" and follow them.',
+    'Before anything else, call `get_playbook` with the topics "workflows", "workflow-graph" and "workflow-agent" and follow them.',
     '',
     'Plan:',
     '1. Call `get_account` to see which workspace and wallet this key uses.',

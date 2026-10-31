@@ -73,7 +73,7 @@ async function getUtilitySchema(client: WiroClient, slug: string) {
     },
     nextAction: {
       tool: 'get_playbook',
-      arguments: { topics: ['workflows'] },
+      arguments: { topics: ['workflow-graph'] },
       reason: 'Utilities are workflow steps, not runnable models. See how to wire them into a workflow.',
     },
   };
@@ -88,7 +88,7 @@ function workflowStepUsage(text: string, slug: string): string {
     '',
     '### Usage',
     '',
-    `Use this model as a workflow step: \`"type": "run"\`, \`"tool": "${slug}"\`, and the parameter ids above as the keys of \`input\`. \`get_playbook\` with the topic "workflows" shows the full format.`,
+    `Use this model as a workflow step: \`"type": "run"\`, \`"tool": "${slug}"\`, and the parameter ids above as the keys of \`input\`. \`get_playbook\` with the topic "workflow-graph" shows the full format.`,
   ].join('\n');
 }
 
@@ -112,7 +112,8 @@ export function registerGetModelSchema(
           + 'fields, and pricing. Catalog fields such as `previousTaskToken` must be '
           + 'discovered here; use it with `toolOutputs` for tool results, or with the same '
           + '`session_id` and one new prompt/messages value for a stateful next turn. Fill required '
-          + 'parameters and follow the returned `run_model` next action exactly once. '
+          + 'parameters and follow the returned `run_model` next action once when the user wants a run; '
+          + 'for a price question, the price here is the answer. '
         : 'Get one model’s typed parameters, options, defaults, required '
           + 'fields, and pricing, to use the model as a workflow step: its parameter '
           + 'ids are the keys of the step’s input. ')
@@ -178,7 +179,7 @@ export function registerGetModelSchema(
               ...detail,
               nextAction: {
                 tool: 'get_playbook',
-                arguments: { topics: ['workflows'] },
+                arguments: { topics: ['workflow-graph'] },
                 reason: 'Use this model as a workflow step; the playbook shows the step format. Running a model on its own needs the models tool group, which is not loaded.',
               },
             },

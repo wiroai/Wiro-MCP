@@ -827,6 +827,6 @@ export function prepareIssuesText(error: WorkflowPrepareError): string {
     const part = !issue.input ? '' : issue.nodeId === 'output' || issue.nodeId === 'input' ? ` field \`${issue.input}\`` : ` input \`${issue.input}\``;
     lines.push(`- ${where}${part}: ${issue.message}`);
   }
-  lines.push('', 'Fix all of them and try again. Use get_model_schema to check a model\'s parameter ids and get_playbook topic "workflows" for the graph format.');
+  lines.push('', 'Fix all of them and try again. Use get_model_schema to check a model\'s parameter ids and get_playbook topic "workflow-graph" for the graph format.');
   return lines.join('\n');
 }

@@ -42,7 +42,7 @@ export function registerSendAgentMessage(server: McpServer, client: WiroClient):
         + 'wallet to start; that is a minimum, not a cap. '
         + 'The Workflow Agent ("workflow-agent") designs Wiro workflows; its usage is billed to the same wallet. '
         + 'Pass workflow to have it edit an existing one. It never saves anything: valid workflows in its reply come '
-        + 'back under workflows, and you save them with save_workflow_from_agent after the user agrees. '
+        + 'back under workflows, and you save the one the user picks with save_workflow_from_agent (a request to save it is that choice). '
         + 'A deployed agent (its guid) pays for its turns with its own credits; image, video and other model '
         + 'runs it starts are billed to the wallet of the Wiro API key saved on that agent. '
         + 'Without session, Studio and the Workflow Agent start a new session; a deployed agent uses its "default" '

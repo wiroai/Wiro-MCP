@@ -10,11 +10,11 @@ export function registerSearchModels(server: McpServer, client: WiroClient): voi
     'search_models',
     {
       title: 'Search Wiro models',
-      description: 'Search and browse AI models on Wiro. Choose a model from '
-        + 'the result and call the returned `get_model_schema` next action before '
-        + 'using `run_model`.',
+      description: 'Search and browse AI models on Wiro. Each row shows the model\'s price; '
+        + '`get_model_schema` shows how it depends on settings such as resolution. Choose a '
+        + 'model and call the returned `get_model_schema` next action before using `run_model`.',
       inputSchema: {
-        search: z.string().optional().describe('One to three key words, e.g. "flux", "upscale", "remove background". Every word must appear in one field of a model (name, description or a parameter), so never a sentence.'),
+        search: z.string().optional().describe('One to three key words, e.g. "flux", "upscale" or "remove background". Every word must appear in one field of a model: its name, description, or a parameter\'s id, label or notes. Case, dashes and underscores are ignored and a word also matches inside a longer one, so a stem such as "timestamp" finds timestamp options. Never a sentence.'),
         categories: z.array(z.string()).optional().describe(
           'Filter by categories. Available: "text-to-image", "image-to-image", "image-editing", '
           + '"text-to-video", "image-to-video", "speech-to-video", "talking-head", '

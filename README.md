@@ -192,7 +192,7 @@ The hosted server takes the same credentials as a bearer token:
 |------|-------------|
 | `search_models` | Search and browse AI models by keyword, category, or owner |
 | `get_model_schema` | Get full parameter schema and pricing for any model, or the parameters and output ports of a workflow utility |
-| `recommend_model` | Describe what you want to build, get model recommendations by relevance |
+| `recommend_model` | Find models for a goal from two or three key words, best matches first |
 | `explore` | Browse curated models grouped by category, no parameters needed |
 | `run_model` | Run any model, waiting up to 45s by default before it returns a recoverable task token |
 | `wait_for_task` | Continue waiting for an existing task without submitting or billing a duplicate run |
@@ -200,7 +200,7 @@ The hosted server takes the same credentials as a bearer token:
 | `list_tasks` | Browse authenticated task history across conversations, then continue with `get_task` |
 | `get_task_price` | Get the cost of a completed task |
 | `cancel_task` | Cancel a queued task |
-| `kill_task` | Kill a running task |
+| `kill_task` | Stop a queued or running task |
 | `upload_file` | Upload a file from a public http(s) URL (up to about 100 MB) for use as model input |
 
 For long generations, `run_model` returns the existing task ID and token when its
@@ -275,7 +275,7 @@ your wallet after each reply. Your own agents run on a monthly plan with credits
 | Tool | Description |
 |------|-------------|
 | `get_account` | Show which workspace your API key works in and its wallet balance |
-| `get_playbook` | Step-by-step guides: getting started, models, workflows, the Workflow Agent, Studio, agents and billing |
+| `get_playbook` | Step-by-step guides: getting started, models, workflows, workflow graphs, the Workflow Agent, Studio, agents and billing |
 | `search_docs` | Search the Wiro documentation for guides and API references |
 
 The server also offers prompts for common jobs (`build_workflow`, `deploy_agent`,

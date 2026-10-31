@@ -26,7 +26,8 @@ export function registerResumeWorkflowRun(server: McpServer, client: WiroClient)
         + 'settings: changes saved to the workflow since then apply to new runs only. '
         + 'Completed steps are kept and not charged again; failed, skipped '
         + 'and not-yet-run steps run again as new model runs and are charged to the wallet '
-        + 'that paid for the original run. Ask the user before resuming. Use it only when '
+        + 'that paid for the original run. Ask the user before resuming, unless they asked you to '
+        + 'continue this run: then give the expected cost in one line and resume. Use it only when '
         + 'wait_for_workflow_run reports `canResume: true`.',
       inputSchema: {
         workflowtoken: z.string().min(1).describe('The run token of a failed or stopped run.'),

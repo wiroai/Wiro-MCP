@@ -163,9 +163,12 @@ export function registerDeployAgent(server: McpServer, client: WiroClient): void
         + 'days until it is cancelled. Without confirm: true the tool only returns the exact quote. Show it to '
         + 'the user, get their approval, then repeat the call with confirm: true and confirm_charge_usd set to '
         + 'the quoted price; if the price changed in between, nothing is charged and a new quote comes back. '
-        + 'Never repeat a confirmed deploy that failed or timed out without checking list_my_agents first. The '
+        + 'Never repeat a confirmed deploy that timed out or whose outcome is unknown without checking '
+        + 'list_my_agents first. A refusal that says nothing was created or charged, such as one for balance, '
+        + 'can be confirmed again once its cause is fixed and the user says yes. The '
         + 'agent starts on its own after deployment. Credentials can be added later with set_agent_credentials '
-        + 'or connect_agent_oauth, but skills that need them do not work until then. To change a template\'s '
+        + 'or connect_agent_oauth, but skills that need them do not work until then. A custom build also gets '
+        + 'the scheduled tasks its skills come with, or a starter task on Mondays at 10:00. To change a template\'s '
         + 'skills, deploy it first and then use apply_agent_skills. get_playbook describes the whole flow.',
       inputSchema: {
         template: z.string().min(1).max(200).optional()
@@ -488,7 +491,7 @@ export function registerDeployAgent(server: McpServer, client: WiroClient): void
           ));
         }
         if (error instanceof ApiResultError && /insufficient wallet balance/i.test(error.message)) {
-          return errorResult(new Error(`${error.message}\n\nNothing was created or charged. Add funds to the wallet, then try again. get_account shows the balance.`));
+          return errorResult(new Error(`${error.message}\n\nNothing was created or charged. Give the user the amounts above. Funds are added at https://wiro.ai/panel/wallet/deposit/credit-card; once the user has added them and says yes, confirm the same quote again.`));
         }
         return errorResult(error);
       }

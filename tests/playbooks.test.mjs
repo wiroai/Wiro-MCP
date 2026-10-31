@@ -123,7 +123,7 @@ test('every planned tool is covered by at least one playbook', () => {
 });
 
 test('the workflow examples are valid graphs that reference only declared sources', () => {
-  const blocks = [...PLAYBOOKS.workflows.matchAll(/```json\n([\s\S]*?)```/g)].map(match => match[1]);
+  const blocks = [...PLAYBOOKS['workflow-graph'].matchAll(/```json\n([\s\S]*?)```/g)].map(match => match[1]);
   assert.equal(blocks.length, 2);
 
   const minimal = JSON.parse(blocks[0]);

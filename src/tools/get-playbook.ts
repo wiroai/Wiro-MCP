@@ -22,9 +22,8 @@ export function registerGetPlaybook(server: McpServer): void {
         + 'the formats and the money rules for one kind of job. Read the '
         + 'relevant topic before a multi-step job, such as building or running '
         + 'a workflow, deploying or setting up an agent, or a Studio session, '
-        + 'and follow it. Read getting-started before the first workflow, Studio, '
-        + 'agent or billing job in a conversation; for a job that only uses models, '
-        + `the models topic is enough. Topics: ${topicList}. `
+        + 'and follow it. Each topic is enough for its own job; read getting-started '
+        + `when the route or the workspace is unclear. Topics: ${topicList}. `
         + 'Several topics can be read in one call.',
       inputSchema: {
         topics: z.array(topicSchema).min(1)

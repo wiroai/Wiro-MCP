@@ -232,12 +232,15 @@ export function registerSetAgentCredentials(server: McpServer, client: WiroClien
       title: 'Set agent credentials',
       description: 'Save credential fields on a deployed agent: API keys, bot tokens, account IDs, '
         + 'allow lists, your own OAuth app keys, or the token for a browser-free connection. '
-        + 'Call with only credential (no fields) first to see that credential\'s field keys, '
-        + 'formats, which are required, how it connects, and what is already set on this agent; '
-        + 'nothing is written then (list_agent_skills with name explains a credential without an '
-        + 'agent). Then call with fields. Every field is checked before anything '
-        + 'is written; unknown or Wiro-managed fields are refused. File fields take a public URL '
-        + 'and the file is uploaded. Values are never echoed back. A running agent restarts to load '
+        + 'Call with only credential (no fields) to see that credential\'s field keys, formats, '
+        + 'which are required, how it connects, and what is already set on this agent; nothing is '
+        + 'written then. Skip that call when list_agent_skills with name already showed the fields. '
+        + 'Then call with fields. Every field is checked before anything '
+        + 'is written; unknown or Wiro-managed fields are refused. A key file, such as a Google '
+        + 'service account JSON or an App Store .p8 key, takes the file\'s text, never a link: never '
+        + 'ask for a public link to a key (the user can also upload it on the agent\'s page in the '
+        + 'Wiro dashboard). Other file fields take a public URL and the file is uploaded. '
+        + 'Values are never echoed back. A running agent restarts to load '
         + 'the values. Channels such as Telegram, Slack and Discord turn on by themselves once all '
         + 'their required fields are set, and turn off when one is cleared. Saving a credential can '
         + 'switch scheduled tasks that need it back on. Sign-in integrations (such as Google Ads, YouTube, '
@@ -252,7 +255,7 @@ export function registerSetAgentCredentials(server: McpServer, client: WiroClien
         fields: z.array(z.object({
           credential: z.string().min(1).describe('Credential key, for example "telegram", "gmail" or "meta-ads".'),
           field: z.string().min(1).describe('Field key inside that credential, for example "bottoken". Use "authmethod" to pick a connection mode (for example "api_key").'),
-          value: credentialValueSchema.describe('The value. Lists are JSON arrays; a list of objects replaces the whole list. Files are a public http(s) URL. An empty value clears an optional field.'),
+          value: credentialValueSchema.describe('The value. Lists are JSON arrays; a list of objects replaces the whole list. A key file takes the file\'s text; other files take a public http(s) URL. An empty value clears an optional field.'),
           parent_field: z.string().optional().describe('Only to change one entry of a list field: that list field\'s key, for example "groups".'),
           ordinal: z.number().int().min(0).optional().describe('With parent_field: the entry\'s position in the list, from 0.'),
         })).max(100).optional()

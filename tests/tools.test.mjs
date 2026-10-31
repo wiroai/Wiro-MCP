@@ -582,7 +582,7 @@ test('get_model_schema points at workflow steps when run_model is not loaded', a
     const { nextAction, model } = result.structuredContent;
     assert.equal(nextAction.tool, 'get_playbook');
     assert.ok(names.has(nextAction.tool));
-    assert.deepEqual(nextAction.arguments, { topics: ['workflows'] });
+    assert.deepEqual(nextAction.arguments, { topics: ['workflow-graph'] });
     assert.equal(model.slug, 'owner/image-model');
     assert.equal(model.parameters[0].items[0].id, 'prompt');
 

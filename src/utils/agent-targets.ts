@@ -355,7 +355,7 @@ export async function explainSendRefusal(
     const minimum = toNumber(response.minTopup) ?? 10;
     return `${target.name} needs at least ${formatUsd(minimum)} in the Wiro wallet of this API key's `
       + `workspace to start a turn${walletUsd === null ? '' : `; the wallet has ${formatUsd(walletUsd)}`}. `
-      + `Add funds on wiro.ai, then send the message again. The ${formatUsd(minimum)} is a minimum to start, `
+      + `Funds are added at https://wiro.ai/panel/wallet/deposit/credit-card; then send the message again. The ${formatUsd(minimum)} is a minimum to start, `
       + 'not a spending cap. get_account shows the current balance.';
   }
 

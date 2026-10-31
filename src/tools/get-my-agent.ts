@@ -23,7 +23,7 @@ export function registerGetMyAgent(server: McpServer, client: WiroClient): void 
     {
       title: 'Get a deployed Wiro agent',
       description: 'Read the full state of one deployed agent: status (number and label), plan and credit '
-        + 'balance, skills, chat channels, model settings, scheduled tasks, custom instructions and the state '
+        + 'balance, time zone, skills, chat channels, model settings, scheduled tasks, custom instructions and the state '
         + 'of each credential. Credential values are never returned, only whether each one is filled, '
         + 'connected or missing. With wait_seconds it keeps reading until the agent is no longer stopping, '
         + 'queued or starting; when the wait runs out, follow the returned nextAction instead of repeating '
@@ -33,7 +33,7 @@ export function registerGetMyAgent(server: McpServer, client: WiroClient): void 
         agent_guid: z.string().min(1).max(100)
           .describe('The deployed agent\'s guid, from list_my_agents or deploy_agent.'),
         wait_seconds: z.number().int().min(0).max(MAX_WAIT_SECONDS).default(0)
-          .describe('Keep reading for up to this many seconds while the agent is stopping, queued or starting (0 to 600, default 0 for an immediate read).'),
+          .describe('Keep reading for up to this many seconds while the agent is stopping, queued or starting (0 to 600, default 0 for an immediate read). 45 or less is safe for clients with a 60 second tool timeout; follow nextAction to keep waiting.'),
       },
       outputSchema: {
         agent: agentDetailSchema,

@@ -34,7 +34,7 @@ export const savedWorkflowSchema = {
 
 export const workflowContentsInputSchema = z.record(z.string(), z.unknown())
   .describe('The workflow graph (version "1"): {version, nodes, output, schema, metadata}. '
-    + 'Read get_playbook topic "workflows" for the format and an example.');
+    + 'Read get_playbook topic "workflow-graph" for the format and an example.');
 
 export function registerCreateWorkflow(server: McpServer, client: WiroClient): void {
   server.registerTool(
@@ -42,7 +42,7 @@ export function registerCreateWorkflow(server: McpServer, client: WiroClient): v
     {
       title: 'Create a Wiro workflow',
       description: 'Save a new private workflow in the API key\'s workspace from a step graph. '
-        + 'Read get_playbook topic "workflows" first: it has the graph format, the reference '
+        + 'Read get_playbook topic "workflow-graph" first: it has the graph format, the reference '
         + 'syntax and examples. Check every model\'s parameter ids with get_model_schema. Wiro '
         + 'checks the graph against the live model catalog, fills catalog defaults and lays the '
         + 'steps out before saving; every problem it finds comes back together, so fix them all '
@@ -70,7 +70,7 @@ export function registerCreateWorkflow(server: McpServer, client: WiroClient): v
         const problem = tags ? tagProblem(tags) : null;
         if (problem) throw new Error(problem);
         if (!isPlainObject(contents.nodes) || !isPlainObject(contents.nodes.output)) {
-          throw new Error('contents.nodes must include the End node "output". See get_playbook topic "workflows".');
+          throw new Error('contents.nodes must include the End node "output". See get_playbook topic "workflow-graph".');
         }
         const hidden = findHiddenValues(contents);
         if (hidden.length > 0) {

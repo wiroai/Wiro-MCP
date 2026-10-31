@@ -25,6 +25,7 @@ export function registerListStudioResults(server: McpServer, client: WiroClient)
       description: 'List the model runs Studio started for you (images, videos, audio, text), newest first, with '
         + 'their status, output URLs, text answers and cost. It covers every Studio conversation of this API key\'s '
         + 'workspace. Use it to collect outputs that finished after a turn ended, or to check what is still running. '
+        + 'Runs carry no session: match a run to a request by its start time and prompt. '
         + 'These runs belong to Studio, so get_task, list_tasks, cancel_task and kill_task cannot read or stop them; '
         + 'poll this tool instead. It reads at most the 100 most recent runs: to collect a period, pass limit '
         + '100 and since. Only successful runs are charged. Read-only.',

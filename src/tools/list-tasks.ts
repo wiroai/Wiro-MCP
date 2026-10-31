@@ -11,8 +11,8 @@ export function registerListTasks(server: McpServer, client: WiroClient): void {
     {
       title: 'List Wiro tasks',
       description: 'List recent model tasks in the API key\'s workspace (personal, or the '
-        + 'key\'s team), newest first, from every project in it, with their status, cost '
-        + 'and first outputs. Use it to find work from earlier conversations, then call '
+        + 'key\'s team), newest first, from every project in it and from wiro.ai, with their '
+        + 'status, cost and first outputs. Use it to find work from earlier conversations, then call '
         + '`get_task` with a returned task ID for the complete result. Start times are Unix '
         + 'seconds. Steps of workflow runs and the runs Studio starts are not listed: '
         + 'list_workflow_runs and list_studio_results have those.',
