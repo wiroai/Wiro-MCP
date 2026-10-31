@@ -406,7 +406,7 @@ function planFor(
         message: `Upgrade to Pro: about ${formatUsd(estimate)} now from ${wallet} for the ${daysLeft} days left in this period. `
           + `Wiro works out the exact amount from the real length of the billing period, and it is never more than ${formatUsd(maxCharge)}, so that is the amount to approve. `
           + (cancelled ? `${ending} ` : `From the next renewal the plan costs ${formatUsd(pro.priceUsd)} every 30 days. `)
-          + `The monthly pool rises to ${formatCredits(pro.monthlyCredits)} credits at once and the agent restarts. There is no downgrade back to Starter later, only cancelling and subscribing again.`,
+          + `The monthly pool rises to ${formatCredits(pro.monthlyCredits)} credits at once and the agent restarts. To go back to Starter later, cancel, let the plan end, then subscribe to Starter.`,
         perform: async signal => {
           const body = requireApiSuccess(
             await client.post<BillingEnvelope>('/UserAgent/UpgradeTier', { guid, targetTier: 'pro' }, signal),

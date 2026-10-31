@@ -496,11 +496,11 @@ A Wiro agent is an assistant that keeps running on Wiro with a set of skills, su
 | --- | --- | --- |
 | 0 | Stopped | Start it with \`control_agent\` (start). Right after a deploy, start or renewal, 0 means the plan is not active and no credits are left. |
 | 1 | Stopping | Wait. |
-| 2 | Queued | Wait for a free host. This has no fixed time limit. |
+| 2 | Queued | Wait. It can take a while; check again with \`get_my_agent\`. |
 | 3 | Starting | Wait. An agent that is not healthy after about 2 minutes moves to 5. |
 | 4 | Running | Ready for messages. |
 | 5 | Error | It failed to start or stopped unexpectedly. Read the logs with \`get_agent_activity\` (logs), then start it again. |
-| 6 | Not paid yet, or setup not finished | Without an active plan: \`manage_agent_billing\` (subscribe), which also starts it. With one: set the missing credentials, call \`update_agent\` with only the agent's guid, then start it. |
+| 6 | Not paid yet, or setup not finished | Without an active plan: \`manage_agent_billing\` (subscribe), which also starts it. With one: set the missing credentials, call \`update_agent\` with the agent's guid so it checks the setup again, then start it. |
 
 ## Setup: credentials and connected accounts
 
@@ -529,8 +529,8 @@ Example, "link our HubSpot account to the agent": \`list_my_agents\`, \`get_my_a
 
 Check with reads, and send no test messages: each one uses credits.
 
-1. Find the agent by title with \`list_my_agents\`, then \`get_my_agent\`: the status, plan, credits left and channels. A stopped agent or an ended plan does not answer, and a running agent with no credits left stays at 4 but takes no new turns.
-2. \`get_agent_activity\` (logs) shows one day (UTC) of events, such as messages, tool calls and errors. A running agent and an agent in error (5) have logs; a stopped one (0) has none. \`get_agent_activity\` (usage) shows how the credits were spent.
+1. Find the agent by title with \`list_my_agents\`, then \`get_my_agent\`: the status, plan, credits left and channels. A stopped agent or an ended plan does not answer, and an agent with no credits left takes no new turns until credits are added.
+2. \`get_agent_activity\` (logs) shows one day (UTC) of events, such as messages, tool calls and errors. A running agent and an agent in error (5) have logs; a stopped one (0) has none. \`get_agent_activity\` (usage) shows how the credits were spent. In a team, \`get_agent_activity\` needs a team admin.
 3. In direct messages, Telegram and Discord answer only the user IDs on the allow list.
 
 Then offer the one fix that matches, with its price.
@@ -549,12 +549,12 @@ Then offer the one fix that matches, with its price.
 \`manage_agent_billing\` handles the plan. Without \`confirm: true\` every action only says what would happen and what it costs; an action that charges is confirmed with \`confirm_charge_usd\`, the quoted amount.
 
 - \`subscribe\` starts a plan for an agent without an active one, and queues the agent to start.
-- \`upgrade_to_pro\` charges the difference for the rest of the period now; the full Pro credit pool applies at once, and renewals charge the Pro price. The quote is an estimate with a maximum, and \`confirm_charge_usd\` is the most the user agreed to pay. There is no downgrade: cancel, let the plan end, then subscribe to Starter.
+- \`upgrade_to_pro\` charges the difference for the rest of the period now; the full Pro credit pool applies at once, and renewals charge the Pro price. The quote is an estimate with a maximum, and \`confirm_charge_usd\` is the most the user agreed to pay. To move to Starter, cancel, let the plan end, then subscribe to Starter.
 - \`buy_credits\` is for Pro plans; without a pack it lists them. A small, medium or large pack adds 5, 10 or 20 times the monthly credits, at 5, 10 or 20 times the monthly price. Pack credits are added at once, are used after the monthly pool and do not reset each month; the pool refills at each renewal. On Starter, \`upgrade_to_pro\` is the way to more credits now.
-- \`cancel\` stops the next renewal, with no refund. The agent keeps working until the paid period ends, then stops, unless extra credits are left: it runs on those until they are used. It keeps its skills, settings and connected accounts, though some sign-ins may need connecting again after a long stop.
+- \`cancel\` stops the next renewal, with no refund. The agent keeps working until the paid period ends, then stops, unless extra credits are left: it keeps running on those while they last. It keeps its skills, settings and connected accounts, though some sign-ins may need connecting again after a long stop.
 - \`renew\` undoes a cancellation for free while the period lasts, or renews a plan that already ended, for a charge; when a plan cannot be renewed, it says to use \`subscribe\`. If the wallet is short at renewal time, the plan ends instead of renewing.
 - Plans paid by card are managed in the Wiro dashboard: \`upgrade_to_pro\` and \`buy_credits\` return the link to the agent's page there and charge nothing, a personal card plan is cancelled there, and a skill change goes on the next card invoice.
-- In a team, only team admins can deploy, pay for, start, stop or change agents, including skills and credentials; other members can read the team's agents and talk to them. That refusal is final for the key: a team admin can do it or grant admin rights, or a personal project's key deploys in the personal workspace. Billing works only from the agent's own workspace.
+- In a team, only team admins can deploy, pay for, start, stop or change agents, including skills and credentials; other members can see the team's agents with \`get_my_agent\` and talk to them; their logs and usage (\`get_agent_activity\`) need a team admin. That refusal is final for the key: a team admin can do it or grant admin rights, or a personal project's key deploys in the personal workspace. Billing works only from the agent's own workspace.
 
 ## Skills, custom skills and scheduled tasks
 
@@ -574,7 +574,7 @@ Then offer the one fix that matches, with its price.
 
 Ask once for the whole removal, naming each step and what it gives up.
 
-1. Deleting does not sign the agent out of connected services. To revoke its access, disconnect them first with \`disconnect_agent_oauth\`.
+1. To revoke the agent's access to connected services, disconnect them first with \`disconnect_agent_oauth\`.
 2. Cancel the plan with \`manage_agent_billing\` (cancel). A plan paid by card must end before the agent can be deleted: the user cancels a personal card plan in the Wiro dashboard, and you delete the agent after its period ends.
 3. Stop the agent with \`control_agent\` (stop) and wait until it shows status 0.
 4. Delete it with \`delete_agent\`, and \`confirm: true\` once the user agrees.

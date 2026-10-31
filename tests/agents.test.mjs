@@ -1532,6 +1532,7 @@ test('manage_agent_billing refuses packs below Pro and estimates a wallet upgrad
     assert.equal(upgrade.structuredContent.nextAction.arguments.confirm_charge_usd, 108);
     assert.match(upgrade.structuredContent.message, /about \$54\.00 now .* never more than \$108\.00, so that is the amount to approve/);
     assert.match(upgrade.structuredContent.message, /confirm_charge_usd 108, confirm: true/);
+    assert.match(upgrade.structuredContent.message, /To go back to Starter later, cancel, let the plan end, then subscribe to Starter\./);
     assert.equal(fake.calls.filter(item => item.path !== '/UserAgent/Detail').length, 0);
 
     // The approved amount is a ceiling for a prorated upgrade, and the estimate alone is below it.

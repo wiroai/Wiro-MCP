@@ -216,7 +216,7 @@ export function registerControlAgent(server: McpServer, client: WiroClient): voi
           try {
             requireApiSuccess(await client.post(call.path, { guid }, extra.signal), call.fallback);
             const label = call.path === '/UserAgent/Start'
-              ? 'Start requested. The agent is queued and starts on an agent host shortly.'
+              ? 'Start requested. The agent is queued and starts shortly.'
               : call.path === '/UserAgent/Stop'
                 ? `Stop requested. ${PLAN_KEEPS_RUNNING}`
                 : 'Restart requested. The agent stops and starts again with its current settings.';

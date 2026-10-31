@@ -101,7 +101,7 @@ export function registerListAgentSkills(server: McpServer, client: WiroClient): 
         + 'help, so you know what to ask for before calling set_agent_credentials or connect_agent_oauth.',
       inputSchema: {
         name: z.string().min(1).max(100).optional()
-          .describe('A skill name (for example "int-gmail-check") returns its price and the setup fields of every credential it needs. A credential or channel key (for example "telegram") returns that credential\'s setup, including whether one-click Wiro connect is available.'),
+          .describe('A skill name (for example "int-gmail-check") returns its price and the setup fields of every credential it needs. A credential or channel key (for example "telegram") returns that credential\'s setup and the ways it can connect.'),
         category: z.enum(['int', 'util']).optional()
           .describe('"int" for skills that connect to an outside service, "util" for helper skills.'),
         capability: z.string().max(100).optional()

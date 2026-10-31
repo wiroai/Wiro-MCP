@@ -1054,7 +1054,7 @@ test('connect_agent_oauth refuses a return address outside the dashboard and the
   });
 });
 
-test('connect_agent_oauth explains what to save when Wiro\'s own app is not available', async () => {
+test('connect_agent_oauth explains what to save before a provider can connect', async () => {
   const fake = fakeClient({
     '/Credentials/Detail': credentialDetail,
     '/UserAgent/Detail': detail(),
@@ -1080,7 +1080,9 @@ test('connect_agent_oauth explains what to save when Wiro\'s own app is not avai
       arguments: { agent_guid: AGENT, credential: 'meta-ads', mode: 'wiro' },
     });
     assert.equal(wiro.structuredContent.state, 'setup_needed');
-    assert.match(wiro.structuredContent.message, /not available yet/);
+    assert.equal(wiro.structuredContent.message, 'Use another mode for Meta Ads.');
+    assert.doesNotMatch(text(wiro), /not available|- \*\*wiro\*\*/);
+    assert.match(text(wiro), /- \*\*own\*\*: /);
   });
 });
 

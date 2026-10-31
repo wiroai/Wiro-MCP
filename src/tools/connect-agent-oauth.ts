@@ -112,7 +112,7 @@ function oauthHint(message: string, meta: CredentialMeta): string | undefined {
     return `Save your own ${meta.title} app keys with set_agent_credentials first (call it with credential "${meta.key}" to see the fields).`;
   }
   if (/wiro-managed oauth is not enabled/i.test(message)) {
-    return 'Wiro\'s own app is not available for this provider yet. Use mode own (your own app) or api_key where offered.';
+    return 'Connect this service with mode own (your own app) or api_key where offered.';
   }
   if (/no pending .* connection/i.test(message)) {
     return 'The account list from the last connect expired after 15 minutes. Connect again.';
@@ -182,7 +182,7 @@ function result(
 function modeLines(modes: ModeRequirement[]): string[] {
   return [
     '',
-    ...modes.map(mode => `- **${mode.mode}**${mode.available ? '' : ' (not available)'}: ${mode.note}${mode.fields.length > 0 ? ` Fields: ${mode.fields.map(field => `${field.field}${field.isSet ? ' (set)' : ' (missing)'}`).join(', ')}.` : ''}`),
+    ...modes.filter(mode => mode.available).map(mode => `- **${mode.mode}**: ${mode.note}${mode.fields.length > 0 ? ` Fields: ${mode.fields.map(field => `${field.field}${field.isSet ? ' (set)' : ' (missing)'}`).join(', ')}.` : ''}`),
   ];
 }
 
@@ -210,7 +210,7 @@ async function connect(
   const requirement = modes.find(candidate => candidate.mode === mode);
   if (!mode || !requirement) {
     return result('connect', context, 'setup_needed',
-      `Choose how to connect ${meta.title}. Wiro's own app is not available for it, so it needs your own app keys or a token first.`,
+      `Choose how to connect ${meta.title}: it needs your own app keys or a token saved first.`,
       { ...setupExtra, nextAction: describeAction }, modeLines(modes));
   }
   if (!requirement.available) {

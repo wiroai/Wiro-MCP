@@ -96,8 +96,7 @@ const logDatesSchema = z.object({
 
 type Envelope = ApiEnvelope & Record<string, unknown>;
 
-const NOT_RUNNING_NOTE = 'The activity log is read from the agent host, and this agent is not on one right now '
-  + '(it is stopped, has never started, or was released). Start it with control_agent to read its log.';
+const NOT_RUNNING_NOTE = 'The activity log can be read while the agent runs. Start it with control_agent to read it.';
 
 function tokenCounts(row: Record<string, unknown>): z.infer<typeof tokenCountsSchema> {
   const fields: Array<[keyof z.infer<typeof tokenCountsSchema>, unknown]> = [
@@ -172,8 +171,8 @@ export function registerGetAgentActivity(server: McpServer, client: WiroClient):
         + 'usage per model for the current period and the credit ledger (charges, renewals, packs and token '
         + 'usage per turn; 100 credits = 1 USD). kind logs returns the activity log for one day, newest first '
         + '(tool calls, turns, scheduled runs, errors). kind log_dates lists the days that have a log. Logs '
-        + 'are read from the agent\'s host: a running agent and an agent in error have one, a stopped agent '
-        + 'has none (the call says so; start it only if the user agrees). Names and emails of the people who '
+        + 'can be read while the agent is running or in error; for a stopped agent the call says so (start it '
+        + 'only if the user agrees). Names and emails of the people who '
         + 'acted are never returned.',
       inputSchema: {
         agent_guid: z.string().min(1).max(100)
@@ -209,7 +208,7 @@ export function registerGetAgentActivity(server: McpServer, client: WiroClient):
       const startAgent = {
         tool: 'control_agent',
         arguments: { agent_guid: guid, action: 'start' },
-        reason: 'Logs can only be read while the agent is on an agent host.',
+        reason: 'The log can be read once the agent runs.',
       };
       try {
         if (kind === 'usage') {

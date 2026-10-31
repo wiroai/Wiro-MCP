@@ -494,7 +494,7 @@ async function describeCredential(
       return `- \`${field.key}\` ${field.label} (${flags})${field.help ? `: ${firstSentence(field.help)}` : ''}`;
     }),
     ...(modes
-      ? ['', '### How it connects', '', ...modes.map(mode => `- **${mode.mode}**${mode.available ? '' : ' (not available)'}: ${mode.note}${mode.fields.length > 0 ? ` Fields: ${mode.fields.map(field => `${field.field}${field.isSet ? ' (set)' : ''}`).join(', ')}.` : ''}`)]
+      ? ['', '### How it connects', '', ...modes.filter(mode => mode.available).map(mode => `- **${mode.mode}**: ${mode.note}${mode.fields.length > 0 ? ` Fields: ${mode.fields.map(field => `${field.field}${field.isSet ? ' (set)' : ''}`).join(', ')}.` : ''}`)]
       : []),
     ...(notes.length > 0 ? ['', ...notes.map(note => `- ${note}`)] : []),
   ];

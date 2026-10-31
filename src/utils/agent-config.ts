@@ -1348,7 +1348,7 @@ export function connectionModeRequirements(meta: CredentialMeta, group: Row | nu
         needsBrowser: true,
         fields,
         note: meta.wiroPending
-          ? `Wiro's own ${meta.title} app is not available yet. Use another mode.`
+          ? `Use another mode for ${meta.title}.`
           : `Sign in through Wiro's own ${meta.title} app. Nothing to set up first.`,
       };
     }

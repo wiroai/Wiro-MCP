@@ -55,8 +55,8 @@ const STATUS_TEXT: Record<AgentStatusLabel, string> = {
 const STATUS_HINT: Record<AgentStatusLabel, string> = {
   stopped: 'It is not running. control_agent with action start starts it.',
   stopping: 'It is shutting down. If a restart was requested it is queued again on its own.',
-  queued: 'It is waiting for a free agent host. This step has no time limit.',
-  starting: 'It is booting on an agent host. If it does not come up within about two minutes it moves to error.',
+  queued: 'It is waiting to start. This can take a while.',
+  starting: 'It is starting up. If it does not come up within about two minutes it moves to error.',
   running: 'It is live and accepts messages.',
   error: 'The start failed or the agent stopped unexpectedly. control_agent with action start retries, and get_agent_activity with kind logs may show why.',
   setup_required: 'It has no paid plan yet, or required credentials are missing. It does not leave this state on its own.',
