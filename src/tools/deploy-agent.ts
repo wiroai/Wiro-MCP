@@ -491,7 +491,7 @@ export function registerDeployAgent(server: McpServer, client: WiroClient): void
           ));
         }
         if (error instanceof ApiResultError && /insufficient wallet balance/i.test(error.message)) {
-          return errorResult(new Error(`${error.message}\n\nNothing was created or charged. Give the user the amounts above. Funds are added at https://wiro.ai/panel/wallet/deposit/credit-card; once the user has added them and says yes, confirm the same quote again.`));
+          return errorResult(new Error(`${error.message}\n\nNothing was created or charged. Give the user the amounts above. Funds are added at https://wiro.ai/panel/wallet/deposit/credit-card (for a team key, select the team in the dashboard first); once the user has added them and says yes, confirm the same quote again.`));
         }
         return errorResult(error);
       }

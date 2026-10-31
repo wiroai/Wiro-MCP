@@ -655,7 +655,7 @@ async function observeOpenOutcome(
 function annotateKnownRefusal(error: ApiResultError): Error {
   const text = error.message;
   if (/insufficient wallet balance/i.test(text)) {
-    return new Error(`${text}\n\nNothing was charged. Funds are added at https://wiro.ai/panel/wallet/deposit/credit-card; once the user has added them and says yes, try again. get_account shows the balance.`);
+    return new Error(`${text}\n\nNothing was charged. Funds are added at https://wiro.ai/panel/wallet/deposit/credit-card (for a team key, select the team in the dashboard first); once the user has added them and says yes, try again. get_account shows the balance.`);
   }
   if (/purchase request id was already used/i.test(text)) {
     return new Error(`${text}\n\nNothing was charged now. This request id belongs to an earlier purchase of another pack or at another price. For a new purchase, get a new quote without request_id. If an earlier call with this id said the wallet was charged but the purchase is still pending, do not buy again: that purchase can only be finished at its original price, so ask Wiro support to finish it.`);

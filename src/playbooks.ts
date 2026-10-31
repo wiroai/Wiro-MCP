@@ -424,8 +424,8 @@ Studio is Wiro's creative agent. Describe what you want, such as an image, a sho
 
 - The wallet of the key's workspace must hold at least $10 to start a turn, or the message is refused with "Insufficient balance" and nothing is charged.
 - $10 is a minimum, not a cap. One message can start several paid model runs, so a turn can cost more.
-- Each turn is billed after it ends: the chat part by token use, even when the turn fails, and each model run Studio started when it succeeds. The reply shows the chat part as Agent usage, in dollars, sometimes a moment after the reply. Charges that land after the work can take the wallet below zero.
-- Studio gives no price before a turn. For a rough estimate, take a typical model for the job from \`search_models\`, multiply its price by the number of results, and add the chat part.
+- Each turn is billed after it ends: the chat part by token use, even when the turn fails, and each model run Studio started when it succeeds. The reply shows the chat part as Agent usage, in dollars. If it is not in the reply yet, read the message again with \`get_agent_message\`. Charges that land after the work can take the wallet below zero.
+- For a rough estimate before a turn, take a typical model for the job from \`search_models\`, multiply its price by the number of results, and add the chat part.
 - Before the first message, tell the user this in one line and check the balance with \`get_account\`. When they asked for exactly this, go ahead. For large or open-ended requests, such as many videos or long clips, agree on the scope first.
 
 ## Send a request
@@ -448,8 +448,8 @@ Example, "two banner images for my bakery's weekend sale, warm colors": \`get_ac
 - A finished turn lists its \`modelRuns\`: the model runs Studio started for it, with their files and the cost of each, and \`get_agent_message\` keeps waiting while they run. \`mediaUrls\` are the file links in the reply text and often repeat them. Show every file: images inline when the client can, links for the rest.
 - Some turns hand the work to the background. The reply says so, and the files arrive later: keep following \`nextAction\`, or check \`list_studio_results\`.
 - If fewer results came back than the user asked for, check \`list_studio_results\` for runs still going before you offer a follow-up turn.
-- \`list_studio_results\` lists the model runs Studio started in this workspace, newest first and across all sessions, with status, outputs, cost, start time and prompt. It reads up to the 100 most recent runs; \`since\` limits them to a period.
-- With a personal project's key, a late result also arrives as a new message in \`get_agent_conversation\`. With a team project's key it does not.
+- \`list_studio_results\` lists the model runs Studio started in this workspace, newest first and across all sessions, with status, outputs, cost, start time and prompt. For a period, pass \`since\` with \`limit\` 100.
+- Results that finish after the turn show in \`list_studio_results\`.
 - Studio's runs belong to Studio: \`get_task\`, \`wait_for_task\`, \`cancel_task\` and \`kill_task\` do not work on them.
 
 ## Slow turns and follow-ups
@@ -595,12 +595,12 @@ Everything on Wiro is paid from a prepaid wallet in USD; only agent plans can be
 
 ## The balance
 
-- \`get_account\` shows the balance in its parts: deposits, coupon credit and store revenue. A model run can spend all three.
+- \`get_account\` shows the balance in its parts: deposits, coupon credit and store revenue.
 - Coupon credit can be limited to certain models, and then it only counts for those models.
 - Charges use coupon credit first, then store revenue, then deposits.
 - Charges that land after the work is done, such as Studio turns, can take the balance below zero.
-- The balance can trail a charge that just finished by a few seconds.
-- Funds are added in the Wiro dashboard at wiro.ai/panel/wallet/deposit/credit-card. No tool adds funds or returns a payment page.
+- Right after a charge, read the balance again before you report it.
+- Funds are added in the Wiro dashboard at wiro.ai/panel/wallet/deposit/credit-card; for a team key, select the team in the dashboard first. No tool adds funds or returns a payment page.
 
 ## What each product charges, and when
 
@@ -622,7 +622,7 @@ Where to see costs afterwards:
 - A workflow run reports its cost so far and, once settled, the amount charged. \`list_workflow_runs\` shows past runs.
 - A Studio or Workflow Agent reply shows the chat part of the turn as Agent usage. \`list_studio_results\` shows the cost of each model run Studio started.
 - \`get_agent_activity\` (usage) shows an agent's credit use.
-- No tool adds up spending over a period. For a total, point the user to Transactions (wiro.ai/panel/wallet/transactions) and Project Usage (wiro.ai/panel/wallet/project-usage) in the Wiro dashboard. Both open on the current month.
+- For spending over a period, point the user to Transactions (wiro.ai/panel/wallet/transactions) and Project Usage (wiro.ai/panel/wallet/project-usage) in the Wiro dashboard. Both open on the current month.
 
 ## Minimums and limits
 
@@ -642,7 +642,7 @@ Where to see costs afterwards:
 ## Estimates and quotes
 
 - For usage-priced work, the estimate is the model price from \`get_model_schema\` times the number of runs or steps. Say when the final cost depends on output length or duration, and get one yes on the total of a batch.
-- Known charges come as a quote first. After a clear yes, repeat the call as the quote's \`nextAction\` shows: \`confirm: true\` with \`confirm_charge_usd\` set to the approved amount, or for \`apply_agent_skills\` the quote's \`idempotency_key\`. If the price changed in between, nothing is charged and a new quote comes back: show the new amount and ask again, since the old one is refused again.
+- Known charges come as a quote first. After a clear yes, repeat the call as the quote's \`nextAction\` shows: \`confirm: true\` with \`confirm_charge_usd\` set to the approved amount, or for \`apply_agent_skills\` the quote's \`idempotency_key\`. If the price changed in between, nothing is charged and a new quote comes back: show the new amount and ask again.
 - Prorated amounts, such as an upgrade to Pro or a skill change, are estimates for the days left in the period. For an upgrade the quote also gives the maximum, and \`confirm_charge_usd\` is the most the user agreed to pay.
 - Cancelling an agent plan stops the next renewal. It does not refund the current period.
 

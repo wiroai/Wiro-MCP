@@ -105,7 +105,7 @@ export function registerGetAccount(server: McpServer, client: WiroClient): void 
           if (balance.couponCreditUsd) lines.push(`- Coupon credit: $${balance.couponCreditUsd} (may be limited to certain models)`);
           if (balance.storeRevenueUsd) lines.push(`- Store revenue: $${balance.storeRevenueUsd}`);
         } else {
-          lines.push('**Balance:** no wallet yet. Add funds at https://wiro.ai/panel/wallet/deposit/credit-card to start.');
+          lines.push('**Balance:** no wallet yet. Add funds at https://wiro.ai/panel/wallet/deposit/credit-card to start; for a team project\'s key, select that team in the Wiro dashboard first.');
         }
         if (workspace.kind === 'team') {
           lines.push('', 'Team spend limits and the team\'s model rules can still refuse a run when the wallet has money.');

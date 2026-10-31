@@ -888,6 +888,7 @@ test('deploy_agent explains a short wallet and a lost response', async () => {
     assert.equal(result.isError, true);
     assert.match(textOf(result), /Required: \$12\.00, Available: \$3\.00/);
     assert.match(textOf(result), /Nothing was created or charged/);
+    assert.match(textOf(result), /for a team key, select the team in the dashboard first/);
   });
 
   const timeout = fakeClient({
@@ -1903,6 +1904,7 @@ test('manage_agent_billing says nothing was charged when the wallet is short', a
     const result = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'subscribe', confirm_charge_usd: 12, confirm: true });
     assert.equal(result.isError, true);
     assert.match(textOf(result), /Nothing was charged/);
+    assert.match(textOf(result), /for a team key, select the team in the dashboard first/);
     assert.equal(fake.called('/UserAgent/CreateSubscriptionCheckout').length, 1);
   });
 });

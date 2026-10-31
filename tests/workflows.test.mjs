@@ -964,7 +964,7 @@ test('delete_workflow only describes the deletion until it is confirmed', async 
   });
 });
 
-test('get_account names the team that owns the wallet', async () => {
+test('get_account names the team that owns the wallet and where funds are added', async () => {
   const fake = fakeClient({
     '/Wallet/List': {
       result: true,
@@ -983,6 +983,16 @@ test('get_account names the team that owns the wallet', async () => {
     assert.deepEqual(result.structuredContent.workspace, { kind: 'team', teamName: 'Design', organizationName: 'Acme' });
     assert.equal(result.structuredContent.balance.totalUsd, 14.5);
     assert.equal(JSON.stringify(result.structuredContent).includes('team-guid-1'), false);
+  });
+
+  // Without a wallet the workspace cannot be told apart, so the deposit hint covers a team key too.
+  const empty = fakeClient({
+    '/Wallet/List': { result: true, errors: [], wallet: [] },
+    '/Organization/List': { result: true, errors: [], organizations: [] },
+  });
+  await withClient(empty, async client => {
+    const result = await client.callTool({ name: 'get_account', arguments: {} });
+    assert.match(result.content[0].text, /no wallet yet\. Add funds at https:\/\/wiro\.ai\/panel\/wallet\/deposit\/credit-card to start; for a team project's key, select that team in the Wiro dashboard first/);
   });
 });
 

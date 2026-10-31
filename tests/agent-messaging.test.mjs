@@ -398,6 +398,7 @@ test('Studio wallet and availability refusals say what to do without repeating c
     assert.equal(result.isError, true);
     assert.match(textOf(result), /at least \$10\.00/);
     assert.match(textOf(result), /has \$3\.50/);
+    assert.match(textOf(result), /for a team key, select the team in the dashboard first/);
     assert.match(textOf(result), /get_account/);
   });
 
