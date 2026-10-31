@@ -1235,7 +1235,7 @@ test('get_my_agent shows the agent\'s own prices and where a shortened entry is 
     assert.notEqual(result.isError, true, textOf(result));
     const lines = textOf(result).split('\n');
     const prices = lines.findIndex(line => line.startsWith('**Prices now:**'));
-    assert.equal(lines[prices], '**Prices now:** Starter $15.00 per 30 days with 1,500 credits per month; Pro $150.00 per 30 days with 15,000 credits per month. A new plan or an upgrade uses these.');
+    assert.equal(lines[prices], '**Prices now:** Starter $15.00 per 30 days with 1,500 credits per month; Pro $150.00 per 30 days with 15,000 credits per month. A new plan or an upgrade uses these, and a skill change moves the plan to today\'s prices for all its skills.');
     assert.ok(lines[prices - 1].startsWith('**Credits:**'), 'the prices follow the credits line');
     assert.deepEqual(result.structuredContent.agent.pricing, { starter: { priceUsd: 15, monthlyCredits: 1500 }, pro: { priceUsd: 150, monthlyCredits: 15000 } });
     // The custom instruction is cut in the structured copy; the short scheduled task is not.

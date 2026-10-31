@@ -5,6 +5,7 @@ import {
   asString,
   errorResult,
   errorText,
+  isPlainObject,
   requireApiSuccess,
   toNumber,
   unixToIso,
@@ -33,7 +34,7 @@ import {
   workspaceHint,
   type PlanBilling,
 } from '../utils/agent-config.js';
-import { outcomeUnknown } from '../utils/user-agent.js';
+import { asTier, outcomeUnknown, toTierPricing } from '../utils/user-agent.js';
 import { DEFAULT_WAIT_SECONDS } from '../utils/poll.js';
 import { nextActionSchema } from './schemas.js';
 
@@ -44,6 +45,7 @@ const pricingSchema = z.object({
   currentMonthlyCredits: z.number().nullable(),
   newMonthlyCredits: z.number().nullable(),
   deltaMonthlyCredits: z.number().nullable(),
+  note: z.string().optional(),
 });
 
 const outputSchema = {
@@ -114,6 +116,26 @@ const CREDIT_SPEND_BY = 'It can be spent until this period ends.';
 
 function difference(next: number | null, current: number | null): number | null {
   return next === null || current === null ? null : Math.round((next - current) * 100) / 100;
+}
+
+/**
+ * A skill change prices the plan at today's prices for all its skills, so a
+ * plan that started at other prices also changes for the skills it already
+ * has, and so do its monthly credits. The agent's tiers carry today's prices
+ * and credits for those skills. An agent without a plan has no price of its
+ * own to move from, and a move to Pro prices the whole plan at today's Pro
+ * prices, which the quote already shows.
+ */
+function todayPriceNote(row: Row, billing: PlanBilling, currentPrice: number | null, currentCredits: number | null, tierChange: string | undefined): string | null {
+  if (tierChange) return null;
+  const tier = asTier(row.tier);
+  const tiers = toTierPricing(isPlainObject(row.agent) ? row.agent.tiers : undefined);
+  const today = tier && tiers ? tiers[tier] : null;
+  if (billing.plan === 'none' || currentPrice === null || today === null || !difference(today.priceUsd, currentPrice)) return null;
+  const credits = currentCredits !== null && today.monthlyCredits !== currentCredits
+    ? `, and its monthly credits from ${currentCredits} to ${today.monthlyCredits}`
+    : '';
+  return `The change also moves the plan from its current ${formatUsd(currentPrice)} a month to ${formatUsd(today.priceUsd)} a month, today's ${tier === 'pro' ? 'Pro' : 'Starter'} price for the skills it already has${credits}.`;
 }
 
 /**
@@ -354,6 +376,7 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
             const priceChanged = confirm && givenKey !== null;
             const blocked = billing.plan !== 'none' && billing.status !== 'active';
             const restart = restartNote(status, 'new skills');
+            const priceNote = todayPriceNote(row, billing, currentPrice, currentCredits, tierChange);
             const pricing = {
               currentMonthlyUsd: currentPrice,
               newMonthlyUsd: newPrice,
@@ -361,6 +384,7 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
               currentMonthlyCredits: currentCredits,
               newMonthlyCredits: newCredits,
               deltaMonthlyCredits: difference(newCredits, currentCredits),
+              ...(priceNote ? { note: priceNote } : {}),
             };
             const nextAction = blocked
               ? {
@@ -398,6 +422,7 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
               listLine('Already as requested', changes.alreadySet),
               tierChange ? `**Plan:** ${currentTier ?? 'unknown'} to ${tierChange}` : null,
               `**Monthly price:** ${currentPrice !== null ? formatUsd(currentPrice) : 'unknown'} now, ${formatUsd(newPrice)} after the change${delta !== null ? ` (${delta >= 0 ? '+' : ''}${formatUsd(delta)})` : ''}`,
+              priceNote ? `**Price update:** ${priceNote}` : null,
               newCredits !== null ? `**Monthly credits:** ${currentCredits ?? 'unknown'} now, ${newCredits} after the change` : null,
               `**Billing:** ${note}`,
               `**Restart:** ${restart}`,

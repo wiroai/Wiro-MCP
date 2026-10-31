@@ -687,6 +687,89 @@ test('apply_agent_skills tells a cancelled plan that nothing renews at the new p
   });
 });
 
+test('apply_agent_skills says when the change also moves the plan to today\'s prices', async () => {
+  // A Pro plan bought at $90 a month, whose skills cost $110 a month on Pro
+  // today, turns on a skill that adds $20.
+  const apollo = { name: 'int-apollo-sales', title: 'Apollo Sales', depends_on: [], conflicts_with: [], credential_key: 'apollo', requires_credentials: true, pricing: { billing_model: 'tokens', monthly_price_weight_usd: 2, monthly_credits_weight: 200 } };
+  const quote = async detailOverrides => {
+    const fake = fakeClient(skillRoutes({
+      '/Skills/List': { ...skillList, skills: [...skillList.skills, apollo], total: skillList.total + 1 },
+      '/UserAgent/Detail': detail({
+        tier: 'pro',
+        tiermultiplier: 10,
+        monthlypriceusd: 90,
+        monthlycredits: 9000,
+        agent: { guid: 'tpl-1', custom: false, tiers: { starter: { priceUsd: 11, credits: 1100 }, pro: { priceUsd: 110, credits: 11000 } }, tiermultiplier: 10 },
+        ...detailOverrides,
+      }),
+      '/UserAgent/PricingPreview': { result: true, errors: [], tier: 'pro', tiermultiplier: 10, totalPriceUsd: 130, totalMonthlyCredits: 13000, tiers: { starter: { priceUsd: 13, credits: 1300 }, pro: { priceUsd: 130, credits: 13000 } }, starterFloorUsd: 4 },
+    }));
+    let result;
+    await withClient(fake, async client => {
+      result = await client.callTool({ name: 'apply_agent_skills', arguments: { agent_guid: AGENT, skills: { 'int-apollo-sales': true } } });
+    });
+    assert.equal(result.structuredContent.status, 'quote', text(result));
+    return result;
+  };
+
+  const older = await quote({});
+  const lines = text(older).split('\n');
+  const price = lines.findIndex(line => line.startsWith('**Monthly price:**'));
+  assert.equal(lines[price], '**Monthly price:** $90.00 now, $130.00 after the change (+$40.00)');
+  const note = 'The change also moves the plan from its current $90.00 a month to $110.00 a month, today\'s Pro price for the skills it already has, and its monthly credits from 9000 to 11000.';
+  assert.equal(lines[price + 1], `**Price update:** ${note}`);
+  assert.equal(older.structuredContent.pricing.note, note);
+  assert.equal(older.structuredContent.pricing.deltaMonthlyUsd, 40);
+  assert.equal(lines[price + 2], '**Monthly credits:** 9000 now, 13000 after the change');
+
+  // A plan whose credits already match today's names only the price.
+  const sameCredits = await quote({ monthlycredits: 11000 });
+  assert.match(text(sameCredits), /\*\*Price update:\*\* The change also moves the plan from its current \$90\.00 a month to \$110\.00 a month, today's Pro price for the skills it already has\.\n/);
+
+  // At today's prices there is nothing more to say.
+  const current = await quote({ monthlypriceusd: 110, monthlycredits: 11000 });
+  assert.match(text(current), /\*\*Monthly price:\*\* \$110\.00 now, \$130\.00 after the change \(\+\$20\.00\)/);
+  assert.doesNotMatch(text(current), /Price update|today's/);
+  assert.equal('note' in current.structuredContent.pricing, false);
+
+  // Without a plan there is no price of its own to move from.
+  const unsubscribed = await quote({ subscription: null });
+  assert.doesNotMatch(text(unsubscribed), /Price update/);
+
+  assert.match(PLAYBOOKS.agents, /The plan price is set from the skills and the tier at today's prices when the plan starts, moves to Pro or its skills change, and renewals keep that price\./);
+  assert.doesNotMatch(PLAYBOOKS.agents, /depends only on the skills/);
+});
+
+test('apply_agent_skills adds no price update when the change also moves the plan to Pro', async () => {
+  // A Starter plan bought at $9 a month, whose skills cost $11 on Starter and
+  // $110 on Pro today, moves to Pro, alone and with a skill that adds $20.
+  const apollo = { name: 'int-apollo-sales', title: 'Apollo Sales', depends_on: [], conflicts_with: [], credential_key: 'apollo', requires_credentials: true, pricing: { billing_model: 'tokens', monthly_price_weight_usd: 2, monthly_credits_weight: 200 } };
+  const quote = async (skills, totalPriceUsd) => {
+    const fake = fakeClient(skillRoutes({
+      '/Skills/List': { ...skillList, skills: [...skillList.skills, apollo], total: skillList.total + 1 },
+      '/UserAgent/Detail': detail({ tier: 'starter', tiermultiplier: 10, monthlypriceusd: 9, monthlycredits: 900, agent: { guid: 'tpl-1', custom: false, tiers: { starter: { priceUsd: 11, credits: 1100 }, pro: { priceUsd: 110, credits: 11000 } }, tiermultiplier: 10 } }),
+      '/UserAgent/PricingPreview': { result: true, errors: [], tier: 'pro', tiermultiplier: 10, totalPriceUsd, totalMonthlyCredits: totalPriceUsd * 100 },
+    }));
+    let result;
+    await withClient(fake, async client => {
+      result = await client.callTool({ name: 'apply_agent_skills', arguments: { agent_guid: AGENT, skills, tier: 'pro' } });
+    });
+    assert.equal(result.structuredContent.status, 'quote', text(result));
+    assert.equal(fake.calls.find(call => call.path === '/UserAgent/PricingPreview').body.tier, 'pro');
+    return result;
+  };
+
+  const tierOnly = await quote({}, 110);
+  assert.match(text(tierOnly), /\*\*Plan:\*\* starter to pro\n\*\*Monthly price:\*\* \$9\.00 now, \$110\.00 after the change \(\+\$101\.00\)\n\*\*Monthly credits:\*\*/);
+  assert.doesNotMatch(text(tierOnly), /Price update|today's|\$11\.00/);
+  assert.equal('note' in tierOnly.structuredContent.pricing, false);
+
+  const withSkill = await quote({ 'int-apollo-sales': true }, 130);
+  assert.match(text(withSkill), /\*\*Monthly price:\*\* \$9\.00 now, \$130\.00 after the change \(\+\$121\.00\)\n\*\*Monthly credits:\*\*/);
+  assert.doesNotMatch(text(withSkill), /Price update|today's|\$11\.00/);
+  assert.equal('note' in withSkill.structuredContent.pricing, false);
+});
+
 test('apply_agent_skills says once that a credit for skills turned off can be spent until the period ends', async () => {
   // Turning the reporting skill off lowers the price from $42 to $40.
   const removal = { agent_guid: AGENT, skills: { 'util-chat-markdown-reporting': false } };

@@ -663,9 +663,10 @@ function formatModelsLine(agent: AgentDetail): string | null {
 export function formatAgentDetail(agent: AgentDetail): string {
   const lines = formatAgentSummaryLines(agent);
   if (agent.pricing) {
-    // This agent's own Starter and Pro prices, which can differ from its template's.
+    // Today's Starter and Pro prices for this agent's own skills, which can
+    // differ from its template's and from the price its plan pays.
     const { starter, pro } = agent.pricing;
-    lines.push(`**Prices now:** Starter ${formatUsd(starter.priceUsd)} per 30 days with ${formatCredits(starter.monthlyCredits)} credits per month; Pro ${formatUsd(pro.priceUsd)} per 30 days with ${formatCredits(pro.monthlyCredits)} credits per month. A new plan or an upgrade uses these.`);
+    lines.push(`**Prices now:** Starter ${formatUsd(starter.priceUsd)} per 30 days with ${formatCredits(starter.monthlyCredits)} credits per month; Pro ${formatUsd(pro.priceUsd)} per 30 days with ${formatCredits(pro.monthlyCredits)} credits per month. A new plan or an upgrade uses these, and a skill change moves the plan to today's prices for all its skills.`);
   }
   const models = formatModelsLine(agent);
   if (models) lines.push(models);
