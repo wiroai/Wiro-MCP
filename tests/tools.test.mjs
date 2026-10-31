@@ -3,8 +3,15 @@ import { readdirSync, readFileSync } from 'node:fs';
 import test from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { TaskWaitTimeoutError, WiroClient } from '../dist/client.js';
-import { createMcpServer } from '../dist/server.js';
+import {
+  advertiseJsonSchema2020_12,
+  createMcpServer,
+  registerTools,
+  withJsonSchema2020_12,
+} from '../dist/server.js';
+import * as toolsExport from '../dist/tools/index.js';
 
 function runningDetail() {
   return {
@@ -556,6 +563,72 @@ test('every tool advertises output schemas and annotations', async () => {
       assert.equal(listOutputProperties?.[omitted], undefined);
     }
   });
+});
+
+test('registerTools on an existing McpServer lists 2020-12 schemas before or after connect', async () => {
+  const jsonSchema202012 = 'https://json-schema.org/draft/2020-12/schema';
+  for (const order of ['before', 'after']) {
+    const server = new McpServer({ name: 'host', version: '1.0.0' });
+    const client = new Client({ name: 'test-client', version: '1.0.0' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    // The host's own tool. The SDK takes new tools after connect only once the server has one.
+    server.registerTool('host_tool', { description: 'Host tool' }, async () => ({ content: [] }));
+    if (order === 'before') registerTools(server, {}, { wrapTool: (_tool, handler) => handler });
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+    if (order === 'after') registerTools(server, {});
+    try {
+      const { tools } = await client.listTools();
+      assert.deepEqual(tools.map(tool => tool.name).sort(), [...EXPECTED_TOOLS, 'host_tool'].sort(), order);
+      for (const tool of tools) {
+        assert.equal(tool.inputSchema.$schema, jsonSchema202012, `${order}: ${tool.name} inputSchema dialect`);
+        if (tool.name !== 'host_tool') {
+          assert.equal(tool.outputSchema.$schema, jsonSchema202012, `${order}: ${tool.name} outputSchema dialect`);
+        }
+        assert.equal(JSON.stringify(tool).includes('draft-07'), false, `${order}: ${tool.name} still mentions draft-07`);
+      }
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  }
+});
+
+test('the 2020-12 helpers cover tools registered one by one, and a second call changes nothing', async () => {
+  const jsonSchema202012 = 'https://json-schema.org/draft/2020-12/schema';
+  assert.equal(toolsExport.advertiseJsonSchema2020_12, advertiseJsonSchema2020_12);
+  assert.equal(toolsExport.withJsonSchema2020_12, withJsonSchema2020_12);
+  for (const helper of ['server', 'transport']) {
+    const server = new McpServer({ name: 'host', version: '1.0.0' });
+    toolsExport.registerSearchModels(server, {});
+    toolsExport.registerGetPlaybook(server);
+    const client = new Client({ name: 'test-client', version: '1.0.0' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    if (helper === 'server') {
+      advertiseJsonSchema2020_12(server);
+      const connect = server.connect;
+      advertiseJsonSchema2020_12(server);
+      assert.equal(server.connect, connect);
+      await server.connect(serverTransport);
+    } else {
+      withJsonSchema2020_12(serverTransport);
+      const send = serverTransport.send;
+      await server.connect(withJsonSchema2020_12(serverTransport));
+      assert.equal(serverTransport.send, send);
+    }
+    await client.connect(clientTransport);
+    try {
+      const { tools } = await client.listTools();
+      assert.deepEqual(tools.map(tool => tool.name).sort(), ['get_playbook', 'search_models'], helper);
+      for (const tool of tools) {
+        assert.equal(tool.inputSchema.$schema, jsonSchema202012, `${helper}: ${tool.name} inputSchema dialect`);
+        assert.equal(tool.outputSchema.$schema, jsonSchema202012, `${helper}: ${tool.name} outputSchema dialect`);
+      }
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  }
 });
 
 test('list_tasks returns structured history and chains into get_task', async () => {

@@ -1,6 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 import type { WiroClient } from '../client.js';
+import { advertiseJsonSchema2020_12 } from '../utils/json-schema-dialect.js';
 import { registerSearchModels } from './search-models.js';
 import { registerGetModelSchema } from './get-model-schema.js';
 import { registerRunModel } from './run-model.js';
@@ -106,6 +107,8 @@ export function registerTools(
   client: WiroClient,
   options: RegisterToolsOptions = {},
 ): void {
+  // Claude and other 2020-12-only MCP clients reject the SDK's draft-07 $schema.
+  advertiseJsonSchema2020_12(mcpServer);
   const server = options.wrapTool ? withToolWrapper(mcpServer, options.wrapTool) : mcpServer;
   const enabled = new Set<Toolset>(options.toolsets ?? TOOLSETS);
 
@@ -183,6 +186,8 @@ export function registerTools(
     registerManageAgentCustomSkill(server, client);
   }
 }
+
+export { advertiseJsonSchema2020_12, withJsonSchema2020_12 } from '../utils/json-schema-dialect.js';
 
 export {
   registerSearchModels,

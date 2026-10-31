@@ -258,6 +258,25 @@ test('the server advertises short instructions that point to the playbooks', asy
   });
 });
 
+// Some clients show the model only the start of the instructions (Claude Code
+// keeps 4,096 characters, older versions 2,048).
+test('the instructions stay under 4,000 characters, with the rules in the first 2,048', () => {
+  assert.ok(SERVER_INSTRUCTIONS.length < 4000, `the instructions are ${SERVER_INSTRUCTIONS.length} characters`);
+  const head = SERVER_INSTRUCTIONS.slice(0, 2048);
+  for (const rule of [
+    'get_playbook',
+    'wait for a clear yes',
+    'Never set confirm: true on your own',
+    'Never resubmit the original request',
+    'Never retry a paid call',
+    'never ask for this server\'s own API key or secret in chat',
+    'expected cost in one line',
+    'get the user\'s yes first',
+  ]) {
+    assert.ok(head.includes(rule), `"${rule}" must be in the first 2,048 characters`);
+  }
+});
+
 // Every combination of toolsets a server can be started with.
 const TOOLSET_CHOICES = [
   ['models'], ['workflows'], ['agents'],

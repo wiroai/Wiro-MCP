@@ -1,3 +1,4 @@
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 
 /**
@@ -147,9 +148,32 @@ export function normalizeOutgoingMessage(message: unknown): unknown {
   return { ...message, result: { ...result, tools } };
 }
 
+const LISTS_2020_12 = Symbol.for('@wiro-ai/wiro-mcp/json-schema-2020-12');
+
+type Marked<T> = T & { [LISTS_2020_12]?: true };
+
+/** Wraps a transport so the tools/list it sends uses JSON Schema 2020-12. Calling it again does nothing. */
 export function withJsonSchema2020_12<T extends Transport>(transport: T): T {
+  const marked = transport as Marked<T>;
+  if (marked[LISTS_2020_12]) return transport;
+  marked[LISTS_2020_12] = true;
   const originalSend = transport.send.bind(transport);
   transport.send = (message, options) =>
     originalSend(normalizeOutgoingMessage(message) as Parameters<Transport['send']>[0], options);
   return transport;
+}
+
+/**
+ * Makes an McpServer list its tools with JSON Schema 2020-12, whether it is
+ * connected already or connects later. Calling it again does nothing.
+ */
+export function advertiseJsonSchema2020_12(server: McpServer): McpServer {
+  const marked = server as Marked<McpServer>;
+  if (marked[LISTS_2020_12]) return server;
+  marked[LISTS_2020_12] = true;
+  const connected = server.server.transport;
+  if (connected) withJsonSchema2020_12(connected);
+  const originalConnect = server.connect.bind(server);
+  server.connect = (transport: Transport) => originalConnect(withJsonSchema2020_12(transport));
+  return server;
 }

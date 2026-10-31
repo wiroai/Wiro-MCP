@@ -461,18 +461,26 @@ const client = new WiroClient(apiKey, apiSecret, undefined, {
 |--------|-------------|
 | `createMcpServer(client, options?)` | Creates an McpServer with the tools, prompts and server instructions registered. `options.toolsets` picks tool groups and the prompts that use them; `options.instructions` replaces the instructions; `options.wrapTool(tool, handler)` returns the handler to register for each tool, for your own logging or permission checks; `options.maxToolInputElements` caps the array elements and object members one tool call may carry (default 10000, `Infinity` turns the check off) |
 | `WiroClient` | API client with both auth types; `post(path, body)` calls any Wiro API endpoint with the same credentials |
-| `registerTools(server, client, options?)` | Register tools on an existing McpServer |
+| `registerTools(server, client, options?)` | Registers the tools on an McpServer you already have, with the same `toolsets` and `wrapTool` options. That server then lists every tool schema, its own tools included, as JSON Schema 2020-12 |
+| `advertiseJsonSchema2020_12(server)` | Makes an McpServer list its tool schemas as JSON Schema 2020-12. Call it when you register single tools from `@wiro-ai/wiro-mcp/tools` instead of using `registerTools` |
+| `withJsonSchema2020_12(transport)` | The same for one transport: `await server.connect(withJsonSchema2020_12(transport))` |
 | `parseToolsets(value)` | Parse a `WIRO_TOOLSETS`-style list such as `"models,agents"` |
 
 ```typescript
 // Import specific components
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WiroClient } from '@wiro-ai/wiro-mcp/client';
 import { createMcpServer } from '@wiro-ai/wiro-mcp/server';
+import { registerTools } from '@wiro-ai/wiro-mcp/tools';
 
 const client = new WiroClient('your-api-key', 'your-api-secret');
 
 // Only the model and workflow tools
 const server = createMcpServer(client, { toolsets: ['models', 'workflows'] });
+
+// Or add the model tools to an McpServer you already have
+const myServer = new McpServer({ name: 'my-server', version: '1.0.0' });
+registerTools(myServer, client, { toolsets: ['models'] });
 ```
 
 ## Environment Variables
