@@ -33,10 +33,10 @@ import {
 
 const AGENT = 'ua-0001';
 const NOW = Math.floor(Date.now() / 1000);
-const TOKEN = '123456789:AAHsecretTelegramBotToken';
+const TOKEN = '000000:TEST-BOT-TOKEN';
 
 // ---------------------------------------------------------------------------
-// Fixtures shaped like the production responses
+// Fixtures
 // ---------------------------------------------------------------------------
 
 const skillList = {
@@ -149,9 +149,9 @@ const credentials = {
       oauth_flow: { callback_path: '/UserAgentOAuth/GAdsCallback' },
     },
   },
-  'sys-openai': {
-    key: 'sys-openai',
-    title: 'OpenAI',
+  'sys-example': {
+    key: 'sys-example',
+    title: 'Example Service',
     credential_mode: 'api_key',
     connection_modes: [],
     credential_schema: [{ key: 'apikey', type: 'password', label: 'API key', required: true, platform_managed: true }],
@@ -1140,7 +1140,7 @@ test('set_agent_credentials writes typed values, reports the channel and never e
     '/UserAgent/Detail': () => (written
       ? detail({
         status: 1,
-        credentials: { telegram: { bottoken: TOKEN, allowedusers: ['761381461'], optional: true, _connected: true, _filled: true, _schema: { title: 'Telegram' } } },
+        credentials: { telegram: { bottoken: TOKEN, allowedusers: ['123456789'], optional: true, _connected: true, _filled: true, _schema: { title: 'Telegram' } } },
         communicationChannels: [{ id: 'telegram', title: 'Telegram', credentialkey: 'telegram', enabled: true, configured: true, missingfields: [] }],
       })
       : detail()),
@@ -1152,7 +1152,7 @@ test('set_agent_credentials writes typed values, reports the channel and never e
         agent_guid: AGENT,
         fields: [
           { credential: 'telegram', field: 'bottoken', value: TOKEN },
-          { credential: 'telegram', field: 'allowedusers', value: [761381461, ' 761381462 '] },
+          { credential: 'telegram', field: 'allowedusers', value: [123456789, ' 987654321 '] },
         ],
       },
     });
@@ -1162,7 +1162,7 @@ test('set_agent_credentials writes typed values, reports the channel and never e
       useragentguid: AGENT,
       fields: [
         { credentialkey: 'telegram', fieldname: 'bottoken', fieldvalue: TOKEN },
-        { credentialkey: 'telegram', fieldname: 'allowedusers', fieldvalue: ['761381461', '761381462'] },
+        { credentialkey: 'telegram', fieldname: 'allowedusers', fieldvalue: ['123456789', '987654321'] },
       ],
     });
     const out = result.structuredContent;
@@ -1172,7 +1172,7 @@ test('set_agent_credentials writes typed values, reports the channel and never e
     assert.equal(out.agentStatus, 'stopping');
     assert.match(out.notes.join(' '), /restarts to load the new values/);
     assert.match(out.notes.join(' '), /Telegram is on\./);
-    assert.doesNotMatch(JSON.stringify(result), /AAHsecret/);
+    assert.doesNotMatch(JSON.stringify(result), /TEST-BOT-TOKEN/);
   });
 });
 
@@ -1283,7 +1283,7 @@ test('set_agent_credentials refuses bad fields before writing anything', async (
           { credential: 'meta-ads', field: 'adaccountid', value: '123' },
           { credential: 'meta-ads', field: 'accesstoken', value: 'abcdefghijkl' },
           { credential: 'meta-ads', field: 'authmethod', value: 'magic' },
-          { credential: 'sys-openai', field: 'apikey', value: 'sk-123456789' },
+          { credential: 'sys-example', field: 'apikey', value: 'test-api-key' },
           { credential: 'nope', field: 'x', value: 'y' },
         ],
       },
@@ -1296,9 +1296,9 @@ test('set_agent_credentials refuses bad fields before writing anything', async (
     assert.match(message, /"accesstoken" is filled by the connection itself/);
     // wiro_connect_pending leaves wiro out of the choices.
     assert.match(message, /Meta Ads: authmethod must be one of api_key, own\./);
-    assert.match(message, /OpenAI is managed by Wiro/);
+    assert.match(message, /Example Service is managed by Wiro/);
     assert.match(message, /Unknown credential "nope"/);
-    assert.doesNotMatch(message, /AAHsecret/);
+    assert.doesNotMatch(message, /TEST-BOT-TOKEN/);
     assert.equal(fake.paths().includes('/UserAgent/CredentialUpsert'), false);
   });
 });
@@ -1316,14 +1316,14 @@ test('set_agent_credentials hides submitted values inside server errors', async 
         agent_guid: AGENT,
         fields: [
           { credential: 'telegram', field: 'bottoken', value: TOKEN },
-          { credential: 'telegram', field: 'allowedusers', value: ['761381461'] },
+          { credential: 'telegram', field: 'allowedusers', value: ['123456789'] },
         ],
       },
     });
     assert.equal(result.isError, true);
     assert.match(text(result), /partly saved/);
     assert.match(text(result), /Telegram rejected \[hidden\]/);
-    assert.doesNotMatch(JSON.stringify(result), /AAHsecret/);
+    assert.doesNotMatch(JSON.stringify(result), /TEST-BOT-TOKEN/);
     assert.equal(result.structuredContent.applied, 1);
   });
 });
@@ -1525,12 +1525,12 @@ test('set_agent_credentials writes a list inside one entry with parent_field and
     }]);
 
     // A text list keeps its text items.
-    const users = await write(client, { credential: 'telegram', field: 'allowedusers', parent_field: 'groups', ordinal: 0, value: ['761381461', 761381462] });
+    const users = await write(client, { credential: 'telegram', field: 'allowedusers', parent_field: 'groups', ordinal: 0, value: ['123456789', 987654321] });
     assert.notEqual(users.isError, true, text(users));
     assert.deepEqual(fake.calls.filter(call => call.path === '/UserAgent/CredentialUpsert').at(-1).body.fields, [{
       credentialkey: 'telegram',
       fieldname: 'allowedusers',
-      fieldvalue: ['761381461', '761381462'],
+      fieldvalue: ['123456789', '987654321'],
       parentfield: 'groups',
       ordinal: 0,
     }]);
@@ -1571,7 +1571,7 @@ test('set_agent_credentials checks one entry\'s field with parent_field as stric
     // A value is checked as it is sent, the same way in both kinds of write.
     const spaced = '-1001234567890 ';
     const entry = await write(client, { credential: 'telegram', field: 'chatid', parent_field: 'groups', ordinal: 0, value: spaced });
-    const whole = await write(client, { credential: 'telegram', field: 'groups', value: [{ chatid: spaced, allowedusers: ['761381461'] }] });
+    const whole = await write(client, { credential: 'telegram', field: 'groups', value: [{ chatid: spaced, allowedusers: ['123456789'] }] });
     for (const result of [entry, whole]) {
       assert.equal(result.isError, true);
       assert.match(text(result), /Group Chat ID in Allowed Telegram Groups #1 has an invalid format \(expected pattern \^-\\d\{5,\}\$\)\./);
@@ -1591,20 +1591,20 @@ test('set_agent_credentials names list items and entries the way Wiro does', asy
   const fake = fakeClient({ '/Credentials/Detail': credentialDetail });
   const write = (client, field) => client.callTool({ name: 'set_agent_credentials', arguments: { agent_guid: AGENT, fields: [field] } });
   await withClient(fake, async client => {
-    const top = await write(client, { credential: 'telegram', field: 'allowedusers', value: ['761381461', '12'] });
+    const top = await write(client, { credential: 'telegram', field: 'allowedusers', value: ['123456789', '12'] });
     assert.equal(top.isError, true);
     assert.match(text(top), /Allowed Telegram DM User IDs #2 has an invalid format \(expected pattern \^\\d\{5,\}\$\)\./);
 
     // A text list inside an entry names its items after the entry, in a whole write and with parent_field.
     const nested = 'Allowed User IDs in Allowed Telegram Groups #1, item #2 has an invalid format (expected pattern ^\\d{5,}$).';
-    const whole = await write(client, { credential: 'telegram', field: 'groups', value: [{ chatid: '-1001234567890', allowedusers: ['761381461', '12'] }] });
-    const entry = await write(client, { credential: 'telegram', field: 'allowedusers', parent_field: 'groups', ordinal: 0, value: ['761381461', '12'] });
+    const whole = await write(client, { credential: 'telegram', field: 'groups', value: [{ chatid: '-1001234567890', allowedusers: ['123456789', '12'] }] });
+    const entry = await write(client, { credential: 'telegram', field: 'allowedusers', parent_field: 'groups', ordinal: 0, value: ['123456789', '12'] });
     for (const result of [whole, entry]) {
       assert.equal(result.isError, true);
       assert.ok(text(result).includes(nested), text(result));
       assert.doesNotMatch(text(result), / item \d+ /);
     }
-    const notText = await write(client, { credential: 'telegram', field: 'allowedusers', parent_field: 'groups', ordinal: 0, value: [{ id: '761381461' }] });
+    const notText = await write(client, { credential: 'telegram', field: 'allowedusers', parent_field: 'groups', ordinal: 0, value: [{ id: '123456789' }] });
     assert.ok(text(notText).includes('Allowed User IDs takes a list of text values; Allowed User IDs in Allowed Telegram Groups #1, item #1 is not one.'), text(notText));
 
     const unknownField = await write(client, { credential: 'firebase', field: 'bundleid', parent_field: 'accounts', ordinal: 0, value: 'com.acme.app' });
@@ -2181,13 +2181,13 @@ test('manage_agent_custom_skill history shows saved states without who changed t
         intervalexpr: '0 7 * * *',
         enabled: true,
         operation: 'update',
-        changedby: 'uuid-secret',
+        changedby: '00000000-0000-0000-0000-000000000001',
         changedat: 1767225600,
         after_value: 'Do my task.',
         after_interval: '0 8 * * *',
         after_enabled: true,
         changed_fields: ['value', 'interval'],
-        changedby_user: { uuid: 'uuid-secret', email: 'owner@example.com', firstname: 'Ada' },
+        changedby_user: { uuid: '00000000-0000-0000-0000-000000000001', email: 'owner@example.com', firstname: 'Ada' },
         prev_value: 'Older',
       }],
       preset_default: null,
@@ -2209,7 +2209,7 @@ test('manage_agent_custom_skill history shows saved states without who changed t
     }]);
     assert.equal(out.presetDefault, null);
     assert.deepEqual(out.templates, [{ title: 'Daily digest', description: 'A short daily summary', value: 'Summarize today.', interval: '0 9 * * *' }]);
-    assert.doesNotMatch(JSON.stringify(result), /owner@example\.com|uuid-secret|Ada|Older/);
+    assert.doesNotMatch(JSON.stringify(result), /owner@example\.com|00000000-0000-0000-0000-000000000001|Ada|Older/);
   });
 });
 
@@ -2365,7 +2365,7 @@ test('deploy custom skills resolve bare keys against the template and need text 
   ], template);
   assert.deepEqual(errors, []);
   assert.deepEqual(skills, [
-    // Sent without a schedule, Wiro would save the template's task on its weekly default.
+    // The template's own task is sent with the template's schedule.
     { key: 'cs-cron-daily-digest', kind: 'scheduled_task', fromTemplate: true, interval: '0 8 * * *', enabled: false },
     { key: 'cs-content-strategy', kind: 'skill', fromTemplate: true, value: 'Focus on reels' },
     { key: 'cs-cron-weekly-report', kind: 'scheduled_task', fromTemplate: false, value: 'Sum up', interval: '0 9 * * 1' },

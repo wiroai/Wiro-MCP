@@ -32,15 +32,15 @@ const AGENT_TOOLS = [
 
 // Values that must never leave the server, whichever tool returns the agent.
 const SECRETS = [
-  'owner-uuid-secret',
+  '00000000-0000-0000-0000-000000000001',
   'team-guid-secret',
-  'secret-app-password',
-  'SECRET-BOT-TOKEN',
+  'test-app-password',
+  'TEST-BOT-TOKEN',
   'gmail-owner@example.com',
-  '761381461',
-  'billing.stripe.com',
-  'price_secret',
-  'prod_secret',
+  '123456789',
+  'billing.example.com',
+  'price_test_123',
+  'prod_test_123',
   'member@example.com',
   'member-uuid',
   'avatar.png',
@@ -114,7 +114,7 @@ function subscription(overrides = {}) {
 function agentRow(overrides = {}) {
   return {
     guid: 'ua-1',
-    uuid: 'owner-uuid-secret',
+    uuid: '00000000-0000-0000-0000-000000000001',
     teamguid: null,
     title: 'My Bot',
     description: 'Posts every morning',
@@ -134,8 +134,8 @@ function agentRow(overrides = {}) {
     pendingextra: 0,
     creditperiod: '2026-10',
     creditsyncat: NOW - 86_400,
-    stripepriceid: 'price_secret',
-    stripeproductid: 'prod_secret',
+    stripepriceid: 'price_test_123',
+    stripeproductid: 'prod_test_123',
     deletedat: null,
     deletedby: null,
     createdat: String(NOW - 10 * 86_400),
@@ -145,9 +145,9 @@ function agentRow(overrides = {}) {
     runningat: String(NOW - 400),
     setuprequired: true,
     subscription: subscription(),
-    stripeportalurl: 'https://billing.stripe.com/p/session/secret-portal',
-    stripeupdateurl: 'https://billing.stripe.com/p/session/secret-update',
-    stripecancelurl: 'https://billing.stripe.com/p/session/secret-cancel',
+    stripeportalurl: 'https://billing.example.com/portal/test',
+    stripeupdateurl: 'https://billing.example.com/update/test',
+    stripecancelurl: 'https://billing.example.com/cancel/test',
     extracreditsexpiry: NOW + 100 * 86_400,
     agentguid: 'tpl-guid',
     agent: {
@@ -187,7 +187,7 @@ function agentRow(overrides = {}) {
         _filled: false,
         _required_missing: true,
         account: 'gmail-owner@example.com',
-        apppassword: 'secret-app-password',
+        apppassword: 'test-app-password',
         _editable: { account: true, apppassword: true },
         _schema: {
           title: 'Gmail',
@@ -205,8 +205,8 @@ function agentRow(overrides = {}) {
         _connected: true,
         _filled: true,
         _required_missing: false,
-        bottoken: '123456:SECRET-BOT-TOKEN',
-        allowedusers: ['761381461'],
+        bottoken: '000000:TEST-BOT-TOKEN',
+        allowedusers: ['123456789'],
         _schema: { title: 'Telegram', oauth_provider: null, fields: [] },
       },
     },
@@ -365,8 +365,8 @@ test('only known refusals count as nothing charged after a paid request', () => 
   assert.equal(outcomeUnknown(new ApiResultError('Only a team admin can perform this action on a team-owned agent.', [97], {})), false);
   assert.equal(outcomeUnknown(new ApiResultError('A skill update is already in progress for this agent.', [104], {})), false);
   assert.equal(isPreChargeRefusal(refused('Extra credit pack not available for this agent.')), true);
-  // Catch-all answers that can follow a charge leave the outcome open.
-  assert.equal(outcomeUnknown(refused('Connection terminated unexpectedly')), true);
+  // Any other answer leaves the outcome open.
+  assert.equal(outcomeUnknown(refused('Unexpected error')), true);
   assert.equal(outcomeUnknown(refused('Wallet was charged but the credit purchase is still pending. Retry with the same request id.')), true);
   assert.equal(outcomeUnknown(new WiroApiError(502, 'Bad gateway')), true);
   assert.equal(outcomeUnknown(new WiroApiError(401, 'Unauthorized')), false);
@@ -606,7 +606,7 @@ test('list_agent_skills with a name returns the setup fields of every credential
     '/Skills/Detail': {
       result: true,
       errors: [],
-      skill: { name: 'int-googleads-manage', title: 'Google Ads', requires_credentials: true, credential_key: 'google-ads', additional_credential_keys: ['google-merchant-center', 'sys-openai'], depends_on: [], conflicts_with: [], pricing: { monthly_price_weight_usd: 3, monthly_credits_weight: 300 } },
+      skill: { name: 'int-googleads-manage', title: 'Google Ads', requires_credentials: true, credential_key: 'google-ads', additional_credential_keys: ['google-merchant-center', 'sys-example'], depends_on: [], conflicts_with: [], pricing: { monthly_price_weight_usd: 3, monthly_credits_weight: 300 } },
     },
     '/Credentials/Detail': body => (credentials[body.key]
       ? { result: true, errors: [], credential: credentials[body.key] }
@@ -827,7 +827,7 @@ test('deploy_agent quotes a template without deploying or echoing credentials', 
     const result = await call(client, 'deploy_agent', {
       template: 'instagram-manager',
       tier: 'pro',
-      credentials: { telegram: { bottoken: '123456:SECRET-BOT-TOKEN', allowedusers: ['761381461'] } },
+      credentials: { telegram: { bottoken: '000000:TEST-BOT-TOKEN', allowedusers: ['123456789'] } },
     });
     assert.notEqual(result.isError, true);
     assert.equal(fake.called('/UserAgent/Deploy').length, 0);
@@ -947,7 +947,7 @@ test('deploy_agent with confirm pays from the wallet and returns a sanitized age
       template: 'instagram-manager',
       tier: 'starter',
       title: 'Insta',
-      credentials: { telegram: { bottoken: '123456:SECRET-BOT-TOKEN', allowedusers: ['761381461'] } },
+      credentials: { telegram: { bottoken: '000000:TEST-BOT-TOKEN', allowedusers: ['123456789'] } },
       custom_skills: [
         { key: 'content-strategy', value: 'Focus on reels' },
         { key: 'weekly-report', value: 'Summarize the week', interval: '0 9 * * 1' },
@@ -961,7 +961,7 @@ test('deploy_agent with confirm pays from the wallet and returns a sanitized age
     assert.equal(deployCall.body.agentguid, templateRow().guid);
     assert.equal(deployCall.body.tier, 'starter');
     assert.equal(deployCall.body.title, 'Insta');
-    assert.equal(deployCall.body.credentials.telegram.bottoken, '123456:SECRET-BOT-TOKEN');
+    assert.equal(deployCall.body.credentials.telegram.bottoken, '000000:TEST-BOT-TOKEN');
     assert.deepEqual(deployCall.body.customskills, [
       { key: 'cs-content-strategy', value: 'Focus on reels', _user_created: false },
       { key: 'cs-cron-weekly-report', value: 'Summarize the week', interval: '0 9 * * 1', _user_created: true },
@@ -1062,7 +1062,7 @@ test('deploy_agent checks custom skills against the template before quoting', as
       custom_skills: [{ key: 'daily-digest', enabled: false }],
     });
     assert.notEqual(quote.isError, true, textOf(quote));
-    // Without its schedule Wiro would save the task on its weekly default instead of the template's.
+    // The template's own task is sent with the template's schedule.
     assert.deepEqual(quote.structuredContent.quote.customSkills, [
       { key: 'cs-cron-daily-digest', kind: 'scheduled_task', interval: '0 9 * * *', enabled: false, replacesTemplateEntry: true },
     ]);
@@ -1106,7 +1106,7 @@ test('deploy_agent tells a second agent with its own title to wait and deploy ag
       template: 'instagram-manager',
       tier: 'starter',
       title: 'Brand B',
-      credentials: { telegram: { bottoken: '123456:SECRET-BOT-TOKEN', allowedusers: ['761381461'] } },
+      credentials: { telegram: { bottoken: '000000:TEST-BOT-TOKEN', allowedusers: ['123456789'] } },
       confirm_charge_usd: 12,
       confirm: true,
     });
@@ -1150,15 +1150,15 @@ test('deploy_agent explains a short wallet and a lost response', async () => {
     assert.equal(timeout.called('/UserAgent/Deploy').length, 1);
   });
 
-  // A catch-all answer can come after the wallet was charged.
-  const afterCharge = fakeClient({
+  // An answer that is not a known refusal leaves the outcome open too.
+  const unclear = fakeClient({
     '/Agent/Detail': { result: true, errors: [], agents: [templateRow()] },
-    '/UserAgent/Deploy': { result: false, errors: [{ code: 0, message: 'Connection terminated unexpectedly' }] },
+    '/UserAgent/Deploy': { result: false, errors: [{ code: 0, message: 'Unexpected error' }] },
   });
-  await withClient(afterCharge, async client => {
+  await withClient(unclear, async client => {
     const result = await call(client, 'deploy_agent', { template: 'instagram-manager', tier: 'starter', confirm_charge_usd: 12, confirm: true });
     assert.equal(result.isError, true);
-    assert.match(textOf(result), /Connection terminated unexpectedly/);
+    assert.match(textOf(result), /Unexpected error/);
     assert.match(textOf(result), /may have been created and charged\. Check list_my_agents/);
   });
 });
@@ -1784,7 +1784,7 @@ test('manage_agent_billing reports a failure after the request as a possible cha
     '/UserAgent/Detail': () => detailResponse(agentRow({ status: 6, subscription: null })),
     '/UserAgent/CreateSubscriptionCheckout': () => {
       subscribed = true;
-      return { result: false, errors: [{ code: 0, message: 'Cannot read properties of undefined' }] };
+      return { result: false, errors: [{ code: 0, message: 'Unexpected error' }] };
     },
   });
   await withClient(subscribe, async client => {
@@ -1796,7 +1796,7 @@ test('manage_agent_billing reports a failure after the request as a possible cha
     assert.match(textOf(result), /Do not repeat the call until this is checked/);
   });
 
-  // The charge landed but the tier write did not: the plan already carries the Pro price.
+  // With the Pro price but not the Pro tier on the agent, the text says not to upgrade again.
   let upgraded = false;
   const upgrade = fakeClient({
     '/UserAgent/Detail': () => detailResponse(agentRow(upgraded ? { monthlypriceusd: 120, subscription: subscription({ amount: 120 }) } : {})),
@@ -1844,7 +1844,7 @@ test('manage_agent_billing reports an action that went through despite an error 
     '/UserAgent/Detail': () => detailResponse(agentRow({ tier: 'pro', extracredits: credited ? 6000 : 0 })),
     '/UserAgent/CreateExtraCreditCheckout': () => {
       credited = true;
-      return { result: false, errors: [{ code: 0, message: 'Connection is closed.' }] };
+      return { result: false, errors: [{ code: 0, message: 'Unexpected error' }] };
     },
   });
   await withClient(rose, async client => {
@@ -1861,7 +1861,7 @@ test('manage_agent_billing reports an action that went through despite an error 
     '/UserAgent/Detail': () => detailResponse(agentRow({ status: subscribed ? 2 : 6, subscription: subscribed ? subscription() : null })),
     '/UserAgent/CreateSubscriptionCheckout': () => {
       subscribed = true;
-      return { result: false, errors: [{ code: 0, message: 'Cannot read properties of undefined' }] };
+      return { result: false, errors: [{ code: 0, message: 'Unexpected error' }] };
     },
   });
   await withClient(subscribe, async client => {
@@ -1935,8 +1935,7 @@ test('manage_agent_billing refuses packs below Pro and estimates a wallet upgrad
 });
 
 test('manage_agent_billing approves an upgrade on a shorter billing period at its maximum', async () => {
-  // A card plan switching to the wallet keeps its 28-day card period: Wiro
-  // divides by 28 days, while the estimate divides by 30.
+  // The current period is 28 days long; the charge is prorated over its real length.
   const start = NOW;
   const end = NOW + 28 * 86_400;
   const fake = fakeClient({

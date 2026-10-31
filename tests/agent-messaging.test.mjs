@@ -1492,7 +1492,7 @@ test('send errors with an unknown outcome name the session to check before resen
     assert.match(textOf(result), /no message id\. Check get_agent_conversation with agent "workflow-agent" and session "mcp-flow"/);
   });
 
-  // A bare "temporarily unavailable" can follow a Send that timed out inside Wiro after queueing.
+  // A bare "temporarily unavailable" answer leaves open whether the message was queued.
   for (const [agent, path] of [['studio', '/Studio/Message/Send'], ['agent-guid-1', '/UserAgent/Message/Send']]) {
     const unavailable = fakeClient({
       [path]: { result: false, errors: [{ code: 0, message: 'Agent is temporarily unavailable. Please try again shortly.' }] },
