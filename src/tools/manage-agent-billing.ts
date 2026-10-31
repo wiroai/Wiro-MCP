@@ -414,7 +414,7 @@ function planFor(
             'The plan could not be upgraded.',
           );
           if (asString(body.url)) {
-            // A checkout link means the plan is paid by card. The link is a payment page for the owner's card, so it is not passed on.
+            // A checkout link means the plan is paid by card, and card payments are made in the dashboard.
             return { outcome: 'refused', message: cardPlan('upgrade it to Pro') };
           }
           const charged = toNumber(body.proratedCharge);

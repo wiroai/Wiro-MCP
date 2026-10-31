@@ -10,9 +10,9 @@ import {
   toTierPricing,
 } from './user-agent.js';
 
-// The agent catalog: templates, skills and the credentials they need. These
-// come from public catalog endpoints; preset credential values and OAuth
-// internals are still left out.
+// The agent catalog: templates, skills and the credentials they need, from
+// public catalog endpoints. Results are rebuilt from an allowlist of what a
+// user needs to choose an agent and set it up.
 
 export const templateSummarySchema = z.object({
   guid: z.string(),
@@ -105,7 +105,7 @@ function writableSchemaField(field: Record<string, unknown>): boolean {
     && field.type !== 'computed';
 }
 
-/** What a user fills in for one credential group, from its inline schema. Values are never read. */
+/** What a user fills in for one credential group, from its inline schema. */
 function toCredentialRequirement(key: string, group: Record<string, unknown>): CredentialRequirement {
   const schema = isPlainObject(group._schema) ? group._schema : {};
   const editable = isPlainObject(group._editable) ? group._editable : null;
@@ -366,7 +366,7 @@ function setupItems(field: Record<string, unknown>, nested: boolean): Credential
   });
 }
 
-/** A credential registry entry reduced to what a user is asked for. OAuth internals stay out. */
+/** A credential registry entry reduced to what a user is asked for. */
 export function toCredentialSetup(
   credential: Record<string, unknown>,
   role: CredentialSetup['role'],

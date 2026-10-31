@@ -12,10 +12,8 @@ import {
 } from './api.js';
 import { pollUntil, reportProgress, type ToolCallContext } from './poll.js';
 
-// Deployed agents and the agent catalog. Agent rows come back with the
-// owner's stored credential values, billing links and account ids, none of
-// which an assistant should pass on, so every row is rebuilt here from an
-// allowlist instead of being passed through.
+// Deployed agents and the agent catalog. Results are rebuilt from an
+// allowlist: only states, labels, prices and settings are returned.
 
 export const AGENT_DASHBOARD_URL = 'https://wiro.ai/panel/agents';
 
@@ -272,7 +270,7 @@ export const credentialStatusSchema = z.object({
 
 export type CredentialStatus = z.infer<typeof credentialStatusSchema>;
 
-/** Per-credential state only. Field values never leave this function. */
+/** The state of each credential: whether it is filled, connected or missing. */
 export function summarizeCredentials(credentials: unknown, skipKeys: Set<string> = new Set()): CredentialStatus[] {
   if (!isPlainObject(credentials)) return [];
   const statuses: CredentialStatus[] = [];
@@ -522,9 +520,9 @@ export function selectableModelSlugs(row: Record<string, unknown>): Set<string> 
 }
 
 /**
- * The full sanitized view of one deployed agent (Detail, Deploy and Update
- * rows). Credential values, billing session links, account ids and the
- * team id are dropped; only states, labels and settings remain.
+ * The full view of one deployed agent (Detail, Deploy and Update rows): its
+ * status, plan, prices, credits and settings, and the state of each
+ * credential and channel.
  */
 export function toAgentDetail(row: Record<string, unknown>): AgentDetail {
   const summary = toAgentSummary(row);
@@ -753,7 +751,7 @@ export interface AgentApiClient {
 
 type UserAgentEnvelope = ApiEnvelope & { useragents?: unknown };
 
-/** The raw Detail row. Callers must pass it through toAgentDetail before returning anything. */
+/** Reads one agent's Detail row; tool results are built from it with toAgentDetail or toAgentSummary. */
 export async function readAgentDetail(
   client: AgentApiClient,
   guid: string,

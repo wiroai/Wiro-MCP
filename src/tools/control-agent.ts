@@ -199,8 +199,8 @@ export function registerControlAgent(server: McpServer, client: WiroClient): voi
           }
         } else if (previous === 3 || previous === 4) {
           // A restart is an update: updating a starting or running agent stops
-          // it and queues it again. Only `result` is read; the rest of the
-          // response is the full agent row, which is not passed on.
+          // it and queues it again. Only the outcome is read from the answer;
+          // the status shown comes from Detail.
           call = { path: '/UserAgent/Update', fallback: 'The agent could not be restarted.' };
         } else if (previous === 0 || previous === 5) {
           call = start;

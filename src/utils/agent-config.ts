@@ -1307,7 +1307,7 @@ export function uploadFileName(url: string, field: string, contentType: string):
 }
 
 // ---------------------------------------------------------------------------
-// Agent credential status (from /UserAgent/Detail, values never read out)
+// Agent credential status (from /UserAgent/Detail)
 // ---------------------------------------------------------------------------
 
 export function isFilledValue(value: unknown): boolean {
