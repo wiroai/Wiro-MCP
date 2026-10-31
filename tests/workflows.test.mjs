@@ -881,6 +881,54 @@ test('wait_for_workflow_run prints the inputs a failed step received and hides s
   });
 });
 
+test('wait_for_workflow_run shortens large step inputs in the text and the structured result', async () => {
+  const messages = Array.from({ length: 40 }, (_, index) => ({ role: index % 2 ? 'assistant' : 'user', content: 'x'.repeat(20_000) }));
+  const dataUrl = `data:image/png;base64,${'A'.repeat(300_000)}`;
+  const fake = fakeClient({
+    '/Workflow/RunDetail': {
+      result: true,
+      errors: [],
+      workflowrun: { workflowtoken: 'run-token-4', status: 'failed', canresume: true, contents: graph() },
+      workflowrunnodes: [{ nodeId: 'node-a1', status: 'failed', tasktoken: 'step-token', error: 'Context too long.' }],
+    },
+    '/Workflow/RunNodeDetail': {
+      result: true,
+      errors: [],
+      workflowrunnode: {
+        taskDetail: {
+          taskStatus: 'task_postprocess_end',
+          modelslugowner: 'owner',
+          modelslugproject: 'llm-model',
+          parameters: {
+            messages,
+            combineInputImages: [[dataUrl, dataUrl]],
+            options: { headers: { authorization: 'Bearer nested-secret-value' } },
+            ...Object.fromEntries(Array.from({ length: 20 }, (_, index) => [`field${index}`, 'y'.repeat(5_000)])),
+          },
+        },
+      },
+    },
+  });
+  await withClient(fake, async client => {
+    const result = await client.callTool({
+      name: 'wait_for_workflow_run',
+      arguments: { workflowtoken: 'run-token-4', wait_seconds: 0, debug_node_id: 'node-a1' },
+    });
+    assert.notEqual(result.isError, true);
+    const text = result.content.map(block => block.text ?? '').join('\n');
+    assert.ok(text.length < 12_000, `the text has ${text.length} characters`);
+    assert.match(text, /This list stops after about 8 KB/);
+    assert.ok(JSON.stringify(result).length < 40_000, `the result has ${JSON.stringify(result).length} characters`);
+    const parameters = result.structuredContent.debug.parameters;
+    assert.equal(parameters.messages.length, 11);
+    assert.equal(parameters.messages[10], '(+30 more)');
+    assert.equal(parameters.messages[0].content.length, 503);
+    assert.equal(parameters.combineInputImages[0][0].length, 503);
+    assert.equal(parameters.options.headers.authorization, '[hidden]');
+    assert.equal(JSON.stringify(result).includes('nested-secret-value'), false);
+  });
+});
+
 test('delete_workflow only describes the deletion until it is confirmed', async () => {
   const fake = fakeClient({
     '/Workflow/Detail': { result: true, errors: [], workflow: [storedRow()] },

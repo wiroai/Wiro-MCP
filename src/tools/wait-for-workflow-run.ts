@@ -149,6 +149,35 @@ export function registerWaitForWorkflowRun(server: McpServer, client: WiroClient
   );
 }
 
+// A step's inputs can hold whole chat histories or files as data URLs, so
+// debug_node_id shortens them before they are returned.
+const DEBUG_STRING_MAX = 500;
+const DEBUG_LIST_MAX = 10;
+const DEBUG_DEPTH_MAX = 6;
+const DEBUG_TEXT_MAX = 8_000;
+
+function isFilled(value: unknown): boolean {
+  return value !== '' && value !== null && value !== undefined;
+}
+
+/** Cuts long strings and lists, summarises deep nesting and hides secret-looking values at every level. */
+function shortenStepInput(value: unknown, depth = 0): unknown {
+  if (typeof value === 'string') return truncate(value, DEBUG_STRING_MAX);
+  if (Array.isArray(value)) {
+    if (depth >= DEBUG_DEPTH_MAX) return `(a list of ${value.length} items)`;
+    const kept = value.slice(0, DEBUG_LIST_MAX).map(item => shortenStepInput(item, depth + 1));
+    return value.length > DEBUG_LIST_MAX ? [...kept, `(+${value.length - DEBUG_LIST_MAX} more)`] : kept;
+  }
+  if (value !== null && typeof value === 'object') {
+    if (depth >= DEBUG_DEPTH_MAX) return '(an object)';
+    return Object.fromEntries(Object.entries(value as Record<string, unknown>)
+      .map(([key, item]) => [key, SENSITIVE_INPUT_KEY.test(key) && isFilled(item)
+        ? '[hidden]'
+        : shortenStepInput(item, depth + 1)]));
+  }
+  return value;
+}
+
 /** The step details debug_node_id asked for, as text for clients that show only text. */
 function formatStepDebug(debug: Record<string, unknown>): string {
   const lines = [`### Step \`${String(debug.nodeId ?? '')}\``, ''];
@@ -164,7 +193,12 @@ function formatStepDebug(debug: Record<string, unknown>): string {
     return [`${fence}${language}`, value, fence];
   };
   if (debug.parameters && typeof debug.parameters === 'object') {
-    lines.push('**Inputs its model received:**', ...block('json', JSON.stringify(debug.parameters, null, 2)));
+    const json = JSON.stringify(debug.parameters, null, 2);
+    const cut = json.length > DEBUG_TEXT_MAX;
+    lines.push('**Inputs its model received:**', ...block('json', cut ? `${json.slice(0, DEBUG_TEXT_MAX)}\n...` : json));
+    if (cut) {
+      lines.push(`This list stops after about ${DEBUG_TEXT_MAX / 1000} KB. The structured result has every input under \`debug.parameters\`, with long values shortened.`);
+    }
   }
   if (typeof debug.output === 'string' && debug.output) {
     lines.push('**Output:**', ...block('text', debug.output));
@@ -194,10 +228,7 @@ async function readStepDebug(
   }
   const detail = (response.workflowrunnode?.taskDetail ?? {}) as Record<string, unknown>;
   const parameters = typeof detail.parameters === 'object' && detail.parameters !== null
-    ? Object.fromEntries(Object.entries(detail.parameters as Record<string, unknown>)
-      .map(([key, value]) => [key, SENSITIVE_INPUT_KEY.test(key) && value !== '' && value !== null && value !== undefined
-        ? '[hidden]'
-        : typeof value === 'string' ? truncate(value, 500) : value]))
+    ? shortenStepInput(detail.parameters) as Record<string, unknown>
     : undefined;
   const debugoutput = asString(detail.debugoutput);
   return {
