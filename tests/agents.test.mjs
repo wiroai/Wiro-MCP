@@ -7,6 +7,7 @@ import { WiroApiError } from '../dist/client.js';
 import { ApiResultError } from '../dist/utils/api.js';
 import {
   agentStatusLabel,
+  formatAgentDetail,
   htmlToText,
   isPreChargeRefusal,
   nextStepForAgent,
@@ -1126,6 +1127,33 @@ test('get_my_agent returns the sanitized state and the next step', async () => {
   });
 });
 
+test('get_my_agent counts only the active skills\' credentials as missing on a custom build', async () => {
+  const row = agentRow({
+    status: 6,
+    setuprequired: true,
+    credentials: {
+      instagram: { optional: false, _connected: true, _filled: true, _required_missing: false, _schema: { title: 'Instagram', oauth_provider: { provider: 'instagram' } } },
+      wiro: { apikey: 'wiro-project-key-value', optional: false, _connected: false, _filled: true, _required_missing: false, _schema: { title: 'Wiro AI Models' } },
+      tiktok: { clientkey: '', clientsecret: '', optional: false, _connected: false, _filled: false, _required_missing: true, _schema: { title: 'TikTok', oauth_provider: { provider: 'tiktok' } } },
+    },
+    skillsmeta: {
+      'int-instagram-post': { title: 'Instagram Post', requires_credentials: true, credential_key: 'instagram' },
+      'int-wiro-models': { title: 'Wiro AI Models', requires_credentials: true, credential_key: 'wiro' },
+    },
+  });
+  row.agent = { ...row.agent, custom: true };
+  const fake = fakeClient({ '/UserAgent/Detail': detailResponse(row) });
+  await withClient(fake, async client => {
+    const result = await call(client, 'get_my_agent', { agent_guid: 'ua-1' });
+    assert.notEqual(result.isError, true);
+    // TikTok belongs to a skill that is turned off, so it does not hold the setup back.
+    assert.deepEqual(result.structuredContent.agent.missingCredentials, []);
+    assert.match(textOf(result), /\*\*Setup required:\*\* yes/);
+    assert.doesNotMatch(textOf(result), /missing TikTok/);
+    assert.doesNotMatch(JSON.stringify(result), /wiro-project-key-value/);
+  });
+});
+
 test('get_my_agent shows the agent\'s own prices and where a shortened entry is read in full', async () => {
   const row = agentRow();
   row.agent.tiers = { starter: { priceUsd: 15, credits: 1500 }, pro: { priceUsd: 150, credits: 15000 } };
@@ -1146,7 +1174,7 @@ test('get_my_agent shows the agent\'s own prices and where a shortened entry is 
     assert.match(tools.find(tool => tool.name === 'get_my_agent').description, /plan, its Starter and Pro prices, credit balance/);
     assert.equal(
       tools.find(tool => tool.name === 'update_agent').inputSchema.properties.chat_model.description,
-      'Model for chat turns, a slug from selectableModels in get_my_agent; null resets to the default. Each model uses credits at its own rate; the plan price stays the same.',
+      'Model for chat turns: a slug from the model list in get_my_agent, which shows each model\'s credits per 1M tokens. null resets to the default. The plan price stays the same.',
     );
   });
 
@@ -1187,6 +1215,47 @@ test('get_my_agent names the time zone that is set', async () => {
     assert.doesNotMatch(textOf(result), /UTC, the default/);
     assert.equal(result.structuredContent.agent.timezone, 'Europe/Istanbul');
   });
+});
+
+test('get_my_agent names the models in use and the credit rates of the models it can switch to', async () => {
+  const row = agentRow({
+    agentModel: { chatModel: 'openai/gpt-5.6-sol', cronModel: 'openai/gpt-5.6-luna', voicePrepModel: null, voicePostcallModel: null },
+  });
+  row.tokenRates.models['openai/gpt-6-luna'] = { selectable: true, label: 'GPT-6 Luna', input_per_1m: 12.5, output_per_1m: 62.5 };
+  // A selectable model whose rates Wiro does not list.
+  row.tokenRates.models['openai/gpt-6-sol'] = { selectable: true, label: 'GPT-6 Sol' };
+  const line = '**Models:** chat GPT-5.6 Sol, scheduled tasks GPT-5.6 Luna. Models you can switch to, in credits per 1M input and output tokens: '
+    + 'GPT-5.6 Sol (openai/gpt-5.6-sol) 625 and 3,750; GPT-5.6 Luna (openai/gpt-5.6-luna) 25 and 150; '
+    + 'GPT-6 Luna (openai/gpt-6-luna) 12.5 and 62.5; GPT-6 Sol (openai/gpt-6-sol) rate unknown.';
+  const fake = fakeClient({
+    '/UserAgent/Detail': detailResponse(row),
+    '/UserAgent/UpdateSettings': { result: true, errors: [] },
+  });
+  await withClient(fake, async client => {
+    const result = await call(client, 'get_my_agent', { agent_guid: 'ua-1' });
+    assert.notEqual(result.isError, true, textOf(result));
+    assert.ok(textOf(result).split('\n').includes(line), textOf(result));
+    assert.deepEqual(result.structuredContent.agent.selectableModels, [
+      { slug: 'openai/gpt-5.6-sol', label: 'GPT-5.6 Sol', inputCreditsPer1M: 625, outputCreditsPer1M: 3750 },
+      { slug: 'openai/gpt-5.6-luna', label: 'GPT-5.6 Luna', inputCreditsPer1M: 25, outputCreditsPer1M: 150 },
+      { slug: 'openai/gpt-6-luna', label: 'GPT-6 Luna', inputCreditsPer1M: 12.5, outputCreditsPer1M: 62.5 },
+      { slug: 'openai/gpt-6-sol', label: 'GPT-6 Sol' },
+    ]);
+
+    // update_agent returns the same view after a change.
+    const updated = await call(client, 'update_agent', { agent_guid: 'ua-1', timezone: 'Europe/Istanbul' });
+    assert.notEqual(updated.isError, true, textOf(updated));
+    assert.ok(textOf(updated).split('\n').includes(line), textOf(updated));
+  });
+
+  // A model setting that is not set reads as the default, one that cannot be chosen shows its slug,
+  // and an agent without model data gets no Models line.
+  const unlisted = formatAgentDetail(toAgentDetail(agentRow({
+    agentModel: { chatModel: null, cronModel: 'openai/gpt-5.2', voicePrepModel: null, voicePostcallModel: null },
+    tokenRates: undefined,
+  })));
+  assert.ok(unlisted.split('\n').includes('**Models:** chat the default model, scheduled tasks openai/gpt-5.2.'), unlisted);
+  assert.doesNotMatch(formatAgentDetail(toAgentDetail(agentRow({ agentModel: undefined, tokenRates: undefined }))), /\*\*Models:\*\*/);
 });
 
 test('get_my_agent waits for a starting agent and hands back a continuation when time runs out', async () => {

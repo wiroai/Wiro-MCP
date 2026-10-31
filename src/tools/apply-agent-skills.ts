@@ -217,7 +217,7 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
     {
       title: 'Change an agent\'s skills',
       description: 'Turn registry skills on or off for a deployed agent, and optionally move it '
-        + 'from Starter to Pro, as one billed change. Skills set the agent\'s monthly price. '
+        + 'from Starter to Pro, as one billed change. Skills set the agent\'s monthly price and monthly credits. '
         + 'Steps: 1) call without confirm. The tool checks the names, adds the skills they '
         + 'depend on, and returns the current and new monthly price, an estimate of what is '
         + 'charged now and an idempotency_key. Nothing changes yet. 2) Show the price to the '

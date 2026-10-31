@@ -375,6 +375,15 @@ const modelSettingsSchema = z.object({
   voicePostcall: z.string().nullable(),
 });
 
+const selectableModelSchema = z.object({
+  slug: z.string(),
+  label: z.string().optional(),
+  inputCreditsPer1M: z.number().optional(),
+  outputCreditsPer1M: z.number().optional(),
+});
+
+type SelectableModel = z.infer<typeof selectableModelSchema>;
+
 export const extraCreditPackSchema = z.object({
   pack: z.string(),
   credits: z.number(),
@@ -409,7 +418,7 @@ export const agentDetailSchema = agentSummarySchema.extend({
   pricing: tierPricingSchema.nullable(),
   extraCreditPacks: z.array(extraCreditPackSchema),
   models: modelSettingsSchema.optional(),
-  selectableModels: z.array(z.object({ slug: z.string(), label: z.string().optional() })).optional(),
+  selectableModels: z.array(selectableModelSchema).optional(),
   enabledCommands: z.array(z.string()).nullable(),
   credentials: z.array(credentialStatusSchema),
   missingCredentials: z.array(z.object({ key: z.string(), title: z.string(), oauth: z.boolean() })),
@@ -488,13 +497,22 @@ export function toAgentSummary(row: Record<string, unknown>): AgentSummary {
   };
 }
 
-function selectableModels(tokenRates: unknown): Array<{ slug: string; label?: string }> {
+/** The models an agent can switch to, with their credits per 1M input and output tokens when Wiro lists them. */
+function selectableModels(tokenRates: unknown): SelectableModel[] {
   if (!isPlainObject(tokenRates) || !isPlainObject(tokenRates.models)) return [];
   return Object.entries(tokenRates.models)
     .filter(([, meta]) => isPlainObject(meta) && meta.selectable === true)
     .map(([slug, meta]) => {
-      const label = isPlainObject(meta) ? asString(meta.label) : undefined;
-      return { slug, ...(label ? { label } : {}) };
+      const rates = meta as Record<string, unknown>;
+      const label = asString(rates.label);
+      const input = toNumber(rates.input_per_1m);
+      const output = toNumber(rates.output_per_1m);
+      return {
+        slug,
+        ...(label ? { label } : {}),
+        ...(input !== null ? { inputCreditsPer1M: input } : {}),
+        ...(output !== null ? { outputCreditsPer1M: output } : {}),
+      };
     });
 }
 
@@ -518,6 +536,14 @@ export function toAgentDetail(row: Record<string, unknown>): AgentDetail {
   const cover = asString(row.cover) || asString(agent.cover);
   const agentModel = isPlainObject(row.agentModel) ? row.agentModel : undefined;
   const models = selectableModels(row.tokenRates);
+  // A custom build's setup waits only for the main credential of each active
+  // skill, which skillsmeta lists, so only those count as missing.
+  const activeKeys = summary.template.custom && isPlainObject(row.skillsmeta)
+    ? new Set(Object.values(row.skillsmeta).filter(isPlainObject)
+      .filter(meta => meta.requires_credentials === true)
+      .map(meta => asString(meta.credential_key))
+      .filter((key): key is string => Boolean(key)))
+    : null;
   const packs = Array.isArray(agent.extracreditpacks)
     ? agent.extracreditpacks.filter(isPlainObject).filter(pack => pack.enabled !== false)
     : [];
@@ -551,6 +577,7 @@ export function toAgentDetail(row: Record<string, unknown>): AgentDetail {
     // is listed as missing too.
     missingCredentials: credentials
       .filter(credential => credential.requiredMissing || (credential.oauth && !credential.optional && !credential.connected))
+      .filter(credential => !activeKeys || activeKeys.has(credential.key))
       .map(({ key, title, oauth }) => ({ key, title, oauth })),
     channels,
     scheduledTasks: summarizeTasks(row.scheduledskills),
@@ -597,6 +624,28 @@ export function formatAgentSummaryLines(agent: AgentSummary): string[] {
 
 const SHORTENED_NOTE = ' (its text is long; manage_agent_custom_skill history shows it in full)';
 
+function formatRate(credits: number): string {
+  return credits.toLocaleString('en-US', { maximumFractionDigits: 3 });
+}
+
+/** The chat and scheduled-task models, then every model the agent can switch to with its rates. */
+function formatModelsLine(agent: AgentDetail): string | null {
+  const choices = agent.selectableModels ?? [];
+  const nameOf = (slug: string | null) => (slug ? choices.find(model => model.slug === slug)?.label ?? slug : 'the default model');
+  const parts: string[] = [];
+  if (agent.models) parts.push(`chat ${nameOf(agent.models.chat)}, scheduled tasks ${nameOf(agent.models.cron)}.`);
+  if (choices.length > 0) {
+    const rates = choices.map(model => {
+      const name = model.label ? `${model.label} (${model.slug})` : model.slug;
+      return model.inputCreditsPer1M !== undefined && model.outputCreditsPer1M !== undefined
+        ? `${name} ${formatRate(model.inputCreditsPer1M)} and ${formatRate(model.outputCreditsPer1M)}`
+        : `${name} rate unknown`;
+    });
+    parts.push(`Models you can switch to, in credits per 1M input and output tokens: ${rates.join('; ')}.`);
+  }
+  return parts.length > 0 ? `**Models:** ${parts.join(' ')}` : null;
+}
+
 export function formatAgentDetail(agent: AgentDetail): string {
   const lines = formatAgentSummaryLines(agent);
   if (agent.pricing) {
@@ -604,6 +653,8 @@ export function formatAgentDetail(agent: AgentDetail): string {
     const { starter, pro } = agent.pricing;
     lines.push(`**Prices now:** Starter ${formatUsd(starter.priceUsd)} per 30 days with ${formatCredits(starter.monthlyCredits)} credits per month; Pro ${formatUsd(pro.priceUsd)} per 30 days with ${formatCredits(pro.monthlyCredits)} credits per month. A new plan or an upgrade uses these.`);
   }
+  const models = formatModelsLine(agent);
+  if (models) lines.push(models);
   if (agent.timezone !== undefined) {
     lines.push(`**Time zone:** ${agent.timezone?.trim() ? agent.timezone : 'UTC, the default'}. Scheduled tasks run in it.`);
   }

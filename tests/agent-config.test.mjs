@@ -1090,6 +1090,100 @@ test('set_agent_credentials writes typed values, reports the channel and never e
   });
 });
 
+test('set_agent_credentials names the credentials the setup still waits for after a write, at any status', async () => {
+  const json = '{"type":"service_account","project_id":"push-app"}';
+  const write = { agent_guid: AGENT, fields: [{ credential: 'firebase', field: 'accounts', value: [{ appname: 'Push App', serviceaccountjson: json }] }] };
+  const firebase = { accounts: [{ appname: 'Push App', serviceaccountjson: Buffer.from(json).toString('base64') }], optional: false, _connected: false, _filled: true, _required_missing: false, _schema: { title: 'Firebase' } };
+  const wiro = filled => ({ apikey: filled ? 'wiro-project-key-value' : '', optional: false, _connected: false, _filled: filled, _required_missing: !filled, _schema: { title: 'Wiro AI Models' } });
+  const afterWrite = overrides => fakeClient({
+    '/Credentials/Detail': credentialDetail,
+    '/UserAgent/CredentialUpsert': { result: true, errors: [], applied: 1 },
+    '/UserAgent/Detail': detail({ credentials: { firebase, wiro: wiro(false) }, communicationChannels: [], scheduledskills: [], ...overrides }),
+  });
+  const restartNote = 'The agent restarts shortly to load the new values.';
+  const missingNote = 'Setup is not finished: still missing Wiro AI Models. Set it with set_agent_credentials, then check with get_my_agent.';
+
+  // A running agent whose setup still waits for another credential.
+  await withClient(afterWrite({ status: 4, setuprequired: true }), async client => {
+    const result = await client.callTool({ name: 'set_agent_credentials', arguments: write });
+    assert.notEqual(result.isError, true, text(result));
+    assert.deepEqual(result.structuredContent.notes, [restartNote, missingNote]);
+    assert.match(text(result), /\*\*Firebase:\*\* set\n/);
+    assert.match(text(result), /- Setup is not finished: still missing Wiro AI Models\. Set it with set_agent_credentials, then check with get_my_agent\./);
+    assert.doesNotMatch(JSON.stringify(result), /service_account|wiro-project-key-value/);
+  });
+
+  // At status 6 the named note takes the place of the general one.
+  await withClient(afterWrite({ status: 6, setuprequired: true }), async client => {
+    const result = await client.callTool({ name: 'set_agent_credentials', arguments: write });
+    assert.deepEqual(result.structuredContent.notes, [missingNote]);
+    assert.doesNotMatch(text(result), /still needs setup before it can start/);
+  });
+
+  // Once nothing is missing, the result says nothing about setup.
+  await withClient(afterWrite({ status: 4, setuprequired: false, credentials: { firebase, wiro: wiro(true) } }), async client => {
+    const result = await client.callTool({ name: 'set_agent_credentials', arguments: write });
+    assert.notEqual(result.isError, true, text(result));
+    assert.deepEqual(result.structuredContent.notes, [restartNote]);
+    assert.doesNotMatch(text(result), /Setup is not finished/);
+    assert.doesNotMatch(JSON.stringify(result), /service_account|wiro-project-key-value/);
+  });
+
+  // At status 6 with no credential named, the general note stays.
+  await withClient(afterWrite({ status: 6, setuprequired: true, credentials: { firebase, wiro: wiro(true) } }), async client => {
+    const result = await client.callTool({ name: 'set_agent_credentials', arguments: write });
+    assert.deepEqual(result.structuredContent.notes, ['The agent still needs setup before it can start; get_my_agent shows what is missing.']);
+    assert.doesNotMatch(JSON.stringify(result), /service_account|wiro-project-key-value/);
+  });
+
+  // A sign-in that is still missing is connected, not set.
+  const metaAds = { appid: '', appsecret: '', systemusertoken: 'EAAG-system-user-token', optional: false, _connected: false, _filled: true, _required_missing: false, _schema: { title: 'Meta Ads', oauth_provider: { provider: 'meta' } } };
+  const signIn = fakeClient({
+    '/Credentials/Detail': credentialDetail,
+    '/UserAgent/CredentialUpsert': { result: true, errors: [], applied: 1 },
+    '/UserAgent/Detail': detail({ status: 6, setuprequired: true, credentials: { 'meta-ads': metaAds }, communicationChannels: [], scheduledskills: [] }),
+  });
+  await withClient(signIn, async client => {
+    const result = await client.callTool({
+      name: 'set_agent_credentials',
+      arguments: { agent_guid: AGENT, fields: [{ credential: 'meta-ads', field: 'systemusertoken', value: 'EAAG-system-user-token' }] },
+    });
+    assert.notEqual(result.isError, true, text(result));
+    assert.deepEqual(result.structuredContent.notes, ['Setup is not finished: still missing Meta Ads. Connect it with connect_agent_oauth, then check with get_my_agent.']);
+    assert.equal(result.structuredContent.nextAction?.tool, 'connect_agent_oauth');
+    assert.doesNotMatch(JSON.stringify(result), /EAAG-system-user-token/);
+  });
+});
+
+test('set_agent_credentials clears an optional field or a chat channel\'s field, never another required one', async () => {
+  const fake = fakeClient({
+    '/Credentials/Detail': credentialDetail,
+    '/UserAgent/CredentialUpsert': body => ({ result: true, errors: [], applied: body.fields.length }),
+    '/UserAgent/Detail': detail(),
+  });
+  await withClient(fake, async client => {
+    const { tools } = await client.listTools();
+    const value = tools.find(tool => tool.name === 'set_agent_credentials').inputSchema.properties.fields.items.properties.value;
+    assert.match(value.description, /An empty value clears an optional field\. A required field cannot be cleared, except on a chat channel, which then turns off\.$/);
+
+    const required = await client.callTool({
+      name: 'set_agent_credentials',
+      arguments: { agent_guid: AGENT, fields: [{ credential: 'google-play', field: 'serviceaccountjson', value: '' }] },
+    });
+    assert.equal(required.isError, true);
+    assert.match(text(required), /Service account JSON is required and cannot be cleared\./);
+    assert.equal(fake.calls.some(call => call.path === '/UserAgent/CredentialUpsert'), false);
+
+    const channel = await client.callTool({
+      name: 'set_agent_credentials',
+      arguments: { agent_guid: AGENT, fields: [{ credential: 'telegram', field: 'bottoken', value: '' }] },
+    });
+    assert.notEqual(channel.isError, true, text(channel));
+    const upsert = fake.calls.find(call => call.path === '/UserAgent/CredentialUpsert');
+    assert.deepEqual(upsert.body.fields, [{ credentialkey: 'telegram', fieldname: 'bottoken', fieldvalue: '' }]);
+  });
+});
+
 test('set_agent_credentials refuses bad fields before writing anything', async () => {
   const fake = fakeClient({ '/Credentials/Detail': credentialDetail });
   await withClient(fake, async client => {

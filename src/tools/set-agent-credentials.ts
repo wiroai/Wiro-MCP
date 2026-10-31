@@ -31,6 +31,7 @@ import {
   type CredentialMeta,
 } from '../utils/agent-config.js';
 import { fetchPublicFile, type RemoteFile } from '../utils/remote-file.js';
+import { toAgentDetail } from '../utils/user-agent.js';
 import { nextActionSchema } from './schemas.js';
 
 const credentialValueSchema = z.union([
@@ -253,6 +254,22 @@ function afterWriteNote(status: number | null): string {
   }
 }
 
+/** When the agent loads the values, and the credentials its setup still waits for, at any status. */
+function afterWriteNotes(status: number | null, missing: Array<{ title: string; oauth: boolean }>): string[] {
+  if (missing.length === 0) return [afterWriteNote(status)];
+  // A sign-in is completed with connect_agent_oauth, other credentials by saving their fields.
+  const fields = missing.filter(item => !item.oauth).map(item => item.title);
+  const signIns = missing.filter(item => item.oauth).map(item => item.title);
+  const steps = fields.length > 0 && signIns.length > 0
+    ? `Set ${keyList(fields)} with set_agent_credentials, connect ${keyList(signIns)} with connect_agent_oauth, then check with get_my_agent.`
+    : fields.length > 0
+      ? `Set ${fields.length > 1 ? 'them' : 'it'} with set_agent_credentials, then check with get_my_agent.`
+      : `Connect ${signIns.length > 1 ? 'them' : 'it'} with connect_agent_oauth, then check with get_my_agent.`;
+  const setup = `Setup is not finished: still missing ${keyList(missing.map(item => item.title))}. ${steps}`;
+  // At status 6 the general note says the same without the names.
+  return status === 6 ? [setup] : [afterWriteNote(status), setup];
+}
+
 function errorMessages(body: ApiEnvelope): string[] {
   return (body.errors ?? [])
     .map(error => (typeof error?.message === 'string' ? error.message.trim() : ''))
@@ -297,7 +314,7 @@ export function registerSetAgentCredentials(server: McpServer, client: WiroClien
         fields: z.array(z.object({
           credential: z.string().min(1).describe('Credential key, for example "telegram", "gmail" or "meta-ads".'),
           field: z.string().min(1).describe('Field key inside that credential, for example "bottoken". Use "authmethod" to pick a connection mode (for example "api_key").'),
-          value: credentialValueSchema.describe('The value. Lists are JSON arrays; a list of objects replaces the whole list. A key file takes the file\'s text; other files take a public http(s) URL. An empty value clears an optional field.'),
+          value: credentialValueSchema.describe('The value. Lists are JSON arrays; a list of objects replaces the whole list. A key file takes the file\'s text; other files take a public http(s) URL. An empty value clears an optional field. A required field cannot be cleared, except on a chat channel, which then turns off.'),
           parent_field: z.string().optional().describe('Only to change one entry of a list field: that list field\'s key, for example "groups".'),
           ordinal: z.number().int().min(0).optional().describe('With parent_field: the entry\'s position in the list, from 0.'),
         })).max(100).optional()
@@ -414,7 +431,10 @@ export function registerSetAgentCredentials(server: McpServer, client: WiroClien
         if (keys.includes('wiro')) {
           notes.push('Model runs started by this agent are billed to the wallet of the workspace that owns that project key.');
         }
-        notes.unshift(afterWriteNote(status));
+        // The credentials the setup still waits for, named as get_my_agent names them.
+        const setup = row ? toAgentDetail(row) : null;
+        const stillMissing = setup?.setupRequired ? setup.missingCredentials : [];
+        notes.unshift(...afterWriteNotes(status, stillMissing));
 
         // Connect is offered only once the mode it uses has every field saved, as
         // describe does; the agent read back after the write says which are.
