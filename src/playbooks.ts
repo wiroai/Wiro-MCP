@@ -576,7 +576,7 @@ Then offer the one fix that matches, with its price.
 
 ## Skills, custom skills and scheduled tasks
 
-- \`apply_agent_skills\` turns skills on or off. The plan price follows the skills: on a wallet plan, the difference for the rest of the period is charged at once, or credited to the wallet for use until the period ends, and \`get_account\` with \`recent_transactions\` shows that row. Quote first, then confirm as the quote's \`nextAction\` shows, with its \`idempotency_key\`. If the price changed, nothing changes and a new quote with a new key comes back.
+- \`apply_agent_skills\` turns skills on or off. The plan price follows the skills: on a wallet plan, the difference for the rest of the period is charged at once, or credited back to the balances that paid (coupon credit keeps its coupon's end date, and other credit lasts until the period ends), and \`get_account\` with \`recent_transactions\` shows that row. Quote first, then confirm as the quote's \`nextAction\` shows, with its \`idempotency_key\`. If the price changed, nothing changes and a new quote with a new key comes back.
 - The quote lists the skills a change adds because others depend on them. Name them before the yes: they can add to the price and need credentials of their own, and a skill that uses a Wiro project bills its model runs to the wallet of the workspace that owns the project.
 - Skills turned on later with \`apply_agent_skills\` still need their credentials and add no scheduled tasks. \`list_agent_skills\` without a name lists every skill with its title and price: look there for the service the user named. Turning a skill off keeps its credentials saved: to end the agent's access to a service, the user revokes it with that service, such as deleting the Gmail app password in their Google account. A required field cannot be left empty, but saving a new value replaces the old one.
 - \`manage_agent_custom_skill\` manages the agent's own instructions:
@@ -633,7 +633,7 @@ Everything on Wiro is paid from a prepaid wallet in USD; only agent plans can be
 | Workflow Agent | The chat tokens of each turn | After the turn |
 | Agent plan | The monthly price of the tier | At deploy or subscribe, then every 30 days until cancelled |
 | Agent upgrade to Pro | The price difference for the rest of the period | At the upgrade |
-| Agent skill change | The price difference for the rest of the period, charged, or credited for use until the period ends | When applied |
+| Agent skill change | The price difference for the rest of the period, charged, or credited back to the balances that paid | When applied |
 | Agent credit pack | The pack price | At purchase |
 | Agent messages and scheduled tasks | Agent credits (100 credits = $1), not the wallet | Each turn |
 
@@ -665,7 +665,7 @@ Where to see costs afterwards:
 
 - For usage-priced work, the estimate is the model price from \`get_model_schema\` times the number of runs or steps. When it shows the user's discount, take it off the part the deposits will pay. Say when the final cost depends on output length or duration, and get one yes on the total of a batch.
 - Known charges come as a quote first. After a clear yes, repeat the call as the quote's \`nextAction\` shows: \`confirm: true\` with \`confirm_charge_usd\` set to the approved amount, or for \`apply_agent_skills\` the quote's \`idempotency_key\`. If the price changed in between, nothing is charged and a new quote comes back: show the new amount and ask again.
-- Prorated amounts, such as an upgrade to Pro or a skill change, are estimates for the days left in the period. For an upgrade the quote also gives the maximum, and \`confirm_charge_usd\` is the most the user agreed to pay.
+- Prorated amounts, such as an upgrade to Pro or a skill change, are estimates for the time left in the period, with one day as the least a rise pays for. For an upgrade the quote also gives the maximum, and \`confirm_charge_usd\` is the most the user agreed to pay.
 - Cancelling an agent plan stops the next renewal. It does not refund the current period.
 
 Example, "what would 50 runs of my Thumbnail workflow cost?": \`get_workflow\` for the model steps and their settings, \`get_model_schema\` for each model's price at those settings, the sum times 50, and the cost of past runs from \`list_workflow_runs\` when it ran before. Run nothing to find out.

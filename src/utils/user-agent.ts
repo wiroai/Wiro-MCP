@@ -1055,13 +1055,22 @@ export function isKnownPaidOutcome(error: unknown): boolean {
 }
 
 /**
+ * Whether a result:false answer carries code 110. Its answer is the whole outcome:
+ * the change is reported as failed, what the agent and the wallet show is read by
+ * hand, and the call is not repeated.
+ */
+export function isKnownFailedChange(error: unknown): boolean {
+  return error instanceof ApiResultError && error.codes.some(code => Number(code) === 110);
+}
+
+/**
  * After a paid request was sent, whether it may still have gone through.
- * Only the known refusals, an answer that says what the wallet paid, and
- * client errors (other than a timeout or rate limit) settle it; any other
- * answer, a network failure or a server error leaves it open.
+ * Only the known refusals, an answer that says what the wallet paid or carries
+ * code 110, and client errors (other than a timeout or rate limit) settle it; any
+ * other answer, a network failure or a server error leaves it open.
  */
 export function outcomeUnknown(error: unknown): boolean {
-  if (error instanceof ApiResultError) return !isPreChargeRefusal(error) && !isKnownPaidOutcome(error);
+  if (error instanceof ApiResultError) return !isPreChargeRefusal(error) && !isKnownPaidOutcome(error) && !isKnownFailedChange(error);
   if (error instanceof WiroApiError) {
     return error.status >= 500 || error.status === 408 || error.status === 429;
   }

@@ -366,6 +366,7 @@ test('only known refusals count as nothing charged after a paid request', () => 
   assert.equal(outcomeUnknown(new ApiResultError('Only a team admin can perform this action on a team-owned agent.', [97], {})), false);
   assert.equal(outcomeUnknown(new ApiResultError('A skill update is already in progress for this agent.', [104], {})), false);
   assert.equal(isPreChargeRefusal(refused('Extra credit pack not available for this agent.')), true);
+  assert.equal(outcomeUnknown(new ApiResultError('This skill change failed, and it could not be undone.', [110], {})), false, 'its answer is the whole outcome');
   // Any other answer leaves the outcome open.
   assert.equal(outcomeUnknown(refused('Unexpected error')), true);
   assert.equal(outcomeUnknown(refused('Wallet was charged but the credit purchase is still pending. Retry with the same request id.')), true);
@@ -2123,6 +2124,18 @@ test('manage_agent_billing refuses packs below Pro and estimates a wallet upgrad
     const done = await call(client, 'manage_agent_billing', upgrade.structuredContent.nextAction.arguments);
     assert.equal(done.structuredContent.outcome, 'done');
     assert.equal(fake.called('/UserAgent/UpgradeTier').length, 1);
+  });
+});
+
+test('an upgrade in the last hours of a period quotes the one day it pays for, not nothing', async () => {
+  const upgradeable = { guid: 'ua-1', uuid: 'u1', status: 4, tier: 'starter', tiermultiplier: 10, monthlypriceusd: 12, monthlycredits: 1200, agent: { tiers: { starter: { priceUsd: 12, credits: 1200 }, pro: { priceUsd: 120, credits: 12000 } } }, subscription: { plan: 'agent', status: 'active', provider: 'prepaid', amount: 12, currentperiodend: Math.floor(Date.now() / 1000) + 11 * 3600, daysremaining: 1 } };
+  const fake = fakeClient({ '/UserAgent/Detail': { result: true, errors: [], useragents: [upgradeable] } });
+  await withClient(fake, async client => {
+    const quote = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'upgrade_to_pro' });
+    assert.equal(quote.structuredContent.quote.chargeNowUsd, 3.6, textOf(quote));
+    assert.equal(quote.structuredContent.quote.maxChargeUsd, 108);
+    assert.match(quote.structuredContent.message, /about \$3\.60 now .* for the rest of this period, at the one-day minimum\./);
+    assert.match(quote.structuredContent.message, /Wiro works out the exact amount from the real length of the billing period, and it is never more than \$108\.00/);
   });
 });
 

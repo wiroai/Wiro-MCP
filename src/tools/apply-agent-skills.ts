@@ -27,8 +27,9 @@ import {
   parseSkillChangeKey,
   planBilling,
   planSkillChanges,
-  proratedDaysLeft,
+  periodSecondsLeft,
   readUserAgent,
+  underOneDayLeft,
   restartNote,
   skillChangeDigest,
   skillPriceTag,
@@ -107,14 +108,39 @@ type SkillsApplyBody = ApiEnvelope & {
   tier?: string;
   stripeProrationApplied?: boolean;
   prepaidWalletDelta?: unknown;
+  prepaidCreditParts?: unknown;
   warnings?: unknown;
 };
 
 const UNCHANGED_RESTART = 'Nothing changed, so the agent does not restart.';
 
-// A credit for skills turned off goes to the wallet with an end date: it can be
-// spent until the plan's current period ends.
-const CREDIT_SPEND_BY = 'It can be spent until this period ends.';
+// A credit for skills turned off goes back to the balances that paid for the plan.
+// Which ones is known once it is applied (creditTerms).
+const CREDIT_TERMS = 'Coupon credit keeps its coupon\'s end date, and other credit lasts until this period ends.';
+
+function roundCents(usd: number): number {
+  return Math.round(usd * 100) / 100;
+}
+
+/**
+ * How long an applied credit lasts, from the parts Wiro says it split into. Coupon
+ * credit keeps the end date of the coupon that paid. What came back from a coupon
+ * that has ended since, from store revenue or from deposits lasts until the plan's
+ * current period ends. The two amounts add up to the credit, and parts that come
+ * to nothing say nothing.
+ */
+function creditTerms(parts: unknown): string {
+  if (!isPlainObject(parts)) return CREDIT_TERMS;
+  const coupon = toNumber(parts.couponUsd) ?? 0;
+  const others = (toNumber(parts.storeUsd) ?? 0) + (toNumber(parts.depositUsd) ?? 0);
+  const untilEnd = roundCents((toNumber(parts.couponUntilPeriodEndUsd) ?? 0) + others);
+  const keepsEnd = roundCents(roundCents(coupon + others) - untilEnd);
+  if (keepsEnd > 0 && untilEnd > 0) {
+    return `${formatUsd(keepsEnd)} of it went back as coupon credit and keeps its coupon's end date, and ${formatUsd(untilEnd)} lasts until this period ends.`;
+  }
+  if (keepsEnd > 0) return 'It went back as coupon credit and keeps its coupon\'s end date.';
+  return untilEnd > 0 ? 'It lasts until this period ends.' : '';
+}
 
 function difference(next: number | null, current: number | null): number | null {
   return next === null || current === null ? null : Math.round((next - current) * 100) / 100;
@@ -124,20 +150,21 @@ function difference(next: number | null, current: number | null): number | null 
  * A skill change prices the plan at today's prices for all its skills, so a
  * plan that started at other prices also changes for the skills it already
  * has, and so do its monthly credits. The agent's tiers carry today's prices
- * and credits for those skills. An agent without a plan has no price of its
- * own to move from, and a move to Pro prices the whole plan at today's Pro
- * prices, which the quote already shows.
+ * and credits for those skills. They are the base of the new price, not a price
+ * the plan reaches. An agent without an active plan cannot take the change yet,
+ * and a move to Pro prices the whole plan at today's Pro prices, which the quote
+ * already shows.
  */
 function todayPriceNote(row: Row, billing: PlanBilling, currentPrice: number | null, currentCredits: number | null, tierChange: string | undefined): string | null {
   if (tierChange) return null;
   const tier = asTier(row.tier);
   const tiers = toTierPricing(isPlainObject(row.agent) ? row.agent.tiers : undefined);
   const today = tier && tiers ? tiers[tier] : null;
-  if (billing.plan === 'none' || currentPrice === null || today === null || !difference(today.priceUsd, currentPrice)) return null;
-  const credits = currentCredits !== null && today.monthlyCredits !== currentCredits
-    ? `, and its monthly credits from ${currentCredits} to ${today.monthlyCredits}`
-    : '';
-  return `The change also moves the plan from its current ${formatUsd(currentPrice)} a month to ${formatUsd(today.priceUsd)} a month, today's ${tier === 'pro' ? 'Pro' : 'Starter'} price for the skills it already has${credits}.`;
+  if (billing.status !== 'active' || currentPrice === null || today === null || !difference(today.priceUsd, currentPrice)) return null;
+  const versus = currentCredits !== null && today.monthlyCredits !== currentCredits
+    ? ` with ${today.monthlyCredits} monthly credits, not its current ${formatUsd(currentPrice)} and ${currentCredits}`
+    : `, not its current ${formatUsd(currentPrice)}`;
+  return `Today's ${tier === 'pro' ? 'Pro' : 'Starter'} price for the skills this plan already has is ${formatUsd(today.priceUsd)} a month${versus}. A skill change counts from today's price, and the new price in this quote already includes that.`;
 }
 
 /**
@@ -176,20 +203,23 @@ function quoteBillingNote(billing: PlanBilling, delta: number | null, estimate: 
   }
   if (delta === null) {
     return billing.plan === 'prepaid'
-      ? `The difference for the rest of this period is taken from, or credited to, ${walletName(billing)} when the change is applied. A credit can be spent until this period ends.${after}`
+      ? `The difference for the rest of this period is taken from, or credited to, ${walletName(billing)} when the change is applied. ${CREDIT_TERMS}${after}`
       : `Any prorated difference appears on the next invoice.${after}`;
   }
   if (Math.abs(delta) < 0.005) return 'The monthly price does not change, so nothing is charged.';
   if (billing.plan === 'card') {
     return `Nothing is charged now. The card subscription is updated and the prorated difference appears on the next invoice.${after}`;
   }
-  // The days the estimate counts, so the amount adds up.
-  const daysLeft = billing.periodEnd !== null ? proratedDaysLeft(billing.periodEnd) : 0;
-  const days = daysLeft > 0 ? ` for the ${daysLeft} ${daysLeft === 1 ? 'day' : 'days'} left in this period` : ' for the rest of this period';
+  // The amount goes by the second, so the days are only a guide. A rise pays for at least a day.
+  const secondsLeft = billing.periodEnd !== null ? periodSecondsLeft(billing.periodEnd) : null;
+  const daysLeft = secondsLeft !== null ? Math.round(secondsLeft / 86400) : 0;
+  const days = daysLeft > 0 ? ` for the rest of this period (about ${daysLeft} ${daysLeft === 1 ? 'day' : 'days'})` : ' for the rest of this period';
   if (delta > 0) {
-    return `About ${formatUsd(estimate ?? 0)} is taken from ${walletName(billing)} now${days}.${after}`;
+    return `About ${formatUsd(estimate ?? delta)} is taken from ${walletName(billing)} now${underOneDayLeft(billing.periodEnd) ? ' for the rest of this period, at the one-day minimum' : days}.${after}`;
   }
-  return `About ${formatUsd(Math.abs(estimate ?? 0))} is credited back to ${walletName(billing)} now${days}. ${CREDIT_SPEND_BY}${after}`;
+  // A credit rounds down, so what is left of the period can come to nothing.
+  if (estimate === 0) return `Nothing is credited now: what is left of this period comes to under a cent.${after}`;
+  return `Up to about ${formatUsd(Math.abs(estimate ?? delta))} is credited back to ${walletName(billing)} now${days}. ${CREDIT_TERMS}${after}`;
 }
 
 function chargeNote(billing: PlanBilling, body: SkillsApplyBody): { note: string; charged: number | null } {
@@ -199,7 +229,8 @@ function chargeNote(billing: PlanBilling, body: SkillsApplyBody): { note: string
     return { charged, note: `${formatUsd(charged)} was taken from ${walletName(billing)} for the rest of this period.${cancelled}` };
   }
   if (charged !== null && charged < 0) {
-    return { charged, note: `${formatUsd(Math.abs(charged))} was credited to ${walletName(billing)}. ${CREDIT_SPEND_BY}${cancelled}` };
+    const terms = creditTerms(body.prepaidCreditParts);
+    return { charged, note: `${formatUsd(Math.abs(charged))} was credited to ${walletName(billing)}.${terms ? ` ${terms}` : ''}${cancelled}` };
   }
   if (body.stripeProrationApplied === true) {
     return { charged: null, note: `The card subscription was updated; any prorated difference appears on the next invoice.${cancelled}` };
@@ -274,8 +305,9 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
         + 'The key is tied to the quoted prices: if the price changed since the quote, nothing '
         + 'is applied and a new quote with a new key comes back. Reusing the key after a timeout '
         + 'is safe, the change is applied once. Billing: on a prepaid plan the monthly difference '
-        + 'for the days left in the period is taken from the wallet at once, or credited to it '
-        + 'when the price drops, and that credit can be spent until the period ends; on a card '
+        + 'for the time left in the period is taken from the wallet at once, or credited back to '
+        + 'the balances that paid when the price drops: coupon credit keeps its coupon\'s end date, '
+        + 'and other credit lasts until the period ends; on a card '
         + 'plan it is added to the next invoice. A running agent '
         + 'restarts once to load the skills. Newly enabled skills may still need credentials '
         + '(set_agent_credentials, connect_agent_oauth, bind_agent_project for a Wiro project) and do not create scheduled tasks '
@@ -418,7 +450,7 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
             const newCredits = toNumber(preview.totalMonthlyCredits);
             const delta = difference(newPrice, currentPrice);
             const estimate = billing.plan === 'prepaid' && billing.status === 'active' && delta !== null
-              ? estimateProratedUsd(delta, billing.periodEnd)
+              ? estimateProratedUsd(delta, billing.periodEnd) ?? delta
               : null;
             const note = quoteBillingNote(billing, delta, estimate, newPrice);
             const quoteKey = givenKey?.priceTag === priceTag ? key : newSkillChangeKey(digest, priceTag);
@@ -516,8 +548,13 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
           if (extra.signal.aborted) throw error;
           if (!outcomeUnknown(error)) {
             const failure = describeSkillsApplyError(error, billing.plan);
+            // Code 110 is the whole outcome: the next step reads the agent, and the call is not repeated.
+            const failedChange = failure.code === 110;
+            const nextAction = failedChange
+              ? { tool: 'get_my_agent', arguments: { agent_guid }, reason: 'Check the agent\'s skills and monthly price. Do not repeat the change.' }
+              : undefined;
             const text = [
-              '## Skill change not applied',
+              failedChange ? '## Skill change failed' : '## Skill change not applied',
               '',
               failure.message,
               failure.guidance ? `\n${failure.guidance}` : '',
@@ -530,7 +567,7 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
                 status: 'refused' as const,
                 idempotencyKey: key,
                 billing: { ...billingBase, note: failure.guidance || failure.message },
-                restart: UNCHANGED_RESTART,
+                restart: failedChange ? 'The agent does not restart for this change.' : UNCHANGED_RESTART,
                 error: {
                   code: failure.code,
                   message: failure.message,
@@ -539,6 +576,7 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
                   ...(failure.requiredUsd !== undefined ? { requiredUsd: failure.requiredUsd } : {}),
                   ...(failure.availableUsd !== undefined ? { availableUsd: failure.availableUsd } : {}),
                 },
+                ...(nextAction ? { nextAction } : {}),
               },
               isError: true,
             };
@@ -547,7 +585,9 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
           const message = errorText(error);
           if (sentEmpty) {
             const note = 'The agent\'s skills already match the request, so the change is in place. Do not repeat it. '
-              + 'What the earlier call with this idempotency_key charged is not shown here; get_agent_activity with kind usage shows it.';
+              + (billing.plan === 'prepaid'
+                ? `What the earlier call with this idempotency_key took from, or credited to, ${walletName(billing)} is not shown here; get_account with recent_transactions shows it.`
+                : 'Any price difference follows the plan\'s usual billing.');
             return {
               content: [{ type: 'text' as const, text: `## No change needed\n\n${note}` }],
               structuredContent: {
@@ -564,7 +604,7 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
           // before anything is reported.
           const holds = await changeHolds(client, agent_guid, plan.requested, tierChange, extra.signal);
           if (holds === true) {
-            const note = `The agent's skills now match the request, so the change is in place. Do not repeat it. ${billing.plan === 'prepaid' && billing.status === 'active' ? `The difference for the rest of this period was probably taken from, or credited to, ${walletName(billing)}, and a credit can be spent until this period ends; get_agent_activity with kind usage and get_account show it.` : 'Any price difference follows the plan\'s usual billing.'}`;
+            const note = `The agent's skills now match the request, so the change is in place. Do not repeat it. ${billing.plan === 'prepaid' && billing.status === 'active' ? `The difference for the rest of this period was probably taken from, or credited to, ${walletName(billing)}; get_account with recent_transactions shows it.` : 'Any price difference follows the plan\'s usual billing.'}`;
             return {
               content: [{ type: 'text' as const, text: [
                 '## Skills updated',

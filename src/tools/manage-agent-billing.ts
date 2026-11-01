@@ -13,7 +13,7 @@ import {
   unixToIso,
   type ApiEnvelope,
 } from '../utils/api.js';
-import { workspaceHint } from '../utils/agent-config.js';
+import { estimateProratedUsd, underOneDayLeft, workspaceHint } from '../utils/agent-config.js';
 import { DEFAULT_WAIT_SECONDS } from '../utils/poll.js';
 import { isPlainTeamMember, teamAgentBillingRefused } from '../utils/workspace.js';
 import {
@@ -394,11 +394,8 @@ function planFor(
       const ending = `The plan is cancelled, so it ends about a day after ${periodEnd} and does not renew at the Pro price; this charge covers only the days left. To keep the plan, undo the cancellation first with action renew.`;
       const current = agent.monthlyPriceUsd ?? agent.subscription?.amountUsd ?? 0;
       const periodEndSeconds = toNumber(raw?.currentperiodend);
-      const daysLeft = periodEndSeconds !== null
-        ? Math.max(0, Math.round((periodEndSeconds - Date.now() / 1000) / 86_400))
-        : 30;
       const maxCharge = roundUsd(Math.max(0, pro.priceUsd - current));
-      const estimate = roundUsd(Math.max(0, ((pro.priceUsd - current) / 30) * daysLeft));
+      const estimate = Math.min(maxCharge, Math.max(0, estimateProratedUsd(pro.priceUsd - current, periodEndSeconds) ?? maxCharge));
       return {
         outcome: 'quote',
         quote: {
@@ -410,7 +407,7 @@ function planFor(
           paidFrom,
           tier: 'pro',
         },
-        message: `Upgrade to Pro: about ${formatUsd(estimate)} now from ${wallet} for the ${daysLeft} days left in this period. `
+        message: `Upgrade to Pro: about ${formatUsd(estimate)} now from ${wallet} for the rest of this period${estimate > 0 && underOneDayLeft(periodEndSeconds) ? ', at the one-day minimum' : ''}. `
           + `Wiro works out the exact amount from the real length of the billing period, and it is never more than ${formatUsd(maxCharge)}, so that is the amount to approve. `
           + (cancelled ? `${ending} ` : `From the next renewal the plan costs ${formatUsd(pro.priceUsd)} every 30 days. `)
           + `The monthly pool rises to ${formatCredits(pro.monthlyCredits)} credits at once and the agent restarts. To go back to Starter later, cancel, let the plan end, then subscribe to Starter.`,

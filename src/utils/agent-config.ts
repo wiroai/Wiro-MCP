@@ -562,23 +562,44 @@ export function planBilling(row: Row): PlanBilling {
   };
 }
 
-/** The whole days a prepaid plan's change is charged for: what is left of the period, to the nearest day. */
-export function proratedDaysLeft(periodEndUnix: number, nowMs = Date.now()): number {
-  return Math.max(0, Math.round((periodEndUnix - nowMs / 1000) / 86400));
+const DAY_SECONDS = 86400;
+const WALLET_PLAN_PERIOD_SECONDS = 30 * DAY_SECONDS;
+
+/** The time left in a period, in seconds. */
+export function periodSecondsLeft(periodEndUnix: number, nowMs = Date.now()): number {
+  return Math.max(0, periodEndUnix - nowMs / 1000);
+}
+
+/** Whether a rise now costs the one-day minimum: under a day is left of the period, or none. */
+export function underOneDayLeft(periodEndUnix: number | null, nowMs = Date.now()): boolean {
+  return periodEndUnix !== null && periodEndUnix - Math.floor(nowMs / 1000) < DAY_SECONDS;
+}
+
+/** Drops float noise only, so it cannot move a whole cent. */
+function withoutFloatNoise(usd: number): number {
+  return Math.round(usd * 1e9) / 1e9;
 }
 
 /**
- * Wiro charges a prepaid plan the monthly difference for the days left in the
- * period. The estimate assumes a 30-day period.
+ * Wiro charges a prepaid plan the monthly difference for the time left in the
+ * period, by the second: a charge rounds up to the cent, a credit down, and a
+ * rise pays for at least one day. This is that sum. The agent's row does not say
+ * when the period started, so the period is taken as 30 days, the length of a plan
+ * paid from the wallet.
  */
 export function estimateProratedUsd(
   deltaUsd: number,
   periodEndUnix: number | null,
   nowMs = Date.now(),
-  periodDays = 30,
+  periodSeconds = WALLET_PLAN_PERIOD_SECONDS,
 ): number | null {
   if (periodEndUnix === null || !Number.isFinite(deltaUsd)) return null;
-  return Math.round((deltaUsd / periodDays) * proratedDaysLeft(periodEndUnix, nowMs) * 100) / 100;
+  const total = Math.max(1, periodSeconds);
+  const left = Math.min(total, Math.max(0, periodEndUnix - Math.floor(nowMs / 1000)));
+  if (deltaUsd > 0) {
+    return Math.ceil(withoutFloatNoise((deltaUsd * Math.min(total, Math.max(DAY_SECONDS, left))) / total) * 100 - 1e-6) / 100;
+  }
+  return -Math.floor(withoutFloatNoise((Math.abs(deltaUsd) * left) / total) * 100 + 1e-6) / 100 || 0;
 }
 
 export interface SkillsApplyFailure {
@@ -614,7 +635,7 @@ export function describeSkillsApplyError(error: unknown, plan?: PlanBilling['pla
   const message = error instanceof Error ? error.message : String(error);
   const body = error instanceof ApiResultError ? error.body : {};
   const codes = error instanceof ApiResultError ? error.codes.map(code => toNumber(code)) : [];
-  const code = codes.find(candidate => candidate !== null && candidate >= 95 && candidate <= 109) ?? null;
+  const code = codes.find(candidate => candidate !== null && candidate >= 95 && candidate <= 110) ?? null;
   const base = { code, message, retrySameKey: false };
   switch (code) {
     case 101: {
@@ -678,6 +699,11 @@ export function describeSkillsApplyError(error: unknown, plan?: PlanBilling['pla
       return {
         ...base,
         guidance: skillPaymentGuidance(plan),
+      };
+    case 110:
+      return {
+        ...base,
+        guidance: 'Do not repeat this change. Check the agent\'s skills and monthly price with get_my_agent and the wallet with get_account (recent_transactions) before changing anything, and contact Wiro support if they are not what you expect.',
       };
     case 95:
     case 96:
