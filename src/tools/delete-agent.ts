@@ -78,6 +78,8 @@ export function registerDeleteAgent(server: McpServer, client: WiroClient): void
               arguments: { agent_guid: guid, action: 'cancel' },
               reason: 'Cancel the plan before deleting the agent.',
             };
+          } else if (subscription?.nextprovider === 'prepaid') {
+            blockers.push(`The plan is billed by card and moves to wallet billing after ${agent.subscription?.periodEndsAt ?? 'this period'}, when it renews from the wallet. Once it is billed from the wallet, cancel it with manage_agent_billing action cancel, then delete the agent; the rest of the paid period is not refunded.`);
           } else {
             blockers.push(`The plan is billed by card and still active. It has to end first; cancel it from the dashboard (${agent.dashboardUrl}) and delete the agent after the period ends.`);
           }

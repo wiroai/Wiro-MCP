@@ -5,7 +5,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { AjvJsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/ajv';
 import { WiroApiError } from '../dist/client.js';
 import { createMcpServer } from '../dist/server.js';
-import { extractMediaUrls, extractReplyLinks, newSessionKey, sessionKeyProblem, SESSION_NAME_RULE } from '../dist/utils/agent-message.js';
+import { extractMediaUrls, extractReplyLinks, isStudioSessionName, newSessionKey, sessionKeyProblem, sessionNameSuggestion, SESSION_NAME_RULE } from '../dist/utils/agent-message.js';
 import { attachmentFileName, buildMessageForm } from '../dist/utils/agent-targets.js';
 import { createMediaContent, isWiroHostedFile, isWiroHostedUrl } from '../dist/utils/media.js';
 
@@ -534,6 +534,18 @@ test('Studio wallet and availability refusals say what to do without repeating c
   });
 });
 
+test('a Studio or Workflow Agent wallet that could not be read is not called a low balance', async () => {
+  for (const [agent, route] of [['studio', '/Studio/Message/Send'], ['workflow-agent', '/StudioWorkflow/Message/Send']]) {
+    const fake = fakeClient({ [route]: { result: false, errors: [{ code: 0, message: 'Could not retrieve wallet balance' }] } });
+    await withClient(fake, async client => {
+      const result = await client.callTool({ name: 'send_agent_message', arguments: { agent, message: 'hi' } });
+      assert.equal(result.isError, true);
+      assert.match(textOf(result), /Could not retrieve wallet balance\n\nWiro could not read the balance just now\. That is not a low balance, and nothing was charged\./);
+      assert.doesNotMatch(textOf(result), /Funds are added|\$0\.00|at least/);
+    });
+  }
+});
+
 test('an invalid model is answered with the models that can be chosen', async () => {
   const fake = fakeClient({
     '/StudioWorkflow/Message/Send': {
@@ -586,10 +598,17 @@ test('inputs that do not apply to an agent are refused before anything is sent',
 
     const reserved = await client.callTool({
       name: 'send_agent_message',
-      arguments: { agent: 'studio', message: 'hi', session: 'cron:daily' },
+      arguments: { agent: 'agent-guid-1', message: 'hi', session: 'cron:daily' },
     });
     assert.equal(reserved.isError, true);
     assert.match(textOf(reserved), /reserved/);
+
+    const reservedHere = await client.callTool({
+      name: 'send_agent_message',
+      arguments: { agent: 'workflow-agent', message: 'hi', session: 'a:cron:b' },
+    });
+    assert.equal(reservedHere.isError, true);
+    assert.match(textOf(reservedHere), /reserved/);
 
     const badSession = await client.callTool({
       name: 'send_agent_message',
@@ -2298,7 +2317,7 @@ test('Studio run collection reads a small page, 100 runs only when the turn star
   });
 });
 
-test('Studio and Workflow Agent session names sent from here stay within 100 characters', async () => {
+test('a message keeps to each agent\'s own length: 100 characters for the Workflow Agent, 128 for Studio', async () => {
   const fake = fakeClient({
     '/StudioWorkflow/Message/Send': { result: true, errors: [], messageguid: 'wf-s', status: 'agent_queue' },
     '/Studio/Message/Send': { result: true, errors: [], messageguid: 'st-s', status: 'agent_queue' },
@@ -2309,7 +2328,8 @@ test('Studio and Workflow Agent session names sent from here stay within 100 cha
       arguments: { agent: 'workflow-agent', message: 'hi', session: 'a'.repeat(101), wait_seconds: 0 },
     });
     assert.equal(tooLong.isError, true);
-    assert.match(textOf(tooLong), /at most 100 characters/);
+    assert.ok(textOf(tooLong).includes(SESSION_NAME_RULE), textOf(tooLong));
+    assert.ok(textOf(tooLong).includes(`"${'a'.repeat(100)}"`), textOf(tooLong));
     assert.equal(fake.calls.length, 0);
 
     const longest = await client.callTool({
@@ -2320,15 +2340,15 @@ test('Studio and Workflow Agent session names sent from here stay within 100 cha
 
     const studioTooLong = await client.callTool({
       name: 'send_agent_message',
-      arguments: { agent: 'studio', message: 'hi', session: 'b'.repeat(101), wait_seconds: 0 },
+      arguments: { agent: 'studio', message: 'hi', session: 'b'.repeat(129), wait_seconds: 0 },
     });
     assert.equal(studioTooLong.isError, true);
-    assert.match(textOf(studioTooLong), /at most 100 characters/);
+    assert.ok(textOf(studioTooLong).includes(SESSION_NAME_RULE), textOf(studioTooLong));
     assert.equal(fake.callsTo('/Studio/Message/Send').length, 0);
 
     const studio = await client.callTool({
       name: 'send_agent_message',
-      arguments: { agent: 'studio', message: 'hi', session: 'b'.repeat(100), wait_seconds: 0 },
+      arguments: { agent: 'studio', message: 'hi', session: 'b'.repeat(128), wait_seconds: 0 },
     });
     assert.notEqual(studio.isError, true, textOf(studio));
   });
@@ -2344,13 +2364,12 @@ test('a session name over 128 characters gets the limit of the path it is on', a
       });
       assert.equal(refused.isError, true);
       assert.ok(textOf(refused).includes(SESSION_NAME_RULE), textOf(refused));
-      assert.equal(textOf(refused).includes('128'), false, textOf(refused));
     }
     const studio = await client.callTool({
       name: 'send_agent_message',
       arguments: { agent: 'studio', message: 'hi', session: 'C'.repeat(129), wait_seconds: 0 },
     });
-    assert.ok(textOf(studio).includes(`"${'c'.repeat(100)}"`), textOf(studio));
+    assert.ok(textOf(studio).includes(`"${'C'.repeat(128)}"`), textOf(studio));
 
     const deployed = await client.callTool({
       name: 'send_agent_message',
@@ -2401,7 +2420,7 @@ test('Workflow Agent sessions longer than 100 characters that already exist can 
       arguments: { agent: 'workflow-agent', message: 'hi', session: long, wait_seconds: 0 },
     });
     assert.equal(send.isError, true);
-    assert.match(textOf(send), /at most 100 characters/);
+    assert.ok(textOf(send).includes(SESSION_NAME_RULE), textOf(send));
     for (const session of ['c'.repeat(129), 'has spaces']) {
       const refused = await client.callTool({ name: 'get_agent_conversation', arguments: { agent: 'workflow-agent', session } });
       assert.equal(refused.isError, true, session);
@@ -2870,11 +2889,13 @@ test('Studio refuses a new message under a name outside the session rule, before
   });
   await withClient(fake, async client => {
     for (const [session, suggestion] of [
-      ['My Test Mug', 'my-test-mug'],
-      ['My-Test-Cup', 'my-test-cup'],
-      ['Mug', 'mug'],
+      ['My Test Mug', 'My-Test-Mug'],
       ['my mug', 'my-mug'],
-      ['with:colon', 'with-colon'],
+      ['draft-r2', 'draft-v2'],
+      ['DRAFT-R7', 'DRAFT-v7'],
+      ['-R1', 'R1'],
+      ['şema', 'ema'],
+      ['a~b', 'a-b'],
     ]) {
       const refused = await client.callTool({
         name: 'send_agent_message',
@@ -2883,12 +2904,14 @@ test('Studio refuses a new message under a name outside the session rule, before
       assert.equal(refused.isError, true, session);
       const text = textOf(refused);
       assert.ok(text.includes(SESSION_NAME_RULE), text);
-      assert.ok(text.includes('^[a-z0-9._-]{1,100}$'), text);
+      assert.ok(text.includes('^[A-Za-z0-9._:-]{1,128}$'), text);
+      assert.match(text, /can still be read with get_agent_conversation and deleted with delete_agent_session, but not sent to: to go on with it, start a new session and say in the first message where it left off\./);
+      assert.doesNotMatch(text, /rename/i, 'renaming is no tool here');
       assert.ok(text.includes(`"${suggestion}"`), text);
     }
     assert.equal(fake.callsTo('/Studio/Message/Send').length, 0);
 
-    for (const session of ['default', 'bakery-banners', 'mcp-test_2.final', 'session-mh2x8a1b2c']) {
+    for (const session of ['default', 'bakery-banners', 'mcp-test_2.final', 'session-mh2x8a1b2c', 'Mug', 'My-Test-Cup', 'with:colon']) {
       const sent = await client.callTool({
         name: 'send_agent_message',
         arguments: { agent: 'studio', message: 'One image', session, wait_seconds: 0 },
@@ -2915,6 +2938,113 @@ test('Studio refuses a new message under a name outside the session rule, before
     });
     assert.equal(spaced.isError, true);
     assert.equal(textOf(spaced).includes(SESSION_NAME_RULE), true, textOf(spaced));
+  });
+});
+
+// What each agent's own check answers for a name sent from a project key: Studio's
+// and the Workflow Agent's, read off their rules. The Workflow Agent counts a mark of
+// its own against the 128, so it takes names up to 119 characters from this key.
+const SESSION_NAME_TABLE = [
+  ['capitals', 'MCP-Test-T2-probe', true, true],
+  ['a colon', 'project:banners', true, true],
+  ['every allowed character', 'a.b_c:d-E9', true, true],
+  ['"default"', 'default', true, true],
+  ['100 characters', 'n'.repeat(100), true, true],
+  ['119 characters', 'n'.repeat(119), true, true],
+  ['120 characters', 'n'.repeat(120), true, false],
+  ['128 characters', 'n'.repeat(128), true, false],
+  ['129 characters', 'n'.repeat(129), false, false],
+  ['-r2 at the end', 'draft-r2', false, true],
+  ['-R2 at the end', 'draft-R2', false, true],
+  ['only -R1', '-R1', false, true],
+  ['-r with no number', 'draft-r', true, true],
+  ['-r alone', '-r', true, true],
+  ['-r2 inside', 'a-r2b', true, true],
+  ['a space', 'My Test Mug', false, false],
+  ['a tab', 'a\tb', false, false],
+  ['a non-ASCII letter', 'şema', false, false],
+  ['a tilde', 'a~b', false, false],
+];
+
+test('the session name check for each agent gives the answer its own rule gives', async () => {
+  const fake = fakeClient({
+    '/Studio/Message/Send': { result: true, errors: [], messageguid: 'st-t', status: 'agent_queue' },
+    '/StudioWorkflow/Message/Send': { result: true, errors: [], messageguid: 'wf-t', status: 'agent_queue' },
+  });
+  await withClient(fake, async client => {
+    for (const [label, session, studio, workflow] of SESSION_NAME_TABLE) {
+      for (const [agent, path, takes, limit] of [
+        ['studio', '/Studio/Message/Send', studio, 128],
+        ['workflow-agent', '/StudioWorkflow/Message/Send', workflow, 100],
+      ]) {
+        const before = fake.callsTo(path).length;
+        const result = await client.callTool({ name: 'send_agent_message', arguments: { agent, message: 'hi', session, wait_seconds: 0 } });
+        const sent = fake.callsTo(path).length > before;
+        // The check may keep to a shorter name, and never lets through one the agent refuses.
+        const expected = takes && session.length <= limit;
+        assert.equal(sent, expected, `${agent}, ${label}: ${textOf(result)}`);
+        if (sent) assert.equal(fake.callsTo(path).at(-1).body.sessionkey, session, label);
+        else assert.equal(result.isError, true, label);
+      }
+      assert.equal(isStudioSessionName(session), studio, label);
+    }
+  });
+});
+
+test('a name the session rule refuses is never what the refusal suggests', async () => {
+  const followsRule = name => /^[A-Za-z0-9._:-]{1,128}$/.test(name) && !/-r\d+$/i.test(name);
+  const names = [
+    ...SESSION_NAME_TABLE.map(([, session]) => session),
+    'draft-r2', 'draft-R22', 'x-r2-', 'x y-r9', '-r9', '--r9', 'a-r2-r3', '~', '  ', 'şğü', '日本語', 'default!', 'DEFAULT ', 'x'.repeat(125) + '-r22', 'x'.repeat(126) + '-r2',
+  ];
+  for (const name of names) {
+    for (const max of [128, 100]) {
+      const suggestion = sessionNameSuggestion(name, max);
+      assert.ok(followsRule(suggestion), `${JSON.stringify(name)} gives ${JSON.stringify(suggestion)}`);
+      assert.ok(suggestion.length <= max, suggestion);
+      assert.notEqual(suggestion.toLowerCase(), 'default', name);
+    }
+  }
+  assert.equal(sessionNameSuggestion('x'.repeat(125) + '-r22'), 'x'.repeat(125) + '-v2');
+  assert.match(sessionNameSuggestion('日本語'), /^mcp-[0-9a-f]{8}$/);
+});
+
+test('Studio\'s own answer about a name in other capitals is passed on as it is', async () => {
+  const answer = 'You already have a Studio session with this name in different capitals. Use its exact name, or another name. Nothing was sent or charged.';
+  const fake = fakeClient({
+    '/Studio/Message/Send': { result: false, errors: [{ code: 0, message: answer }] },
+  });
+  await withClient(fake, async client => {
+    const result = await client.callTool({ name: 'send_agent_message', arguments: { agent: 'studio', message: 'hi', session: 'Bakery-Banners', wait_seconds: 0 } });
+    assert.equal(fake.callsTo('/Studio/Message/Send').length, 1, 'the local check leaves this to Studio');
+    assert.equal(fake.callsTo('/Studio/Message/Send')[0].body.sessionkey, 'Bakery-Banners');
+    assert.equal(result.isError, true);
+    assert.equal(textOf(result), `## Error\n\n${answer}`);
+  });
+});
+
+test('Studio names that look like a deployed agent\'s own sessions are Studio\'s to answer, and stay readable', async () => {
+  const sessionNames = ['cron:daily', 'voice-prep', 'cs-cron-weekly', 'wiro:api'];
+  const fake = fakeClient({
+    '/Studio/Message/Send': { result: true, errors: [], messageguid: 'st-r', status: 'agent_queue' },
+    '/Studio/Message/Sessions': { result: true, errors: [], data: { sessions: sessionNames.map(sessionkey => ({ sessionkey, messagecount: '1', updatedat: '1700000000' })) } },
+    '/Studio/Message/History': { result: true, errors: [], data: { hasmore: false, messages: [] } },
+    '/UserAgent/Message/Sessions': { result: true, errors: [], data: { sessions: sessionNames.map(sessionkey => ({ sessionkey, messagecount: '1', updatedat: '1700000000' })) } },
+  });
+  await withClient(fake, async client => {
+    for (const session of sessionNames) {
+      const sent = await client.callTool({ name: 'send_agent_message', arguments: { agent: 'studio', message: 'hi', session, wait_seconds: 0 } });
+      assert.notEqual(sent.isError, true, textOf(sent));
+      const read = await client.callTool({ name: 'get_agent_conversation', arguments: { agent: 'studio', session } });
+      assert.notEqual(read.isError, true, textOf(read));
+      const onAgent = await client.callTool({ name: 'send_agent_message', arguments: { agent: 'agent-guid-1', message: 'hi', session, wait_seconds: 0 } });
+      assert.equal(onAgent.isError, true, session);
+      assert.match(textOf(onAgent), /reserved/);
+    }
+    const listed = await client.callTool({ name: 'get_agent_conversation', arguments: { agent: 'studio' } });
+    assert.deepEqual(listed.structuredContent.sessions.map(row => row.session), sessionNames);
+    const onAgent = await client.callTool({ name: 'get_agent_conversation', arguments: { agent: 'agent-guid-1' } });
+    assert.deepEqual(onAgent.structuredContent.sessions, []);
   });
 });
 

@@ -165,6 +165,8 @@ export function walletBalance(wallet: Record<string, unknown>): WalletBalance {
 export interface PayingWallet {
   workspace: ConnectedWorkspace;
   balanceUsd: number | null;
+  /** The part of the balance that is store revenue, when the wallet could be read. */
+  storeRevenueUsd?: number;
 }
 
 /**
@@ -176,7 +178,12 @@ export async function readPayingWallet(client: WiroClient, signal?: AbortSignal)
     const wallets = (await client.post<WalletListResponse>('/Wallet/List', {}, signal)).wallet;
     const wallet = primaryWallet(Array.isArray(wallets) ? wallets : []);
     if (!wallet) return { workspace: { kind: 'unknown' }, balanceUsd: null };
-    return { workspace: await workspaceOfWallet(client, wallet, signal), balanceUsd: walletBalance(wallet).totalUsd };
+    const balance = walletBalance(wallet);
+    return {
+      workspace: await workspaceOfWallet(client, wallet, signal),
+      balanceUsd: balance.totalUsd,
+      storeRevenueUsd: balance.storeRevenueUsd,
+    };
   } catch (error) {
     if (signal?.aborted) throw error;
     return { workspace: { kind: 'unknown' }, balanceUsd: null };

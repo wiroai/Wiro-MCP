@@ -518,12 +518,18 @@ test('the README continuation example sends the session_id with the task token',
 test('the session name rule reads the same in the playbooks and the tool text', async () => {
   for (const topic of ['workflow-agent', 'studio', 'agents']) {
     assert.ok(PLAYBOOKS[topic].includes(SESSION_NAME_RULE), topic);
-    assert.doesNotMatch(PLAYBOOKS[topic], /Session names use letters|use only letters, digits/, topic);
+    assert.doesNotMatch(PLAYBOOKS[topic], /lowercase letters|use only letters, digits/, topic);
   }
+  assert.match(SESSION_NAME_RULE, /letters, digits, dots, dashes, underscores and colons, up to 128 characters \(100 for the Workflow Agent\), and cannot end in "-r" followed by a number\./);
+  const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8').replace(/\s+/g, ' ');
+  assert.ok(readme.includes(SESSION_NAME_RULE), 'the README states it the same way');
+  assert.match(PLAYBOOKS.studio, /A session under another name can still be read and deleted: to go on with it, start a new session and say in the first message where it left off\./);
+  assert.match(PLAYBOOKS.studio, /A new name that differs only in capitals from a session the user has is refused too: use that session's exact name, or another name\./);
   await withClient(async client => {
     const { tools } = await client.listTools();
     const session = tools.find(tool => tool.name === 'send_agent_message').inputSchema.properties.session;
     assert.ok(session.description.includes(SESSION_NAME_RULE));
+    assert.match(session.description, /a session it has under another name can be read and deleted, not sent to\./);
   });
 });
 
@@ -543,4 +549,19 @@ test('the playbooks say what a deploy quote holds and how to read wallet rows', 
   assert.match(agents, /`get_my_agent` lists them only on an active Pro plan/);
   assert.match(agents, /A required field cannot be left empty, but saving a new value replaces the old one\./);
   assert.match(billing, /`get_account` with `recent_transactions` lists the wallet's latest rows/);
+});
+
+test('the playbooks keep a wallet that could not be read apart from a low balance', () => {
+  const { agents, billing } = PLAYBOOKS;
+  assert.match(billing, /An answer that the balance could not be read is no such refusal: nothing was charged, no funds need adding, and trying again is fine\./);
+  assert.match(agents, /An answer that the balance could not be read also creates and charges nothing, and needs no funds: confirm the same quote again in a moment\./);
+});
+
+test('the agents playbook says when pack credits end', () => {
+  assert.match(PLAYBOOKS.agents, /Pack credits are added at once, are used after the monthly pool, do not reset each month and end 6 months \(180 days\) after purchase;/);
+});
+
+test('the agents playbook says what an upgrade does at each renewal, not when its credits arrive', () => {
+  assert.match(PLAYBOOKS.agents, /renewals charge the Pro price and refill the Pro credit pool/);
+  assert.doesNotMatch(PLAYBOOKS.agents, /pool applies at once/);
 });

@@ -14,7 +14,7 @@ import {
   type ApiEnvelope,
 } from './api.js';
 import { oneLine, quotedSpan } from './quoted-text.js';
-import { credentialKeysSetupWaitsFor, planEndsWithPeriod, WIRO_PROJECT_CREDENTIAL } from './user-agent.js';
+import { credentialKeysSetupWaitsFor, isWalletNotRead, planEndsWithPeriod, WALLET_NOT_READ_NOTE, WIRO_PROJECT_CREDENTIAL } from './user-agent.js';
 
 // Helpers for configuring a deployed agent: its registry skills, credentials,
 // sign-in connections and custom skills. The pure functions mirror the server
@@ -510,10 +510,15 @@ function cents(value: number | null): string {
   return value === null || !Number.isFinite(value) ? 'none' : String(Math.round(value * 100));
 }
 
-/** Fingerprint of the monthly price before and after a change, as it was quoted. */
-export function skillPriceTag(currentUsd: number | null, newUsd: number | null): string {
+/**
+ * Fingerprint of what a quoted charge rests on: the monthly price before and after
+ * a change and, for a plan paid from the wallet, the period it is charged in. A
+ * renewal keeps the prices and starts a new period, which changes the charge.
+ */
+export function skillPriceTag(currentUsd: number | null, newUsd: number | null, periodEndUnix: number | null = null): string {
+  const prices = `${cents(currentUsd)}:${cents(newUsd)}`;
   return crypto.createHash('sha256')
-    .update(`${cents(currentUsd)}:${cents(newUsd)}`)
+    .update(periodEndUnix === null ? prices : `${prices}:${periodEndUnix}`)
     .digest('hex')
     .slice(0, 8);
 }
@@ -545,20 +550,24 @@ export interface PlanBilling {
   wallet: 'team' | 'personal';
   /** true: the plan ends with this period; false: it renews; null: not known, for a card plan without its card state. */
   cancelAtPeriodEnd: boolean | null;
+  /** A card plan that moves to wallet billing when this period ends. */
+  switchingToWallet: boolean;
 }
 
 export function planBilling(row: Row): PlanBilling {
   const wallet = asString(row.teamguid) ? 'team' : 'personal';
   const subscription = isPlainObject(row.subscription) ? row.subscription : null;
   if (!subscription) {
-    return { plan: 'none', status: null, periodEnd: null, wallet, cancelAtPeriodEnd: false };
+    return { plan: 'none', status: null, periodEnd: null, wallet, cancelAtPeriodEnd: false, switchingToWallet: false };
   }
+  const plan = asString(subscription.provider) === 'prepaid' ? 'prepaid' : 'card';
   return {
-    plan: asString(subscription.provider) === 'prepaid' ? 'prepaid' : 'card',
+    plan,
     status: asString(subscription.status) ?? null,
     periodEnd: toNumber(subscription.currentperiodend),
     wallet,
     cancelAtPeriodEnd: planEndsWithPeriod(subscription, row.stripecancelatperiodend),
+    switchingToWallet: plan === 'card' && subscription.nextprovider === 'prepaid',
   };
 }
 
@@ -672,7 +681,7 @@ export function describeSkillsApplyError(error: unknown, plan?: PlanBilling['pla
       return {
         ...base,
         retrySameKey: true,
-        guidance: 'Another skill change for this agent is still running. Wait a few seconds, then repeat the call with the same idempotency_key.',
+        guidance: 'Another skill change for this agent is still running, and one runs at a time. Nothing was changed or charged by this call. Wait a few seconds, then repeat the call with the same idempotency_key. If it keeps saying so, it clears within 15 minutes.',
       };
     case 105:
       return {
@@ -687,17 +696,19 @@ export function describeSkillsApplyError(error: unknown, plan?: PlanBilling['pla
     case 107:
       return {
         ...base,
-        guidance: 'Repeat the call without idempotency_key to start a fresh change.',
+        guidance: 'This idempotency_key cannot be used for this call, and nothing was changed or charged by it. Get a new quote: repeat the call without idempotency_key, show the quote to the user, and confirm with the key it gives.',
       };
     case 108:
       return {
         ...base,
         retrySameKey: true,
-        guidance: 'Nothing was changed. Repeat the call with the same idempotency_key.',
+        guidance: 'Wiro could not read or save what this change needs just now, and the wallet balance can be part of that. It is not a low balance, so no funds need to be added. Nothing was changed or charged. Try again: repeat the call with the same idempotency_key.',
       };
     case 109:
+      // Wiro's sentence covers cards and wallets alike. The guidance names the fix for this plan.
       return {
         ...base,
+        message: 'Payment processing failed for this skill change.',
         guidance: skillPaymentGuidance(plan),
       };
     case 110:
@@ -727,6 +738,7 @@ export function describeSkillsApplyError(error: unknown, plan?: PlanBilling['pla
       guidance: 'Nothing was changed or charged. Use names from list_agent_skills.',
     };
   }
+  if (isWalletNotRead(error)) return { ...base, guidance: WALLET_NOT_READ_NOTE };
   return { ...base, guidance: workspaceHint(message) ?? '' };
 }
 

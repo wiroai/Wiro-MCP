@@ -177,38 +177,77 @@ function walletName(billing: PlanBilling): string {
   return billing.wallet === 'team' ? 'the team wallet' : 'your personal wallet';
 }
 
-/** For a cancelled plan, a skill change only covers the days left: nothing renews at the new price. */
+/** When the new monthly credits come: a plan set to end renews only if it is kept, and an agent without a plan gets them once it is subscribed. */
+function creditsWhen(billing: PlanBilling): string {
+  if (billing.plan === 'none') return 'a month once it is subscribed';
+  return billing.status === 'active' && billing.cancelAtPeriodEnd === true
+    ? 'at each renewal after the change, if the plan is kept'
+    : 'at each renewal after the change';
+}
+
+/** For a cancelled plan, a skill change only covers the time left: nothing renews at the new price. */
 function cancelledNote(billing: PlanBilling): string {
   const end = billing.periodEnd !== null ? unixToIso(billing.periodEnd) : undefined;
   if (billing.plan === 'card') {
     return `The plan is set to end${end ? ` after ${end}` : ' with this period'} and does not renew.`;
   }
-  return `The plan is cancelled and ends about a day after ${end ?? 'the end of this period'}, so this covers only the days left and the new price is not renewed. Undo the cancellation with manage_agent_billing (renew) to keep the plan.`;
+  return `The plan is cancelled and ends about a day after ${end ?? 'the end of this period'}, so this covers only the time left and the new price is not renewed. Undo the cancellation with manage_agent_billing (renew) to keep the plan.`;
+}
+
+/** A card subscription that ends with this period: the plan is set to end, or it moves to wallet billing. */
+function cardEndsWithPeriod(billing: PlanBilling): boolean {
+  return billing.plan === 'card' && (billing.cancelAtPeriodEnd === true || billing.switchingToWallet);
+}
+
+function walletSwitchNote(billing: PlanBilling, price: number | null): string {
+  return `When this period ends, the plan moves to wallet billing and renews from ${walletName(billing)}${price !== null ? ` at ${formatUsd(price)} a month` : ''}.`;
+}
+
+// A card subscription that ends with this period is not renewed by card, so its notes point to no next invoice.
+const CARD_ENDS_QUOTE = 'Nothing is charged now. The card subscription is updated to the new price for the rest of this period.';
+// A card plan whose renewal is not known may also end with this period, so its next invoice is named only for a plan that renews by card.
+const CARD_UNKNOWN_QUOTE = 'Nothing is charged now. The card subscription is updated to the new price, and a plan that renews by card shows the prorated difference on its next invoice.';
+
+/** Only a wallet plan that has ended comes back with renew; any other plan that is not active takes a new one (manage_agent_billing). */
+function renewsBack(billing: PlanBilling): boolean {
+  return billing.plan === 'prepaid' && billing.status === 'expired';
 }
 
 function quoteBillingNote(billing: PlanBilling, delta: number | null, estimate: number | null, nextPrice: number | null): string {
   // A card plan whose renewal is not known gets the new price without a renewal claim.
   const after = billing.cancelAtPeriodEnd === true
     ? ` ${cancelledNote(billing)}`
-    : nextPrice === null
-      ? ''
-      : billing.cancelAtPeriodEnd === false
-        ? ` The plan then renews at ${formatUsd(nextPrice)} a month.`
-        : ` The new monthly price is ${formatUsd(nextPrice)}.`;
+    : billing.switchingToWallet
+      ? ` ${walletSwitchNote(billing, nextPrice)}`
+      : nextPrice === null
+        ? ''
+        : billing.cancelAtPeriodEnd === false
+          ? ` The plan then renews at ${formatUsd(nextPrice)} a month.`
+          : ` The new monthly price is ${formatUsd(nextPrice)}.`;
   if (billing.plan === 'none') {
     return 'The agent has no subscription yet, so nothing is charged now. The new monthly price applies once it is subscribed.';
   }
   if (billing.status !== 'active') {
-    return `The subscription is ${billing.status ?? 'not active'}. Skills can only change on an active subscription, so renew it with manage_agent_billing first.`;
+    return renewsBack(billing)
+      ? `The subscription is ${billing.status ?? 'not active'}. Skills can only change on an active subscription, so renew it with manage_agent_billing first.`
+      : `The subscription is ${billing.status ?? 'not active'}. Skills can only change on an active subscription, so start a new plan with manage_agent_billing (subscribe) first.`;
   }
   if (delta === null) {
     return billing.plan === 'prepaid'
       ? `The difference for the rest of this period is taken from, or credited to, ${walletName(billing)} when the change is applied. ${CREDIT_TERMS}${after}`
-      : `Any prorated difference appears on the next invoice.${after}`;
+      : cardEndsWithPeriod(billing)
+        ? `${CARD_ENDS_QUOTE}${after}`
+        : billing.cancelAtPeriodEnd === null
+          ? `${CARD_UNKNOWN_QUOTE}${after}`
+          : `Any prorated difference appears on the next invoice.${after}`;
   }
   if (Math.abs(delta) < 0.005) return 'The monthly price does not change, so nothing is charged.';
   if (billing.plan === 'card') {
-    return `Nothing is charged now. The card subscription is updated and the prorated difference appears on the next invoice.${after}`;
+    return cardEndsWithPeriod(billing)
+      ? `${CARD_ENDS_QUOTE}${after}`
+      : billing.cancelAtPeriodEnd === null
+        ? `${CARD_UNKNOWN_QUOTE}${after}`
+        : `Nothing is charged now. The card subscription is updated and the prorated difference appears on the next invoice.${after}`;
   }
   // The amount goes by the second, so the days are only a guide. A rise pays for at least a day.
   const secondsLeft = billing.periodEnd !== null ? periodSecondsLeft(billing.periodEnd) : null;
@@ -233,6 +272,18 @@ function chargeNote(billing: PlanBilling, body: SkillsApplyBody): { note: string
     return { charged, note: `${formatUsd(Math.abs(charged))} was credited to ${walletName(billing)}.${terms ? ` ${terms}` : ''}${cancelled}` };
   }
   if (body.stripeProrationApplied === true) {
+    const moved = isPlainObject(body.pricing) ? toNumber(body.pricing.deltaUsd) : null;
+    if (moved !== null && Math.abs(moved) < 0.005) {
+      return { charged: null, note: `The monthly price did not change, so nothing was charged.${cancelled}` };
+    }
+    if (cardEndsWithPeriod(billing)) {
+      const price = isPlainObject(body.pricing) ? toNumber(body.pricing.newPriceUsd) : null;
+      const switching = billing.switchingToWallet ? ` ${walletSwitchNote(billing, price)}` : '';
+      return { charged: null, note: `Nothing was charged now. The card subscription was updated to the new price for the rest of this period.${cancelled}${switching}` };
+    }
+    if (billing.cancelAtPeriodEnd === null) {
+      return { charged: null, note: 'Nothing was charged now. The card subscription was updated to the new price, and a plan that renews by card shows the prorated difference on its next invoice.' };
+    }
     return { charged: null, note: `The card subscription was updated; any prorated difference appears on the next invoice.${cancelled}` };
   }
   if (billing.plan === 'none') {
@@ -302,13 +353,14 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
         + 'depend on, and returns the current and new monthly price, an estimate of what is '
         + 'charged now and an idempotency_key. Nothing changes yet. 2) Show the price to the '
         + 'user. 3) After they approve, call again with confirm: true and that idempotency_key. '
-        + 'The key is tied to the quoted prices: if the price changed since the quote, nothing '
-        + 'is applied and a new quote with a new key comes back. Reusing the key after a timeout '
+        + 'The key is tied to the quoted prices and, on a prepaid plan, the billing period: if '
+        + 'either changed since the quote, nothing is applied and a new quote with a new key comes back. Reusing the key after a timeout '
         + 'is safe, the change is applied once. Billing: on a prepaid plan the monthly difference '
         + 'for the time left in the period is taken from the wallet at once, or credited back to '
         + 'the balances that paid when the price drops: coupon credit keeps its coupon\'s end date, '
         + 'and other credit lasts until the period ends; on a card '
-        + 'plan it is added to the next invoice. A running agent '
+        + 'plan nothing is charged at once: the card subscription is updated to the new price, and a '
+        + 'plan that renews by card shows the prorated difference on its next invoice. A running agent '
         + 'restarts once to load the skills. Newly enabled skills may still need credentials '
         + '(set_agent_credentials, connect_agent_oauth, bind_agent_project for a Wiro project) and do not create scheduled tasks '
         + '(manage_agent_custom_skill does). Find skill names with list_agent_skills and the '
@@ -325,7 +377,7 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
         confirm: z.boolean().default(false)
           .describe('false (default) only returns the quote. true applies the change and charges it; it needs the idempotency_key from the quote.'),
         idempotency_key: z.string().min(8).max(128).optional()
-          .describe('With confirm: true, the key from the quote the user approved. It ties the approval to the quoted prices, and repeating the call with it after a timeout never applies the change twice. Omit it to get a quote.'),
+          .describe('With confirm: true, the key from the quote the user approved. It ties the approval to the quoted prices and, on a prepaid plan, the billing period, and repeating the call with it after a timeout never applies the change twice. Omit it to get a quote.'),
       }),
       outputSchema,
       annotations: {
@@ -444,7 +496,7 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
           if (newPrice === null) {
             throw new Error('Wiro did not return the new monthly price of this change, so it cannot be quoted. Try again later.');
           }
-          const priceTag = skillPriceTag(currentPrice, newPrice);
+          const priceTag = skillPriceTag(currentPrice, newPrice, billing.plan === 'prepaid' ? billing.periodEnd : null);
           const approved = confirm && givenKey !== null && givenKey.priceTag === priceTag;
           if (!approved) {
             const newCredits = toNumber(preview.totalMonthlyCredits);
@@ -470,7 +522,7 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
             const nextAction = blocked
               ? {
                 tool: 'manage_agent_billing',
-                arguments: { agent_guid, action: 'renew' },
+                arguments: { agent_guid, action: renewsBack(billing) ? 'renew' : 'subscribe' },
                 reason: 'The subscription must be active before skills can change.',
               }
               : {
@@ -490,7 +542,7 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
             const lead = !confirm
               ? null
               : priceChanged
-                ? 'The price changed since the quote, so nothing was applied or charged. This is the new quote with a new idempotency_key; show it to the user and ask again.'
+                ? 'The price or the billing period changed since the quote, so nothing was applied or charged. This is the new quote with a new idempotency_key; show it to the user and ask again.'
                 : 'Nothing was applied: confirming needs the idempotency_key of a quote, which ties the approval to the price. This is the quote; show it to the user first.';
             const lines = [
               '## Skill change quote',
@@ -504,7 +556,7 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
               tierChange ? `**Plan:** ${currentTier ?? 'unknown'} to ${tierChange}` : null,
               `**Monthly price:** ${currentPrice !== null ? formatUsd(currentPrice) : 'unknown'} now, ${formatUsd(newPrice)} after the change${delta !== null ? ` (${delta >= 0 ? '+' : ''}${formatUsd(delta)})` : ''}`,
               priceNote ? `**Price update:** ${priceNote}` : null,
-              newCredits !== null ? `**Monthly credits:** ${currentCredits ?? 'unknown'} now, ${newCredits} after the change` : null,
+              newCredits !== null ? `**Monthly credits:** ${currentCredits ?? 'unknown'} now, ${newCredits} ${creditsWhen(billing)}` : null,
               `**Billing:** ${note}`,
               `**Restart:** ${restart}`,
               credentialsNeeded.length > 0
@@ -512,7 +564,7 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
                 : null,
               '',
               blocked
-                ? 'Renew the subscription with manage_agent_billing before applying this change.'
+                ? `${renewsBack(billing) ? 'Renew the subscription' : 'Start a new plan'} with manage_agent_billing before applying this change.`
                 : `Nothing has changed yet. After the user approves, call apply_agent_skills again with confirm: true and idempotency_key \`${quoteKey}\`.`,
             ].filter((line): line is string => line !== null);
             return {
@@ -552,7 +604,9 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
             const failedChange = failure.code === 110;
             const nextAction = failedChange
               ? { tool: 'get_my_agent', arguments: { agent_guid }, reason: 'Check the agent\'s skills and monthly price. Do not repeat the change.' }
-              : undefined;
+              : failure.code === 107
+                ? { tool: 'apply_agent_skills', arguments: { agent_guid, skills, ...(tier ? { tier } : {}), add_dependencies }, reason: 'Get a new quote for this change, with a new key.' }
+                : undefined;
             const text = [
               failedChange ? '## Skill change failed' : '## Skill change not applied',
               '',
@@ -731,7 +785,8 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
             status: applied.noOp ? 'no_change' as const : 'applied' as const,
             idempotencyKey: key,
             ...(pricing ? { pricing } : {}),
-            billing: { ...billingBase, chargedNowUsd: charge.charged, note: billingNote },
+            // The saved answer of an earlier call: its charge is in the note, and this call charged nothing.
+            billing: { ...billingBase, chargedNowUsd: replayed ? 0 : charge.charged, note: billingNote },
             ...(Array.isArray(serverPricing.enabledSkills) ? { enabledSkills: serverPricing.enabledSkills.map(String) } : {}),
             restart,
             ...(nextAction ? { nextAction } : {}),

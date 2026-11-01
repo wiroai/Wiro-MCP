@@ -10,15 +10,18 @@ import {
   type ApiEnvelope,
 } from './api.js';
 import {
-  SESSION_NAME_MAX,
-  SESSION_NAME_PATTERN,
   SESSION_NAME_RULE,
+  WORKFLOW_SESSION_NAME_MAX,
+  isStudioSessionName,
   newSessionKey,
+  reservedSessionName,
   sessionKeyProblem,
   sessionNameSuggestion,
+  unusableSessionName,
 } from './agent-message.js';
 import { quotedSpan } from './quoted-text.js';
 import { fetchPublicFile } from './remote-file.js';
+import { isWalletNotRead, WALLET_NOT_READ_NOTE } from './user-agent.js';
 
 // Studio, the Workflow Agent and the user's own deployed agents speak the same
 // message protocol behind three route families. Everything that differs
@@ -128,30 +131,37 @@ export function agentEndpoint(target: AgentTarget, operation: AgentOperation): s
 }
 
 /**
- * Why a session name cannot be used with this agent, or null. SESSION_NAME_RULE
- * is the rule for a new name. Studio holds every message it is sent to that
- * rule, and the Workflow Agent holds sent messages to the length in it. Reading,
- * cancelling and deleting address a session that already exists, under the name
- * it has, as does sending to a deployed agent.
+ * Why a session name cannot be used with this agent, or null. Each agent has its
+ * own check. Studio holds every message it is sent to SESSION_NAME_RULE, and any
+ * name can be read, cancelled and deleted under the name it has. The Workflow Agent
+ * takes the same characters everywhere and a shorter name for a message. A deployed
+ * agent takes any name but those of its own sessions. Studio itself refuses a new
+ * name that differs from a stored one only in capitals: only it can see that, so
+ * the answer comes from it.
  */
 export function agentSessionProblem(
   target: AgentTarget,
   session: string,
   use: 'send' | 'read' = 'read',
 ): string | null {
-  // A name longer than the rule allows gets the rule, not the longer limit for reading.
-  const overSendLimit = use === 'send' && target.kind !== 'deployed' && session.length > SESSION_NAME_MAX;
-  const problem = overSendLimit ? null : sessionKeyProblem(session);
-  if (problem) return problem;
+  if (target.kind === 'deployed') return sessionKeyProblem(session);
   if (target.kind === 'studio') {
-    if (use === 'read' || (SESSION_NAME_PATTERN.test(session) && session.length <= SESSION_NAME_MAX)) return null;
-    return `Nothing was sent. ${SESSION_NAME_RULE} The pattern is ^[a-z0-9._-]{1,${SESSION_NAME_MAX}}$. Use a name such as `
+    if (use === 'read') return unusableSessionName(session);
+    if (isStudioSessionName(session)) return null;
+    return `Nothing was sent. ${SESSION_NAME_RULE} The pattern is ^[A-Za-z0-9._:-]{1,128}$. Use a name such as `
       + `"${sessionNameSuggestion(session)}". A session under another name can still be read with `
-      + 'get_agent_conversation: to go on with it, start a new session and say in the first message where it left off.';
+      + 'get_agent_conversation and deleted with delete_agent_session, but not sent to: to go on with it, start a new '
+      + 'session and say in the first message where it left off.';
   }
-  if (target.kind !== 'workflow-agent') return null;
-  if (!WORKFLOW_SESSION_PATTERN.test(session) || (use === 'send' && session.length > SESSION_NAME_MAX)) {
-    return SESSION_NAME_RULE;
+  // A name over the shorter limit gets the rule, not the longer limit for reading.
+  const overSendLimit = use === 'send' && session.length > WORKFLOW_SESSION_NAME_MAX;
+  const problem = overSendLimit ? null : unusableSessionName(session);
+  if (problem) return problem;
+  if (session.toLowerCase().includes(':cron:')) return reservedSessionName(session);
+  if (overSendLimit || !WORKFLOW_SESSION_PATTERN.test(session)) {
+    return use === 'send'
+      ? `Nothing was sent. ${SESSION_NAME_RULE} Use a name such as "${sessionNameSuggestion(session, WORKFLOW_SESSION_NAME_MAX)}".`
+      : SESSION_NAME_RULE;
   }
   return null;
 }
@@ -364,6 +374,8 @@ export async function explainSendRefusal(
     return `${target.name} is temporarily unavailable. The message may still have been queued. `
       + checkBeforeResending(target, session);
   }
+
+  if (isWalletNotRead(error)) return `${message}\n\n${WALLET_NOT_READ_NOTE}`;
 
   if (target.kind !== 'deployed' && hasErrorCode(error, 97)) {
     const walletUsd = toNumber(response.walletUsd);

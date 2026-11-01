@@ -187,13 +187,15 @@ export type AgentSubscription = z.infer<typeof subscriptionSchema>;
 /**
  * Whether a plan ends with its current period: true when it ends, false when
  * it renews, null when that is not known. A wallet plan says so itself, and a
- * card plan moving to wallet billing renews from the wallet. Any other card
- * plan is known only when the row carries its card state (cardEnds).
+ * card plan moving to wallet billing renews from the wallet, even though its
+ * card subscription is set to end with the period. Any other card plan is
+ * known only when the row carries its card state (cardEnds).
  */
 export function planEndsWithPeriod(subscription: Record<string, unknown>, cardEnds?: unknown): boolean | null {
-  if (subscription.pendingdowngrade === 'cancel' || cardEnds === true) return true;
-  if (subscription.provider === 'prepaid' || subscription.nextprovider === 'prepaid' || cardEnds === false) return false;
-  return null;
+  if (subscription.pendingdowngrade === 'cancel') return true;
+  if (subscription.provider === 'prepaid' || subscription.nextprovider === 'prepaid') return false;
+  if (cardEnds === true) return true;
+  return cardEnds === false ? false : null;
 }
 
 export function toSubscription(value: unknown, cardEnds?: unknown): AgentSubscription | null {
@@ -1007,9 +1009,19 @@ export function nextStepForAgent(agent: AgentDetail, waitSeconds: number, plainM
 // Refusals known to leave the wallet untouched.
 const PRE_CHARGE_CODES = new Set([95, 96, 97, 99, 101, 102, 103, 104, 105, 106, 107, 108, 109]);
 
+const WALLET_NOT_READ = /could not retrieve wallet balance/i;
+
+/** Whether a refusal says the wallet could not be read, which says nothing about what it holds. */
+export function isWalletNotRead(error: unknown): boolean {
+  return error instanceof ApiResultError && WALLET_NOT_READ.test(error.message);
+}
+
+/** The words after such a refusal. No funds are asked for: the wallet may hold plenty. */
+export const WALLET_NOT_READ_NOTE = 'Wiro could not read the balance just now. That is not a low balance, and nothing was charged. Try again in a moment; if it keeps saying so, get_account shows the wallet.';
+
 const PRE_CHARGE_REFUSALS: RegExp[] = [
   /insufficient wallet balance/i,
-  /could not retrieve wallet balance/i,
+  WALLET_NOT_READ,
   /wallet deduction failed/i,
   /subscription (is )?already active/i,
   /already on (the )?(pro|starter) tier/i,

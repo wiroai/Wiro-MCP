@@ -16,7 +16,6 @@ import {
   extractReply,
   isTerminalMessageStatus,
   isVoiceCallText,
-  sessionKeyProblem,
   toAgentMessage,
   type AgentMessage,
 } from '../utils/agent-message.js';
@@ -218,7 +217,7 @@ export function registerGetAgentConversation(server: McpServer, client: WiroClie
           const sessions = rows
             .map(row => ({ row, key: asString(row.sessionkey) ?? '' }))
             // Sessions whose names cannot be used with these tools are left out.
-            .filter(({ key }) => key !== '' && sessionKeyProblem(key) === null)
+            .filter(({ key }) => key !== '' && agentSessionProblem(target, key) === null)
             .map(({ row, key }) => {
               const updatedAt = unixToIso(row.updatedat);
               const lastMessage = sessionPreview(row.lastmessage);

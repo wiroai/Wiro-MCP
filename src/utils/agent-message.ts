@@ -267,24 +267,56 @@ export function formatAgentMessage(message: AgentMessage, heading = 'Reply'): st
   return lines.join('\n');
 }
 
-/** The one rule for naming a session, stated the same wherever a session name is asked for. */
-export const SESSION_NAME_RULE = 'Session names use lowercase letters, digits, dots, dashes and underscores, at most 100 characters.';
-export const SESSION_NAME_MAX = 100;
-export const SESSION_NAME_PATTERN = /^[a-z0-9._-]+$/;
+export const SESSION_NAME_MAX = 128;
+/** The Workflow Agent counts a mark of its own against the 128, so a name it gets from a project key is shorter. */
+export const WORKFLOW_SESSION_NAME_MAX = 100;
 
-/** A name that follows the rule, close to the one given. */
-export function sessionNameSuggestion(session: string): string {
-  const name = session.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').slice(0, SESSION_NAME_MAX).replace(/^-+|-+$/g, '');
-  return name || newSessionKey();
+/**
+ * The one rule for naming a session, stated the same wherever a session name is
+ * asked for. Names an agent keeps for itself aside, a name that follows it works
+ * with every agent. Studio holds every message to it (isStudioSessionName); a
+ * deployed agent and the Workflow Agent also take some names outside it
+ * (agentSessionProblem).
+ */
+export const SESSION_NAME_RULE = `Session names use letters, digits, dots, dashes, underscores and colons, up to ${SESSION_NAME_MAX} characters (${WORKFLOW_SESSION_NAME_MAX} for the Workflow Agent), and cannot end in "-r" followed by a number.`;
+export const SESSION_NAME_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
+const NUMBERED_ENDING = /-r\d+$/i;
+
+/** Whether Studio takes a message under this name. "default" follows the rule too. */
+export function isStudioSessionName(name: string): boolean {
+  return SESSION_NAME_PATTERN.test(name) && !NUMBERED_ENDING.test(name);
 }
 
-/** Why a session name cannot be used, or null when it can. */
-export function sessionKeyProblem(sessionKey: string): string | null {
+/** A name that follows the rule, close to the one given. */
+export function sessionNameSuggestion(session: string, maxLength = SESSION_NAME_MAX): string {
+  const name = session
+    .replace(/[^A-Za-z0-9._:-]+/g, '-')
+    .slice(0, maxLength)
+    .replace(/^-+|-+$/g, '')
+    .replace(/-r(\d+)$/i, '-v$1');
+  // "default" is an agent's main chat, never a new name.
+  return name && name.toLowerCase() !== 'default' ? name : newSessionKey();
+}
+
+/** Why a name cannot address any session, or null when it can. */
+export function unusableSessionName(sessionKey: string): string | null {
   if (!sessionKey.trim()) return 'The session name cannot be empty.';
-  if (sessionKey.length > 128) return 'The session name must be at most 128 characters.';
+  if (sessionKey.length > SESSION_NAME_MAX) return `The session name must be at most ${SESSION_NAME_MAX} characters.`;
   if (/[\u0000-\u001f\u007f~]/.test(sessionKey)) {
     return 'The session name cannot contain control characters or "~".';
   }
+  return null;
+}
+
+/** The answer for a name kept for sessions of the agent's own. */
+export function reservedSessionName(sessionKey: string): string {
+  return `The session name ${quotedSpan(sessionKey)} is reserved by Wiro. Choose another one.`;
+}
+
+/** Why a session name cannot be used on a deployed agent, or null when it can. */
+export function sessionKeyProblem(sessionKey: string): string | null {
+  const unusable = unusableSessionName(sessionKey);
+  if (unusable) return unusable;
   const lower = sessionKey.toLowerCase();
   if (lower === 'wiro:api'
     || lower.startsWith('wiro:api:')
@@ -293,7 +325,7 @@ export function sessionKeyProblem(sessionKey: string): string | null {
     || lower.startsWith('cs-cron-')
     || lower.startsWith('cron:')
     || lower.includes(':cron:')) {
-    return `The session name ${quotedSpan(sessionKey)} is reserved by Wiro. Choose another one.`;
+    return reservedSessionName(sessionKey);
   }
   return null;
 }

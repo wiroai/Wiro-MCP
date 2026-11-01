@@ -1496,3 +1496,22 @@ test('a call with the client key toolCallId still checks the arguments the tool 
     await server.close();
   }
 });
+
+test('tools/list shows every tool but explore as closed, with the arguments it takes', async () => {
+  const server = createMcpServer({ authType: 'apikey-only' });
+  const client = new Client({ name: 'test-client', version: '1.0.0' });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await server.connect(serverTransport);
+  await client.connect(clientTransport);
+  try {
+    const { tools } = await client.listTools();
+    assert.ok(tools.length > 40);
+    for (const tool of tools.filter(candidate => candidate.name !== 'explore')) {
+      assert.equal(tool.inputSchema.additionalProperties, false, tool.name);
+      assert.ok(tool.inputSchema.properties, `${tool.name} shows its properties`);
+    }
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});

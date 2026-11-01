@@ -19,6 +19,7 @@ import {
   formatCredits,
   formatUsd,
   nextStepForAgent,
+  isWalletNotRead,
   outcomeUnknown,
   readAgentDetail,
   sameAmount,
@@ -75,6 +76,8 @@ const quoteWalletSchema = z.object({
   teamName: z.string().optional(),
   organizationName: z.string().optional(),
   balanceUsd: z.number().optional(),
+  storeRevenueUsd: z.number().optional()
+    .describe('The part of balanceUsd that is store revenue, when there is any.'),
 });
 
 const quoteSchema = z.object({
@@ -161,14 +164,23 @@ function paidFromText({ workspace }: PayingWallet): string {
   return payingWalletText(workspace, PAID_FROM);
 }
 
-function quoteWallet({ workspace, balanceUsd }: PayingWallet): z.infer<typeof quoteWalletSchema> | undefined {
+function quoteWallet({ workspace, balanceUsd, storeRevenueUsd }: PayingWallet): z.infer<typeof quoteWalletSchema> | undefined {
   if (workspace.kind === 'unknown' && balanceUsd === null) return undefined;
   return {
     kind: workspace.kind,
     ...(workspace.teamName ? { teamName: workspace.teamName } : {}),
     ...(workspace.organizationName ? { organizationName: workspace.organizationName } : {}),
     ...(balanceUsd !== null ? { balanceUsd } : {}),
+    ...(storeRevenueUsd ? { storeRevenueUsd } : {}),
   };
+}
+
+/** What the paying wallet holds, with store revenue apart from deposits and coupon credit. */
+function walletHoldsText(wallet: Quote['wallet']): string {
+  if (wallet?.balanceUsd === undefined) return 'get_account shows the balance.';
+  if (!wallet.storeRevenueUsd) return `It holds ${formatUsd(wallet.balanceUsd)}.`;
+  const others = Math.round((wallet.balanceUsd - wallet.storeRevenueUsd) * 100) / 100;
+  return `It holds ${formatUsd(others)} in deposits and coupon credit, and ${formatUsd(wallet.storeRevenueUsd)} in store revenue.`;
 }
 
 /** The tier that was not asked for: its price and credits. */
@@ -195,7 +207,7 @@ function quoteText(quote: Quote, credentials?: Record<string, unknown>): string 
     `- Tier: ${quote.tier === 'pro' ? 'Pro' : 'Starter'}`,
     `- Price: ${formatUsd(quote.priceUsd)} now, then ${formatUsd(quote.priceUsd)} every 30 days until the plan is cancelled`,
     `- Monthly credits: ${formatCredits(quote.monthlyCredits)}. They pay for the agent's chat and scheduled tasks (100 credits = $1). Model runs it starts, for images, videos or voice calls, are billed to the wallet of the workspace that owns the Wiro project connected to the agent.`,
-    `- Paid from: ${quote.paidFrom} ${quote.wallet?.balanceUsd !== undefined ? `It holds ${formatUsd(quote.wallet.balanceUsd)}.` : 'get_account shows the balance.'}`,
+    `- Paid from: ${quote.paidFrom} ${walletHoldsText(quote.wallet)}`,
   ];
   const otherTier = otherTierLine(quote);
   if (otherTier) lines.push(otherTier);
@@ -660,6 +672,9 @@ export function registerDeployAgent(server: McpServer, client: WiroClient): void
             `${errorText(error)}\n\nThe deploy request was sent and the answer does not show whether it went through, so the agent may have been created and charged. `
             + 'Check list_my_agents before trying again.',
           ));
+        }
+        if (isWalletNotRead(error)) {
+          return errorResult(new Error(`${errorText(error)}\n\nWiro could not read the balance just now. That is not a low balance, and nothing was created or charged. Try again in a moment by confirming the same quote; if it keeps saying so, get_account shows the wallet.`));
         }
         if (error instanceof ApiResultError && /insufficient wallet balance/i.test(error.message)) {
           return errorResult(new Error(`${error.message}\n\nNothing was created or charged. Give the user the amounts above. Funds are added at https://wiro.ai/panel/wallet/deposit/credit-card (for a team project, select that team in the dashboard first); once the user has added them and says yes, confirm the same quote again.`));

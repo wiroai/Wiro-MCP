@@ -1186,6 +1186,20 @@ test('deploy_agent tells a second agent with its own title to wait and deploy ag
   });
 });
 
+test('deploy_agent says a wallet that could not be read is no low balance', async () => {
+  const fake = fakeClient({
+    '/Agent/Detail': { result: true, errors: [], agents: [templateRow()] },
+    '/UserAgent/Deploy': { result: false, errors: [{ code: 0, message: 'Could not retrieve wallet balance' }] },
+  });
+  await withClient(fake, async client => {
+    const result = await call(client, 'deploy_agent', { template: 'instagram-manager', tier: 'starter', confirm_charge_usd: 12, confirm: true });
+    assert.equal(result.isError, true);
+    assert.match(textOf(result), /^## Error\n\nCould not retrieve wallet balance\n\nWiro could not read the balance just now\. That is not a low balance, and nothing was created or charged\. Try again in a moment by confirming the same quote/m);
+    assert.doesNotMatch(textOf(result), /funds are added|deposit\/credit-card|may have been created|list_my_agents/i);
+    assert.equal(fake.called('/UserAgent/Deploy').length, 1);
+  });
+});
+
 test('deploy_agent explains a short wallet and a lost response', async () => {
   const shortWallet = fakeClient({
     '/Agent/Detail': { result: true, errors: [], agents: [templateRow()] },
@@ -1820,7 +1834,7 @@ test('manage_agent_billing buys credits with a request id that makes retries saf
     assert.equal(quote.structuredContent.quote.creditsAdded, 6000);
     assert.equal(quote.structuredContent.nextAction.arguments.request_id, requestId);
     assert.equal(quote.structuredContent.nextAction.arguments.confirm_charge_usd, 60);
-    assert.doesNotMatch(quote.structuredContent.message, /expir/i);
+    assert.match(quote.structuredContent.message, /do not reset each month and end 6 months \(180 days\) after purchase\./);
     assert.equal(fake.called('/UserAgent/CreateExtraCreditCheckout').length, 0);
 
     const done = await call(client, 'manage_agent_billing', quote.structuredContent.nextAction.arguments);
@@ -1887,6 +1901,53 @@ test('manage_agent_billing does not call a purchase a replay when an expiring pa
     assert.match(result.structuredContent.message, /it is not confirmed whether this bought a new pack or repeated a purchase that had already completed/);
     assert.match(result.structuredContent.message, /get_account before buying again/);
     assert.doesNotMatch(textOf(result), /nothing new was bought or charged/);
+  });
+});
+
+test('manage_agent_billing does not report a charge when a pack shows but the repeat added no credits', async () => {
+  // The id's purchase completed seconds ago, so its pack is new and this call adds nothing.
+  const fake = fakeClient({
+    '/UserAgent/Detail': detailResponse(agentRow({ tier: 'pro', extracredits: 6000 })),
+    '/UserAgent/CreateExtraCreditCheckout': body => ({ result: true, url: null, errors: [], provider: 'prepaid', requestid: body.requestid }),
+    '/UserAgent/TransactionList': {
+      result: true,
+      errors: [],
+      summary: { extrapacks: [{ id: 12, credits: 6000, remainingcredits: 6000, status: 'active', purchasedat: NOW, expiresat: NOW + 180 * 86_400 }] },
+    },
+  });
+  await withClient(fake, async client => {
+    const result = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'buy_credits', pack: 'small', request_id: 'pack-key-654', confirm_charge_usd: 60, confirm: true });
+    assert.notEqual(result.isError, true, textOf(result));
+    const out = result.structuredContent;
+    assert.equal(out.outcome, 'done');
+    assert.deepEqual(out.result, { chargedUsd: null });
+    assert.match(textOf(result), /^## buy_credits: Pack in place/);
+    assert.match(out.message, /^The small pack is in place: 6,000 credits for \$60\.00 from the personal wallet\. This request id is charged only once\./);
+    assert.match(out.message, /if the id had already completed in an earlier call, nothing new was bought or charged now/);
+    assert.match(out.message, /nothing new was bought or charged now\. The agent restarts to load the credit pack, which takes about a minute\. Follow it with get_my_agent\. For another pack, get a new quote without request_id\.$/);
+    assert.equal(out.nextAction.tool, 'get_my_agent');
+    assert.doesNotMatch(textOf(result), /Bought|older pack/);
+  });
+});
+
+test('manage_agent_billing says a stopped agent loads a pack that is in place when it starts', async () => {
+  const fake = fakeClient({
+    '/UserAgent/Detail': detailResponse(agentRow({ tier: 'pro', status: 0, extracredits: 6000 })),
+    '/UserAgent/CreateExtraCreditCheckout': body => ({ result: true, url: null, errors: [], provider: 'prepaid', requestid: body.requestid }),
+    '/UserAgent/TransactionList': {
+      result: true,
+      errors: [],
+      summary: { extrapacks: [{ id: 12, credits: 6000, remainingcredits: 6000, status: 'active', purchasedat: NOW, expiresat: NOW + 180 * 86_400 }] },
+    },
+  });
+  await withClient(fake, async client => {
+    const result = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'buy_credits', pack: 'small', request_id: 'pack-key-654', confirm_charge_usd: 60, confirm: true });
+    assert.notEqual(result.isError, true, textOf(result));
+    const out = result.structuredContent;
+    assert.match(textOf(result), /^## buy_credits: Pack in place/);
+    assert.match(out.message, /nothing new was bought or charged now\. The agent is stopped, so the credit pack takes effect the next time it starts\. For another pack, get a new quote without request_id\.$/);
+    assert.doesNotMatch(out.message, /restarts/);
+    assert.equal(out.nextAction, undefined);
   });
 });
 
@@ -2088,6 +2149,86 @@ test('manage_agent_billing reports an action that went through despite an error 
   });
 });
 
+test('manage_agent_billing says what an upgrade or a pack does to the agent at each status', async () => {
+  const restarting = what => new RegExp(`The agent restarts to load the ${what}, which takes about a minute\\. Follow it with get_my_agent\\.`);
+  const cases = [
+    [4, restarting, true],
+    [3, restarting, true],
+    [1, what => new RegExp(`already stopping or restarting; it loads the ${what} when it starts again\\.`), true],
+    [2, what => new RegExp(`queued to start and loads the ${what} when it does\\.`), true],
+    [0, what => new RegExp(`The agent is stopped, so the ${what} takes effect the next time it starts\\.`), false],
+    [5, what => new RegExp(`The agent stopped with an error, so the ${what} takes effect the next time it starts\\.`), false],
+    [6, what => new RegExp(`The agent still needs setup; the ${what} takes effect once it starts\\.`), false],
+  ];
+  for (const [status, note, waits] of cases) {
+    const upgrade = fakeClient({
+      '/UserAgent/Detail': detailResponse(agentRow({ status })),
+      '/UserAgent/UpgradeTier': { result: true, errors: [], tier: 'pro', previousTier: 'starter', newPriceUsd: 120, newMonthlyCredits: 12000, proratedCharge: 54 },
+    });
+    await withClient(upgrade, async client => {
+      const quote = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'upgrade_to_pro' });
+      assert.match(quote.structuredContent.message, note('new plan'));
+      const done = await call(client, 'manage_agent_billing', quote.structuredContent.nextAction.arguments);
+      assert.equal(done.structuredContent.outcome, 'done');
+      assert.match(done.structuredContent.message, note('new plan'));
+      assert.equal(done.structuredContent.nextAction?.tool, waits ? 'get_my_agent' : undefined, `upgrade at status ${status}`);
+      if (!waits) assert.doesNotMatch(done.structuredContent.message, /agent restarts/);
+    });
+
+    let bought = false;
+    const pack = fakeClient({
+      '/UserAgent/Detail': () => detailResponse(agentRow({ tier: 'pro', status, extracredits: bought ? 6000 : 0 })),
+      '/UserAgent/CreateExtraCreditCheckout': body => {
+        bought = true;
+        return { result: true, url: null, errors: [], provider: 'prepaid', requestid: body.requestid };
+      },
+    });
+    await withClient(pack, async client => {
+      const quote = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'buy_credits', pack: 'small' });
+      assert.match(quote.structuredContent.message, note('credit pack'));
+      const done = await call(client, 'manage_agent_billing', quote.structuredContent.nextAction.arguments);
+      assert.equal(done.structuredContent.outcome, 'done');
+      assert.match(done.structuredContent.message, note('credit pack'));
+      assert.equal(done.structuredContent.nextAction?.tool, waits ? 'get_my_agent' : undefined, `pack at status ${status}`);
+      if (!waits) assert.doesNotMatch(done.structuredContent.message, /agent restarts/);
+    });
+  }
+});
+
+test('manage_agent_billing does not wait for a stopped agent when an unclear answer turns out to be a done upgrade', async () => {
+  let upgraded = false;
+  const fake = fakeClient({
+    '/UserAgent/Detail': () => detailResponse(agentRow(upgraded ? { status: 0, tier: 'pro' } : { status: 0 })),
+    '/UserAgent/UpgradeTier': () => {
+      upgraded = true;
+      throw new WiroApiError(502, 'Bad gateway');
+    },
+  });
+  await withClient(fake, async client => {
+    const result = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'upgrade_to_pro', confirm_charge_usd: 108, confirm: true });
+    assert.equal(result.structuredContent.outcome, 'done');
+    assert.equal(result.structuredContent.nextAction, undefined);
+  });
+});
+
+test('manage_agent_billing does not wait for a stopped agent when an unclear answer turns out to be a bought pack', async () => {
+  let credited = false;
+  const fake = fakeClient({
+    '/UserAgent/Detail': () => detailResponse(agentRow({ tier: 'pro', status: 0, extracredits: credited ? 6000 : 0 })),
+    '/UserAgent/CreateExtraCreditCheckout': () => {
+      credited = true;
+      throw new WiroApiError(502, 'Bad gateway');
+    },
+  });
+  await withClient(fake, async client => {
+    const result = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'buy_credits', pack: 'small', request_id: 'pack-key-654', confirm_charge_usd: 60, confirm: true });
+    assert.notEqual(result.isError, true, textOf(result));
+    assert.equal(result.structuredContent.outcome, 'done');
+    assert.match(result.structuredContent.message, /The agent's extra credits rose by 6,000, so the purchase went through\./);
+    assert.equal(result.structuredContent.nextAction, undefined);
+  });
+});
+
 test('manage_agent_billing refuses packs below Pro and estimates a wallet upgrade', async () => {
   const fake = fakeClient({
     '/UserAgent/Detail': detailResponse(agentRow()),
@@ -2108,6 +2249,8 @@ test('manage_agent_billing refuses packs below Pro and estimates a wallet upgrad
     assert.equal(upgrade.structuredContent.nextAction.arguments.confirm_charge_usd, 108);
     assert.match(upgrade.structuredContent.message, /about \$54\.00 now .* never more than \$108\.00, so that is the amount to approve/);
     assert.match(upgrade.structuredContent.message, /confirm_charge_usd 108, confirm: true/);
+    assert.match(upgrade.structuredContent.message, /The Pro monthly pool is 12,000 credits\. The agent restarts to load the new plan/);
+    assert.doesNotMatch(upgrade.structuredContent.message, /at once|full pool|rises to/);
     assert.match(upgrade.structuredContent.message, /To go back to Starter later, cancel, let the plan end, then subscribe to Starter\./);
     assert.equal(fake.calls.filter(item => item.path !== '/UserAgent/Detail').length, 0);
 
@@ -2123,7 +2266,78 @@ test('manage_agent_billing refuses packs below Pro and estimates a wallet upgrad
 
     const done = await call(client, 'manage_agent_billing', upgrade.structuredContent.nextAction.arguments);
     assert.equal(done.structuredContent.outcome, 'done');
+    assert.match(done.structuredContent.message, /The Pro monthly pool is 12,000 credits\./);
     assert.equal(fake.called('/UserAgent/UpgradeTier').length, 1);
+  });
+});
+
+test('manage_agent_billing says a wallet that could not be read is no low balance, on every route that can answer it', async () => {
+  const sentence = 'Could not retrieve wallet balance';
+  const refused = { result: false, errors: [{ code: 0, message: sentence }] };
+  const prepaid = { provider: 'prepaid', currentperiodend: NOW + 15 * 86_400 };
+  for (const [path, action, row, extra] of [
+    ['/UserAgent/UpgradeTier', 'upgrade_to_pro', agentRow({ subscription: subscription(prepaid) }), { confirm_charge_usd: 108 }],
+    ['/UserAgent/RenewSubscription', 'renew', agentRow({ subscription: subscription({ ...prepaid, status: 'expired' }) }), { confirm_charge_usd: 12 }],
+    ['/UserAgent/CreateSubscriptionCheckout', 'subscribe', agentRow({ status: 6, subscription: null }), { confirm_charge_usd: 12 }],
+    ['/UserAgent/CreateExtraCreditCheckout', 'buy_credits', agentRow({ tier: 'pro', subscription: subscription(prepaid) }), { pack: 'small', confirm_charge_usd: 60 }],
+  ]) {
+    const fake = fakeClient({ '/UserAgent/Detail': detailResponse(row), [path]: refused });
+    await withClient(fake, async client => {
+      const result = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action, ...extra, confirm: true });
+      assert.equal(fake.called(path).length, 1, `${action}: ${textOf(result)}`);
+      assert.equal(result.isError, true, action);
+      const text = textOf(result);
+      assert.ok(text.includes(sentence), text);
+      assert.match(text, /Wiro could not read the balance just now\. That is not a low balance, and nothing was charged\. Try again in a moment; if it keeps saying so, get_account shows the wallet\./, action);
+      assert.doesNotMatch(text, /funds are added|deposit\/credit-card|may have taken effect|does not show whether/i, action);
+      assert.equal(fake.called('/UserAgent/Detail').length, 1, `${action}: no read to see whether it went through`);
+    });
+  }
+  // A real low balance keeps its own answer.
+  const short = fakeClient({
+    '/UserAgent/Detail': detailResponse(agentRow({ subscription: subscription(prepaid) })),
+    '/UserAgent/UpgradeTier': { result: false, errors: [{ code: 0, message: 'Insufficient wallet balance. Required: $54.00, Available: $1.00' }] },
+  });
+  await withClient(short, async client => {
+    const result = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'upgrade_to_pro', confirm_charge_usd: 108, confirm: true });
+    assert.match(textOf(result), /Nothing was charged\. Funds are added at/);
+  });
+});
+
+test('manage_agent_billing: an upgrade on an ended Pro wallet plan points to renew; every other plan without an active period keeps subscribe', async () => {
+  const ended = (tier, overrides = {}) => agentRow({ tier, status: 0, monthlycredits: 0, monthlypriceusd: 110, subscription: subscription({ status: 'expired', amount: 110, currentperiodend: NOW - 86_400, ...overrides }) });
+  const upgrade = async row => {
+    let result;
+    await withClient(fakeClient({ '/UserAgent/Detail': detailResponse(row), '/Organization/List': { result: true, errors: [], organizations: [] } }), async client => {
+      result = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'upgrade_to_pro' });
+    });
+    return result.structuredContent;
+  };
+  const pro = await upgrade(ended('pro'));
+  assert.equal(pro.outcome, 'refused');
+  assert.deepEqual(pro.nextAction.arguments, { agent_guid: 'ua-1', action: 'renew' });
+  assert.match(pro.message, /already on Pro/);
+  for (const row of [ended('starter'), ended('pro', { provider: 'stripe' }), ended('pro', { status: 'refunded' }), agentRow({ tier: 'pro', status: 0, subscription: null })]) {
+    assert.deepEqual((await upgrade(row)).nextAction.arguments, { agent_guid: 'ua-1', action: 'subscribe', tier: 'pro' });
+  }
+});
+
+test('an upgrade starts from the plan\'s amount when the agent shows no monthly price, as the charge does', async () => {
+  const fake = fakeClient({ '/UserAgent/Detail': detailResponse(agentRow({ monthlypriceusd: 0, subscription: subscription({ amount: 12 }) })) });
+  await withClient(fake, async client => {
+    const quote = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'upgrade_to_pro' });
+    assert.equal(quote.structuredContent.quote.maxChargeUsd, 108, textOf(quote));
+  });
+});
+
+test('an upgrade with more than a day left names no minimum, and a cancelled plan pays for the time left', async () => {
+  const upgradeable = { guid: 'ua-1', uuid: 'u1', status: 4, tier: 'starter', tiermultiplier: 10, monthlypriceusd: 12, monthlycredits: 1200, agent: { tiers: { starter: { priceUsd: 12, credits: 1200 }, pro: { priceUsd: 120, credits: 12000 } } }, subscription: { plan: 'agent', status: 'active', provider: 'prepaid', amount: 12, currentperiodend: Math.floor(Date.now() / 1000) + 15 * 86400 + 3600, daysremaining: 16 } };
+  const fake = fakeClient({ '/UserAgent/Detail': { result: true, errors: [], useragents: [upgradeable] } });
+  await withClient(fake, async client => {
+    const quote = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'upgrade_to_pro' });
+    assert.equal(quote.structuredContent.quote.chargeNowUsd, 54.15, textOf(quote));
+    assert.match(quote.structuredContent.message, /about \$54\.15 now from the personal wallet for the rest of this period\. /);
+    assert.doesNotMatch(quote.structuredContent.message, /minimum/);
   });
 });
 
@@ -2172,7 +2386,7 @@ test('manage_agent_billing does not promise renewals on a cancelled plan', async
     const upgrade = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'upgrade_to_pro' });
     const { quote, message } = upgrade.structuredContent;
     assert.equal(quote.recurringUsd, null);
-    assert.match(message, /The plan is cancelled, so it ends about a day after .* and does not renew at the Pro price; this charge covers only the days left/);
+    assert.match(message, /The plan is cancelled, so it ends about a day after .* and does not renew at the Pro price; this charge covers only the time left/);
     assert.match(message, /undo the cancellation first with action renew/);
     assert.doesNotMatch(message, /From the next renewal/);
   });
@@ -2252,6 +2466,8 @@ test('list_my_agents and get_my_agent do not say a card plan renews when its car
     [agentRow({ subscription: card, stripecancelatperiodend: false }), /billed by card, \$12\.00 per 30 days, renews after /, 'renews'],
     [agentRow(), /billed from the wallet, \$12\.00 per 30 days, renews after /, 'renews'],
     [agentRow({ subscription: subscription({ pendingdowngrade: 'cancel' }) }), /cancelled, ends after /, 'ends'],
+    // A card plan moving to wallet billing renews from the wallet, even if a row carries the card subscription's end flag.
+    [agentRow({ subscription: subscription({ provider: 'stripe', nextprovider: 'prepaid' }), stripecancelatperiodend: true }), /billed by card, \$12\.00 per 30 days, renews after \S+, switching to wallet billing at period end/, 'renews'],
   ]) {
     const known = fakeClient({ '/UserAgent/Detail': detailResponse(row) });
     await withClient(known, async client => {
@@ -2261,6 +2477,20 @@ test('list_my_agents and get_my_agent do not say a card plan renews when its car
       assert.equal(detail.structuredContent.agent.subscription.cancelAtPeriodEnd, atPeriodEnd === 'ends');
     });
   }
+});
+
+test('undoing a cancellation quotes what the renewal charges: the monthly price, then the plan\'s amount', async () => {
+  const stored = fakeClient({ '/UserAgent/Detail': detailResponse(agentRow({ monthlypriceusd: 40, subscription: subscription({ amount: 39, pendingdowngrade: 'cancel' }) })) });
+  await withClient(stored, async client => {
+    const quote = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'renew' });
+    assert.equal(quote.structuredContent.quote.recurringUsd, 40, textOf(quote));
+    assert.match(quote.structuredContent.message, /for \$40\.00 after/);
+  });
+  const none = fakeClient({ '/UserAgent/Detail': detailResponse(agentRow({ monthlypriceusd: 0, subscription: subscription({ amount: 12, pendingdowngrade: 'cancel' }) })) });
+  await withClient(none, async client => {
+    const quote = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'renew' });
+    assert.equal(quote.structuredContent.quote.recurringUsd, 12, textOf(quote));
+  });
 });
 
 test('manage_agent_billing cancels and undoes a wallet plan with confirmation', async () => {
@@ -2418,6 +2648,31 @@ test('get_agent_activity logs strip people and explain an agent that is not runn
 // ---------------------------------------------------------------------------
 // delete_agent
 // ---------------------------------------------------------------------------
+
+test('a card plan moving to wallet billing is cancelled, and its agent deleted, once the wallet bills it', async () => {
+  await withClient(fakeClient({}), async client => {
+    const { tools } = await client.listTools();
+    const description = tools.find(tool => tool.name === 'manage_agent_billing').description;
+    assert.match(description, /charges nothing\. A card plan that is moving to wallet billing pays upgrade_to_pro and buy_credits from the wallet, and cancel works once the wallet bills it\./);
+  });
+  const switching = subscription({ provider: 'stripe', nextprovider: 'prepaid' });
+  for (const teamguid of [null, 'team-1']) {
+    const fake = fakeClient({ '/UserAgent/Detail': detailResponse(agentRow({ teamguid, status: 0, subscription: switching })) });
+    await withClient(fake, async client => {
+      const cancel = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'cancel' });
+      assert.equal(cancel.structuredContent.outcome, 'refused', String(teamguid));
+      assert.match(cancel.structuredContent.message, /^A switch to wallet billing is already scheduled for this plan, so it cannot be cancelled now\. After \S+ it is billed from the wallet, and action cancel then stops its renewals\.$/);
+      assert.doesNotMatch(cancel.structuredContent.message, /cancelled from the dashboard/);
+
+      const remove = await call(client, 'delete_agent', { agent_guid: 'ua-1', confirm: true });
+      assert.equal(remove.structuredContent.deleted, false);
+      assert.match(remove.structuredContent.blockers[0], /^The plan is billed by card and moves to wallet billing after \S+, when it renews from the wallet\. Once it is billed from the wallet, cancel it with manage_agent_billing action cancel, then delete the agent; the rest of the paid period is not refunded\.$/);
+      assert.doesNotMatch(remove.structuredContent.blockers.join(' '), /cancel it from the dashboard/);
+      assert.equal(fake.called('/UserAgent/CancelSubscription').length, 0);
+      assert.equal(fake.called('/UserAgent/Delete').length, 0);
+    });
+  }
+});
 
 test('delete_agent lists what blocks the deletion in order', async () => {
   const fake = fakeClient({ '/UserAgent/Detail': detailResponse(agentRow({ status: 4 })) });
@@ -3057,14 +3312,19 @@ test('control_agent stop says what happens with this agent\'s plan', async () =>
   assert.match(cardEnds, /already cancelled/);
 
   const switching = await stop(subscription({ provider: 'stripe', nextprovider: 'prepaid' }));
-  assert.match(switching, /still renews every 30 days/);
+  assert.match(switching, new RegExp(`moves to wallet billing after ${end.replace(/[.]/g, '\\.')}, then renews from the wallet every 30 days and starts the agent again\\. Once it is billed from the wallet, cancel it with manage_agent_billing to stop paying\\.$`));
+  assert.doesNotMatch(switching, /a wallet plan/);
+  // The plan still renews from the wallet when a row carries the card subscription's end flag.
+  const switchingTeam = await stop(subscription({ provider: 'stripe', nextprovider: 'prepaid' }), { stripecancelatperiodend: true });
+  assert.match(switchingTeam, /moves to wallet billing after \S+, then renews from the wallet every 30 days/);
+  assert.doesNotMatch(switchingTeam, /already cancelled/);
 
   const ended = await stop(subscription({ status: 'expired' }));
   assert.match(ended, /no active plan, so no renewal starts it again/);
   const none = await stop(null);
   assert.match(none, /no active plan/);
 
-  for (const message of [renewing, cancelled, cardUnknown, cardRenews, cardEnds, switching, ended, none]) {
+  for (const message of [renewing, cancelled, cardUnknown, cardRenews, cardEnds, switching, switchingTeam, ended, none]) {
     assert.doesNotMatch(message, /Right after a start/, 'advice about a start does not follow a stop');
   }
 });
@@ -3208,6 +3468,20 @@ test('a deploy quote names the team wallet, its balance, the Pro price and the t
     assert.ok(lines.includes(TEAM_CHATS_LINE), textOf(result));
     assert.equal(fake.called('/UserAgent/Deploy').length, 0);
     assertNoSecrets(result);
+  });
+});
+
+test('a deploy quote shows store revenue apart from deposits and coupon credit', async () => {
+  const fake = fakeClient({
+    '/Organization/List': organizations('member'),
+    '/Team/List': TEAMS_OF_ORGANIZATION,
+    '/Wallet/List': walletOf('user-uuid-1', { amount: '4', giftedamount: '6', storeamount: '300' }),
+    '/Agent/Detail': { result: true, errors: [], agents: [templateRow()] },
+  });
+  await withClient(fake, async client => {
+    const result = await call(client, 'deploy_agent', { template: 'instagram-manager', tier: 'starter' });
+    assert.deepEqual(result.structuredContent.quote.wallet, { kind: 'personal', balanceUsd: 310, storeRevenueUsd: 300 });
+    assert.ok(textOf(result).split('\n').includes('- Paid from: The personal wallet. It holds $10.00 in deposits and coupon credit, and $300.00 in store revenue.'), textOf(result));
   });
 });
 

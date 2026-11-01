@@ -50,7 +50,11 @@ function planAfterStop(plan: AgentSubscription | null): string {
     return `The plan is already cancelled: it ends after ${periodEnd} and does not renew, so nothing starts the agent `
       + 'again by itself.';
   }
-  if (plan.billing === 'wallet' || plan.switchingToWallet) {
+  if (plan.switchingToWallet) {
+    return `Stopping does not pause the plan: it moves to wallet billing after ${periodEnd}, then renews from the wallet `
+      + 'every 30 days and starts the agent again. Once it is billed from the wallet, cancel it with manage_agent_billing to stop paying.';
+  }
+  if (plan.billing === 'wallet') {
     return 'Stopping does not pause the plan: a wallet plan still renews every 30 days and starts the agent again. '
       + 'Cancel it with manage_agent_billing to stop paying.';
   }

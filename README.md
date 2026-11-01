@@ -237,9 +237,10 @@ are separate from your Workflow Agent chats on wiro.ai.
 ### Agents
 
 Talk to any Wiro agent with one set of tools. `agent` is `"studio"`, `"workflow-agent"`
-or the id of one of your own agents. Session names use lowercase letters, digits, dots,
-dashes and underscores, at most 100 characters. Studio refuses a message under any other
-name.
+or the id of one of your own agents. Session names use letters, digits, dots, dashes,
+underscores and colons, up to 128 characters (100 for the Workflow Agent), and cannot end in
+"-r" followed by a number. Studio refuses a message under any other name; a session it has
+under another name can be read and deleted, and to go on with it you start a new session.
 
 | Tool | Description |
 |------|-------------|

@@ -79,7 +79,8 @@ export function registerSendAgentMessage(server: McpServer, client: WiroClient):
         message: z.string().min(1).describe('The message, as the user would type it.'),
         session: z.string().optional().describe('Conversation to continue (from an earlier send_agent_message '
           + 'or get_agent_conversation). Leave it out to start a new session with Studio or the Workflow Agent, '
-          + `or to use a deployed agent's "default" session. ${SESSION_NAME_RULE} Studio refuses any other name.`),
+          + `or to use a deployed agent's "default" session. ${SESSION_NAME_RULE} Studio refuses any other name: a session `
+          + 'it has under another name can be read and deleted, not sent to.'),
         model: z.string().optional().describe('Studio and the Workflow Agent only: the chat model key for this '
           + 'turn. Leave it out for the default; an unknown key is refused with the list of keys you can use. If '
           + 'you set one, pass the same model on every later turn of the session; switching models reduces the '
