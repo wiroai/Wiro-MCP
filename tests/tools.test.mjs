@@ -614,6 +614,46 @@ test('every tool advertises output schemas and annotations', async () => {
   });
 });
 
+test('tool annotations follow the MCP meaning of each hint', async () => {
+  // Only these add new work or data, without removing or replacing anything.
+  const additive = new Set([
+    'clone_workflow', 'create_workflow', 'resume_workflow_run', 'run_model', 'run_workflow', 'upload_file',
+  ]);
+  // Repeating one of these with the same arguments has no further effect.
+  const repeatable = new Set([
+    'apply_agent_skills', 'cancel_agent_message', 'cancel_task', 'delete_agent', 'delete_agent_session',
+    'delete_workflow', 'kill_task',
+  ]);
+  await withClient({}, async client => {
+    const { tools } = await client.listTools();
+    const names = tools.map(tool => tool.name);
+    for (const name of [...additive, ...repeatable]) assert.ok(names.includes(name), `${name} is a tool`);
+    for (const tool of tools) {
+      const { readOnlyHint, destructiveHint, idempotentHint } = tool.annotations;
+      if (readOnlyHint) {
+        assert.equal(destructiveHint, false, `${tool.name} only reads`);
+        assert.equal(idempotentHint, true, `${tool.name} only reads`);
+        continue;
+      }
+      assert.equal(destructiveHint, !additive.has(tool.name), `${tool.name} destructiveHint`);
+      assert.equal(idempotentHint, repeatable.has(tool.name), `${tool.name} idempotentHint`);
+    }
+    const hints = name => {
+      const { destructiveHint, idempotentHint } = tools.find(tool => tool.name === name).annotations;
+      return [destructiveHint, idempotentHint];
+    };
+    // These charge the wallet, stop an agent, replace a connection or restart an agent.
+    assert.deepEqual(hints('apply_agent_skills'), [true, true]);
+    assert.deepEqual(hints('control_agent'), [true, false]);
+    assert.deepEqual(hints('connect_agent_oauth'), [true, false]);
+    assert.deepEqual(hints('update_agent'), [true, false]);
+    // A repeat restarts a running agent again.
+    assert.deepEqual(hints('disconnect_agent_oauth'), [true, false]);
+    // A deployed agent's turn can change or remove things, and a model switch shortens a session's memory.
+    assert.deepEqual(hints('send_agent_message'), [true, false]);
+  });
+});
+
 test('registerTools on an existing McpServer lists 2020-12 schemas before or after connect', async () => {
   const jsonSchema202012 = 'https://json-schema.org/draft/2020-12/schema';
   for (const order of ['before', 'after']) {

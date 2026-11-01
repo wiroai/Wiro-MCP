@@ -25,6 +25,7 @@ import {
   prepareCredentialWrite,
   readUserAgent,
   redactSecrets,
+  unusedCredentialNote,
   uploadFileName,
   usableConnectionModes,
   type CredentialField,
@@ -443,6 +444,11 @@ export function registerSetAgentCredentials(server: McpServer, client: WiroClien
           const meta = metas.get(key);
           const state = statuses.find(entry => entry.key === key);
           if (!meta?.oauth || state?.connected || !row) continue;
+          const unusedNote = await unusedCredentialNote(client, row, key, meta.title, extra.signal);
+          if (unusedNote) {
+            notes.push(unusedNote);
+            continue;
+          }
           const written = new Set(prepared.apiFields.filter(field => field.credentialkey === key).map(field => field.fieldname));
           const authMethod = prepared.apiFields.find(field => field.credentialkey === key && field.fieldname === 'authmethod')?.fieldvalue;
           const modes = connectionModeRequirements(meta, credentialGroup(row, key));
@@ -540,8 +546,13 @@ async function describeCredential(
     notes.push('The value is a Wiro project API key. Model runs started by the agent are billed to the wallet of the workspace that owns that project. Only use a key the user gave you.');
   }
 
+  const unusedNote = row && meta.oauth && !status?.connected
+    ? await unusedCredentialNote(client, row, key, meta.title, signal)
+    : null;
+  if (unusedNote) notes.push(unusedNote);
+
   let nextAction;
-  if (meta.oauth && modes && !status?.connected) {
+  if (meta.oauth && modes && !status?.connected && !unusedNote) {
     const mode = chooseConnectionMode(meta, modes);
     if (mode && !(mode === 'api_key' && !meta.oauth.directProbe)) {
       // The only usable mode is chosen even when its fields are not saved yet.

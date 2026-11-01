@@ -28,6 +28,20 @@ import {
 import { DEFAULT_WAIT_SECONDS, MAX_WAIT_SECONDS } from '../utils/poll.js';
 import { loadWorkflowAgentContext } from '../utils/workflow-agent.js';
 
+/** Chat commands that clear or restart a deployed agent. It runs one wherever it appears in a message. */
+const CLEARING_COMMAND = /(?:^|[\s>])\/(agent_restart|clear_all_sessions|clear_history|new_session)(?=[\s<]|$)/;
+
+/** The answer to a message a deployed agent would run as one of those commands; undefined for any other. */
+function clearingCommandRefusal(message: string): string | undefined {
+  // A link whose path has such a name is only a link, so links are left out first.
+  const command = message.replace(/https?:\/\/[^\s<]+/gi, '').match(CLEARING_COMMAND)?.[1];
+  if (!command) return undefined;
+  return `Nothing was sent. A deployed agent runs /${command} as a command wherever it appears in a message, and that `
+    + 'clears or restarts something on the agent. If the message only mentions it, write the name without the slash. '
+    + 'A new session name starts a fresh conversation, delete_agent_session deletes one, and control_agent restarts '
+    + 'the agent. To run the command itself, type it in the agent\'s chat on wiro.ai.';
+}
+
 export function registerSendAgentMessage(server: McpServer, client: WiroClient): void {
   server.registerTool(
     'send_agent_message',
@@ -46,7 +60,9 @@ export function registerSendAgentMessage(server: McpServer, client: WiroClient):
         + 'A deployed agent (its guid) pays for its turns with its own credits; image, video and other model '
         + 'runs it starts are billed to the wallet of the Wiro API key saved on that agent. '
         + 'Without session, Studio and the Workflow Agent start a new session; a deployed agent uses its "default" '
-        + 'session. Studio sessions are the user\'s own Studio chats on wiro.ai, so pass session "default" only to '
+        + 'session. A message to a deployed agent with a command that clears or restarts it (/new_session, '
+        + '/clear_all_sessions, /clear_history, /agent_restart) is refused. '
+        + 'Studio sessions are the user\'s own Studio chats on wiro.ai, so pass session "default" only to '
         + 'write into their main Studio chat. Workflow Agent sessions used with an API key belong to the key\'s '
         + 'project: they are separate from the user\'s Workflow Agent chats on wiro.ai, which this key cannot read, '
         + 'and "default" is the project\'s own main session. Reuse the returned session to continue a conversation, '
@@ -81,7 +97,7 @@ export function registerSendAgentMessage(server: McpServer, client: WiroClient):
       outputSchema: agentTurnOutputSchema,
       annotations: {
         readOnlyHint: false,
-        destructiveHint: false,
+        destructiveHint: true,
         idempotentHint: false,
         openWorldHint: true,
       },
@@ -89,6 +105,8 @@ export function registerSendAgentMessage(server: McpServer, client: WiroClient):
     async ({ agent, message, session, model, attachment_urls, workflow, wait_seconds }, extra) => {
       try {
         const target = resolveAgentTarget(agent);
+        const refusal = target.kind === 'deployed' ? clearingCommandRefusal(message) : undefined;
+        if (refusal) throw new Error(refusal);
         if (model && target.kind === 'deployed') {
           throw new Error('model applies only to Studio and the Workflow Agent. A deployed agent uses the model '
             + 'in its settings; change it with update_agent.');

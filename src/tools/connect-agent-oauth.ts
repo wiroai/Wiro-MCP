@@ -20,11 +20,15 @@ import {
   dashboardAgentUrl,
   isAllowedRedirectUrl,
   loadCredentialMeta,
+  loadSkillRegistry,
   ownAppRedirectUri,
   parseDiscoveredGroups,
   readOAuthStatus,
   readUserAgent,
   toAccountRefs,
+  turnOnSkillText,
+  unusedCredential,
+  unusedCredentialNote,
   type AccountRef,
   type ConnectionState,
   type CredentialMeta,
@@ -32,6 +36,7 @@ import {
   type ModeRequirement,
   type OAuthStatusSnapshot,
   type PickerMeta,
+  type SkillRegistry,
 } from '../utils/agent-config.js';
 import {
   DEFAULT_WAIT_SECONDS,
@@ -187,6 +192,25 @@ function modeLines(modes: ModeRequirement[]): string[] {
   ];
 }
 
+/** The answer to a connect that the rule on unused credentials refuses, or null when it may go ahead. */
+function unusedCredentialRefusal(
+  row: Record<string, unknown>,
+  context: Context,
+  registry: SkillRegistry,
+): string | null {
+  const { credential, meta } = context;
+  const unused = unusedCredential(row, credential, registry);
+  if (!unused) return null;
+  return [
+    `${meta.title} is not used by any of this agent's active skills, custom skills or scheduled tasks, so nothing was started.`,
+    unused.services.length > 0
+      ? `Services its skills connect with this tool: ${unused.services.join(', ')}.`
+      : 'None of its skills connect a service with this tool.',
+    turnOnSkillText(meta.title, credential, unused.skills),
+    credentialGroup(row, credential)?._connected === true ? `${meta.title} is still connected from before; disconnect_agent_oauth removes that connection.` : '',
+  ].filter(Boolean).join(' ');
+}
+
 async function connect(
   context: Context,
   input: { mode?: string; redirectUrl?: string; confirm: boolean },
@@ -194,6 +218,8 @@ async function connect(
   const { client, agentGuid, credential, meta, signal } = context;
   const oauth = meta.oauth as NonNullable<CredentialMeta['oauth']>;
   const row = await readUserAgent(client, agentGuid, signal);
+  const refusal = unusedCredentialRefusal(row, context, await loadSkillRegistry(client, signal));
+  if (refusal) return errorResult(new Error(refusal));
   const group = credentialGroup(row, credential);
   const modes = connectionModeRequirements(meta, group);
   const redirectUri = meta.connectionModes.includes('own') ? ownAppRedirectUri(meta) : undefined;
@@ -345,7 +371,7 @@ async function connect(
     ['', authorizeUrl]);
 }
 
-function statusMessage(state: ConnectionState, meta: CredentialMeta, snapshot: OAuthStatusSnapshot): string {
+function statusMessage(state: ConnectionState, meta: CredentialMeta, snapshot: OAuthStatusSnapshot, unusedNote: string | null): string {
   const next = meta.oauth?.picker?.next;
   switch (state) {
     case 'connected': {
@@ -361,9 +387,9 @@ function statusMessage(state: ConnectionState, meta: CredentialMeta, snapshot: O
     case 'waiting_for_user':
       return `The ${meta.title} sign-in has not finished yet. The link from connect works for ${OAUTH_LINK_TTL_SECONDS / 60} minutes; after that, connect again.`;
     case 'token_expired':
-      return `The saved ${meta.title} access has expired. Start the agent with control_agent, or connect again.`;
+      return `The saved ${meta.title} access has expired. ${unusedNote ?? 'Start the agent with control_agent, or connect again.'}`;
     default:
-      return `${meta.title} is not connected. Start with action connect.`;
+      return `${meta.title} is not connected. ${unusedNote ?? 'Start with action connect.'}`;
   }
 }
 
@@ -387,6 +413,7 @@ async function status(
   if (!snapshot) throw new Error(`Could not read the ${meta.title} connection status.`);
   const state = stateOf(snapshot);
   let nextAction;
+  let unusedNote: string | null = null;
   if (state === 'waiting_for_user') {
     nextAction = {
       tool: 'connect_agent_oauth',
@@ -406,16 +433,22 @@ async function status(
       reason: `List the ${picker.next.label} to choose from.`,
     };
   } else if (state === 'not_connected' || state === 'token_expired') {
-    nextAction = {
-      tool: 'connect_agent_oauth',
-      arguments: { action: 'connect', agent_guid: agentGuid, credential },
-      reason: `Connect ${meta.title}.`,
-    };
+    // Only these states offer connect, so only they read the skills. A status is
+    // still answered when that read fails: connect goes by the rule anyway.
+    const row = await readUserAgent(client, agentGuid, signal).catch(() => null);
+    unusedNote = row ? await unusedCredentialNote(client, row, credential, meta.title, signal) : null;
+    if (!unusedNote) {
+      nextAction = {
+        tool: 'connect_agent_oauth',
+        arguments: { action: 'connect', agent_guid: agentGuid, credential },
+        reason: `Connect ${meta.title}.`,
+      };
+    }
   }
   const childStep = snapshot.childStep
     ? { ...snapshot.childStep, label: picker?.next?.label ?? snapshot.childStep.picker }
     : undefined;
-  return result('status', context, state, statusMessage(state, meta, snapshot), {
+  return result('status', context, state, statusMessage(state, meta, snapshot, unusedNote), {
     ...(snapshot.connectedAt ? { connectedAt: snapshot.connectedAt } : {}),
     ...(snapshot.tokenExpiresAt ? { tokenExpiresAt: snapshot.tokenExpiresAt } : {}),
     accounts: snapshot.accounts,
@@ -558,8 +591,9 @@ export function registerConnectAgentOauth(server: McpServer, client: WiroClient)
         + 'connect), and with picker runs the extra step some providers have (Meta Ads pages, '
         + 'Google Business locations). Connecting again replaces an existing connection and needs '
         + 'confirm: true. A running agent restarts when a connection or selection is saved. '
-        + 'Remove a connection with disconnect_agent_oauth. Connect only a credential that the agent\'s '
-        + 'skills use (get_my_agent lists them). Only the person who deployed the agent can connect, so the '
+        + 'Remove a connection with disconnect_agent_oauth. A credential that none of the agent\'s active '
+        + 'skills use, that no custom skill or scheduled task of the agent requires, and that its setup does not wait for, is refused before any link is made (get_my_agent '
+        + 'lists the skills; apply_agent_skills turns one on). Only the person who deployed the agent can connect, so the '
         + 'connected project must be one that person created. The agents playbook (get_playbook) has the '
         + 'full setup walkthrough.',
       inputSchema: {
@@ -591,7 +625,7 @@ export function registerConnectAgentOauth(server: McpServer, client: WiroClient)
       outputSchema,
       annotations: {
         readOnlyHint: false,
-        destructiveHint: false,
+        destructiveHint: true,
         idempotentHint: false,
         openWorldHint: true,
       },

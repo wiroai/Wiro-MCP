@@ -11,6 +11,7 @@ import {
   type ApiEnvelope,
 } from '../utils/api.js';
 import {
+  APPROVAL_POLICY_KEY,
   DEFAULT_CRON_INTERVAL,
   agentStatusOf,
   customSkillEntries,
@@ -216,6 +217,35 @@ async function upsert(client: WiroClient, input: Input, signal: AbortSignal) {
   if (fromAgent && kind === 'scheduled_task' && existing.source === 'skill-bundle' && !isCustomBuild(row)
     && input.value !== undefined && input.value !== existing.value) {
     return errorResult(new Error(templateTaskTextError(key)));
+  }
+  const turnsPolicyOff = input.enabled === false;
+  const changesPolicyText = input.value !== undefined && input.value !== existing?.value;
+  if (key === APPROVAL_POLICY_KEY && existing?.enabled === true && !input.confirm && (turnsPolicyOff || changesPolicyText)) {
+    return reply(input, key, 'confirm_needed',
+      turnsPolicyOff
+        ? `Turning off ${key} removes the agent's approval gate: it can then post, send or change things on outside services by itself, such as from a scheduled task, without waiting for the user's yes. A running agent restarts to load this, and enabled: true turns the policy on again. Nothing has changed yet.`
+        : `The new text below replaces the rules of ${key}. Its mode line and per-action rules decide what the agent may post, send or change on outside services by itself, such as from a scheduled task, without waiting for the user's yes: with mode auto, or a rule that says no approval is needed, nothing waits. A running agent restarts to load this, and action revert restores an earlier version. Nothing has changed yet.`,
+      {
+        entry: toEntry(existing),
+        nextAction: {
+          tool: 'manage_agent_custom_skill',
+          arguments: {
+            action: 'upsert',
+            agent_guid: input.agent_guid,
+            key,
+            ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
+            ...(input.value !== undefined ? { value: input.value } : {}),
+            ...(input.description !== undefined ? { description: input.description } : {}),
+            confirm: true,
+          },
+          reason: 'Ask the user to confirm this first.',
+        },
+      },
+      [
+        ...(input.value !== undefined ? ['', '**New text:**', '', ...textBlock(input.value)] : []),
+        '',
+        'Ask the user to confirm, then call manage_agent_custom_skill again with confirm: true.',
+      ]);
   }
 
   const body: Record<string, unknown> = { useragentguid: input.agent_guid, skillkey: key };
@@ -464,16 +494,24 @@ async function revert(client: WiroClient, input: Input, signal: AbortSignal) {
     const data = await readHistory(client, input, key, signal);
     const warnings: string[] = [];
     let message: string;
+    let restoredPolicy: { enabled: boolean | null; value: string | null } | null = null;
     if (input.source === 'preset') {
       message = data.presetDefault
         ? `Reverting resets ${key} to the template default: its text, schedule, on/off state and description. Your edits are replaced.`
         : `${key} has no template default, so reverting to the template deletes it from the agent.`;
       if (!data.presetDefault) warnings.push('This removes the entry. Its history is kept, so a version can be restored later with source history.');
+      else restoredPolicy = { enabled: boolOrNull(data.presetDefault.enabled), value: asString(data.presetDefault.value) ?? null };
     } else {
       const version = data.entries.find(entry => asString(entry.guid) === input.version_id);
       if (!version) return errorResult(new Error(`Version ${input.version_id} was not found for ${key}. List the versions with action history.`));
       const restored = historyEntry(version);
       message = `Reverting restores the version of ${key} saved${restored.changedAt ? ` at ${restored.changedAt}` : ''}: its text${restored.interval ? `, schedule "${restored.interval}"` : ''} and on/off state. The current text is replaced.`;
+      restoredPolicy = { enabled: restored.enabled, value: version.after_value === null || version.after_value === undefined ? null : String(version.after_value) };
+    }
+    const policyState = key === APPROVAL_POLICY_KEY && restoredPolicy ? restoredPolicy : null;
+    if (policyState) {
+      const state = policyState.enabled === false ? 'off, which removes the agent\'s approval gate' : 'on';
+      message += ` The restored policy is ${state}. Its mode line and per-action rules decide what the agent may post, send or change on outside services by itself without waiting for the user's yes.`;
     }
     return reply(input, key, 'confirm_needed', `${message} Nothing has changed yet.`, {
       entry: current ? toEntry(current) : null,
@@ -491,7 +529,7 @@ async function revert(client: WiroClient, input: Input, signal: AbortSignal) {
         },
         reason: 'Ask the user to confirm this first.',
       },
-    });
+    }, policyState?.value ? ['', '**Text it restores:**', '', ...textBlock(policyState.value)] : []);
   }
 
   const response = requireApiSuccess(
@@ -559,7 +597,9 @@ export function registerManageAgentCustomSkill(server: McpServer, client: WiroCl
         + 'UTC unless it was set with update_agent; a new task without interval runs Mondays at 10:00. '
         + 'Every scheduled run spends the agent\'s credits, so confirm the schedule with the user. '
         + 'Entries from the agent\'s template, cs-approval-policy and the scheduled tasks its skills '
-        + 'brought cannot be deleted or renamed: set enabled false instead. The agent '
+        + 'brought cannot be deleted or renamed: set enabled false instead. Turning off cs-approval-policy '
+        + 'or changing its text also needs confirm: true: off, or a text that allows it, lets the agent act '
+        + 'on outside services by itself without waiting for the user\'s yes. The agent '
         + 'restarts when the text, schedule or on/off state changes. get_my_agent lists the '
         + 'current entries. Registry skills are switched with apply_agent_skills instead. On a team agent '
         + 'this needs a team admin or the person who deployed it; other team members read each entry in full '
@@ -589,7 +629,7 @@ export function registerManageAgentCustomSkill(server: McpServer, client: WiroCl
         limit: z.number().int().min(1).max(500).default(20)
           .describe('history: how many versions to return, newest first (default 20).'),
         confirm: z.boolean().default(false)
-          .describe('delete and revert: true to do it after the user agreed. Without it they only describe what would happen.'),
+          .describe('delete, revert and an upsert that turns off cs-approval-policy or changes its text: true to do it after the user agreed. Without it they only describe what would happen.'),
       },
       outputSchema,
       annotations: {

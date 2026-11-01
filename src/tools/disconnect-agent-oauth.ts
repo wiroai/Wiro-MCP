@@ -52,7 +52,7 @@ export function registerDisconnectAgentOauth(server: McpServer, client: WiroClie
       annotations: {
         readOnlyHint: false,
         destructiveHint: true,
-        idempotentHint: true,
+        idempotentHint: false,
         openWorldHint: true,
       },
     },

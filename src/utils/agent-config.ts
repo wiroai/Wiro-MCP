@@ -363,6 +363,82 @@ export function credentialsNeededFor(
     .filter(entry => entry.credentials.length > 0);
 }
 
+/** The credential keys the given skills use, main and additional, by the same rule as credentialsNeededFor. */
+export function credentialsUsedBySkills(skills: Iterable<string>, registry: SkillRegistry): Set<string> {
+  const used = new Set<string>();
+  for (const name of skills) {
+    const skill = registry.skills.get(name);
+    if (!skill?.requiresCredentials) continue;
+    for (const key of skill.credentialKeys) used.add(key);
+  }
+  return used;
+}
+
+export interface UnusedCredential {
+  /** The services the agent's active skills, custom skills and scheduled tasks connect with connect_agent_oauth, as "Title (key)". */
+  services: string[];
+  /** The skills whose main credential this is, to turn on first. */
+  skills: string[];
+}
+
+/**
+ * Why connect_agent_oauth connect refuses a service on this agent, or null when
+ * it connects: one of the agent's active skills uses it, or one of its custom
+ * skills or scheduled tasks requires it. Wiro keeps such an entry off until the
+ * credential is connected, and connecting turns it on, so the entry counts
+ * whatever its enabled says. A template agent's setup also waits for the
+ * credentials its template requires, whichever skills are on, so those stay
+ * connectable.
+ */
+export function unusedCredential(row: Row, credential: string, registry: SkillRegistry): UnusedCredential | null {
+  const used = credentialsUsedBySkills(enabledSkillNames(row), registry);
+  for (const entry of customSkillEntries(row)) {
+    for (const key of entry.requiresCredentials) used.add(key);
+  }
+  if (used.has(credential) || (!isCustomBuild(row) && credentialGroup(row, credential)?.optional === false)) return null;
+  return {
+    services: [...used].flatMap(key => {
+      const schema = credentialGroup(row, key)?._schema;
+      return isPlainObject(schema) && isPlainObject(schema.oauth_provider)
+        ? [`${asString(schema.title) ?? key} (${key})`]
+        : [];
+    }),
+    skills: [...registry.skills.values()]
+      .filter(skill => !skill.deprecated && skill.requiresCredentials && skill.credentialKeys[0] === credential)
+      .map(skill => skill.name),
+  };
+}
+
+export function turnOnSkillText(title: string, credential: string, skills: string[]): string {
+  return skills.length > 0
+    ? `To use ${title}, first turn on ${skills.join(' or ')} with apply_agent_skills; list_agent_skills with name "${credential}" shows how it connects.`
+    : '';
+}
+
+/**
+ * The same rule for the answers that offer connect (status, and describing or
+ * saving a credential), as a note to show instead of that offer. Null when the
+ * service connects, and when the skills cannot be read: connect checks again.
+ */
+export async function unusedCredentialNote(
+  client: WiroClient,
+  row: Row,
+  credential: string,
+  title: string,
+  signal?: AbortSignal,
+): Promise<string | null> {
+  try {
+    const unused = unusedCredential(row, credential, await loadSkillRegistry(client, signal));
+    if (!unused) return null;
+    return [
+      `${title} is not used by any of this agent's active skills, custom skills or scheduled tasks, so connect_agent_oauth refuses it for now.`,
+      turnOnSkillText(title, credential, unused.skills),
+    ].filter(Boolean).join(' ');
+  } catch {
+    return null;
+  }
+}
+
 const IDEMPOTENCY_KEY_RE = /^mcp-[0-9a-f]{16}-([0-9a-f]{10})-([0-9a-f]{8})$/;
 
 /** Fingerprint of one logical skill change, independent of the agent's current state. */
@@ -1739,6 +1815,9 @@ export function connectionState(
 // ---------------------------------------------------------------------------
 
 export type CustomSkillKind = 'skill' | 'scheduled_task';
+
+/** The entry that holds what an agent posts, sends or changes by itself until the user says yes. */
+export const APPROVAL_POLICY_KEY = 'cs-approval-policy';
 
 const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 

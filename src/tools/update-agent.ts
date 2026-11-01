@@ -81,7 +81,7 @@ export function registerUpdateAgent(server: McpServer, client: WiroClient): void
       },
       annotations: {
         readOnlyHint: false,
-        destructiveHint: false,
+        destructiveHint: true,
         idempotentHint: false,
         openWorldHint: true,
       },

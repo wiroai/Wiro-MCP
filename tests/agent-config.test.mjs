@@ -6,6 +6,7 @@ import test from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createMcpServer } from '../dist/server.js';
+import { SERVER_INSTRUCTIONS } from '../dist/instructions.js';
 import { PLAYBOOKS } from '../dist/playbooks.js';
 import { ApiResultError } from '../dist/utils/api.js';
 import {
@@ -14,6 +15,7 @@ import {
   describeSkillsApplyError,
   buildPickerAccounts,
   connectionState,
+  credentialsUsedBySkills,
   estimateProratedUsd,
   idempotencyKeyMismatch,
   isAllowedRedirectUrl,
@@ -216,6 +218,24 @@ const credentials = {
     },
   },
 };
+
+// The skills behind the services the connect_agent_oauth tests connect.
+const connectSkillList = {
+  ...skillList,
+  skills: [
+    ...skillList.skills,
+    { name: 'int-hubspot-crm', title: 'HubSpot CRM', depends_on: [], conflicts_with: [], credential_key: 'hubspot', requires_credentials: true, pricing: {} },
+    { name: 'int-hubspot-classic', title: 'HubSpot Classic', depends_on: [], deprecated: true, replacement: 'int-hubspot-crm', credential_key: 'hubspot', requires_credentials: true, pricing: {} },
+    { name: 'int-lemlist-outreach', title: 'Lemlist', depends_on: [], conflicts_with: [], credential_key: 'lemlist', additional_credential_keys: ['hubspot'], requires_credentials: true, pricing: {} },
+    { name: 'int-mailchimp-email', title: 'Mailchimp', depends_on: [], conflicts_with: [], credential_key: 'mailchimp', requires_credentials: true, pricing: {} },
+    { name: 'int-metaads-manage', title: 'Meta Ads', depends_on: [], conflicts_with: [], credential_key: 'meta-ads', requires_credentials: true, pricing: {} },
+    { name: 'int-serper-search', title: 'Serper', depends_on: [], conflicts_with: [], credential_key: 'serper', requires_credentials: true, pricing: {} },
+  ],
+};
+
+function skillsOn(...names) {
+  return names.map(name => ({ name, enabled: true, _edited: false }));
+}
 
 function detailRow(overrides = {}) {
   return {
@@ -1103,7 +1123,7 @@ test('set_agent_credentials describe offers connect only once the chosen mode ha
     assert.ok(result.structuredContent.notes.includes('Mode own needs clientid, clientsecret and developertoken saved first.'));
     assert.match(text(result), /- Mode own needs clientid, clientsecret and developertoken saved first\./);
     assert.doesNotMatch(text(result), /Everything mode own needs is saved/);
-    assert.deepEqual(empty.paths(), ['/Credentials/Detail', '/UserAgent/Detail']);
+    assert.deepEqual(empty.paths(), ['/Credentials/Detail', '/UserAgent/Detail', '/Skills/List']);
   });
 
   const saved = fakeClient({
@@ -1188,7 +1208,8 @@ test('set_agent_credentials offers connect after a write only once the mode has 
 test('set_agent_credentials offers only the modes that can be used', async () => {
   const fake = fakeClient({
     '/Credentials/Detail': credentialDetail,
-    '/UserAgent/Detail': detail(),
+    '/Skills/List': skillList,
+    '/UserAgent/Detail': detail({ skills: skillsOn('int-googleads-manage') }),
   });
   await withClient(fake, async client => {
     const metaAds = await client.callTool({ name: 'set_agent_credentials', arguments: { agent_guid: AGENT, credential: 'meta-ads' } });
@@ -1842,7 +1863,8 @@ test('set_agent_credentials uploads a file field from a public URL', { concurren
 test('connect_agent_oauth returns a browser link with the dashboard as the return address', async () => {
   const fake = fakeClient({
     '/Credentials/Detail': credentialDetail,
-    '/UserAgent/Detail': detail(),
+    '/Skills/List': connectSkillList,
+    '/UserAgent/Detail': detail({ skills: skillsOn('int-hubspot-crm') }),
     '/UserAgentOAuth/OAuthStatus': { result: true, connected: false, accounts: [], connectedat: '', tokenexpiresat: '' },
     '/UserAgentOAuth/OAuthConnect': { result: true, authorizeUrl: 'https://app.hubspot.com/oauth/authorize?client_id=abc&state=xyz' },
   });
@@ -1878,7 +1900,8 @@ test('connect_agent_oauth returns a browser link with the dashboard as the retur
 test('connect_agent_oauth refuses a return address outside the dashboard and the local machine', async () => {
   const fake = fakeClient({
     '/Credentials/Detail': credentialDetail,
-    '/UserAgent/Detail': detail(),
+    '/Skills/List': connectSkillList,
+    '/UserAgent/Detail': detail({ skills: skillsOn('int-hubspot-crm') }),
     '/UserAgentOAuth/OAuthStatus': { result: true, connected: false, accounts: [], connectedat: '', tokenexpiresat: '' },
     '/UserAgentOAuth/OAuthConnect': { result: true, authorizeUrl: 'https://app.hubspot.com/oauth/authorize?state=xyz' },
   });
@@ -1904,7 +1927,8 @@ test('connect_agent_oauth refuses a return address outside the dashboard and the
 test('connect_agent_oauth explains what to save before a provider can connect', async () => {
   const fake = fakeClient({
     '/Credentials/Detail': credentialDetail,
-    '/UserAgent/Detail': detail(),
+    '/Skills/List': connectSkillList,
+    '/UserAgent/Detail': detail({ skills: skillsOn('int-metaads-manage') }),
   });
   await withClient(fake, async client => {
     const result = await client.callTool({
@@ -1934,10 +1958,11 @@ test('connect_agent_oauth explains what to save before a provider can connect', 
 });
 
 test('connect_agent_oauth checks a saved token without a browser and lists the accounts', async () => {
-  const row = detailRow();
+  const row = detailRow({ skills: skillsOn('int-metaads-manage') });
   row.credentials['meta-ads'] = { ...row.credentials['meta-ads'], systemusertoken: 'EAAB-system-user-token' };
   const fake = fakeClient({
     '/Credentials/Detail': credentialDetail,
+    '/Skills/List': connectSkillList,
     '/UserAgent/Detail': { result: true, useragents: [row] },
     '/UserAgent/CredentialUpsert': { result: true, applied: 1 },
     '/UserAgentOAuth/OAuthConnect': { result: true, accounts: [{ id: '1234', name: 'Acme Ads' }, { id: '5678', name: 'Beta Ads' }] },
@@ -1962,10 +1987,11 @@ test('connect_agent_oauth checks a saved token without a browser and lists the a
 });
 
 test('connect_agent_oauth asks before replacing a working connection', async () => {
-  const row = detailRow();
+  const row = detailRow({ skills: skillsOn('int-metaads-manage') });
   row.credentials['meta-ads'] = { ...row.credentials['meta-ads'], systemusertoken: 'EAAB-token', authmethod: 'api_key', _connected: true };
   const fake = fakeClient({
     '/Credentials/Detail': credentialDetail,
+    '/Skills/List': connectSkillList,
     '/UserAgent/Detail': { result: true, useragents: [row] },
   });
   await withClient(fake, async client => {
@@ -1981,10 +2007,11 @@ test('connect_agent_oauth asks before replacing a working connection', async () 
   });
 
   // The confirmed call keeps the return address the user asked for.
-  const hubspotRow = detailRow();
+  const hubspotRow = detailRow({ skills: skillsOn('int-hubspot-crm') });
   hubspotRow.credentials.hubspot = { portalname: 'Acme', _connected: true, _filled: true, _required_missing: false, optional: true, _schema: { title: 'HubSpot' } };
   const browser = fakeClient({
     '/Credentials/Detail': credentialDetail,
+    '/Skills/List': connectSkillList,
     '/UserAgent/Detail': { result: true, useragents: [hubspotRow] },
     '/UserAgentOAuth/OAuthStatus': { result: true, connected: true, accounts: [], connectedat: '2026-10-01T10:00:00.000Z', tokenexpiresat: '2099-01-01T00:00:00.000Z' },
     '/UserAgentOAuth/OAuthConnect': { result: true, authorizeUrl: 'https://app.hubspot.com/oauth/authorize?state=xyz' },
@@ -2136,6 +2163,394 @@ test('connect_agent_oauth sends plain credentials to set_agent_credentials', asy
   });
 });
 
+// A custom build with one sign-in service, one service with a plain key and nothing else.
+function customBuildRow(overrides = {}) {
+  return detailRow({
+    agent: { custom: true },
+    skills: skillsOn('int-mailchimp-email', 'int-serper-search', 'util-chat-markdown-reporting'),
+    scheduledskills: [],
+    credentials: {
+      mailchimp: { optional: false, _connected: false, _filled: false, _required_missing: false, _schema: { title: 'Mailchimp', oauth_provider: { auth_method_value: 'wiro' } } },
+      serper: { apikey: '', optional: false, _connected: false, _filled: false, _required_missing: true, _schema: { title: 'Serper Web Search', oauth_provider: null } },
+      telegram: { optional: true, _connected: false, _filled: false, _required_missing: false, _schema: { title: 'Telegram', oauth_provider: null } },
+    },
+    ...overrides,
+  });
+}
+
+test('connect_agent_oauth refuses a service none of the active skills use, before anything starts', async () => {
+  const fake = fakeClient({
+    '/Credentials/Detail': credentialDetail,
+    '/Skills/List': connectSkillList,
+    '/UserAgent/Detail': { result: true, useragents: [customBuildRow()] },
+  });
+  await withClient(fake, async client => {
+    const result = await client.callTool({
+      name: 'connect_agent_oauth',
+      arguments: { action: 'connect', agent_guid: AGENT, credential: 'hubspot', mode: 'wiro' },
+    });
+    assert.equal(result.isError, true);
+    assert.equal(
+      text(result),
+      '## Error\n\nHubSpot is not used by any of this agent\'s active skills, custom skills or scheduled tasks, so nothing was started. Services its skills connect with this tool: Mailchimp (mailchimp). To use HubSpot, first turn on int-hubspot-crm with apply_agent_skills; list_agent_skills with name "hubspot" shows how it connects.',
+    );
+    // Nothing else is read or written once it is refused, whatever the call asks for.
+    assert.deepEqual(fake.paths(), ['/Credentials/Detail', '/UserAgent/Detail', '/Skills/List']);
+
+    const confirmed = await client.callTool({
+      name: 'connect_agent_oauth',
+      arguments: { agent_guid: AGENT, credential: 'hubspot', confirm: true, redirect_url: 'http://localhost:3000/done' },
+    });
+    assert.equal(confirmed.isError, true);
+    assert.match(text(confirmed), /HubSpot is not used by any of this agent's active skills/);
+    assert.equal(fake.paths().includes('/UserAgentOAuth/OAuthConnect'), false);
+    assert.equal(fake.paths().includes('/UserAgentOAuth/OAuthStatus'), false);
+  });
+});
+
+test('connect_agent_oauth says so when none of the agent\'s skills connect a service', async () => {
+  const fake = fakeClient({
+    '/Credentials/Detail': credentialDetail,
+    '/Skills/List': connectSkillList,
+    '/UserAgent/Detail': { result: true, useragents: [customBuildRow({ skills: skillsOn('int-serper-search') })] },
+  });
+  await withClient(fake, async client => {
+    const result = await client.callTool({ name: 'connect_agent_oauth', arguments: { agent_guid: AGENT, credential: 'hubspot' } });
+    assert.equal(result.isError, true);
+    assert.match(text(result), /None of its skills connect a service with this tool\./);
+    assert.doesNotMatch(text(result), /Mailchimp|Serper|Telegram/);
+  });
+});
+
+test('connect_agent_oauth refuses a service whose skill was turned off, and points to disconnect', async () => {
+  const row = customBuildRow();
+  row.credentials.hubspot = { portalname: 'Acme', optional: false, _connected: true, _filled: true, _required_missing: false, _schema: { title: 'HubSpot', oauth_provider: { auth_method_value: 'wiro' } } };
+  row.credentials['meta-ads'] = { systemusertoken: 'EAAB-token', optional: false, _connected: false, _filled: true, _required_missing: false, _schema: { title: 'Meta Ads', oauth_provider: { auth_method_value: 'wiro' } } };
+  const fake = fakeClient({
+    '/Credentials/Detail': credentialDetail,
+    '/Skills/List': connectSkillList,
+    '/UserAgent/Detail': { result: true, useragents: [row] },
+  });
+  await withClient(fake, async client => {
+    const connected = await client.callTool({ name: 'connect_agent_oauth', arguments: { agent_guid: AGENT, credential: 'hubspot', confirm: true } });
+    assert.equal(connected.isError, true);
+    assert.match(text(connected), /HubSpot is not used by any of this agent's active skills/);
+    assert.match(text(connected), /Services its skills connect with this tool: Mailchimp \(mailchimp\)\./);
+    assert.match(text(connected), /HubSpot is still connected from before; disconnect_agent_oauth removes that connection\./);
+
+    // A saved token is neither switched to nor checked.
+    const token = await client.callTool({ name: 'connect_agent_oauth', arguments: { agent_guid: AGENT, credential: 'meta-ads', mode: 'api_key' } });
+    assert.equal(token.isError, true);
+    assert.match(text(token), /Meta Ads is not used by any of this agent's active skills.*first turn on int-metaads-manage with apply_agent_skills;/);
+    assert.doesNotMatch(text(token), /still connected/);
+    for (const path of ['/UserAgent/CredentialUpsert', '/UserAgentOAuth/OAuthConnect']) {
+      assert.equal(fake.paths().includes(path), false, path);
+    }
+  });
+});
+
+test('connect_agent_oauth counts a credential a skill reads besides its main one', async () => {
+  const fake = fakeClient({
+    '/Credentials/Detail': credentialDetail,
+    '/Skills/List': connectSkillList,
+    '/UserAgent/Detail': detail({ skills: skillsOn('int-lemlist-outreach') }),
+    '/UserAgentOAuth/OAuthStatus': { result: true, connected: false, accounts: [], connectedat: '', tokenexpiresat: '' },
+    '/UserAgentOAuth/OAuthConnect': { result: true, authorizeUrl: 'https://app.hubspot.com/oauth/authorize?state=xyz' },
+  });
+  await withClient(fake, async client => {
+    const result = await client.callTool({ name: 'connect_agent_oauth', arguments: { agent_guid: AGENT, credential: 'hubspot' } });
+    assert.notEqual(result.isError, true, text(result));
+    assert.equal(result.structuredContent.state, 'authorize_in_browser');
+  });
+});
+
+test('connect_agent_oauth counts a credential a custom skill or scheduled task requires, on or off', async () => {
+  // Wiro keeps such an entry off until the credential is connected, so a gated entry reads as off.
+  const entry = (key, enabled, requires) => ({ key, description: 'Weekly check', value: 'Check the numbers.', interval: key.startsWith('cs-cron-') ? '0 9 * * 1' : null, enabled, requires_credentials: requires, _source: 'skill-bundle', _editable: true });
+  const routes = row => ({
+    '/Credentials/Detail': credentialDetail,
+    '/Skills/List': connectSkillList,
+    '/UserAgent/Detail': { result: true, useragents: [row] },
+    '/UserAgentOAuth/OAuthStatus': { result: true, connected: false, accounts: [], connectedat: '', tokenexpiresat: '' },
+    '/UserAgentOAuth/OAuthConnect': { result: true, authorizeUrl: 'https://app.hubspot.com/oauth/authorize?state=xyz' },
+  });
+  const connect = (client, credential) => client.callTool({ name: 'connect_agent_oauth', arguments: { agent_guid: AGENT, credential } });
+
+  // No entry needs it, so the call is refused and nothing starts.
+  const without = fakeClient(routes(customBuildRow({ customskills: [], scheduledskills: [] })));
+  await withClient(without, async client => {
+    const refused = await connect(client, 'hubspot');
+    assert.equal(refused.isError, true);
+    assert.match(text(refused), /HubSpot is not used by any of this agent's active skills, custom skills or scheduled tasks, so nothing was started\./);
+    assert.equal(without.paths().includes('/UserAgentOAuth/OAuthConnect'), false);
+  });
+
+  const gated = [
+    ['a scheduled task that is off', { scheduledskills: [entry('cs-cron-crm-report', false, ['hubspot'])], customskills: [] }],
+    ['a scheduled task that reads as on', { scheduledskills: [entry('cs-cron-crm-report', true, ['hubspot'])], customskills: [] }],
+    ['a custom skill that is off', { scheduledskills: [], customskills: [entry('cs-crm-rules', false, ['hubspot'])] }],
+    ['one of the credentials an entry lists', { scheduledskills: [entry('cs-cron-crm-report', false, ['salesforce', 'hubspot'])], customskills: [] }],
+  ];
+  for (const [label, overrides] of gated) {
+    const allowed = fakeClient(routes(customBuildRow(overrides)));
+    await withClient(allowed, async client => {
+      const result = await connect(client, 'hubspot');
+      assert.notEqual(result.isError, true, `${label}: ${text(result)}`);
+      assert.equal(result.structuredContent.state, 'authorize_in_browser', label);
+      assert.equal(allowed.paths().includes('/UserAgentOAuth/OAuthConnect'), true, label);
+
+      // The answers that offer connect go by the same rule.
+      const status = await client.callTool({ name: 'connect_agent_oauth', arguments: { action: 'status', agent_guid: AGENT, credential: 'hubspot' } });
+      assert.equal(status.structuredContent.nextAction?.tool, 'connect_agent_oauth', label);
+      assert.doesNotMatch(status.structuredContent.message, /refuses it for now/, label);
+      const described = await client.callTool({ name: 'set_agent_credentials', arguments: { agent_guid: AGENT, credential: 'hubspot' } });
+      assert.equal(described.structuredContent.nextAction?.tool, 'connect_agent_oauth', label);
+    });
+  }
+
+  // A credential nothing uses stays refused, and the refusal names the one the entry needs.
+  const row = customBuildRow({ scheduledskills: [entry('cs-cron-crm-report', false, ['hubspot'])], customskills: [] });
+  row.credentials.hubspot = { optional: false, _connected: false, _filled: false, _required_missing: false, _schema: { title: 'HubSpot', oauth_provider: { auth_method_value: 'wiro' } } };
+  const other = fakeClient(routes(row));
+  await withClient(other, async client => {
+    const refused = await connect(client, 'meta-ads');
+    assert.equal(refused.isError, true);
+    assert.match(text(refused), /Meta Ads is not used by any of this agent's active skills, custom skills or scheduled tasks/);
+    assert.match(text(refused), /Services its skills connect with this tool: Mailchimp \(mailchimp\), HubSpot \(hubspot\)\./);
+    assert.equal(other.paths().includes('/UserAgentOAuth/OAuthConnect'), false);
+  });
+});
+
+test('connect_agent_oauth keeps a credential a template agent\'s setup waits for connectable', async () => {
+  // The skill is off, but the template requires the credential, so get_my_agent's next step still works.
+  const required = fakeClient({
+    '/Credentials/Detail': credentialDetail,
+    '/Skills/List': connectSkillList,
+    '/UserAgent/Detail': detail(),
+  });
+  await withClient(required, async client => {
+    const result = await client.callTool({ name: 'connect_agent_oauth', arguments: { agent_guid: AGENT, credential: 'meta-ads' } });
+    assert.notEqual(result.isError, true, text(result));
+    assert.equal(result.structuredContent.state, 'setup_needed');
+  });
+
+  // An optional one follows the skills, and so does a custom build's, whose setup goes by the active skills.
+  const optionalRow = detailRow();
+  optionalRow.credentials.hubspot = { optional: true, _connected: false, _filled: false, _required_missing: false, _schema: { title: 'HubSpot', oauth_provider: { auth_method_value: 'wiro' } } };
+  const customRow = customBuildRow();
+  customRow.credentials.hubspot = { optional: false, _connected: false, _filled: false, _required_missing: false, _schema: { title: 'HubSpot', oauth_provider: { auth_method_value: 'wiro' } } };
+  for (const row of [optionalRow, customRow]) {
+    const refused = fakeClient({
+      '/Credentials/Detail': credentialDetail,
+      '/Skills/List': connectSkillList,
+      '/UserAgent/Detail': { result: true, useragents: [row] },
+    });
+    await withClient(refused, async client => {
+      const result = await client.callTool({ name: 'connect_agent_oauth', arguments: { agent_guid: AGENT, credential: 'hubspot' } });
+      assert.equal(result.isError, true);
+      assert.match(text(result), /HubSpot is not used by any of this agent's active skills/);
+    });
+  }
+});
+
+test('connect_agent_oauth makes no link when the skills cannot be read', async () => {
+  const fake = fakeClient({
+    '/Credentials/Detail': credentialDetail,
+    '/Skills/List': { result: false, errors: [] },
+    '/UserAgent/Detail': detail({ skills: skillsOn('int-hubspot-crm') }),
+  });
+  await withClient(fake, async client => {
+    const result = await client.callTool({ name: 'connect_agent_oauth', arguments: { agent_guid: AGENT, credential: 'hubspot' } });
+    assert.equal(result.isError, true);
+    assert.match(text(result), /Could not read the skill list\./);
+    assert.equal(fake.paths().includes('/UserAgentOAuth/OAuthConnect'), false);
+  });
+});
+
+test('connect_agent_oauth status, select_accounts and disconnect_agent_oauth do not go by the skills', async () => {
+  // None of these read the agent's skills, so a leftover connection can always be read and removed.
+  const fake = fakeClient({
+    '/Credentials/Detail': credentialDetail,
+    '/UserAgentOAuth/OAuthStatus': { result: true, connected: true, accounts: [{ id: '1234', name: 'Acme Ads' }], connectedat: '2026-10-01T00:00:00Z', tokenexpiresat: '' },
+    '/UserAgentOAuth/SetPickerAccounts': { result: true, accounts: [{ id: '1234', name: 'Acme Ads' }] },
+    '/UserAgentOAuth/OAuthDisconnect': { result: true, errors: [] },
+  });
+  await withClient(fake, async client => {
+    const status = await client.callTool({ name: 'connect_agent_oauth', arguments: { action: 'status', agent_guid: AGENT, credential: 'hubspot' } });
+    assert.equal(status.structuredContent.state, 'connected');
+    const saved = await client.callTool({ name: 'connect_agent_oauth', arguments: { action: 'select_accounts', agent_guid: AGENT, credential: 'meta-ads', accounts: [{ id: '1234', name: 'Acme Ads' }] } });
+    assert.notEqual(saved.isError, true, text(saved));
+    const preview = await client.callTool({ name: 'disconnect_agent_oauth', arguments: { agent_guid: AGENT, credential: 'hubspot' } });
+    assert.equal(preview.structuredContent.disconnected, false);
+    const done = await client.callTool({ name: 'disconnect_agent_oauth', arguments: preview.structuredContent.nextAction.arguments });
+    assert.notEqual(done.isError, true, text(done));
+    assert.equal(done.structuredContent.disconnected, true);
+    for (const path of ['/UserAgent/Detail', '/Skills/List']) assert.equal(fake.paths().includes(path), false, path);
+  });
+});
+
+test('connect_agent_oauth status offers connect only when connect would go ahead', async () => {
+  const notConnected = { result: true, connected: false, accounts: [], connectedat: '', tokenexpiresat: '' };
+  const expired = { result: true, connected: false, accounts: [{ id: '1', name: 'Acme' }], connectedat: '2026-01-01T00:00:00Z', tokenexpiresat: '2026-01-02T00:00:00Z' };
+  for (const [oauthStatus, state, lead] of [[notConnected, 'not_connected', 'HubSpot is not connected.'], [expired, 'token_expired', 'The saved HubSpot access has expired.']]) {
+    const fake = fakeClient({
+      '/Credentials/Detail': credentialDetail,
+      '/Skills/List': connectSkillList,
+      '/UserAgent/Detail': { result: true, useragents: [customBuildRow()] },
+      '/UserAgentOAuth/OAuthStatus': oauthStatus,
+    });
+    await withClient(fake, async client => {
+      const result = await client.callTool({ name: 'connect_agent_oauth', arguments: { action: 'status', agent_guid: AGENT, credential: 'hubspot' } });
+      assert.notEqual(result.isError, true, text(result));
+      assert.equal(result.structuredContent.state, state);
+      assert.equal(result.structuredContent.nextAction, undefined);
+      assert.equal(
+        result.structuredContent.message,
+        `${lead} HubSpot is not used by any of this agent's active skills, custom skills or scheduled tasks, so connect_agent_oauth refuses it for now. To use HubSpot, first turn on int-hubspot-crm with apply_agent_skills; list_agent_skills with name "hubspot" shows how it connects.`,
+      );
+      assert.doesNotMatch(text(result), /Next: call|connect again|action connect/);
+    });
+  }
+
+  // A service a skill uses keeps the offer, and connect then goes ahead.
+  const used = fakeClient({
+    '/Credentials/Detail': credentialDetail,
+    '/Skills/List': connectSkillList,
+    '/UserAgent/Detail': detail({ skills: skillsOn('int-hubspot-crm') }),
+    '/UserAgentOAuth/OAuthStatus': notConnected,
+    '/UserAgentOAuth/OAuthConnect': { result: true, authorizeUrl: 'https://app.hubspot.com/oauth/authorize?state=xyz' },
+  });
+  await withClient(used, async client => {
+    const result = await client.callTool({ name: 'connect_agent_oauth', arguments: { action: 'status', agent_guid: AGENT, credential: 'hubspot' } });
+    assert.equal(result.structuredContent.message, 'HubSpot is not connected. Start with action connect.');
+    const next = result.structuredContent.nextAction;
+    assert.equal(next.tool, 'connect_agent_oauth');
+    const connected = await client.callTool({ name: next.tool, arguments: next.arguments });
+    assert.equal(connected.structuredContent.state, 'authorize_in_browser');
+  });
+
+  // A template's required service stays connectable whichever skills are on.
+  const required = fakeClient({
+    '/Credentials/Detail': credentialDetail,
+    '/Skills/List': connectSkillList,
+    '/UserAgent/Detail': detail(),
+    '/UserAgentOAuth/OAuthStatus': notConnected,
+  });
+  await withClient(required, async client => {
+    const result = await client.callTool({ name: 'connect_agent_oauth', arguments: { action: 'status', agent_guid: AGENT, credential: 'meta-ads' } });
+    assert.equal(result.structuredContent.nextAction.tool, 'connect_agent_oauth');
+  });
+});
+
+test('connect_agent_oauth status still answers when the skills or the agent cannot be read', async () => {
+  const notConnected = { result: true, connected: false, accounts: [], connectedat: '', tokenexpiresat: '' };
+  for (const routes of [
+    { '/UserAgent/Detail': { result: false, errors: [{ code: 0, message: 'no' }] } },
+    { '/UserAgent/Detail': detail(), '/Skills/List': { result: false, errors: [] } },
+    {},
+  ]) {
+    const fake = fakeClient({ '/Credentials/Detail': credentialDetail, '/UserAgentOAuth/OAuthStatus': notConnected, ...routes });
+    await withClient(fake, async client => {
+      const result = await client.callTool({ name: 'connect_agent_oauth', arguments: { action: 'status', agent_guid: AGENT, credential: 'hubspot' } });
+      assert.notEqual(result.isError, true, text(result));
+      assert.equal(result.structuredContent.state, 'not_connected');
+      assert.equal(result.structuredContent.nextAction.arguments.action, 'connect');
+    });
+  }
+});
+
+test('connect_agent_oauth status reads the skills once, after the wait, and only when it would offer connect', async () => {
+  let reads = 0;
+  const fake = fakeClient({
+    '/Credentials/Detail': credentialDetail,
+    '/Skills/List': connectSkillList,
+    '/UserAgent/Detail': { result: true, useragents: [customBuildRow()] },
+    '/UserAgentOAuth/OAuthStatus': () => { reads += 1; return { result: true, connected: false, accounts: [], connectedat: 't0', tokenexpiresat: '' }; },
+  });
+  await withClient(fake, async client => {
+    const result = await client.callTool({ name: 'connect_agent_oauth', arguments: { action: 'status', agent_guid: AGENT, credential: 'hubspot', since_connected_at: 't0' } });
+    assert.equal(result.structuredContent.state, 'waiting_for_user');
+    assert.equal(result.structuredContent.nextAction.arguments.action, 'status');
+    assert.equal(fake.paths().includes('/UserAgent/Detail'), false);
+    assert.equal(fake.paths().includes('/Skills/List'), false);
+    assert.equal(reads, 1);
+  });
+});
+
+test('set_agent_credentials describe says to turn on a skill first instead of offering a refused connect', async () => {
+  const fake = fakeClient({
+    '/Credentials/Detail': credentialDetail,
+    '/Skills/List': connectSkillList,
+    '/UserAgent/Detail': { result: true, useragents: [customBuildRow()] },
+  });
+  await withClient(fake, async client => {
+    const note = 'HubSpot is not used by any of this agent\'s active skills, custom skills or scheduled tasks, so connect_agent_oauth refuses it for now. To use HubSpot, first turn on int-hubspot-crm with apply_agent_skills; list_agent_skills with name "hubspot" shows how it connects.';
+    const wiro = await client.callTool({ name: 'set_agent_credentials', arguments: { agent_guid: AGENT, credential: 'hubspot' } });
+    assert.equal(wiro.structuredContent.nextAction, undefined);
+    assert.ok(wiro.structuredContent.notes.includes(note));
+    assert.ok(text(wiro).includes(`- ${note}`));
+    // What it needs stays readable.
+    assert.match(text(wiro), /- \*\*wiro\*\*: Sign in through Wiro's own HubSpot app/);
+
+    // A service with only the user's own app is told before the user is asked to make one.
+    const own = await client.callTool({ name: 'set_agent_credentials', arguments: { agent_guid: AGENT, credential: 'google-ads' } });
+    assert.equal(own.structuredContent.nextAction, undefined);
+    assert.match(text(own), /Google Ads is not used by any of this agent's active skills.*first turn on int-googleads-manage with apply_agent_skills/);
+    assert.doesNotMatch(text(own), /Mode own needs/);
+  });
+
+  // A skill that uses it keeps the offer.
+  const used = fakeClient({
+    '/Credentials/Detail': credentialDetail,
+    '/Skills/List': connectSkillList,
+    '/UserAgent/Detail': detail({ skills: skillsOn('int-hubspot-crm') }),
+  });
+  await withClient(used, async client => {
+    const result = await client.callTool({ name: 'set_agent_credentials', arguments: { agent_guid: AGENT, credential: 'hubspot' } });
+    assert.equal(result.structuredContent.nextAction.arguments.mode, 'wiro');
+    assert.doesNotMatch(text(result), /not used by any/);
+  });
+});
+
+test('set_agent_credentials does not offer connect after a write when connect would refuse it', async () => {
+  const row = customBuildRow();
+  row.credentials['google-ads'] = { clientid: '123-abc.apps.googleusercontent.com', clientsecret: 'own-secret-value', developertoken: 'own-dev-token', _connected: false, _filled: true, _required_missing: false, _schema: { title: 'Google Ads', oauth_provider: { auth_method_value: 'wiro' } } };
+  const fake = fakeClient({
+    '/Credentials/Detail': credentialDetail,
+    '/Skills/List': connectSkillList,
+    '/UserAgent/Detail': { result: true, useragents: [row] },
+    '/UserAgent/CredentialUpsert': { result: true, errors: [] },
+  });
+  await withClient(fake, async client => {
+    const result = await client.callTool({
+      name: 'set_agent_credentials',
+      arguments: { agent_guid: AGENT, fields: ['clientid', 'clientsecret', 'developertoken'].map(field => ({ credential: 'google-ads', field, value: 'x' })) },
+    });
+    assert.notEqual(result.isError, true, text(result));
+    assert.equal(result.structuredContent.nextAction, undefined);
+    assert.ok(result.structuredContent.notes.some(entry => /Google Ads is not used by any of this agent's active skills.*first turn on int-googleads-manage/.test(entry)));
+  });
+});
+
+test('connect_agent_oauth and the agents playbook state the rule on unused credentials', async () => {
+  await withClient(fakeClient({}), async client => {
+    const { tools } = await client.listTools();
+    const description = tools.find(tool => tool.name === 'connect_agent_oauth').description;
+    assert.match(description, /A credential that none of the agent's active skills use, that no custom skill or scheduled task of the agent requires, and that its setup does not wait for, is refused before any link is made/);
+  });
+  assert.match(PLAYBOOKS.agents, /connects only a credential the agent's active skills use, a custom skill or scheduled task requires, or its setup waits for, and refuses any other before it makes a link/);
+  assert.match(PLAYBOOKS.agents, /`disconnect_agent_oauth` works for any connected service\./);
+});
+
+test('credentialsUsedBySkills counts main and additional credentials of the skills named', () => {
+  const registry = parseSkillRegistry(connectSkillList);
+  assert.deepEqual([...credentialsUsedBySkills(['int-lemlist-outreach', 'int-mailchimp-email', 'util-anti-ai-human-copy', 'not-in-the-list'], registry)], ['lemlist', 'hubspot', 'mailchimp']);
+  assert.deepEqual([...credentialsUsedBySkills([], registry)], []);
+  // A skill that needs no credentials uses none, whatever keys it lists.
+  const noCredentials = parseSkillRegistry({ skills: [{ name: 'util-x', credential_key: 'hubspot', requires_credentials: false }] });
+  assert.deepEqual([...credentialsUsedBySkills(['util-x'], noCredentials)], []);
+});
+
 test('disconnect_agent_oauth asks first and disconnects only with confirm', async () => {
   const fake = fakeClient({
     '/Credentials/Detail': credentialDetail,
@@ -2163,7 +2578,8 @@ test('connect_agent_oauth and disconnect_agent_oauth say whose project can chang
   const refusal = { result: false, errors: [{ code: 0, message: 'User agent not found or unauthorized' }] };
   const fake = fakeClient({
     '/Credentials/Detail': credentialDetail,
-    '/UserAgent/Detail': detail(),
+    '/Skills/List': connectSkillList,
+    '/UserAgent/Detail': detail({ skills: skillsOn('int-hubspot-crm') }),
     '/UserAgentOAuth/OAuthStatus': { result: true, connected: true, accounts: [], connectedat: '2026-10-01T00:00:00Z', tokenexpiresat: '' },
     '/UserAgentOAuth/OAuthConnect': refusal,
     '/UserAgentOAuth/OAuthDisconnect': refusal,
@@ -2278,6 +2694,178 @@ test('manage_agent_custom_skill refuses invalid upserts without writing', async 
     }
     assert.equal(fake.paths().includes('/UserAgent/CustomSkillUpsert'), false);
   });
+});
+
+test('manage_agent_custom_skill describes turning off the approval policy and needs confirm', async () => {
+  const fake = fakeClient({
+    '/UserAgent/Detail': detail(),
+    '/UserAgent/CustomSkillUpsert': { result: true, errors: [] },
+  });
+  await withClient(fake, async client => {
+    let ask;
+    for (const key of ['cs-approval-policy', 'approval-policy', ' cs-approval-policy ']) {
+      ask = await client.callTool({ name: 'manage_agent_custom_skill', arguments: { action: 'upsert', agent_guid: AGENT, key, enabled: false } });
+      assert.notEqual(ask.isError, true, text(ask));
+      const out = ask.structuredContent;
+      assert.equal(out.status, 'confirm_needed', key);
+      assert.equal(out.key, 'cs-approval-policy');
+      assert.match(out.message, /^Turning off cs-approval-policy removes the agent's approval gate: it can then post, send or change things on outside services by itself, such as from a scheduled task, without waiting for the user's yes\./);
+      assert.match(out.message, /Nothing has changed yet\.$/);
+      assert.equal(out.entry.enabled, true);
+      assert.deepEqual(out.nextAction, {
+        tool: 'manage_agent_custom_skill',
+        arguments: { action: 'upsert', agent_guid: AGENT, key: 'cs-approval-policy', enabled: false, confirm: true },
+        reason: 'Ask the user to confirm this first.',
+      });
+      assert.ok(text(ask).includes(out.message));
+      assert.match(text(ask), /Ask the user to confirm, then call manage_agent_custom_skill again with confirm: true\./);
+    }
+    assert.equal(fake.paths().includes('/UserAgent/CustomSkillUpsert'), false);
+
+    const done = await client.callTool({ name: 'manage_agent_custom_skill', arguments: ask.structuredContent.nextAction.arguments });
+    assert.notEqual(done.isError, true, text(done));
+    assert.equal(done.structuredContent.status, 'saved');
+    assert.equal(done.structuredContent.entry.enabled, false);
+    assert.match(done.structuredContent.restart, /restarts to load the change/);
+    assert.deepEqual(fake.calls.find(call => call.path === '/UserAgent/CustomSkillUpsert').body, {
+      useragentguid: AGENT,
+      skillkey: 'cs-approval-policy',
+      enabled: false,
+    });
+  });
+});
+
+test('manage_agent_custom_skill keeps the whole change when it asks before turning off the approval policy', async () => {
+  const fake = fakeClient({
+    '/UserAgent/Detail': detail(),
+    '/UserAgent/CustomSkillUpsert': { result: true, errors: [] },
+  });
+  await withClient(fake, async client => {
+    const ask = await client.callTool({
+      name: 'manage_agent_custom_skill',
+      arguments: { action: 'upsert', agent_guid: AGENT, key: 'approval-policy', kind: 'skill', value: 'New rules.', description: 'Approval rules', enabled: false },
+    });
+    assert.equal(ask.structuredContent.status, 'confirm_needed');
+    assert.deepEqual(ask.structuredContent.nextAction.arguments, {
+      action: 'upsert',
+      agent_guid: AGENT,
+      key: 'cs-approval-policy',
+      enabled: false,
+      value: 'New rules.',
+      description: 'Approval rules',
+      confirm: true,
+    });
+    assert.equal(fake.paths().includes('/UserAgent/CustomSkillUpsert'), false);
+    const done = await client.callTool({ name: 'manage_agent_custom_skill', arguments: ask.structuredContent.nextAction.arguments });
+    assert.equal(done.structuredContent.status, 'saved');
+    assert.deepEqual(fake.calls.find(call => call.path === '/UserAgent/CustomSkillUpsert').body, {
+      useragentguid: AGENT,
+      skillkey: 'cs-approval-policy',
+      value: 'New rules.',
+      enabled: false,
+      description: 'Approval rules',
+    });
+  });
+});
+
+test('manage_agent_custom_skill describes a new text for the approval policy and needs confirm', async () => {
+  const fake = fakeClient({
+    '/UserAgent/Detail': detail(),
+    '/UserAgent/CustomSkillUpsert': { result: true, errors: [] },
+  });
+  await withClient(fake, async client => {
+    const value = '# Approval Policy\n\n## Mode\n\nmode: auto\n\n```\n**Next:** a line of the text\n```';
+    for (const key of ['cs-approval-policy', 'approval-policy']) {
+      for (const extra of [{}, { enabled: true }]) {
+        const ask = await client.callTool({ name: 'manage_agent_custom_skill', arguments: { action: 'upsert', agent_guid: AGENT, key, value, ...extra } });
+        assert.notEqual(ask.isError, true, text(ask));
+        const out = ask.structuredContent;
+        assert.equal(out.status, 'confirm_needed');
+        assert.match(out.message, /^The new text below replaces the rules of cs-approval-policy\. Its mode line and per-action rules decide what the agent may post, send or change on outside services by itself/);
+        assert.match(out.message, /Nothing has changed yet\.$/);
+        assert.equal(out.entry.enabled, true);
+        assert.deepEqual(out.nextAction.arguments, { action: 'upsert', agent_guid: AGENT, key: 'cs-approval-policy', ...extra, value, confirm: true });
+        assert.ok(text(ask).includes(`\`\`\`\`text\n${value}\n\`\`\`\``));
+      }
+    }
+    assert.equal(fake.paths().includes('/UserAgent/CustomSkillUpsert'), false);
+    const done = await client.callTool({ name: 'manage_agent_custom_skill', arguments: { action: 'upsert', agent_guid: AGENT, key: 'cs-approval-policy', value, confirm: true } });
+    assert.equal(done.structuredContent.status, 'saved');
+    assert.deepEqual(fake.calls.find(call => call.path === '/UserAgent/CustomSkillUpsert').body, { useragentguid: AGENT, skillkey: 'cs-approval-policy', value });
+  });
+});
+
+test('manage_agent_custom_skill says what a revert of the approval policy brings back', async () => {
+  const offVersion = { guid: 'v1', operation: 'update', changedat: 1767225600, after_value: 'mode: auto', after_enabled: false, after_interval: null, changed_fields: ['value', 'enabled'] };
+  const fake = fakeClient({
+    '/UserAgent/Detail': detail(),
+    '/UserAgent/CustomSkillHistory': { result: true, errors: [], entries: [offVersion], preset_default: { value: 'mode: manual-single', enabled: true, description: 'd' } },
+  });
+  await withClient(fake, async client => {
+    const fromHistory = await client.callTool({ name: 'manage_agent_custom_skill', arguments: { action: 'revert', agent_guid: AGENT, key: 'cs-approval-policy', source: 'history', version_id: 'v1' } });
+    assert.equal(fromHistory.structuredContent.status, 'confirm_needed');
+    assert.match(fromHistory.structuredContent.message, /The restored policy is off, which removes the agent's approval gate\./);
+    assert.ok(text(fromHistory).includes('```text\nmode: auto\n```'));
+    const fromPreset = await client.callTool({ name: 'manage_agent_custom_skill', arguments: { action: 'revert', agent_guid: AGENT, key: 'cs-approval-policy', source: 'preset' } });
+    assert.match(fromPreset.structuredContent.message, /The restored policy is on\./);
+    assert.ok(text(fromPreset).includes('```text\nmode: manual-single\n```'));
+    assert.equal(fake.paths().includes('/UserAgent/CustomSkillRevert'), false);
+  });
+});
+
+test('manage_agent_custom_skill does not ask again for the rest of the upserts', async () => {
+  const upserts = (agent = detail()) => fakeClient({
+    '/UserAgent/Detail': agent,
+    '/UserAgent/CustomSkillUpsert': { result: true, errors: [] },
+  });
+  const cases = [
+    // Turning the policy on, and saving the text it already has, act at once.
+    [detail(), { key: 'cs-approval-policy', enabled: true }],
+    [detail(), { key: 'cs-approval-policy', value: 'Ask before spending.' }],
+    // A policy that is off does not gate anything yet.
+    [detail({ customskills: [{ key: 'cs-approval-policy', description: 'Approval rules', value: 'Ask.', interval: null, enabled: false, requires_credentials: [], _source: 'preset-strategy', _editable: true }] }), { key: 'cs-approval-policy', value: 'mode: auto' }],
+    // Other entries turn off at once.
+    [detail(), { key: 'cs-cron-my-task', enabled: false }],
+    // A policy that is already off stays off.
+    [detail({ customskills: [{ key: 'cs-approval-policy', description: 'Approval rules', value: 'Ask.', interval: null, enabled: false, requires_credentials: [], _source: 'preset-strategy', _editable: true }] }), { key: 'cs-approval-policy', enabled: false }],
+    // An agent that comes without one has no gate to turn off.
+    [detail({ customskills: [] }), { key: 'cs-approval-policy', value: 'Ask first.', enabled: false }],
+  ];
+  for (const [agent, args] of cases) {
+    const fake = upserts(agent);
+    await withClient(fake, async client => {
+      const result = await client.callTool({ name: 'manage_agent_custom_skill', arguments: { action: 'upsert', agent_guid: AGENT, ...args } });
+      assert.notEqual(result.isError, true, text(result));
+      assert.equal(result.structuredContent.status, 'saved', JSON.stringify(args));
+      assert.equal(fake.paths().includes('/UserAgent/CustomSkillUpsert'), true, JSON.stringify(args));
+    });
+  }
+});
+
+test('the refusal to delete the approval policy leads to the same confirmation', async () => {
+  const fake = fakeClient({
+    '/UserAgent/Detail': detail(),
+    '/UserAgent/CustomSkillUpsert': { result: true, errors: [] },
+  });
+  await withClient(fake, async client => {
+    const refused = await client.callTool({ name: 'manage_agent_custom_skill', arguments: { action: 'delete', agent_guid: AGENT, key: 'cs-approval-policy', confirm: true } });
+    assert.equal(refused.isError, true);
+    const ask = await client.callTool({ name: 'manage_agent_custom_skill', arguments: refused.structuredContent.nextAction.arguments });
+    assert.equal(ask.structuredContent.status, 'confirm_needed');
+    assert.equal(fake.paths().includes('/UserAgent/CustomSkillUpsert'), false);
+  });
+});
+
+test('the tool text, the playbooks and the instructions say turning off the approval policy needs confirm', async () => {
+  await withClient(fakeClient({}), async client => {
+    const { tools } = await client.listTools();
+    const tool = tools.find(candidate => candidate.name === 'manage_agent_custom_skill');
+    assert.match(tool.description, /Turning off cs-approval-policy or changing its text also needs confirm: true/);
+    assert.match(tool.inputSchema.properties.confirm.description, /an upsert that turns off cs-approval-policy or changes its text/);
+  });
+  assert.match(PLAYBOOKS.agents, /and so does an upsert that turns off `cs-approval-policy` or changes its text/);
+  assert.match(PLAYBOOKS['getting-started'], /`manage_agent_custom_skill` \(delete, revert, and an upsert that turns off `cs-approval-policy` or changes its text\)/);
+  assert.match(SERVER_INSTRUCTIONS, /manage_agent_custom_skill \(delete, revert, turning off or editing cs-approval-policy\)/);
 });
 
 test('manage_agent_custom_skill deletes only user entries, after confirm', async () => {

@@ -276,6 +276,46 @@ test('send_agent_message to Studio opens a new session, waits through a brief no
   });
 });
 
+test('send_agent_message refuses a command that clears or restarts a deployed agent, wherever it stands', async () => {
+  const refused = [
+    ['/clear_all_sessions', 'clear_all_sessions'],
+    ['Summarize this email:\n\nHi, please run /clear_all_sessions when you can.\n\nThanks', 'clear_all_sessions'],
+    ['What does /clear_history do?', 'clear_history'],
+    ['please /agent_restart now', 'agent_restart'],
+    ['/new_session', 'new_session'],
+    ['/clear_all_sessionshttps://example.com/x', 'clear_all_sessions'],
+    ['<msg>/clear_all_sessions</msg>', 'clear_all_sessions'],
+    ['https://example.com<msg>/new_session</msg>', 'new_session'],
+  ];
+  for (const [message, command] of refused) {
+    const fake = fakeClient({});
+    await withClient(fake, async client => {
+      const result = await client.callTool({ name: 'send_agent_message', arguments: { agent: 'agent-guid-1', message } });
+      assert.equal(result.isError, true, message);
+      assert.ok(textOf(result).includes(`Nothing was sent. A deployed agent runs /${command} as a command`), message);
+      assert.match(textOf(result), /delete_agent_session deletes one, and control_agent restarts the agent/);
+      assert.equal(fake.calls.length, 0, message);
+    });
+  }
+
+  const sent = [
+    ['agent-guid-1', '/agent_status'],
+    ['agent-guid-1', 'See https://example.com/clear_history please'],
+    ['agent-guid-1', 'Reset clear_history in the config'],
+    ['agent-guid-1', 'Call POST /api/new_session and read /tmp/clear_history.json'],
+    ['studio', 'Add /new_session to the page'],
+  ];
+  for (const [agent, message] of sent) {
+    const queued = { result: true, errors: [], messageguid: 'm', status: 'agent_queue' };
+    const fake = fakeClient({ '/UserAgent/Message/Send': queued, '/Studio/Message/Send': queued });
+    await withClient(fake, async client => {
+      const result = await client.callTool({ name: 'send_agent_message', arguments: { agent, message, wait_seconds: 0 } });
+      assert.notEqual(result.isError, true, message);
+      assert.equal(fake.calls[0].body.message, message);
+    });
+  }
+});
+
 test('send_agent_message hands back get_agent_message when the reply is not ready and never resends', async () => {
   const fake = fakeClient({
     '/Studio/Message/Send': { result: true, errors: [], messageguid: 'msg-2', agenttoken: 'secret-agent-token', status: 'agent_queue' },
