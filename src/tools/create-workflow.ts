@@ -98,10 +98,10 @@ export function registerCreateWorkflow(server: McpServer, client: WiroClient): v
             nextAction: {
               tool: 'run_workflow',
               arguments: { slug: saved.fullSlug },
-              reason: 'Run it only if the user asked for a run, after telling them the estimate; otherwise ask the user first (each model step is charged). Pass input values'
+              reason: 'Run it only if the user asked for a run, after telling them the estimate; otherwise ask the user first (each model step is charged).'
                 + (saved.inputs.length > 0
-                  ? ` for: ${plainInputKeys(saved.inputs).join(', ') || 'the inputs listed'}. A key you leave out uses its saved value or default.`
-                  : '. It has no inputs.'),
+                  ? ` Pass input values for: ${plainInputKeys(saved.inputs).join(', ') || 'the inputs listed'}. A key you leave out uses its saved value or default.`
+                  : ' It has no inputs.'),
             },
           },
         };

@@ -1691,6 +1691,23 @@ test('update_agent skips Update for settings, checks models and finishes setup',
   });
 });
 
+test('update_agent says a plan is needed when setup finishes on an agent that has none', async () => {
+  let status = 6;
+  const setup = fakeClient({
+    '/UserAgent/Detail': () => detailResponse(agentRow({ status, subscription: null, credentials: {} })),
+    '/UserAgent/Update': () => {
+      status = 0;
+      return { result: true, errors: [], useragents: [] };
+    },
+  });
+  await withClient(setup, async client => {
+    const result = await call(client, 'update_agent', { agent_guid: 'ua-1' });
+    assert.match(result.structuredContent.message, /Setup is complete; the agent needs an active plan before it can start\./);
+    assert.doesNotMatch(result.structuredContent.message, /can be started/);
+    assert.equal(result.structuredContent.nextAction.tool, 'manage_agent_billing');
+  });
+});
+
 // ---------------------------------------------------------------------------
 // manage_agent_billing
 // ---------------------------------------------------------------------------
@@ -2375,14 +2392,13 @@ test('get_agent_activity logs strip people and explain an agent that is not runn
     assert.equal(logs.structuredContent.logs.available, false);
     assert.equal(logs.structuredContent.nextAction.tool, 'control_agent');
     // Starting the agent runs its tasks on its credits, so the user decides.
-    const note = 'The activity log can be read while the agent runs. Ask the user before starting it with control_agent.';
-    assert.equal(logs.structuredContent.logs.note, note);
+    assert.match(logs.structuredContent.logs.note, /Ask the user before starting it with control_agent\.$/);
     assert.match(textOf(logs), /Ask the user before starting it with control_agent\./);
-    assert.equal(logs.structuredContent.nextAction.reason, 'The log can be read once the agent runs. Start it only if the user agrees.');
+    assert.equal(logs.structuredContent.nextAction.reason, 'The agent\'s own log can be read once it runs. Start it only if the user agrees.');
     const dates = await call(client, 'get_agent_activity', { agent_guid: 'ua-1', kind: 'log_dates' });
     assert.equal(dates.structuredContent.logDates.available, false);
-    assert.equal(dates.structuredContent.logDates.note, note);
-    assert.equal(dates.structuredContent.nextAction.reason, 'The log can be read once the agent runs. Start it only if the user agrees.');
+    assert.match(dates.structuredContent.logDates.note, /Ask the user before starting it with control_agent\.$/);
+    assert.equal(dates.structuredContent.nextAction.reason, 'The agent\'s own log can be read once it runs. Start it only if the user agrees.');
   });
 });
 
@@ -2886,6 +2902,9 @@ test('get_my_agent with entry gives the whole text of an entry the list shortens
     const missing = await call(client, 'get_my_agent', { agent_guid: 'ua-1', entry: 'cs-nope' });
     assert.equal(missing.isError, true);
     assert.match(textOf(missing), /This agent has no custom instruction or scheduled task named "cs-nope"\. get_my_agent without entry lists its keys\./);
+    const missingBare = await call(client, 'get_my_agent', { agent_guid: 'ua-1', entry: 'nope' });
+    assert.equal(missingBare.isError, true);
+    assert.match(textOf(missingBare), /This agent has no custom skill or scheduled task named "nope"\. Pass the full key \(cs-\.\.\. or cs-cron-\.\.\.\)\. get_my_agent without entry lists its keys\./);
     const bad = await call(client, 'get_my_agent', { agent_guid: 'ua-1', entry: 'BAD KEY' });
     assert.equal(bad.isError, true);
     assert.match(textOf(bad), /Invalid key "BAD KEY"/);
@@ -2923,13 +2942,13 @@ function customBuildRoutes(scheduledskills) {
 
 test('a custom build\'s deploy result names the scheduled tasks already on and how to change them', async () => {
   const fake = fakeClient(customBuildRoutes([
-    { key: 'cs-cron-my-scheduled-task', description: 'A recurring task your agent runs on a schedule.', value: '# My Scheduled Task', interval: '0 10 * * 1', enabled: true, _source: 'user-created' },
+    { key: 'cs-cron-gmail-digest', description: 'Sends a digest', value: 'Send a digest.', interval: '0 10 * * 1', enabled: true, _source: 'skill-bundle' },
     { key: 'cs-cron-inbox-check', description: 'Checks the inbox', value: 'Check the inbox.', interval: '*/30 * * * *', enabled: false, requires_credentials: ['gmail'], _source: 'skill-bundle' },
     { key: 'cs-cron-weekly-report', description: 'Weekly report', value: 'Summarize the week', interval: '0 9 * * 1', enabled: true, _source: 'user-created' },
   ]));
   await withClient(fake, async client => {
     const quote = await call(client, 'deploy_agent', { custom: true, title: 'Inbox', tier: 'starter', skills: ['int-gmail-check'] });
-    assert.match(textOf(quote), /Scheduled tasks: a custom build comes with the tasks its skills bring, or else a starter task on Mondays at 10:00 UTC\. Every run spends the agent's credits/);
+    assert.match(textOf(quote), /Scheduled tasks: a custom build comes with the tasks its skills bring, and every run spends the agent's credits/);
 
     const result = await call(client, 'deploy_agent', {
       custom: true,
@@ -2942,14 +2961,14 @@ test('a custom build\'s deploy result names the scheduled tasks already on and h
     });
     assert.notEqual(result.isError, true, textOf(result));
     const output = result.structuredContent;
-    assert.deepEqual(output.defaultScheduledTasks, [{ key: 'cs-cron-my-scheduled-task', interval: '0 10 * * 1' }]);
+    assert.deepEqual(output.defaultScheduledTasks, [{ key: 'cs-cron-gmail-digest', interval: '0 10 * * 1' }]);
     for (const text of [textOf(result), output.message]) {
-      assert.match(text, /Scheduled tasks on by default: `?cs-cron-my-scheduled-task/);
+      assert.match(text, /Scheduled tasks on by default: `?cs-cron-gmail-digest/);
       assert.match(text, /every run spends the agent's credits/);
       assert.match(text, /manage_agent_custom_skill \(upsert\) changes a task's text or schedule, and enabled false turns it off/);
       assert.doesNotMatch(text, /cs-cron-inbox-check.*on by default|on by default.*cs-cron-weekly-report/);
     }
-    assert.match(textOf(result), /`cs-cron-my-scheduled-task` \(runs on "0 10 \* \* 1"\)/);
+    assert.match(textOf(result), /`cs-cron-gmail-digest` \(runs on "0 10 \* \* 1"\)/);
     assert.equal(output.nextAction.tool, 'get_my_agent', 'the wait for the agent stays the next step');
   });
 });

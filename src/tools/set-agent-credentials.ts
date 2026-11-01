@@ -33,6 +33,8 @@ import {
   uploadFileName,
   usableConnectionModes,
   WIRO_PROJECT_NOTE,
+  writeOnlyModesNote,
+  writeOnlyNote,
   type CredentialField,
   type CredentialMeta,
 } from '../utils/agent-config.js';
@@ -100,7 +102,7 @@ const connectionModeSchema = z.object({
   mode: z.string(),
   available: z.boolean(),
   needsBrowser: z.boolean(),
-  fields: z.array(z.object({ field: z.string(), label: z.string(), isSet: z.boolean() })),
+  fields: z.array(z.object({ field: z.string(), label: z.string(), isSet: z.boolean(), writeOnly: z.boolean().optional() })),
   note: z.string(),
 });
 
@@ -421,11 +423,15 @@ export function registerSetAgentCredentials(server: McpServer, client: WiroClien
           const mode = connectModeFor(meta, written, typeof authMethod === 'string' ? authMethod : undefined)
             ?? chooseConnectionMode(meta, modes);
           if (!mode || (mode === 'api_key' && !meta.oauth.directProbe)) continue;
+          // An app key reads as empty even once saved, so the ones this call saved count as set.
+          const savedNow = errors.length === 0 ? written : new Set<string>();
           const missing = mode === 'wiro'
             ? []
-            : (modes.find(candidate => candidate.mode === mode)?.fields ?? []).filter(field => !field.isSet);
+            : (modes.find(candidate => candidate.mode === mode)?.fields ?? [])
+              .filter(field => !field.isSet && !(field.writeOnly && savedNow.has(field.field)));
           if (missing.length > 0) {
             notes.push(`Mode ${mode} needs ${keyList(missing.map(field => field.field))} saved first.`);
+            if (missing.some(field => field.writeOnly)) notes.push(writeOnlyNote(mode));
             continue;
           }
           nextAction = {
@@ -522,13 +528,17 @@ async function describeCredential(
     nextAction = bindProjectStep(agentGuid, 'Connect a Wiro project to this agent.');
   } else if (meta.oauth && modes && !status?.connected && !unusedNote) {
     const mode = chooseConnectionMode(meta, modes);
-    if (mode && !(mode === 'api_key' && !meta.oauth.directProbe)) {
+    if (!mode) {
+      const appKeys = writeOnlyModesNote(modes);
+      if (appKeys) notes.push(appKeys);
+    } else if (!(mode === 'api_key' && !meta.oauth.directProbe)) {
       // The only usable mode is chosen even when its fields are not saved yet.
       const missing = mode === 'wiro'
         ? []
         : (modes.find(candidate => candidate.mode === mode)?.fields ?? []).filter(field => !field.isSet);
       if (missing.length > 0) {
         notes.push(`Mode ${mode} needs ${keyList(missing.map(field => field.field))} saved first.`);
+        if (missing.some(field => field.writeOnly)) notes.push(writeOnlyNote(mode));
       } else {
         nextAction = {
           tool: 'connect_agent_oauth',

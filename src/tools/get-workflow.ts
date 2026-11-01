@@ -10,6 +10,7 @@ import {
   toWorkflowDetail,
   WORKFLOW_DESCRIPTION_LABEL,
   workflowDetailSchema,
+  type WorkflowDetail,
 } from '../utils/workflow.js';
 import { nextActionSchema, strictInput } from './schemas.js';
 
@@ -31,13 +32,19 @@ export async function fetchWorkflowRow(
   return row;
 }
 
+/** The inputs a run must be given, when Wiro says so. */
+function requiredNote(inputs: WorkflowDetail['inputs']): string {
+  const keys = plainInputKeys(inputs.filter(input => input.required));
+  return keys.length > 0 ? `A run must be given: ${keys.join(', ')}. ` : '';
+}
+
 export function registerGetWorkflow(server: McpServer, client: WiroClient): void {
   server.registerTool(
     'get_workflow',
     {
       title: 'Get a Wiro workflow',
-      description: 'Read one workflow: its inputs (the keys run_workflow takes), outputs, '
-        + 'state, and the full step graph when you are allowed to see it. Read this before '
+      description: 'Read one workflow: its inputs (the keys run_workflow takes, marked when a run must be '
+        + 'given them), outputs, state, and the full step graph when you are allowed to see it. Read this before '
         + 'running a workflow, and before editing one with update_workflow (pass the returned '
         + '`updatetime` back as `loaded_updatetime`). Protected workflows from other creators '
         + 'show only their inputs, but they can still be run. Input lists and saved values hide '
@@ -75,6 +82,9 @@ export function registerGetWorkflow(server: McpServer, client: WiroClient): void
         const leftOut = workflow.graphHidden && !workflow.insider
           ? 'This protected workflow is outside this key\'s workspace. Unless you own it or are in its team, a key you leave out uses its default, not its saved value, so pass the saved values you want.'
           : 'A key you leave out uses its saved value or default.';
+        // A workflow with no steps has nothing to run, and a run of it is refused. A
+        // hidden graph arrives emptied, so only a graph the caller can see says this.
+        const noSteps = !workflow.graphHidden && workflow.stepCount === 0;
         const lines = ['## Workflow', ''];
         lines.push(`**Title:** ${quotedSpan(workflow.title)}`);
         lines.push(`**Slug:** \`${workflow.fullSlug}\``);
@@ -83,12 +93,12 @@ export function registerGetWorkflow(server: McpServer, client: WiroClient): void
         if (workflow.updatetime && workflow.insider) lines.push(`**updatetime:** \`${workflow.updatetime}\` (pass it as loaded_updatetime when editing)`);
         const count = workflow.stepCount !== undefined ? `${workflow.stepCount}, ` : '';
         lines.push(`**Steps:** ${!workflow.graphHidden
-          ? workflow.stepCount
+          ? (noSteps ? '0, so there is nothing to run yet' : workflow.stepCount)
           : workflow.isClone
             ? `${count}hidden. This is a copy of a protected workflow, so its steps stay hidden, even from you. You can run it and change its title, description and tags.`
             : `${count}hidden by the creator`}`);
         if (workflow.description) lines.push('', ...quotedBlock(WORKFLOW_DESCRIPTION_LABEL, workflow.description));
-        lines.push('', '### Inputs', '', ...quotedWorkflowInputs(workflow.inputs));
+        lines.push('', '### Inputs', '', ...(noSteps && workflow.inputs.length === 0 ? ['No inputs.'] : quotedWorkflowInputs(workflow.inputs)));
         if (workflow.graphHidden && !workflow.insider && workflow.inputs.length > 0) lines.push('', leftOut);
         const outputs = Object.keys(workflow.outputs);
         if (outputs.length > 0) lines.push('', `### Outputs`, '', ...outputs.map(key => `- ${quotedSpan(key)}`));
@@ -103,18 +113,28 @@ export function registerGetWorkflow(server: McpServer, client: WiroClient): void
           lines.push('', 'The full step graph is in the structured result under `workflow.contents`.');
         }
 
+        const nextAction = !noSteps
+          ? {
+            tool: 'run_workflow',
+            arguments: { slug: workflow.fullSlug },
+            reason: 'Run it only if the user asked for a run, after telling them the estimate; otherwise ask the user first (each model step is charged).'
+              + (workflow.inputs.length > 0
+                ? ` Pass input values for: ${plainInputKeys(workflow.inputs).join(', ') || 'the inputs listed'}. ${requiredNote(workflow.inputs)}${leftOut}`
+                : ' It has no inputs.'),
+          }
+          : workflow.canEditGraph
+            ? {
+              tool: 'update_workflow',
+              arguments: { slug: workflow.fullSlug, ...(workflow.updatetime ? { loaded_updatetime: workflow.updatetime } : {}) },
+              reason: 'It has no steps yet, so there is nothing to run. If the user wants to build it, add the steps as `contents`; get_playbook topic "workflow-graph" shows the format.',
+            }
+            : undefined;
+
         return {
           content: [{ type: 'text' as const, text: lines.join('\n') }],
           structuredContent: {
             workflow,
-            nextAction: {
-              tool: 'run_workflow',
-              arguments: { slug: workflow.fullSlug },
-              reason: 'Run it only if the user asked for a run, after telling them the estimate; otherwise ask the user first (each model step is charged). Pass input values'
-                + (workflow.inputs.length > 0
-                  ? ` for: ${plainInputKeys(workflow.inputs).join(', ') || 'the inputs listed'}. ${leftOut}`
-                  : '. It has no inputs.'),
-            },
+            ...(nextAction ? { nextAction } : {}),
           },
         };
       } catch (error) {

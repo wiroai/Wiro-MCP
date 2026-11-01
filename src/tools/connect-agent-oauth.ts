@@ -2,6 +2,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { WiroClient } from '../client.js';
 import {
+  apiErrorMessage,
   asString,
   errorResult,
   errorText,
@@ -10,8 +11,10 @@ import {
   type ApiEnvelope,
 } from '../utils/api.js';
 import {
+  CONNECTION_NOT_CLEARED,
   OAUTH_LINK_TTL_SECONDS,
   accountLabel,
+  agentStatusOf,
   buildChainedSelections,
   buildPickerAccounts,
   chooseConnectionMode,
@@ -21,7 +24,9 @@ import {
   credentialGroup,
   customSkillEntries,
   dashboardAgentUrl,
+  isAgentRunning,
   isAllowedRedirectUrl,
+  isFilledValue,
   loadCredentialMeta,
   loadSkillRegistry,
   ownAppRedirectUri,
@@ -32,6 +37,7 @@ import {
   turnOnSkillText,
   unusedCredential,
   unusedCredentialNote,
+  writeOnlyModesNote,
   type AccountRef,
   type ConnectionState,
   type CredentialMeta,
@@ -48,7 +54,7 @@ import {
   reportProgress,
 } from '../utils/poll.js';
 import { jsonSpan, quotedSpan } from '../utils/quoted-text.js';
-import { WIRO_PROJECT_CREDENTIAL } from '../utils/user-agent.js';
+import { readStatusAdvice, startNeedsPlan, toAgentDetail, WIRO_PROJECT_CREDENTIAL } from '../utils/user-agent.js';
 import { nextActionSchema, strictInput } from './schemas.js';
 
 const accountSchema = z.object({ id: z.string(), name: z.string() });
@@ -92,7 +98,7 @@ const outputSchema = {
     mode: z.string(),
     available: z.boolean(),
     needsBrowser: z.boolean(),
-    fields: z.array(z.object({ field: z.string(), label: z.string(), isSet: z.boolean() })),
+    fields: z.array(z.object({ field: z.string(), label: z.string(), isSet: z.boolean(), writeOnly: z.boolean().optional() })),
     note: z.string(),
   })).optional(),
   ownAppRedirectUri: z.string().optional(),
@@ -190,7 +196,7 @@ function result(
 function modeLines(modes: ModeRequirement[]): string[] {
   return [
     '',
-    ...modes.filter(mode => mode.available).map(mode => `- **${mode.mode}**: ${mode.note}${mode.fields.length > 0 ? ` Fields: ${mode.fields.map(field => `${field.field}${field.isSet ? ' (set)' : ' (missing)'}`).join(', ')}.` : ''}`),
+    ...modes.filter(mode => mode.available).map(mode => `- **${mode.mode}**: ${mode.note}${mode.fields.length > 0 ? ` Fields: ${mode.fields.map(field => `${field.field}${field.isSet ? ' (set)' : field.writeOnly ? '' : ' (missing)'}`).join(', ')}.` : ''}`),
   ];
 }
 
@@ -252,8 +258,9 @@ async function connect(
   const mode = input.mode ?? chooseConnectionMode(meta, modes);
   const requirement = modes.find(candidate => candidate.mode === mode);
   if (!mode || !requirement) {
+    const savedKeysNote = writeOnlyModesNote(modes);
     return result('connect', context, 'setup_needed',
-      `Choose how to connect ${meta.title}: it needs your own app keys or a token saved first.`,
+      `Choose how to connect ${meta.title}: it needs your own app keys or a token saved first.${savedKeysNote ? ` ${savedKeysNote}` : ''}`,
       { ...setupExtra, nextAction: describeAction }, modeLines(modes));
   }
   if (!requirement.available) {
@@ -262,16 +269,30 @@ async function connect(
   if (mode === 'api_key' && !oauth.directProbe) {
     return result('connect', context, 'setup_needed', requirement.note, { ...setupExtra, mode, nextAction: describeAction }, modeLines(modes));
   }
-  const missing = requirement.fields.filter(field => !field.isSet);
+  // App keys read as empty even once saved, so for those the sign-in route below decides.
+  const missing = requirement.fields.filter(field => !field.isSet && !field.writeOnly);
   if (missing.length > 0) {
     return result('connect', context, 'setup_needed',
       `Mode ${mode} needs these saved first with set_agent_credentials: ${missing.map(field => `${field.label} (${field.field})`).join(', ')}. ${requirement.note}`,
       { ...setupExtra, mode, nextAction: describeAction });
   }
   const connectedBefore = group?._connected === true;
-  if (connectedBefore && !input.confirm) {
+  // A sign-in removes what is saved for the modes it leaves.
+  const removed = mode === oauth.directProbe?.mode
+    ? []
+    : meta.fields.filter(field => !field.oauthManaged
+      && field.onlyInModes?.length
+      && !field.onlyInModes.includes(mode)
+      && isFilledValue(group?.[field.key]));
+  const appKeys = requirement.fields.filter(field => field.writeOnly);
+  if ((connectedBefore || removed.length > 0) && !input.confirm) {
+    const saveKeysFirst = removed.length > 0 && appKeys.length > 0
+      ? ' Save the app keys first if they are not saved yet, so the sign-in can start.'
+      : '';
     return result('connect', context, 'confirm_needed',
-      `${meta.title} is already connected. Connecting again replaces that connection and its selected accounts; if the new sign-in or check fails, the agent is left without it.`,
+      `${connectedBefore
+        ? `${meta.title} is already connected. Connecting again replaces that connection and its selected accounts; if the new sign-in or check fails, the agent is left without it.`
+        : `Connecting ${meta.title} with mode ${mode} removes the saved ${removed.map(field => field.label).join(', ')}.`}${saveKeysFirst}`,
       {
         mode,
         nextAction: {
@@ -291,7 +312,8 @@ async function connect(
 
   if (oauth.directProbe && mode === oauth.directProbe.mode) {
     // The check reads the mode from the saved credential, so it is saved first.
-    if (asString(group?.authmethod) !== mode) {
+    const modeSaved = asString(group?.authmethod) !== mode;
+    if (modeSaved) {
       requireApiSuccess(
         await client.post<ApiEnvelope>('/UserAgent/CredentialUpsert', {
           useragentguid: agentGuid,
@@ -309,11 +331,17 @@ async function connect(
       const code = asString(body.errorcode);
       const message = (body.errors ?? []).map(error => error?.message?.trim()).filter(Boolean).join(' ')
         || `${meta.title} could not be checked.`;
+      if (message === CONNECTION_NOT_CLEARED) return errorResult(new Error(message));
       const parts = [code ? `${message} (${code})` : message];
       if (code === 'direct_token_missing') {
         parts.push(`Save ${requirement.fields.map(field => field.field).join(', ')} with set_agent_credentials first.`);
       } else if (connectedBefore) {
         parts.push('Connect again to restore the connection.');
+      }
+      // An error result reads as nothing done, so it says what the check still did.
+      if (modeSaved) parts.push(`The mode is saved as ${mode}.`);
+      if ((modeSaved || code) && isAgentRunning(agentStatusOf(row))) {
+        parts.push('The running agent restarts, which takes about a minute.');
       }
       return errorResult(new Error(parts.join(' ')));
     }
@@ -350,15 +378,25 @@ async function connect(
   } catch {
     since = '';
   }
-  const body = requireApiSuccess(
-    await client.post<ConnectBody>('/UserAgentOAuth/OAuthConnect', {
-      useragentguid: agentGuid,
-      credentialkey: credential,
-      authmethod: mode,
-      redirecturl: redirectUrl,
-    }, signal),
-    `Could not start the ${meta.title} sign-in.`,
-  );
+  const answer = await client.post<ConnectBody>('/UserAgentOAuth/OAuthConnect', {
+    useragentguid: agentGuid,
+    credentialkey: credential,
+    authmethod: mode,
+    redirecturl: redirectUrl,
+  }, signal);
+  if (answer.result !== true && appKeys.length > 0 && /credentials not configured/i.test(apiErrorMessage(answer, ''))) {
+    // What the sign-in removes may be gone already, so this answer goes by a fresh read.
+    const fresh = removed.length > 0 ? await readUserAgent(client, agentGuid, signal).catch(() => null) : null;
+    const groupNow = fresh ? credentialGroup(fresh, credential) : group;
+    const gone = removed.filter(field => !isFilledValue(groupNow?.[field.key]));
+    const goneText = gone.length > 0
+      ? ` The sign-in did not start, and this call removed the saved ${gone.map(field => field.label).join(', ')}${connectedBefore && groupNow?._connected !== true ? `, so ${meta.title} is no longer connected` : ''}. To go back to it, save it again with set_agent_credentials.`
+      : '';
+    return result('connect', context, 'setup_needed',
+      `Mode ${mode} needs these saved first with set_agent_credentials: ${appKeys.map(field => `${field.label} (${field.field})`).join(', ')}. ${requirement.note}${goneText}`,
+      { ...setupExtra, connectionModes: connectionModeRequirements(meta, groupNow), mode, nextAction: describeAction });
+  }
+  const body = requireApiSuccess(answer, `Could not start the ${meta.title} sign-in.`);
   const authorizeUrl = asString(body.authorizeUrl);
   if (!authorizeUrl) throw new Error(`Wiro did not return a sign-in link for ${meta.title}.`);
   const usesDashboard = !/^http:/i.test(redirectUrl);
@@ -387,7 +425,23 @@ async function connect(
     ['', authorizeUrl]);
 }
 
-function statusMessage(state: ConnectionState, meta: CredentialMeta, snapshot: OAuthStatusSnapshot, unusedNote: string | null): string {
+/**
+ * What to do about access that reads as expired. A start is offered only when one can
+ * happen. Without the agent's row the offer stays: control_agent reads the agent again
+ * and says what comes first.
+ */
+function expiredAdvice(row: Record<string, unknown> | null): string {
+  const startOrConnect = 'Start the agent with control_agent, or connect again.';
+  if (!row) return startOrConnect;
+  const agent = toAgentDetail(row);
+  if ((agent.status === 0 || agent.status === 5) && !startNeedsPlan(agent)) return startOrConnect;
+  return agent.status === 3 || agent.status === 4
+    ? 'If the agent cannot use it, connect again.'
+    : `Connect again if the agent needs it. ${readStatusAdvice(agent)}`;
+}
+
+function statusMessage(state: ConnectionState, meta: CredentialMeta, snapshot: OAuthStatusSnapshot, unusedNote: string | null, row: Record<string, unknown> | null): string {
+  const saved = row !== null && credentialGroup(row, meta.key)?._connected === true;
   const next = meta.oauth?.picker?.next;
   switch (state) {
     case 'connected': {
@@ -403,9 +457,11 @@ function statusMessage(state: ConnectionState, meta: CredentialMeta, snapshot: O
     case 'waiting_for_user':
       return `The ${meta.title} sign-in has not finished yet. The link from connect works for ${OAUTH_LINK_TTL_SECONDS / 60} minutes; after that, connect again.`;
     case 'token_expired':
-      return `The saved ${meta.title} access has expired. ${unusedNote ?? 'Start the agent with control_agent, or connect again.'}`;
+      return `The saved ${meta.title} access has expired.${saved ? ` The connection is still saved, so get_my_agent lists ${meta.title} as connected.` : ''} ${unusedNote ?? expiredAdvice(row)}`;
     default:
-      return `${meta.title} is not connected. ${unusedNote ?? 'Start with action connect.'}`;
+      return saved
+        ? `This check found no current ${meta.title} sign-in, but a ${meta.title} connection is saved on this agent, so get_my_agent lists it as connected. ${unusedNote ?? 'If the agent cannot use it, connect again: that replaces the saved connection and asks for confirm: true.'}`
+        : `${meta.title} is not connected. ${unusedNote ?? 'Start with action connect.'}`;
   }
 }
 
@@ -430,6 +486,7 @@ async function status(
   const state = stateOf(snapshot);
   let nextAction;
   let unusedNote: string | null = null;
+  let row: Record<string, unknown> | null = null;
   if (state === 'waiting_for_user') {
     nextAction = {
       tool: 'connect_agent_oauth',
@@ -451,7 +508,7 @@ async function status(
   } else if (state === 'not_connected' || state === 'token_expired') {
     // Only these states offer connect, so only they read the skills. A status is
     // still answered when that read fails: connect goes by the rule anyway.
-    const row = await readUserAgent(client, agentGuid, signal).catch(() => null);
+    row = await readUserAgent(client, agentGuid, signal).catch(() => null);
     unusedNote = row ? await unusedCredentialNote(client, row, credential, meta.title, signal) : null;
     if (!unusedNote) {
       nextAction = {
@@ -464,7 +521,7 @@ async function status(
   const childStep = snapshot.childStep
     ? { ...snapshot.childStep, label: picker?.next?.label ?? snapshot.childStep.picker }
     : undefined;
-  return result('status', context, state, statusMessage(state, meta, snapshot, unusedNote), {
+  return result('status', context, state, statusMessage(state, meta, snapshot, unusedNote, row), {
     ...(snapshot.connectedAt ? { connectedAt: snapshot.connectedAt } : {}),
     ...(snapshot.tokenExpiresAt ? { tokenExpiresAt: snapshot.tokenExpiresAt } : {}),
     accounts: snapshot.accounts,
@@ -605,7 +662,7 @@ export function registerConnectAgentOauth(server: McpServer, client: WiroClient)
         + 'save. action status: whether the sign-in finished (wait_seconds waits for '
         + 'the user). action select_accounts: saves which accounts the agent uses ({id, name} from '
         + 'connect), and with picker runs the extra step some providers have (Meta Ads pages, '
-        + 'Google Business locations). Connecting again replaces an existing connection and needs '
+        + 'Google Business locations). Connecting again replaces an existing connection, and a sign-in removes a token saved for another mode; both need '
         + 'confirm: true. A running agent restarts when a connection or selection is saved. Connecting a service '
         + 'turns on the scheduled tasks that need it; turn off any you do not want. '
         + 'Remove a connection with disconnect_agent_oauth. A credential that none of the agent\'s active '
@@ -637,7 +694,7 @@ export function registerConnectAgentOauth(server: McpServer, client: WiroClient)
         })).optional()
           .describe('select_accounts with picker: what to use under each account. Accounts left out get nothing.'),
         confirm: z.boolean().default(false)
-          .describe('connect: true to replace an existing connection after the user agreed.'),
+          .describe('connect: true to replace an existing connection or a token saved for another mode, after the user agreed.'),
       }),
       outputSchema,
       annotations: {

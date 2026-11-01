@@ -28,7 +28,7 @@ export function registerListMyAgents(server: McpServer, client: WiroClient): voi
       title: 'List my deployed Wiro agents',
       description: 'List the agents deployed in the connected project\'s workspace (a team project '
         + 'lists the team\'s agents, a personal project the personal ones). Each row shows the status, '
-        + 'the plan and the credit balance, and marks an agent waiting in setup (status 6). An agent in '
+        + 'the plan, the credit balance and when the agent last did anything, and marks an agent waiting in setup (status 6). An agent in '
         + 'another status can still miss a required credential. get_my_agent with an agent_guid gives the '
         + 'full state, including which credentials are missing, so read it before you say that an agent\'s '
         + 'setup is done.',
@@ -83,7 +83,8 @@ export function registerListMyAgents(server: McpServer, client: WiroClient): voi
         for (const agent of agents) {
           lines.push(
             `- ${agentTitleSpan(agent.title)} (\`${agent.guid}\`): ${describeAgentStatus(agent.status)}${agent.setupRequired ? ', setup required' : ''}; `
-            + `${agent.tier ?? 'no tier'}; ${formatCredits(agent.credits.remaining)} credits left; ${formatSubscriptionLine(agent.subscription, plainMember)}`,
+            + `${agent.tier ?? 'no tier'}; ${formatCredits(agent.credits.remaining)} credits left; ${formatSubscriptionLine(agent.subscription, plainMember)}`
+            + `${agent.lastActivityAt ? `; last activity ${agent.lastActivityAt}` : ''}`,
           );
         }
         if (nextStart !== null) lines.push('', `More agents may exist: call list_my_agents with start ${nextStart}.`);

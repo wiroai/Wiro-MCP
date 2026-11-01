@@ -2162,3 +2162,139 @@ test('a workflow run comes back soon after it ends, and a long run is read less 
   assert.equal(workflowRunInterval(60_000), 5_000);
   assert.equal(workflowRunInterval(3_600_000), 10_000);
 });
+
+// ---------------------------------------------------------------------------
+// The Start fields a run must be given
+// ---------------------------------------------------------------------------
+
+function twoInputRow(overrides = {}) {
+  const contents = graph();
+  contents.schema.input.style = { name: 'style', label: 'Style', type: 'string', required: false, defaultValue: 'plain', ui: { field: 'textarea' } };
+  return storedRow({ contents, ...overrides });
+}
+
+test('get_workflow marks the inputs Wiro names as required, in text and structured output', async () => {
+  const fake = fakeClient({ '/Workflow/Detail': { result: true, errors: [], workflow: [twoInputRow({ requiredinputs: ['prompt'] })] } });
+  await withClient(fake, async client => {
+    const result = await client.callTool({ name: 'get_workflow', arguments: { slug: 'fox-maker-Ab3xZ' } });
+    assert.notEqual(result.isError, true);
+    const { inputs } = result.structuredContent.workflow;
+    assert.equal(inputs.find(input => input.key === 'prompt').required, true);
+    assert.equal(inputs.find(input => input.key === 'style').required, false);
+    const lines = result.content[0].text.split('\n');
+    assert.ok(lines.includes('- `prompt` (string, textarea, required): Prompt (default: "a fox")'), result.content[0].text);
+    assert.ok(lines.includes('- `style` (string, textarea): Style (default: "plain")'), result.content[0].text);
+    assert.match(result.structuredContent.nextAction.reason, /A run must be given: prompt\. /);
+  });
+});
+
+test('get_workflow makes no claim about required inputs when Wiro does not say', async () => {
+  const fake = fakeClient({ '/Workflow/Detail': { result: true, errors: [], workflow: [twoInputRow()] } });
+  await withClient(fake, async client => {
+    const result = await client.callTool({ name: 'get_workflow', arguments: { slug: 'fox-maker-Ab3xZ' } });
+    for (const input of result.structuredContent.workflow.inputs) {
+      assert.equal(Object.hasOwn(input, 'required'), false, input.key);
+    }
+    assert.doesNotMatch(result.content[0].text, /required/);
+    assert.doesNotMatch(result.structuredContent.nextAction.reason, /must be given/);
+  });
+});
+
+test('get_workflow shows an empty list as no input being required, with nothing marked in the text', async () => {
+  const fake = fakeClient({ '/Workflow/Detail': { result: true, errors: [], workflow: [twoInputRow({ requiredinputs: [] })] } });
+  await withClient(fake, async client => {
+    const result = await client.callTool({ name: 'get_workflow', arguments: { slug: 'fox-maker-Ab3xZ' } });
+    assert.deepEqual(result.structuredContent.workflow.inputs.map(input => input.required), [false, false]);
+    assert.doesNotMatch(result.content[0].text, /required/);
+    assert.doesNotMatch(result.structuredContent.nextAction.reason, /must be given/);
+  });
+});
+
+function blankRow(overrides = {}) {
+  const contents = graph();
+  delete contents.nodes['node-a1'];
+  contents.nodes.output.depends = [];
+  contents.nodes.output.fields = {};
+  contents.output = {};
+  contents.schema.input = {};
+  return storedRow({ contents, ...overrides });
+}
+
+test('get_workflow offers no run of a workflow with no steps, and points its editors at update_workflow', async () => {
+  const fake = fakeClient({ '/Workflow/Detail': { result: true, errors: [], workflow: [blankRow()] } });
+  await withClient(fake, async client => {
+    const result = await client.callTool({ name: 'get_workflow', arguments: { slug: 'fox-maker-Ab3xZ' } });
+    assert.notEqual(result.isError, true);
+    const lines = result.content[0].text.split('\n');
+    assert.ok(lines.includes('**Steps:** 0, so there is nothing to run yet'), result.content[0].text);
+    assert.ok(lines.includes('No inputs.'), result.content[0].text);
+    const { nextAction } = result.structuredContent;
+    assert.equal(nextAction.tool, 'update_workflow');
+    assert.deepEqual(nextAction.arguments, { slug: 'fox-maker-Ab3xZ', loaded_updatetime: '1761700000' });
+    assert.match(nextAction.reason, /no steps yet/);
+  });
+});
+
+test('get_workflow offers nothing for a workflow with no steps that the caller cannot edit', async () => {
+  const row = blankRow({ ispublic: 1, status: 2 });
+  delete row.rejectreason;
+  const fake = fakeClient({ '/Workflow/Detail': { result: true, errors: [], workflow: [row] } });
+  await withClient(fake, async client => {
+    const result = await client.callTool({ name: 'get_workflow', arguments: { slug: 'fox-maker-Ab3xZ' } });
+    assert.notEqual(result.isError, true);
+    assert.equal(result.structuredContent.nextAction, undefined);
+    assert.match(result.content[0].text, /\*\*Steps:\*\* 0, so there is nothing to run yet/);
+  });
+});
+
+test('get_workflow still offers a run when the steps are only hidden, whatever count the row carries', async () => {
+  const hidden = blankRow({ isprotected: 1, ispublic: 1, status: 2, stepcount: 0, estimatedcost: { type: 'estimated', value: 0.04 } });
+  delete hidden.rejectreason;
+  const fake = fakeClient({ '/Workflow/Detail': { result: true, errors: [], workflow: [hidden] } });
+  await withClient(fake, async client => {
+    const result = await client.callTool({ name: 'get_workflow', arguments: { slug: 'fox-maker-Ab3xZ' } });
+    assert.equal(result.structuredContent.nextAction.tool, 'run_workflow');
+    assert.match(result.content[0].text, /No inputs\. Run it with no `input`\./);
+  });
+});
+
+test('a next step for a workflow with no inputs does not ask for input values', async () => {
+  const contents = graph();
+  contents.nodes['node-a1'].input = { prompt: 'a fox' };
+  contents.schema.input = {};
+  const fake = fakeClient({
+    '/Workflow/Detail': { result: true, errors: [], workflow: [storedRow({ contents })] },
+    '/Workflow/Prepare': { result: true, errors: [], contents, warnings: [] },
+    '/Workflow/Add': body => ({ result: true, errors: [], workflow: [{ slug: body.slug, slugid: 'Qw3rT', title: 'Fox maker', updatetime: '1761700100' }] }),
+  });
+  await withClient(fake, async client => {
+    const read = await client.callTool({ name: 'get_workflow', arguments: { slug: 'fox-maker-Ab3xZ' } });
+    const created = await client.callTool({ name: 'create_workflow', arguments: { title: 'Fox maker', contents } });
+    for (const result of [read, created]) {
+      assert.equal(result.structuredContent.nextAction.tool, 'run_workflow');
+      assert.ok(result.structuredContent.nextAction.reason.endsWith('(each model step is charged). It has no inputs.'), result.structuredContent.nextAction.reason);
+    }
+  });
+});
+
+test('a run\'s outputs need no storage path to show', async () => {
+  const fake = fakeClient({
+    '/Workflow/RunDetail': {
+      result: true,
+      errors: [],
+      workflowrun: { workflowtoken: 'run-token-1', status: 'completed', outcome: 'completed', contents: graph() },
+      workflowrunnodes: [{
+        nodeId: 'node-a1',
+        tool: 'owner/image-model',
+        kind: 'tool',
+        status: 'completed',
+        outputs: [{ url: 'https://cdn1.wiro.ai/fox.png', name: 'fox.png', contenttype: 'image/png', size: '1024' }],
+      }],
+    },
+  });
+  await withClient(fake, async client => {
+    const result = await client.callTool({ name: 'wait_for_workflow_run', arguments: { workflowtoken: 'run-token-1' } });
+    assert.notEqual(result.isError, true);
+    assert.deepEqual(result.structuredContent.run.outputs.image, [{ url: 'https://cdn1.wiro.ai/fox.png', name: 'fox.png', mimeType: 'image/png', sizeBytes: 1024 }]);
+  });
+});

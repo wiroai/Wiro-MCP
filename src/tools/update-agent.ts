@@ -1,7 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { WiroClient } from '../client.js';
-import { errorResult, errorText, requireApiSuccess } from '../utils/api.js';
+import { ApiResultError, errorResult, errorText, requireApiSuccess, type ApiEnvelope } from '../utils/api.js';
 import { DEFAULT_WAIT_SECONDS } from '../utils/poll.js';
 import {
   agentDetailSchema,
@@ -10,6 +10,7 @@ import {
   readAgentDetail,
   readAgentStatus,
   selectableModelSlugs,
+  startNeedsPlan,
   toAgentDetail,
 } from '../utils/user-agent.js';
 import { nextActionSchema, strictInput } from './schemas.js';
@@ -40,9 +41,10 @@ export function registerUpdateAgent(server: McpServer, client: WiroClient): void
       title: 'Update a Wiro agent',
       description: 'Change a deployed agent\'s name, description, cover or categories, and its settings: '
         + 'timezone (used by scheduled tasks), team session mode, the models used for chat, scheduled tasks '
-        + 'and voice calls, and which slash commands are available. Only the fields you pass change. A '
-        + 'running or starting agent restarts to apply the change. Calling it with only agent_guid refreshes '
-        + 'the setup status of an agent waiting for setup, after its credentials were set. Skills, credentials and '
+        + 'and voice calls, and which slash commands are available. Only the fields you pass change. On a '
+        + 'running or starting agent, a new name or any of the settings restarts it to apply the change; a new '
+        + 'description, cover or categories leaves it running, and the result says which happened. Calling it with '
+        + 'only agent_guid refreshes the setup status of an agent waiting for setup, after its credentials were set. Skills, credentials and '
         + 'custom instructions have their own tools (apply_agent_skills, set_agent_credentials, '
         + 'manage_agent_custom_skill). On a team agent this needs a team admin or the person who deployed it; '
         + 'other team members can read the agent with get_my_agent and message it.',
@@ -123,22 +125,33 @@ export function registerUpdateAgent(server: McpServer, client: WiroClient): void
           settingNames.push(input);
         }
 
-        // An update restarts a running agent, so it is only sent for profile
-        // fields or to finish the setup of a status 6 agent.
+        // An Update that names no field restarts a running agent, so it is only
+        // sent with profile fields, or with none to finish the setup of a status
+        // 6 agent. Among the profile fields, only a changed title restarts it.
         const sendProfile = Object.keys(profile).length > 0 || previous === 6;
         const sendSettings = Object.keys(settings).length > 0;
         if (!sendProfile && !sendSettings) {
           throw new Error('Nothing to update. Pass at least one field to change.');
         }
 
+        const running = previous === 3 || previous === 4;
         const changed: string[] = [];
+        let restarting: unknown;
         if (sendProfile) {
-          requireApiSuccess(
-            await client.post('/UserAgent/Update', { guid, ...profile }, extra.signal),
-            'The agent could not be updated.',
-          );
+          try {
+            restarting = requireApiSuccess(
+              await client.post<ApiEnvelope & { restarting?: unknown }>('/UserAgent/Update', { guid, ...profile }, extra.signal),
+              'The agent could not be updated.',
+            ).restarting;
+          } catch (error) {
+            // An answer that says whether the agent restarts means the change was saved.
+            if (!(error instanceof ApiResultError) || typeof error.body.restarting !== 'boolean') throw error;
+            restarting = error.body.restarting;
+          }
           changed.push(...Object.keys(profile));
         }
+        // An answer without the field goes by the status read before the update.
+        const profileRestarts = sendProfile && (restarting === true || (restarting === undefined && running));
         if (sendSettings) {
           try {
             requireApiSuccess(
@@ -147,7 +160,8 @@ export function registerUpdateAgent(server: McpServer, client: WiroClient): void
             );
           } catch (error) {
             if (changed.length === 0) throw error;
-            throw new Error(`${errorText(error)}\n\nThe ${changed.join(', ')} change was saved; the settings were not.`);
+            throw new Error(`${errorText(error)}\n\nThe ${changed.join(', ')} change was saved; the settings were not.`
+              + (profileRestarts ? ' The agent restarts to apply the saved change.' : ''));
           }
           changed.push(...settingNames);
         }
@@ -160,13 +174,26 @@ export function registerUpdateAgent(server: McpServer, client: WiroClient): void
           // The change was saved; only the follow-up read failed.
           readFailed = true;
         }
-        const agent = toAgentDetail(after);
-        const restarted = previous === 3 || previous === 4;
+        const restarted = profileRestarts || (sendSettings && running);
+        // Without the read-back the row is from before the change: the saved fields
+        // go over it, a changed model is left out, and a restart leaves the status unknown.
+        const agent = toAgentDetail(readFailed
+          ? {
+            ...before,
+            ...profile,
+            ...settings,
+            ...(settings.enabledcommands !== undefined ? { enabledCommands: settings.enabledcommands } : {}),
+            ...(settingNames.some(name => name in MODEL_FIELDS) ? { agentModel: undefined } : {}),
+            ...(restarted ? { status: null } : {}),
+          }
+          : after);
         const setupFinished = previous === 6 && agent.status !== 6;
         const message = [
           changed.length > 0 ? `Saved: ${changed.join(', ')}.` : 'Setup status refreshed.',
-          restarted ? 'The agent restarts to apply the change.' : '',
-          setupFinished ? 'Setup is complete; the agent can be started.' : '',
+          restarted ? 'The agent restarts to apply the change.' : running ? 'The agent keeps running.' : '',
+          setupFinished
+            ? `Setup is complete; the agent ${startNeedsPlan(agent) ? 'needs an active plan before it can start' : 'can be started'}.`
+            : '',
           previous === 6 && agent.status === 6 && agent.missingCredentials.length > 0
             ? `Setup is still waiting for: ${agent.missingCredentials.map(item => item.title).join(', ')}.`
             : '',

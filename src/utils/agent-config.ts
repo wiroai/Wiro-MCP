@@ -695,6 +695,12 @@ export function describeSkillsApplyError(error: unknown, plan?: PlanBilling['pla
       guidance: 'The new price could not be computed, so nothing was changed. Check the skill names with list_agent_skills.',
     };
   }
+  if (/^unknown skill: /i.test(message)) {
+    return {
+      ...base,
+      guidance: 'Nothing was changed or charged. Use names from list_agent_skills.',
+    };
+  }
   return { ...base, guidance: workspaceHint(message) ?? '' };
 }
 
@@ -720,6 +726,9 @@ export async function connectionRefusalText(
   }
   return `${message}\n\nIntegrations ${rule}`;
 }
+
+/** Wiro's answer when it could not clear a saved connection. Nothing says the connection is gone, and a repeat is safe. */
+export const CONNECTION_NOT_CLEARED = 'The saved connection could not be cleared. Please try again.';
 
 export const WORKSPACE_HINT = 'Connect with a project in the workspace (personal or team) that owns this agent, by its API key or a browser sign-in.';
 
@@ -1588,8 +1597,22 @@ export interface ModeRequirement {
   mode: string;
   available: boolean;
   needsBrowser: boolean;
-  fields: Array<{ field: string; label: string; isSet: boolean }>;
+  /** writeOnly marks an app key: it reads as empty even once saved, so isSet false says nothing about it. */
+  fields: Array<{ field: string; label: string; isSet: boolean; writeOnly?: boolean }>;
   note: string;
+}
+
+/** Goes with a list of missing fields that holds app keys, which may be saved already. */
+export function writeOnlyNote(mode: string): string {
+  return `App keys are not shown once saved. If they are saved already, connect with mode ${mode}.`;
+}
+
+/** The same note before a mode is chosen: it names each usable mode that takes app keys. */
+export function writeOnlyModesNote(requirements: ModeRequirement[]): string | null {
+  const modes = requirements
+    .filter(requirement => requirement.available && requirement.fields.some(field => field.writeOnly))
+    .map(requirement => requirement.mode);
+  return modes.length > 0 ? writeOnlyNote(modes.join(' or ')) : null;
 }
 
 function fieldsForMode(meta: CredentialMeta, mode: string): CredentialField[] {
@@ -1613,11 +1636,15 @@ function fieldsForMode(meta: CredentialMeta, mode: string): CredentialField[] {
 export function connectionModeRequirements(meta: CredentialMeta, group: Row | null): ModeRequirement[] {
   const modes = meta.connectionModes.length > 0 ? meta.connectionModes : ['wiro'];
   return modes.map(mode => {
-    const fields = fieldsForMode(meta, mode).map(field => ({
-      field: field.key,
-      label: field.label,
-      isSet: group !== null && isFilledValue(group[field.key]),
-    }));
+    const fields = fieldsForMode(meta, mode).map(field => {
+      const isSet = group !== null && isFilledValue(group[field.key]);
+      return {
+        field: field.key,
+        label: field.label,
+        isSet,
+        ...(field.oauthManaged && !isSet ? { writeOnly: true } : {}),
+      };
+    });
     if (mode === 'wiro') {
       return {
         mode,
@@ -2027,7 +2054,7 @@ export function resolveExistingCustomSkillKey(
   const matches = [asSkill, asTask].filter(key => existingKeys.has(key));
   if (matches.length === 1) return { key: matches[0] };
   if (matches.length > 1) return { error: `Both ${asSkill} and ${asTask} exist. Pass the full key.` };
-  return { error: `This agent has no custom skill or scheduled task named "${input}". Pass the full key (cs-... or cs-cron-...) or check get_my_agent.` };
+  return { error: `This agent has no custom skill or scheduled task named "${input}". Pass the full key (cs-... or cs-cron-...). get_my_agent without entry lists its keys.` };
 }
 
 /** A light shape check; the API validates the expression fully. */

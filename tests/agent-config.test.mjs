@@ -314,6 +314,7 @@ function fakeClient(routes) {
   const client = {
     calls,
     paths: () => calls.map(call => call.path),
+    called: path => calls.filter(call => call.path === path),
     async post(path, body = {}) {
       calls.push({ path, body });
       const route = routes[path];
@@ -1992,6 +1993,503 @@ test('connect_agent_oauth explains what to save before a provider can connect', 
   });
 });
 
+// Wiro sends an agent's own-app keys back as empty strings, saved or not, so these
+// tests use that shape. Only the sign-in route can tell whether they are saved.
+const googleAdsKeys = { clientid: '', clientsecret: '', developertoken: '', _connected: false, _filled: false, optional: false, _schema: { title: 'Google Ads' } };
+const NOT_CONFIGURED = { result: false, errors: [{ code: 0, message: 'Meta Ads credentials not configured' }] };
+
+test('connect_agent_oauth starts a sign-in with saved app keys that read as empty', async () => {
+  const fake = fakeClient({
+    '/Credentials/Detail': credentialDetail,
+    '/Skills/List': connectSkillList,
+    '/UserAgent/Detail': detail({ skills: skillsOn('int-googleads-manage'), credentials: { 'google-ads': googleAdsKeys } }),
+    '/UserAgentOAuth/OAuthStatus': { result: true, connected: false, accounts: [], connectedat: '', tokenexpiresat: '' },
+    '/UserAgentOAuth/OAuthConnect': { result: true, authorizeUrl: 'https://accounts.google.com/o/oauth2/auth?state=xyz' },
+  });
+  await withClient(fake, async client => {
+    // The only mode left, with or without naming it.
+    for (const args of [{}, { mode: 'own' }]) {
+      const result = await client.callTool({ name: 'connect_agent_oauth', arguments: { agent_guid: AGENT, credential: 'google-ads', ...args } });
+      assert.notEqual(result.isError, true, text(result));
+      assert.equal(result.structuredContent.state, 'authorize_in_browser', text(result));
+      assert.equal(result.structuredContent.mode, 'own');
+    }
+    assert.equal(fake.called('/UserAgentOAuth/OAuthConnect').at(-1).body.authmethod, 'own');
+  });
+});
+
+test('connect_agent_oauth says what to save when the sign-in route finds no app keys', async () => {
+  const fake = fakeClient({
+    '/Credentials/Detail': credentialDetail,
+    '/Skills/List': connectSkillList,
+    '/UserAgent/Detail': detail({ skills: skillsOn('int-metaads-manage') }),
+    '/UserAgentOAuth/OAuthStatus': { result: true, connected: false, accounts: [], connectedat: '', tokenexpiresat: '' },
+    '/UserAgentOAuth/OAuthConnect': NOT_CONFIGURED,
+  });
+  await withClient(fake, async client => {
+    const result = await client.callTool({ name: 'connect_agent_oauth', arguments: { agent_guid: AGENT, credential: 'meta-ads', mode: 'own' } });
+    assert.notEqual(result.isError, true, text(result));
+    const out = result.structuredContent;
+    assert.equal(out.state, 'setup_needed');
+    assert.equal(out.mode, 'own');
+    assert.match(out.message, /^Mode own needs these saved first with set_agent_credentials: App ID \(appid\), App Secret \(appsecret\)\./);
+    assert.equal(out.ownAppRedirectUri, 'https://api.wiro.ai/v1/UserAgentOAuth/MetaAdsCallback');
+    assert.equal(out.nextAction.tool, 'set_agent_credentials');
+  });
+});
+
+test('connect_agent_oauth keeps the refusal an error for a mode with no app keys to save', async () => {
+  const fake = fakeClient({
+    '/Credentials/Detail': credentialDetail,
+    '/Skills/List': connectSkillList,
+    '/UserAgent/Detail': detail({ skills: skillsOn('int-hubspot-crm') }),
+    '/UserAgentOAuth/OAuthStatus': { result: true, connected: false, accounts: [], connectedat: '', tokenexpiresat: '' },
+    '/UserAgentOAuth/OAuthConnect': { result: false, errors: [{ code: 0, message: 'HubSpot credentials not configured' }] },
+  });
+  await withClient(fake, async client => {
+    const result = await client.callTool({ name: 'connect_agent_oauth', arguments: { agent_guid: AGENT, credential: 'hubspot', mode: 'wiro' } });
+    assert.equal(result.isError, true);
+    assert.equal(
+      text(result),
+      '## Error\n\nHubSpot credentials not configured\n\nSave your own HubSpot app keys with set_agent_credentials first (call it with credential "hubspot" to see the fields).',
+    );
+  });
+});
+
+test('connect_agent_oauth passes on any other refusal from the sign-in route', async () => {
+  const fake = fakeClient({
+    '/Credentials/Detail': credentialDetail,
+    '/Skills/List': connectSkillList,
+    '/UserAgent/Detail': detail({ skills: skillsOn('int-metaads-manage') }),
+    '/UserAgentOAuth/OAuthStatus': { result: true, connected: false, accounts: [], connectedat: '', tokenexpiresat: '' },
+    '/UserAgentOAuth/OAuthConnect': { result: false, errors: [{ code: 0, message: 'Invalid redirect URL' }] },
+  });
+  await withClient(fake, async client => {
+    const result = await client.callTool({ name: 'connect_agent_oauth', arguments: { agent_guid: AGENT, credential: 'meta-ads', mode: 'own' } });
+    assert.equal(result.isError, true);
+    assert.match(text(result), /Invalid redirect URL/);
+  });
+});
+
+test('connect_agent_oauth keeps asking for a state field it can read', async () => {
+  const withState = body => (body.key === 'reddit-like'
+    ? {
+      result: true,
+      errors: [],
+      credential: {
+        key: 'reddit-like',
+        title: 'Reddit',
+        credential_mode: 'oauth',
+        connection_modes: ['own'],
+        credential_schema: [
+          { key: 'developerprofileusername', type: 'text', label: 'Developer Profile Username', required: true, only_in_modes: ['own'] },
+          { key: 'clientid', type: 'text', label: 'Client ID', required: true, oauth_managed: true, only_in_modes: ['own'] },
+          { key: 'clientsecret', type: 'password', label: 'Client Secret', required: true, oauth_managed: true, only_in_modes: ['own'] },
+        ],
+        oauth_provider: { oauth_flow: { callback_path: '/UserAgentOAuth/RedditCallback', state_fields: ['developerprofileusername'] } },
+      },
+    }
+    : credentialDetail(body));
+  const fake = fakeClient({
+    '/Credentials/Detail': withState,
+    '/Skills/List': { ...connectSkillList, skills: [...connectSkillList.skills, { name: 'int-reddit-like', title: 'Reddit', depends_on: [], conflicts_with: [], credential_key: 'reddit-like', requires_credentials: true, pricing: {} }] },
+    '/UserAgent/Detail': detail({ skills: skillsOn('int-reddit-like'), credentials: { 'reddit-like': { developerprofileusername: '', clientid: '', clientsecret: '', _connected: false, _filled: false, optional: false, _schema: { title: 'Reddit' } } } }),
+  });
+  await withClient(fake, async client => {
+    const result = await client.callTool({ name: 'connect_agent_oauth', arguments: { agent_guid: AGENT, credential: 'reddit-like' } });
+    assert.equal(result.structuredContent.state, 'setup_needed');
+    assert.match(result.structuredContent.message, /^Mode own needs these saved first with set_agent_credentials: Developer Profile Username \(developerprofileusername\)\./);
+    assert.equal(fake.paths().includes('/UserAgentOAuth/OAuthConnect'), false);
+  });
+});
+
+test('connect_agent_oauth with no mode says that saved app keys do not show, and picks no mode', async () => {
+  const metaAdsKeys = { appid: '', appsecret: '', systemusertoken: '', _connected: false, _filled: false, optional: false, _schema: { title: 'Meta Ads' } };
+  const fake = fakeClient({
+    '/Credentials/Detail': credentialDetail,
+    '/Skills/List': connectSkillList,
+    '/UserAgent/Detail': detail({ skills: skillsOn('int-metaads-manage'), credentials: { 'meta-ads': metaAdsKeys } }),
+  });
+  await withClient(fake, async client => {
+    const result = await client.callTool({ name: 'connect_agent_oauth', arguments: { agent_guid: AGENT, credential: 'meta-ads' } });
+    const out = result.structuredContent;
+    assert.equal(out.state, 'setup_needed');
+    assert.equal(out.mode, undefined);
+    assert.equal(out.message, 'Choose how to connect Meta Ads: it needs your own app keys or a token saved first. App keys are not shown once saved. If they are saved already, connect with mode own.');
+    assert.match(text(result), /If they are saved already, connect with mode own\./);
+    assert.equal(fake.paths().includes('/UserAgentOAuth/OAuthConnect'), false);
+
+    const described = await client.callTool({ name: 'set_agent_credentials', arguments: { agent_guid: AGENT, credential: 'meta-ads' } });
+    assert.equal(described.structuredContent.nextAction, undefined);
+    assert.ok(described.structuredContent.notes.includes('App keys are not shown once saved. If they are saved already, connect with mode own.'), text(described));
+    assert.match(text(described), /If they are saved already, connect with mode own\./);
+  });
+});
+
+test('connect_agent_oauth with no mode names both modes once when both take the same app keys', async () => {
+  const shopify = {
+    key: 'shopify',
+    title: 'Shopify',
+    credential_mode: 'hybrid',
+    connection_modes: ['api_key', 'own'],
+    credential_schema: [
+      { key: 'shopdomain', type: 'text', label: 'Shop Domain', required: true, only_in_modes: ['api_key', 'own'] },
+      { key: 'clientid', type: 'text', label: 'App Client ID', required: true, oauth_managed: true, only_in_modes: ['api_key', 'own'] },
+      { key: 'clientsecret', type: 'password', label: 'App Client Secret', required: true, encrypted: true, oauth_managed: true, only_in_modes: ['api_key', 'own'] },
+    ],
+    oauth_provider: {
+      oauth_flow: { callback_path: '/UserAgentOAuth/ShopifyCallback', state_fields: ['shopdomain'] },
+      direct_probe: { mode: 'api_key', token_field: 'clientsecret', required_fields: ['shopdomain', 'clientid', 'clientsecret'] },
+    },
+  };
+  const fake = fakeClient({
+    '/Credentials/Detail': body => (body.key === 'shopify' ? { result: true, errors: [], credential: shopify } : credentialDetail(body)),
+    '/Skills/List': { ...connectSkillList, skills: [...connectSkillList.skills, { name: 'int-shopify-manage', title: 'Shopify', depends_on: [], conflicts_with: [], credential_key: 'shopify', requires_credentials: true, pricing: {} }] },
+    '/UserAgent/Detail': detail({
+      skills: skillsOn('int-shopify-manage'),
+      credentials: { shopify: { shopdomain: 'acme.myshopify.com', clientid: '', clientsecret: '', _connected: false, _filled: false, optional: false, _schema: { title: 'Shopify' } } },
+    }),
+  });
+  await withClient(fake, async client => {
+    const result = await client.callTool({ name: 'connect_agent_oauth', arguments: { agent_guid: AGENT, credential: 'shopify' } });
+    assert.equal(result.structuredContent.state, 'setup_needed');
+    assert.match(result.structuredContent.message, /App keys are not shown once saved\. If they are saved already, connect with mode api_key or own\.$/);
+    assert.equal(text(result).match(/App keys are not shown/g).length, 1);
+    assert.equal(fake.paths().includes('/UserAgentOAuth/OAuthConnect'), false);
+  });
+});
+
+test('connect_agent_oauth checks a direct mode whose required fields are app keys', async () => {
+  const shopify = {
+    key: 'shopify',
+    title: 'Shopify',
+    credential_mode: 'hybrid',
+    connection_modes: ['api_key', 'own'],
+    credential_schema: [
+      { key: 'shopdomain', type: 'text', label: 'Shop Domain', required: true, only_in_modes: ['api_key', 'own'] },
+      { key: 'clientid', type: 'text', label: 'App Client ID', required: true, oauth_managed: true, only_in_modes: ['api_key', 'own'] },
+      { key: 'clientsecret', type: 'password', label: 'App Client Secret', required: true, encrypted: true, oauth_managed: true, only_in_modes: ['api_key', 'own'] },
+    ],
+    oauth_provider: {
+      oauth_flow: { callback_path: '/UserAgentOAuth/ShopifyCallback', state_fields: ['shopdomain'] },
+      direct_probe: { mode: 'api_key', token_field: 'clientsecret', required_fields: ['shopdomain', 'clientid', 'clientsecret'] },
+    },
+  };
+  const row = shopdomain => detail({
+    skills: skillsOn('int-shopify-manage'),
+    credentials: { shopify: { shopdomain, clientid: '', clientsecret: '', authmethod: 'api_key', _connected: false, _filled: false, optional: false, _schema: { title: 'Shopify' } } },
+  });
+  const routes = {
+    '/Credentials/Detail': body => (body.key === 'shopify' ? { result: true, errors: [], credential: shopify } : credentialDetail(body)),
+    '/Skills/List': { ...connectSkillList, skills: [...connectSkillList.skills, { name: 'int-shopify-manage', title: 'Shopify', depends_on: [], conflicts_with: [], credential_key: 'shopify', requires_credentials: true, pricing: {} }] },
+  };
+  const fake = fakeClient({ ...routes, '/UserAgent/Detail': row('acme.myshopify.com'), '/UserAgentOAuth/OAuthConnect': { result: true, accounts: [] } });
+  await withClient(fake, async client => {
+    const result = await client.callTool({ name: 'connect_agent_oauth', arguments: { agent_guid: AGENT, credential: 'shopify', mode: 'api_key' } });
+    assert.notEqual(result.isError, true, text(result));
+    assert.equal(result.structuredContent.state, 'connected', text(result));
+    assert.equal(fake.called('/UserAgentOAuth/OAuthConnect').length, 1);
+  });
+  // The field it can read still has to be there.
+  const noDomain = fakeClient({ ...routes, '/UserAgent/Detail': row('') });
+  await withClient(noDomain, async client => {
+    const result = await client.callTool({ name: 'connect_agent_oauth', arguments: { agent_guid: AGENT, credential: 'shopify', mode: 'api_key' } });
+    assert.equal(result.structuredContent.state, 'setup_needed');
+    assert.match(result.structuredContent.message, /^Mode api_key needs these saved first with set_agent_credentials: Shop Domain \(shopdomain\)\./);
+  });
+});
+
+test('connect_agent_oauth says what a direct check that did not pass still did', async () => {
+  const shopify = {
+    key: 'shopify',
+    title: 'Shopify',
+    credential_mode: 'hybrid',
+    connection_modes: ['api_key', 'own'],
+    credential_schema: [
+      { key: 'shopdomain', type: 'text', label: 'Shop Domain', required: true, only_in_modes: ['api_key', 'own'] },
+      { key: 'clientid', type: 'text', label: 'App Client ID', required: true, oauth_managed: true, only_in_modes: ['api_key', 'own'] },
+      { key: 'clientsecret', type: 'password', label: 'App Client Secret', required: true, encrypted: true, oauth_managed: true, only_in_modes: ['api_key', 'own'] },
+    ],
+    oauth_provider: {
+      oauth_flow: { callback_path: '/UserAgentOAuth/ShopifyCallback', state_fields: ['shopdomain'] },
+      direct_probe: { mode: 'api_key', token_field: 'clientsecret', required_fields: ['shopdomain', 'clientid', 'clientsecret'] },
+    },
+  };
+  const row = (status, authmethod) => detail({
+    status,
+    skills: skillsOn('int-shopify-manage'),
+    credentials: { shopify: { shopdomain: 'acme.myshopify.com', clientid: '', clientsecret: '', authmethod, _connected: false, _filled: false, optional: false, _schema: { title: 'Shopify' } } },
+  });
+  const check = async (status, authmethod, answer) => {
+    const fake = fakeClient({
+      '/Credentials/Detail': body => (body.key === 'shopify' ? { result: true, errors: [], credential: shopify } : credentialDetail(body)),
+      '/Skills/List': { ...connectSkillList, skills: [...connectSkillList.skills, { name: 'int-shopify-manage', title: 'Shopify', depends_on: [], conflicts_with: [], credential_key: 'shopify', requires_credentials: true, pricing: {} }] },
+      '/UserAgent/Detail': row(status, authmethod),
+      '/UserAgent/CredentialUpsert': { result: true, errors: [], applied: 1 },
+      '/UserAgentOAuth/OAuthConnect': answer,
+    });
+    let result;
+    await withClient(fake, async client => {
+      result = await client.callTool({ name: 'connect_agent_oauth', arguments: { agent_guid: AGENT, credential: 'shopify', mode: 'api_key' } });
+    });
+    assert.equal(result.isError, true);
+    return { body: text(result), upserts: fake.called('/UserAgent/CredentialUpsert').length };
+  };
+  const noKeys = { result: false, errorcode: 'direct_token_missing', errors: [{ code: 0, message: 'Shopify could not validate these app credentials.' }] };
+  const refusedFirst = { result: false, errors: [{ code: 0, message: 'User agent not found or unauthorized' }] };
+  const SAVED = 'The mode is saved as api_key.';
+  const RESTART = 'The running agent restarts, which takes about a minute.';
+
+  // A running agent, and this call saved the mode.
+  let seen = await check(4, 'own', noKeys);
+  assert.equal(seen.upserts, 1);
+  assert.match(seen.body, /Save shopdomain, clientid, clientsecret with set_agent_credentials first\./);
+  assert.ok(seen.body.includes(SAVED), seen.body);
+  assert.ok(seen.body.includes(RESTART), seen.body);
+
+  // A running agent, and the mode was saved already: nothing new is saved, and it still restarts.
+  seen = await check(3, 'api_key', noKeys);
+  assert.equal(seen.upserts, 0);
+  assert.ok(!seen.body.includes(SAVED), seen.body);
+  assert.ok(seen.body.includes(RESTART), seen.body);
+
+  // A stopped agent does not restart.
+  seen = await check(0, 'own', noKeys);
+  assert.ok(seen.body.includes(SAVED), seen.body);
+  assert.ok(!seen.body.includes(RESTART), seen.body);
+
+  // A refusal before the check, with nothing saved, stays plain.
+  seen = await check(4, 'api_key', refusedFirst);
+  assert.ok(!seen.body.includes(SAVED), seen.body);
+  assert.ok(!seen.body.includes(RESTART), seen.body);
+});
+
+test('connect_agent_oauth asks before a sign-in removes a saved token', async () => {
+  const metaAds = { appid: '', appsecret: '', systemusertoken: 'EAAG-system-user-token', _connected: false, _filled: true, _required_missing: false, optional: false, _schema: { title: 'Meta Ads' } };
+  const fake = fakeClient({
+    '/Credentials/Detail': credentialDetail,
+    '/Skills/List': connectSkillList,
+    '/UserAgent/Detail': detail({ skills: skillsOn('int-metaads-manage'), credentials: { 'meta-ads': metaAds } }),
+    '/UserAgentOAuth/OAuthStatus': { result: true, connected: false, accounts: [], connectedat: '', tokenexpiresat: '' },
+    '/UserAgentOAuth/OAuthConnect': { result: true, authorizeUrl: 'https://www.facebook.com/dialog/oauth?state=xyz' },
+  });
+  await withClient(fake, async client => {
+    const asked = await client.callTool({ name: 'connect_agent_oauth', arguments: { agent_guid: AGENT, credential: 'meta-ads', mode: 'own' } });
+    assert.equal(asked.structuredContent.state, 'confirm_needed');
+    assert.equal(asked.structuredContent.message, 'Connecting Meta Ads with mode own removes the saved System User Token. Save the app keys first if they are not saved yet, so the sign-in can start.');
+    assert.equal(asked.structuredContent.nextAction.arguments.confirm, true);
+    assert.equal(fake.paths().includes('/UserAgentOAuth/OAuthConnect'), false);
+    assert.doesNotMatch(JSON.stringify(asked), /EAAG-system-user-token/);
+
+    const confirmed = await client.callTool({ name: 'connect_agent_oauth', arguments: asked.structuredContent.nextAction.arguments });
+    assert.equal(confirmed.structuredContent.state, 'authorize_in_browser');
+  });
+});
+
+// Mailchimp's modes as the registry has them: an API key belongs to mode api_key, and mode wiro takes no app keys.
+const mailchimpCredential = {
+  key: 'mailchimp',
+  title: 'Mailchimp',
+  credential_mode: 'hybrid',
+  connection_modes: ['wiro', 'own', 'api_key'],
+  wiro_connect_pending: false,
+  credential_schema: [
+    { key: 'clientid', type: 'text', label: 'Client ID', required: false, oauth_managed: true, only_in_modes: ['own'] },
+    { key: 'clientsecret', type: 'password', label: 'Client Secret', required: false, encrypted: true, oauth_managed: true, only_in_modes: ['own'] },
+    { key: 'apikey', type: 'password', label: 'API Key (alternative)', required: false, encrypted: true, only_in_modes: ['api_key'] },
+    { key: 'server', type: 'text', label: 'Server (Data Center)', required: false, auto_filled_by_oauth: true },
+    { key: 'accountname', type: 'text', label: 'Account Name', required: false, auto_filled_by_oauth: true },
+  ],
+  oauth_provider: { auth_method_value: 'wiro', oauth_flow: { callback_path: '/UserAgentOAuth/MailchimpCallback', client_id_field: 'clientid', client_secret_field: 'clientsecret' }, direct_probe: null, account_picker: null },
+};
+
+test('connect_agent_oauth asks for no app keys when the mode takes none', async () => {
+  const mailchimp = { clientid: '', clientsecret: '', apikey: 'saved-api-key', server: 'us1', accountname: '', _connected: false, _filled: true, _required_missing: false, optional: false, _schema: { title: 'Mailchimp' } };
+  for (const [group, message] of [
+    [mailchimp, 'Connecting Mailchimp with mode wiro removes the saved API Key (alternative).'],
+    [{ ...mailchimp, authmethod: 'api_key', _connected: true }, 'Mailchimp is already connected. Connecting again replaces that connection and its selected accounts; if the new sign-in or check fails, the agent is left without it.'],
+  ]) {
+    const fake = fakeClient({
+      '/Credentials/Detail': body => (body.key === 'mailchimp' ? { result: true, errors: [], credential: mailchimpCredential } : credentialDetail(body)),
+      '/Skills/List': connectSkillList,
+      '/UserAgent/Detail': detail({ skills: skillsOn('int-mailchimp-email'), credentials: { mailchimp: group } }),
+    });
+    await withClient(fake, async client => {
+      const asked = await client.callTool({ name: 'connect_agent_oauth', arguments: { agent_guid: AGENT, credential: 'mailchimp', mode: 'wiro' } });
+      assert.equal(asked.structuredContent.state, 'confirm_needed', text(asked));
+      assert.equal(asked.structuredContent.message, message);
+      assert.doesNotMatch(JSON.stringify(asked), /saved-api-key/);
+    });
+  }
+});
+
+// A sign-in route that clears what the sign-in removes, then finds no app keys.
+function refusedAfterClearing({ before, after }) {
+  let cleared = false;
+  return fakeClient({
+    '/Credentials/Detail': credentialDetail,
+    '/Skills/List': connectSkillList,
+    '/UserAgent/Detail': () => detail({ skills: skillsOn('int-metaads-manage'), credentials: { 'meta-ads': cleared ? after : before } }),
+    '/UserAgentOAuth/OAuthStatus': { result: true, connected: false, accounts: [], connectedat: '', tokenexpiresat: '' },
+    '/UserAgentOAuth/OAuthConnect': () => { cleared = true; return structuredClone(NOT_CONFIGURED); },
+  });
+}
+const savedToken = { appid: '', appsecret: '', systemusertoken: 'EAAG-system-user-token', _connected: false, _filled: true, _required_missing: false, optional: false, _schema: { title: 'Meta Ads' } };
+
+test('connect_agent_oauth says what a confirmed sign-in removed when the route finds no app keys', async () => {
+  const fake = refusedAfterClearing({ before: savedToken, after: { ...savedToken, systemusertoken: '', _filled: false, _required_missing: true } });
+  await withClient(fake, async client => {
+    const result = await client.callTool({ name: 'connect_agent_oauth', arguments: { agent_guid: AGENT, credential: 'meta-ads', mode: 'own', confirm: true } });
+    assert.notEqual(result.isError, true, text(result));
+    const out = result.structuredContent;
+    assert.equal(out.state, 'setup_needed');
+    assert.match(out.message, /^Mode own needs these saved first with set_agent_credentials: App ID \(appid\), App Secret \(appsecret\)\./);
+    assert.match(out.message, /The sign-in did not start, and this call removed the saved System User Token\. To go back to it, save it again with set_agent_credentials\.$/);
+    assert.doesNotMatch(out.message, /no longer connected/);
+    const token = out.connectionModes.find(mode => mode.mode === 'api_key').fields.find(field => field.field === 'systemusertoken');
+    assert.equal(token.isSet, false);
+    assert.doesNotMatch(JSON.stringify(result), /EAAG-system-user-token/);
+  });
+});
+
+test('connect_agent_oauth says a refused sign-in ended the connection it replaced', async () => {
+  const before = { ...savedToken, _connected: true };
+  const fake = refusedAfterClearing({ before, after: { ...savedToken, systemusertoken: '', _connected: false, _filled: false, _required_missing: true } });
+  await withClient(fake, async client => {
+    const result = await client.callTool({ name: 'connect_agent_oauth', arguments: { agent_guid: AGENT, credential: 'meta-ads', mode: 'own', confirm: true } });
+    assert.match(result.structuredContent.message, /removed the saved System User Token, so Meta Ads is no longer connected\./);
+  });
+});
+
+test('connect_agent_oauth claims nothing was removed when the refused sign-in kept the token', async () => {
+  const fake = refusedAfterClearing({ before: savedToken, after: savedToken });
+  await withClient(fake, async client => {
+    const result = await client.callTool({ name: 'connect_agent_oauth', arguments: { agent_guid: AGENT, credential: 'meta-ads', mode: 'own', confirm: true } });
+    assert.equal(result.structuredContent.state, 'setup_needed');
+    assert.doesNotMatch(result.structuredContent.message, /removed|did not start/);
+    const token = result.structuredContent.connectionModes.find(mode => mode.mode === 'api_key').fields.find(field => field.field === 'systemusertoken');
+    assert.equal(token.isSet, true);
+  });
+});
+
+test('connect_agent_oauth reads the agent once when a refused sign-in had nothing to remove', async () => {
+  const fake = refusedAfterClearing({ before: { ...savedToken, systemusertoken: '' }, after: { ...savedToken, systemusertoken: '' } });
+  await withClient(fake, async client => {
+    const result = await client.callTool({ name: 'connect_agent_oauth', arguments: { agent_guid: AGENT, credential: 'meta-ads', mode: 'own' } });
+    assert.equal(result.structuredContent.state, 'setup_needed');
+    assert.equal(fake.called('/UserAgent/Detail').length, 1);
+  });
+});
+
+test('connect_agent_oauth still answers a refused sign-in when the agent cannot be read again', async () => {
+  let reads = 0;
+  const fake = fakeClient({
+    '/Credentials/Detail': credentialDetail,
+    '/Skills/List': connectSkillList,
+    '/UserAgent/Detail': () => (++reads === 1
+      ? detail({ skills: skillsOn('int-metaads-manage'), credentials: { 'meta-ads': savedToken } })
+      : { result: false, errors: [{ code: 0, message: 'no' }] }),
+    '/UserAgentOAuth/OAuthStatus': { result: true, connected: false, accounts: [], connectedat: '', tokenexpiresat: '' },
+    '/UserAgentOAuth/OAuthConnect': NOT_CONFIGURED,
+  });
+  await withClient(fake, async client => {
+    const result = await client.callTool({ name: 'connect_agent_oauth', arguments: { agent_guid: AGENT, credential: 'meta-ads', mode: 'own', confirm: true } });
+    assert.notEqual(result.isError, true, text(result));
+    assert.equal(result.structuredContent.state, 'setup_needed');
+    assert.match(result.structuredContent.message, /^Mode own needs these saved first with set_agent_credentials: App ID \(appid\), App Secret \(appsecret\)\./);
+    assert.equal(fake.called('/UserAgent/Detail').length, 2);
+  });
+});
+
+test('connect_agent_oauth does not ask about app keys a sign-in keeps', async () => {
+  const hubspot = { clientid: 'older-client-id', clientsecret: '', _connected: false, _filled: true, _required_missing: false, optional: false, _schema: { title: 'HubSpot' } };
+  const fake = fakeClient({
+    '/Credentials/Detail': credentialDetail,
+    '/Skills/List': connectSkillList,
+    '/UserAgent/Detail': detail({ skills: skillsOn('int-hubspot-crm'), credentials: { hubspot } }),
+    '/UserAgentOAuth/OAuthStatus': { result: true, connected: false, accounts: [], connectedat: '', tokenexpiresat: '' },
+    '/UserAgentOAuth/OAuthConnect': { result: true, authorizeUrl: 'https://app.hubspot.com/oauth/authorize?state=xyz' },
+  });
+  await withClient(fake, async client => {
+    const result = await client.callTool({ name: 'connect_agent_oauth', arguments: { agent_guid: AGENT, credential: 'hubspot', mode: 'wiro' } });
+    assert.equal(result.structuredContent.state, 'authorize_in_browser', text(result));
+  });
+});
+
+test('connect_agent_oauth lists app keys without calling them missing', async () => {
+  const fake = fakeClient({
+    '/Credentials/Detail': credentialDetail,
+    '/Skills/List': connectSkillList,
+    '/UserAgent/Detail': detail({ skills: skillsOn('int-metaads-manage') }),
+  });
+  await withClient(fake, async client => {
+    const result = await client.callTool({ name: 'connect_agent_oauth', arguments: { agent_guid: AGENT, credential: 'meta-ads' } });
+    assert.equal(result.structuredContent.state, 'setup_needed');
+    assert.match(text(result), /Fields: systemusertoken \(missing\)\./);
+    assert.match(text(result), /Fields: appid, appsecret\./);
+    const own = result.structuredContent.connectionModes.find(mode => mode.mode === 'own');
+    assert.deepEqual(own.fields.map(field => field.writeOnly), [true, true]);
+  });
+});
+
+test('set_agent_credentials describe does not call app keys saved or missing for sure', async () => {
+  const fake = fakeClient({
+    '/Credentials/Detail': credentialDetail,
+    '/Skills/List': connectSkillList,
+    '/UserAgent/Detail': detail({ skills: skillsOn('int-googleads-manage'), credentials: { 'google-ads': googleAdsKeys } }),
+  });
+  await withClient(fake, async client => {
+    const result = await client.callTool({ name: 'set_agent_credentials', arguments: { agent_guid: AGENT, credential: 'google-ads' } });
+    assert.equal(result.structuredContent.nextAction, undefined);
+    assert.ok(result.structuredContent.notes.includes('Mode own needs clientid, clientsecret and developertoken saved first.'), text(result));
+    assert.ok(result.structuredContent.notes.includes('App keys are not shown once saved. If they are saved already, connect with mode own.'), text(result));
+    assert.doesNotMatch(text(result), /Everything mode own needs is saved/);
+  });
+});
+
+test('set_agent_credentials offers connect right after saving app keys that read as empty', async () => {
+  const routes = {
+    '/Credentials/Detail': credentialDetail,
+    '/Skills/List': connectSkillList,
+    '/UserAgent/CredentialUpsert': { result: true, applied: 3 },
+    '/UserAgent/Detail': detail({ skills: skillsOn('int-googleads-manage'), credentials: { 'google-ads': googleAdsKeys } }),
+  };
+  const field = (name, value) => ({ credential: 'google-ads', field: name, value });
+  const whole = fakeClient(routes);
+  await withClient(whole, async client => {
+    const result = await client.callTool({
+      name: 'set_agent_credentials',
+      arguments: { agent_guid: AGENT, fields: [field('clientid', '123-abc.apps.googleusercontent.com'), field('clientsecret', 'own-secret-value'), field('developertoken', 'own-dev-token')] },
+    });
+    assert.notEqual(result.isError, true, text(result));
+    assert.deepEqual(result.structuredContent.nextAction, {
+      tool: 'connect_agent_oauth',
+      arguments: { action: 'connect', agent_guid: AGENT, credential: 'google-ads', mode: 'own' },
+      reason: 'Connect Google Ads now that its fields are saved.',
+    });
+    assert.doesNotMatch(text(result), /Mode own needs/);
+    assert.doesNotMatch(JSON.stringify(result), /own-secret-value|own-dev-token/);
+  });
+
+  const part = fakeClient({ ...routes, '/UserAgent/CredentialUpsert': { result: true, applied: 1 } });
+  await withClient(part, async client => {
+    const result = await client.callTool({ name: 'set_agent_credentials', arguments: { agent_guid: AGENT, fields: [field('clientid', '123-abc.apps.googleusercontent.com')] } });
+    assert.equal(result.structuredContent.nextAction, undefined);
+    assert.ok(result.structuredContent.notes.includes('Mode own needs clientsecret and developertoken saved first.'), text(result));
+    assert.ok(result.structuredContent.notes.includes('App keys are not shown once saved. If they are saved already, connect with mode own.'), text(result));
+  });
+
+  // A key that failed to save does not count as saved.
+  const failed = fakeClient({ ...routes, '/UserAgent/CredentialUpsert': { result: false, applied: 2, errors: [{ code: 0, message: 'Developer Token could not be saved' }] } });
+  await withClient(failed, async client => {
+    const result = await client.callTool({
+      name: 'set_agent_credentials',
+      arguments: { agent_guid: AGENT, fields: [field('clientid', '123-abc.apps.googleusercontent.com'), field('clientsecret', 'own-secret-value'), field('developertoken', 'own-dev-token')] },
+    });
+    assert.equal(result.structuredContent.nextAction, undefined);
+  });
+});
+
 test('connect_agent_oauth checks a saved token without a browser and lists the accounts', async () => {
   const row = detailRow({ skills: skillsOn('int-metaads-manage') });
   row.credentials['meta-ads'] = { ...row.credentials['meta-ads'], systemusertoken: 'EAAB-system-user-token' };
@@ -2539,6 +3037,72 @@ test('connect_agent_oauth status still answers when the skills or the agent cann
       assert.equal(result.structuredContent.nextAction.arguments.action, 'connect');
     });
   }
+});
+
+test('connect_agent_oauth status agrees with get_my_agent on a saved connection, and offers a start only when one can happen', async () => {
+  const saved = (overrides = {}) => ({
+    '/Credentials/Detail': credentialDetail,
+    '/Skills/List': connectSkillList,
+    '/UserAgent/Detail': detail({
+      skills: skillsOn('int-hubspot-crm'),
+      credentials: { hubspot: { optional: true, _connected: true, _filled: true, _schema: { title: 'HubSpot', oauth_provider: {} } } },
+      ...overrides,
+    }),
+  });
+  const expired = { result: true, connected: false, accounts: [], connectedat: '2026-01-01T00:00:00Z', tokenexpiresat: '2026-01-02T00:00:00Z' };
+  const noSignIn = { result: true, connected: false, accounts: [], connectedat: '', tokenexpiresat: '' };
+  const endedPlan = { plan: 'agent', status: 'expired', provider: 'prepaid', currentperiodend: NOW - 86400 };
+  const ask = async (routes, status) => {
+    let answer;
+    await withClient(fakeClient({ ...routes, '/UserAgentOAuth/OAuthStatus': status }), async client => {
+      answer = await client.callTool({ name: 'connect_agent_oauth', arguments: { action: 'status', agent_guid: AGENT, credential: 'hubspot' } });
+      assert.notEqual(answer.isError, true, text(answer));
+    });
+    return answer.structuredContent;
+  };
+  const listed = 'The connection is still saved, so get_my_agent lists HubSpot as connected.';
+
+  const running = await ask(saved(), expired);
+  assert.equal(running.state, 'token_expired');
+  assert.equal(running.message, `The saved HubSpot access has expired. ${listed} If the agent cannot use it, connect again.`);
+
+  const cannotStart = await ask(saved({ status: 0, extracredits: 0, subscription: endedPlan }), expired);
+  assert.doesNotMatch(cannotStart.message, /Start the agent/);
+  assert.match(cannotStart.message, /It has no active plan and no extra credits left, so it cannot start\./);
+
+  const canStart = await ask(saved({ status: 0 }), expired);
+  assert.equal(canStart.message, `The saved HubSpot access has expired. ${listed} Start the agent with control_agent, or connect again.`);
+
+  const failedNoPlan = await ask(saved({ status: 5, extracredits: 0, subscription: endedPlan }), expired);
+  assert.doesNotMatch(failedNoPlan.message, /Start the agent/);
+
+  const failedWithPlan = await ask(saved({ status: 5 }), expired);
+  assert.equal(failedWithPlan.message, `The saved HubSpot access has expired. ${listed} Start the agent with control_agent, or connect again.`);
+
+  const starting = await ask(saved({ status: 3 }), expired);
+  assert.equal(starting.message, `The saved HubSpot access has expired. ${listed} If the agent cannot use it, connect again.`);
+
+  const savedOnly = await ask(saved(), noSignIn);
+  assert.equal(savedOnly.state, 'not_connected');
+  assert.equal(savedOnly.message, 'This check found no current HubSpot sign-in, but a HubSpot connection is saved on this agent, so get_my_agent lists it as connected. If the agent cannot use it, connect again: that replaces the saved connection and asks for confirm: true.');
+  assert.equal(savedOnly.nextAction.arguments.action, 'connect');
+
+  const notConnected = await ask(saved({ credentials: { hubspot: { clientid: '', clientsecret: '', optional: true, _connected: false, _filled: true, _schema: { title: 'HubSpot', oauth_provider: {} } } } }), noSignIn);
+  assert.equal(notConnected.message, 'HubSpot is not connected. Start with action connect.');
+
+  // The agent's row cannot be read: today's text stays.
+  const unread = fakeClient({ '/Credentials/Detail': credentialDetail, '/UserAgentOAuth/OAuthStatus': expired });
+  await withClient(unread, async client => {
+    const answer = await client.callTool({ name: 'connect_agent_oauth', arguments: { action: 'status', agent_guid: AGENT, credential: 'hubspot' } });
+    assert.equal(answer.structuredContent.message, 'The saved HubSpot access has expired. Start the agent with control_agent, or connect again.');
+  });
+
+  // Connecting again really asks first, as the text says.
+  await withClient(fakeClient({ ...saved(), '/UserAgentOAuth/OAuthStatus': noSignIn }), async client => {
+    const next = await client.callTool({ name: 'connect_agent_oauth', arguments: savedOnly.nextAction.arguments });
+    assert.equal(next.structuredContent.state, 'confirm_needed');
+    assert.equal(next.structuredContent.nextAction.arguments.confirm, true);
+  });
 });
 
 test('connect_agent_oauth status reads the skills once, after the wait, and only when it would offer connect', async () => {

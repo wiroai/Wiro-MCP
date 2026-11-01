@@ -1,7 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { WiroClient } from '../client.js';
-import { ApiResultError, errorResult, requireApiSuccess } from '../utils/api.js';
+import { ApiResultError, errorResult, requireApiSuccess, type ApiEnvelope } from '../utils/api.js';
 import { DEFAULT_WAIT_SECONDS, MAX_WAIT_SECONDS } from '../utils/poll.js';
 import {
   agentStatusLabel,
@@ -35,8 +35,12 @@ interface Decision {
   underWay?: string;
   /** Stands at the end of the message, whatever the wait found. */
   closing?: string;
+  /** The status changed since the agent was read, so it is read again whatever the outcome. */
+  readAgain?: boolean;
   nextAction?: NextAction;
 }
+
+type RestartAnswer = ApiEnvelope & { restarting?: unknown };
 
 /** What a stop means for the agent's plan, as the plan stood before the stop. */
 function planAfterStop(plan: AgentSubscription | null): string {
@@ -250,9 +254,9 @@ export function registerControlAgent(server: McpServer, client: WiroClient): voi
             call = { path: '/UserAgent/Stop', fallback: 'The agent could not be stopped.' };
           }
         } else if (previous === 3 || previous === 4) {
-          // A restart is an update: updating a starting or running agent stops
-          // it and queues it again. Only the outcome is read from the answer;
-          // the status shown comes from Detail.
+          // A restart is an Update that names no field: it stops a starting or
+          // running agent and queues it again. Only the outcome is read from the
+          // answer; the status shown comes from Detail.
           call = { path: '/UserAgent/Update', fallback: 'The agent could not be restarted.' };
         } else if (previous === 0 || previous === 5) {
           call = start;
@@ -264,35 +268,54 @@ export function registerControlAgent(server: McpServer, client: WiroClient): voi
           decision = setupRefusal(current, plainMember);
         }
 
+        // Set when the answer says the agent is restarting and gives no status.
+        let restartNotReadBack = false;
         if (call) {
+          const missing = current.missingCredentials;
+          const closing = missing.length > 0
+            ? `Missing credentials: ${missing.map(item => item.title).join(', ')}. Skills that need them fail until they are set.`
+            : undefined;
+          const restarts = call.path === '/UserAgent/Update';
           try {
-            requireApiSuccess(await client.post(call.path, { guid }, extra.signal), call.fallback);
-            const missing = current.missingCredentials;
-            const closing = missing.length > 0
-              ? `Missing credentials: ${missing.map(item => item.title).join(', ')}. Skills that need them fail until they are set.`
-              : undefined;
+            const answer = requireApiSuccess(await client.post<RestartAnswer>(call.path, { guid }, extra.signal), call.fallback);
             decision = call.path === '/UserAgent/Stop'
               ? { outcome: 'requested', message: `Stop requested. ${planAfterStop(current.subscription)}` }
-              : {
+              : restarts && answer.restarting === false
+                // Wiro found the agent neither starting nor running, so nothing restarted.
+                ? { outcome: 'not_needed', message: 'The agent is no longer starting or running, so it did not restart.', readAgain: true }
+                : {
+                  outcome: 'requested',
+                  ...(restarts
+                    ? { message: 'Restart requested.', underWay: 'The agent stops and starts again with its current settings.' }
+                    : { message: 'Start requested.', underWay: 'The agent is queued and starts on its own; this can take a while.' }),
+                  ...(closing ? { closing } : {}),
+                };
+          } catch (error) {
+            if (restarts && error instanceof ApiResultError && error.body.restarting === true) {
+              restartNotReadBack = true;
+              decision = {
                 outcome: 'requested',
-                ...(call.path === '/UserAgent/Start'
-                  ? { message: 'Start requested.', underWay: 'The agent is queued and starts on its own; this can take a while.' }
-                  : { message: 'Restart requested.', underWay: 'The agent stops and starts again with its current settings.' }),
+                message: 'Restart requested.',
+                underWay: 'The agent is restarting with its current settings.',
                 ...(closing ? { closing } : {}),
               };
-          } catch (error) {
-            const refusal = error instanceof ApiResultError ? interpretRefusal(error.message, current) : null;
-            if (!refusal) throw error;
-            decision = refusal;
+            } else {
+              const refusal = error instanceof ApiResultError ? interpretRefusal(error.message, current) : null;
+              if (!refusal) throw error;
+              decision = refusal;
+            }
           }
         }
 
-        const result = decision ?? { outcome: 'not_needed' as const, message: 'Nothing to do.' };
+        const result: Decision = decision ?? { outcome: 'not_needed', message: 'Nothing to do.' };
         let after = before;
         let settled = !isTransitionalStatus(previous);
         let waitedSeconds: number | undefined;
         let readFailed = false;
-        if (result.outcome === 'requested' || (wait_seconds > 0 && !settled)) {
+        if (restartNotReadBack && wait_seconds === 0) {
+          readFailed = true;
+          settled = false;
+        } else if (result.outcome === 'requested' || result.readAgain || (wait_seconds > 0 && !settled)) {
           try {
             const waited = await waitForAgentToSettle(client, guid, wait_seconds, extra, before);
             after = waited.row;

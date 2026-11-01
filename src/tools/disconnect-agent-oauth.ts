@@ -1,8 +1,9 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { WiroClient } from '../client.js';
-import { errorResult, errorText, requireApiSuccess, type ApiEnvelope } from '../utils/api.js';
+import { ApiResultError, errorResult, errorText, requireApiSuccess, type ApiEnvelope } from '../utils/api.js';
 import {
+  CONNECTION_NOT_CLEARED,
   accountLabel,
   connectionRefusalText,
   loadCredentialMeta,
@@ -102,13 +103,31 @@ export function registerDisconnectAgentOauth(server: McpServer, client: WiroClie
           };
         }
 
-        requireApiSuccess(
-          await client.post<ApiEnvelope>('/UserAgentOAuth/OAuthDisconnect', {
-            useragentguid: agent_guid,
-            credentialkey: credential,
-          }, extra.signal),
-          `Could not disconnect ${meta.title}.`,
-        );
+        try {
+          requireApiSuccess(
+            await client.post<ApiEnvelope>('/UserAgentOAuth/OAuthDisconnect', {
+              useragentguid: agent_guid,
+              credentialkey: credential,
+            }, extra.signal),
+            `Could not disconnect ${meta.title}.`,
+          );
+        } catch (error) {
+          if (!(error instanceof ApiResultError) || error.message !== CONNECTION_NOT_CLEARED) throw error;
+          return {
+            content: [{ type: 'text' as const, text: `## Error\n\n${error.message}` }],
+            structuredContent: {
+              agentGuid: agent_guid,
+              credential,
+              title: meta.title,
+              disconnected: false,
+              connectedBefore,
+              accounts,
+              willClear,
+              message: error.message,
+            },
+            isError: true,
+          };
+        }
         const message = `${meta.title} is disconnected. ${willClear}`;
         return {
           content: [{ type: 'text' as const, text: `## ${meta.title} disconnected\n\n${message}` }],

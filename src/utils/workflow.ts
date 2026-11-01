@@ -135,6 +135,8 @@ export const workflowInputSchema = z.object({
   options: z.array(z.object({ value: z.string(), text: z.string() })).optional(),
   default: z.unknown().optional(),
   savedValue: z.unknown().optional(),
+  required: z.boolean().optional()
+    .describe('Whether a run must be given this input, as far as Wiro says. Left out when that is not known.'),
 });
 
 export type WorkflowInputSummary = z.infer<typeof workflowInputSchema>;
@@ -425,6 +427,8 @@ export function toWorkflowDetail(
   const notes = estimateNotes(estimated?.details);
 
   const description = asString(row.description);
+  // The Start fields a run must be given. Without the list that is not known, so an input then says nothing either way.
+  const required = Array.isArray(row.requiredinputs) ? new Set(row.requiredinputs.map(String)) : null;
   return {
     ...toWorkflowSummary(row, { includeState: insider }),
     // The full text: an edit starts from this value, so it must not be shortened.
@@ -436,7 +440,7 @@ export function toWorkflowDetail(
     canEditGraph: insider && !graphHidden && !(isClone && isProtected),
     graphHidden,
     ...(row.ownerinactive === true ? { ownerInactive: true } : {}),
-    inputs: workflowInputs(contentsObject),
+    inputs: workflowInputs(contentsObject).map(input => (required ? { ...input, required: required.has(input.key) } : input)),
     outputs: workflowOutputs(contentsObject),
     ...(estimated
       ? {
@@ -462,7 +466,7 @@ function summaryValue(value: unknown): string {
 export function formatWorkflowInputs(inputs: WorkflowInputSummary[]): string[] {
   if (inputs.length === 0) return ['No inputs. Run it with no `input`.'];
   return inputs.map(input => {
-    const kind = input.field ? `${input.type}, ${input.field}` : input.type;
+    const kind = [input.type, input.field, input.required ? 'required' : ''].filter(Boolean).join(', ');
     const fallback = input.savedValue !== undefined
       ? ` (saved value: ${summaryValue(input.savedValue)})`
       : input.default !== undefined && input.default !== ''

@@ -205,7 +205,7 @@ function quoteText(quote: Quote, credentials?: Record<string, unknown>): string 
     lines.push(`- Custom skills and scheduled tasks: ${quote.customSkills.map(skill => customSkillLine(skill, skill.replacesTemplateEntry)).join('; ')}.${scheduled ? ' Scheduled tasks run in UTC until the time zone is changed, and every run spends the agent\'s credits.' : ''}`);
   }
   if (quote.kind === 'custom') {
-    lines.push('- Scheduled tasks: a custom build comes with the tasks its skills bring, or else a starter task on Mondays at 10:00 UTC. Every run spends the agent\'s credits. The deploy result names the tasks that are on, and they can be changed or turned off.');
+    lines.push('- Scheduled tasks: a custom build comes with the tasks its skills bring, and every run spends the agent\'s credits. The deploy result names the tasks that are on, and they can be changed or turned off. A build whose skills bring none gets a starter task, which stays off until it is written and turned on with manage_agent_custom_skill.');
   }
   // Only the deploy result can say a carried credential is complete: it may need more fields or a sign-in.
   const toProvide = quote.credentialsNeeded.filter(item => !isFilledValue(credentials?.[item.key]));
@@ -299,8 +299,9 @@ export function registerDeployAgent(server: McpServer, client: WiroClient): void
         + 'can be confirmed again once its cause is fixed and the user says yes. The '
         + 'agent starts on its own after deployment. Credentials can be added later with set_agent_credentials, '
         + 'connect_agent_oauth or, for a Wiro project, bind_agent_project, but skills that need them do not work until then. A custom build also gets '
-        + 'the scheduled tasks its skills come with, or a starter task on Mondays at 10:00; the result names the ones '
-        + 'that are on, and they can be changed or turned off. The quote names the wallet and the other tier\'s price. '
+        + 'the scheduled tasks its skills come with; the result names the ones that are on, and they can be changed or '
+        + 'turned off. A build whose skills bring none gets a starter task, which stays off until it is written and turned '
+        + 'on with manage_agent_custom_skill. The quote names the wallet and the other tier\'s price. '
         + 'In a team workspace the agent starts with collaborative chats, which every team member sees; update_agent '
         + 'changes that after the deploy. To change a template\'s '
         + 'skills, deploy it first and then use apply_agent_skills. get_playbook describes the whole flow.',

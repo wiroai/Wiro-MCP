@@ -445,6 +445,8 @@ export const agentSummarySchema = z.object({
   skills: z.array(z.string()),
   createdAt: z.string().optional(),
   updatedAt: z.string().optional(),
+  lastActivityAt: z.string().optional()
+    .describe('When the agent\'s newest message was written, on any channel, scheduled runs included. Left out when it has none.'),
 });
 
 export type AgentSummary = z.infer<typeof agentSummarySchema>;
@@ -542,7 +544,7 @@ export function toAgentSummary(row: Record<string, unknown>): AgentSummary {
     ...(timezone !== undefined ? { timezone } : {}),
     ...(sessionMode ? { teamSessionMode: sessionMode } : {}),
     skills: toStringArray(row.skills ?? row.enabledSkills),
-    ...timestamps(row, { createdAt: 'createdat', updatedAt: 'updatedat' }),
+    ...timestamps(row, { createdAt: 'createdat', updatedAt: 'updatedat', lastActivityAt: 'lastactivityat' }),
   };
 }
 
@@ -774,6 +776,7 @@ function formatModelsLine(agent: AgentDetail): string | null {
 
 export function formatAgentDetail(agent: AgentDetail, plainMember = false): string {
   const lines = formatAgentSummaryLines(agent, plainMember);
+  if (agent.lastActivityAt) lines.push(`**Last activity:** ${agent.lastActivityAt}`);
   if (agent.pricing) {
     // Today's Starter and Pro prices for this agent's own skills, which can
     // differ from its template's and from the price its plan pays.
@@ -1023,6 +1026,9 @@ const PRE_CHARGE_REFUSALS: RegExp[] = [
   /switch to (the )?(team|personal) context|belongs to a different team/i,
   /^request parameter \[/i,
   /mutually exclusive|agent terms acceptance|customskills must be|skill key may only contain/i,
+  /^unknown skill: /i,
+  /^the tier change could not be saved\./i,
+  /^we couldn't (schedule|undo) the cancellation\./i,
   /enabledchannels is not accepted|credentials must be an object|credential field|is missing required fields/i,
   /chat mode is not accepted|is managed by (wiro|the connection flow)|^agent-[a-z-]+$/i,
   /^failed to deploy agent|failed to save communication channel settings|failed to save custom skill/i,
@@ -1035,14 +1041,27 @@ export function isPreChargeRefusal(error: unknown): boolean {
   return PRE_CHARGE_REFUSALS.some(pattern => pattern.test(error.message.trim()));
 }
 
+const CHARGED_START = 'The wallet was charged ';
+const CHARGED_END = /, but the (tier change|renewal) did not finish\. Please contact support and do not try again\.$/;
+
+/**
+ * Whether a result:false answer says what the wallet paid. Its sentence is the
+ * whole outcome: it is shown as it is, and the call is not repeated.
+ */
+export function isKnownPaidOutcome(error: unknown): boolean {
+  if (!(error instanceof ApiResultError)) return false;
+  const message = error.message.trim();
+  return message.startsWith(CHARGED_START) && CHARGED_END.test(message);
+}
+
 /**
  * After a paid request was sent, whether it may still have gone through.
- * Only the known refusals and client errors (other than a timeout or rate
- * limit) settle it; any other answer, a network failure or a server error
- * leaves it open.
+ * Only the known refusals, an answer that says what the wallet paid, and
+ * client errors (other than a timeout or rate limit) settle it; any other
+ * answer, a network failure or a server error leaves it open.
  */
 export function outcomeUnknown(error: unknown): boolean {
-  if (error instanceof ApiResultError) return !isPreChargeRefusal(error);
+  if (error instanceof ApiResultError) return !isPreChargeRefusal(error) && !isKnownPaidOutcome(error);
   if (error instanceof WiroApiError) {
     return error.status >= 500 || error.status === 408 || error.status === 429;
   }
