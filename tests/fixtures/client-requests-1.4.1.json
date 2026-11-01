@@ -1,0 +1,340 @@
+{
+  "description": "Requests that WiroClient 1.4.1 sent for these inputs, recorded with Date.now returning `now` and fetch stubbed. A client without requestHeaders must send exactly these.",
+  "source": {
+    "package": "@wiro-ai/wiro-mcp",
+    "version": "1.4.1",
+    "commit": "e1d8cdf0ca8e83dd7d64eefe3d1e515b3499f0d0"
+  },
+  "conventions": {
+    "client": "new WiroClient(apiKey, apiSecret, baseUrl) with no options. null means the argument was left out; baseUrl null is the default https://api.wiro.ai/v1.",
+    "call": "post(path, body) or postForm(path, form). Each form field was appended as new Blob([text], { type }) with filename.",
+    "expected": "What fetch received: the URL, init.method, init.headers exactly as passed (a plain object, key order and case kept) and a description of init.body.",
+    "derived": "Not part of the request: pathname is new URL(url).pathname."
+  },
+  "cases": [
+    {
+      "id": "apikey-only/json/default-base",
+      "client": {
+        "apiKey": "test-api-key-0123456789abcdef",
+        "apiSecret": null,
+        "baseUrl": null
+      },
+      "requests": [
+        {
+          "now": 1800000000000,
+          "call": {
+            "method": "post",
+            "path": "/Tool/List",
+            "body": {}
+          },
+          "expected": {
+            "url": "https://api.wiro.ai/v1/Tool/List",
+            "method": "POST",
+            "headers": {
+              "x-api-key": "test-api-key-0123456789abcdef",
+              "Content-Type": "application/json"
+            },
+            "body": {
+              "type": "string",
+              "value": "{}"
+            }
+          },
+          "derived": {
+            "pathname": "/v1/Tool/List"
+          }
+        }
+      ]
+    },
+    {
+      "id": "apikey-only/json/example-test-base",
+      "client": {
+        "apiKey": "test-api-key-0123456789abcdef",
+        "apiSecret": null,
+        "baseUrl": "https://api.example.test/v1"
+      },
+      "requests": [
+        {
+          "now": 1800000001111,
+          "call": {
+            "method": "post",
+            "path": "/Tool/List",
+            "body": {}
+          },
+          "expected": {
+            "url": "https://api.example.test/v1/Tool/List",
+            "method": "POST",
+            "headers": {
+              "x-api-key": "test-api-key-0123456789abcdef",
+              "Content-Type": "application/json"
+            },
+            "body": {
+              "type": "string",
+              "value": "{}"
+            }
+          },
+          "derived": {
+            "pathname": "/v1/Tool/List"
+          }
+        }
+      ]
+    },
+    {
+      "id": "apikey-only/multipart/default-base",
+      "client": {
+        "apiKey": "test-api-key-0123456789abcdef",
+        "apiSecret": null,
+        "baseUrl": null
+      },
+      "requests": [
+        {
+          "now": 1800000002222,
+          "call": {
+            "method": "postForm",
+            "path": "/File/Upload",
+            "form": [
+              {
+                "name": "file",
+                "filename": "golden.txt",
+                "type": "text/plain",
+                "text": "golden vector upload\n"
+              }
+            ]
+          },
+          "expected": {
+            "url": "https://api.wiro.ai/v1/File/Upload",
+            "method": "POST",
+            "headers": {
+              "x-api-key": "test-api-key-0123456789abcdef"
+            },
+            "body": {
+              "type": "FormData",
+              "fields": [
+                {
+                  "name": "file",
+                  "filename": "golden.txt",
+                  "type": "text/plain",
+                  "size": 21
+                }
+              ]
+            }
+          },
+          "derived": {
+            "pathname": "/v1/File/Upload"
+          }
+        }
+      ]
+    },
+    {
+      "id": "apikey-only/multipart/example-test-base",
+      "client": {
+        "apiKey": "test-api-key-0123456789abcdef",
+        "apiSecret": null,
+        "baseUrl": "https://api.example.test/v1"
+      },
+      "requests": [
+        {
+          "now": 1800000003333,
+          "call": {
+            "method": "postForm",
+            "path": "/File/Upload",
+            "form": [
+              {
+                "name": "file",
+                "filename": "golden.txt",
+                "type": "text/plain",
+                "text": "golden vector upload\n"
+              }
+            ]
+          },
+          "expected": {
+            "url": "https://api.example.test/v1/File/Upload",
+            "method": "POST",
+            "headers": {
+              "x-api-key": "test-api-key-0123456789abcdef"
+            },
+            "body": {
+              "type": "FormData",
+              "fields": [
+                {
+                  "name": "file",
+                  "filename": "golden.txt",
+                  "type": "text/plain",
+                  "size": 21
+                }
+              ]
+            }
+          },
+          "derived": {
+            "pathname": "/v1/File/Upload"
+          }
+        }
+      ]
+    },
+    {
+      "id": "signature/json/default-base",
+      "client": {
+        "apiKey": "test-api-key-0123456789abcdef",
+        "apiSecret": "test-api-secret-0123456789abcdef",
+        "baseUrl": null
+      },
+      "requests": [
+        {
+          "now": 1800000004444,
+          "call": {
+            "method": "post",
+            "path": "/Tool/List",
+            "body": {}
+          },
+          "expected": {
+            "url": "https://api.wiro.ai/v1/Tool/List",
+            "method": "POST",
+            "headers": {
+              "x-api-key": "test-api-key-0123456789abcdef",
+              "Content-Type": "application/json",
+              "x-signature": "0b5d41a051ac89471fb31960870440d4403b26497e7958af163c0edbf59703ae",
+              "x-nonce": "1800000004444"
+            },
+            "body": {
+              "type": "string",
+              "value": "{}"
+            }
+          },
+          "derived": {
+            "pathname": "/v1/Tool/List"
+          }
+        }
+      ]
+    },
+    {
+      "id": "signature/json/example-test-base",
+      "client": {
+        "apiKey": "test-api-key-0123456789abcdef",
+        "apiSecret": "test-api-secret-0123456789abcdef",
+        "baseUrl": "https://api.example.test/v1"
+      },
+      "requests": [
+        {
+          "now": 1800000005555,
+          "call": {
+            "method": "post",
+            "path": "/Tool/List",
+            "body": {}
+          },
+          "expected": {
+            "url": "https://api.example.test/v1/Tool/List",
+            "method": "POST",
+            "headers": {
+              "x-api-key": "test-api-key-0123456789abcdef",
+              "Content-Type": "application/json",
+              "x-signature": "491ad33e3b4ecff3aa6b60d31b597b4ee727ab0a1d0a664ba1f1f13703d1292b",
+              "x-nonce": "1800000005555"
+            },
+            "body": {
+              "type": "string",
+              "value": "{}"
+            }
+          },
+          "derived": {
+            "pathname": "/v1/Tool/List"
+          }
+        }
+      ]
+    },
+    {
+      "id": "signature/multipart/default-base",
+      "client": {
+        "apiKey": "test-api-key-0123456789abcdef",
+        "apiSecret": "test-api-secret-0123456789abcdef",
+        "baseUrl": null
+      },
+      "requests": [
+        {
+          "now": 1800000006666,
+          "call": {
+            "method": "postForm",
+            "path": "/File/Upload",
+            "form": [
+              {
+                "name": "file",
+                "filename": "golden.txt",
+                "type": "text/plain",
+                "text": "golden vector upload\n"
+              }
+            ]
+          },
+          "expected": {
+            "url": "https://api.wiro.ai/v1/File/Upload",
+            "method": "POST",
+            "headers": {
+              "x-api-key": "test-api-key-0123456789abcdef",
+              "x-signature": "74115f550f693f85b138219b9d3670ffc8a26248e8da21b9c438e11bd5f8a946",
+              "x-nonce": "1800000006666"
+            },
+            "body": {
+              "type": "FormData",
+              "fields": [
+                {
+                  "name": "file",
+                  "filename": "golden.txt",
+                  "type": "text/plain",
+                  "size": 21
+                }
+              ]
+            }
+          },
+          "derived": {
+            "pathname": "/v1/File/Upload"
+          }
+        }
+      ]
+    },
+    {
+      "id": "signature/multipart/example-test-base",
+      "client": {
+        "apiKey": "test-api-key-0123456789abcdef",
+        "apiSecret": "test-api-secret-0123456789abcdef",
+        "baseUrl": "https://api.example.test/v1"
+      },
+      "requests": [
+        {
+          "now": 1800000007777,
+          "call": {
+            "method": "postForm",
+            "path": "/File/Upload",
+            "form": [
+              {
+                "name": "file",
+                "filename": "golden.txt",
+                "type": "text/plain",
+                "text": "golden vector upload\n"
+              }
+            ]
+          },
+          "expected": {
+            "url": "https://api.example.test/v1/File/Upload",
+            "method": "POST",
+            "headers": {
+              "x-api-key": "test-api-key-0123456789abcdef",
+              "x-signature": "3ed2239efdb905c3f5be7777384f7844b278c31d27c590d845e2b46c0ca29f99",
+              "x-nonce": "1800000007777"
+            },
+            "body": {
+              "type": "FormData",
+              "fields": [
+                {
+                  "name": "file",
+                  "filename": "golden.txt",
+                  "type": "text/plain",
+                  "size": 21
+                }
+              ]
+            }
+          },
+          "derived": {
+            "pathname": "/v1/File/Upload"
+          }
+        }
+      ]
+    }
+  ]
+}

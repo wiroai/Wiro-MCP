@@ -1,5 +1,4 @@
 import crypto from 'node:crypto';
-import net from 'node:net';
 import type {
   ListTasksParams,
   SearchModelsParams,
@@ -77,13 +76,23 @@ export interface WaitForTaskOptions {
   maxConsecutiveErrors?: number;
 }
 
-export interface TrustedProxyContext {
-  clientIp: string;
-  sharedSecret: string;
-}
+/**
+ * Returns the headers to add to one Wiro API request. `pathname` is the path of
+ * the request URL, base path included, such as `/v1/Tool/List`, and `apiKey`
+ * is the API key the request is sent with.
+ */
+export type RequestHeadersHook = (
+  request: { pathname: string; apiKey: string },
+) => Record<string, string>;
 
 export interface WiroClientOptions {
-  trustedProxy?: TrustedProxyContext;
+  /**
+   * Called for every Wiro API request the client sends, JSON and multipart.
+   * The headers it returns are sent after the client's own. Their values must
+   * be strings, and they may not set x-api-key, x-signature, x-nonce or
+   * Content-Type: the request then fails before it is sent.
+   */
+  requestHeaders?: RequestHeadersHook;
   // Shown instead of the API's "x-signature and x-nonce headers are required"
   // error when the project needs signature auth and no API secret was given.
   // Say where your users enter the secret.
@@ -199,11 +208,35 @@ export function isTaskNotFound(detail?: TaskDetailResponse): boolean {
     .some(error => TASK_NOT_FOUND_ERRORS.includes(String(error?.message ?? '').trim()));
 }
 
+// WiroClient sets these itself, so a requestHeaders hook may not.
+const CLIENT_HEADERS = new Set(['x-api-key', 'x-signature', 'x-nonce', 'content-type']);
+
+/** Checks what a requestHeaders hook returned and copies it. */
+function checkRequestHeaders(headers: unknown): Record<string, string> {
+  const prototype = typeof headers === 'object' && headers !== null
+    ? Object.getPrototypeOf(headers)
+    : undefined;
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new TypeError('requestHeaders must return a plain object of header names and string values');
+  }
+  const checked: Record<string, string> = {};
+  for (const [name, value] of Object.entries(headers as object)) {
+    if (typeof value !== 'string') {
+      throw new TypeError(`requestHeaders returned a non-string value for ${name}`);
+    }
+    if (CLIENT_HEADERS.has(name.toLowerCase())) {
+      throw new Error(`requestHeaders cannot set ${name}; WiroClient sets it`);
+    }
+    checked[name] = value;
+  }
+  return checked;
+}
+
 export class WiroClient {
   private readonly apiKey: string;
   private readonly apiSecret?: string;
   private readonly baseUrl: string;
-  private readonly trustedProxy?: TrustedProxyContext;
+  private readonly requestHeaders?: RequestHeadersHook;
   private readonly missingSecretHint: string;
   public readonly authType: 'signature' | 'apikey-only';
 
@@ -214,18 +247,18 @@ export class WiroClient {
     options: WiroClientOptions = {},
   ) {
     if (!apiKey) throw new Error('WIRO_API_KEY is required');
-    if (options.trustedProxy) {
-      if (net.isIP(options.trustedProxy.clientIp) === 0) {
-        throw new Error('trustedProxy.clientIp must be a valid IPv4 or IPv6 address');
-      }
-      if (options.trustedProxy.sharedSecret.length < 32) {
-        throw new Error('trustedProxy.sharedSecret must be at least 32 characters');
-      }
+    // Ignoring it would send every request without the headers its caller
+    // expects, so code written for an older version fails here instead.
+    if ('trustedProxy' in options) {
+      throw new Error('The trustedProxy option was removed in 1.5.0; pass requestHeaders instead.');
+    }
+    if (options.requestHeaders !== undefined && typeof options.requestHeaders !== 'function') {
+      throw new TypeError('requestHeaders must be a function');
     }
     this.apiKey = apiKey;
     this.apiSecret = apiSecret;
     this.baseUrl = baseUrl ?? DEFAULT_BASE_URL;
-    this.trustedProxy = options.trustedProxy;
+    this.requestHeaders = options.requestHeaders;
     this.missingSecretHint = options.missingSecretHint ?? DEFAULT_MISSING_SECRET_HINT;
     this.authType = apiSecret ? 'signature' : 'apikey-only';
   }
@@ -264,20 +297,9 @@ export class WiroClient {
       headers['x-nonce'] = nonce;
     }
 
-    if (this.trustedProxy) {
-      const timestamp = Date.now().toString();
-      const payload = [
-        timestamp,
-        this.trustedProxy.clientIp,
-        this.apiKey,
-        pathname,
-      ].join('\n');
-      headers['x-wiro-proxy-client-ip'] = this.trustedProxy.clientIp;
-      headers['x-wiro-proxy-timestamp'] = timestamp;
-      headers['x-wiro-proxy-signature'] = crypto
-        .createHmac('sha256', this.trustedProxy.sharedSecret)
-        .update(payload)
-        .digest('hex');
+    const requestHeaders = this.requestHeaders;
+    if (requestHeaders) {
+      Object.assign(headers, checkRequestHeaders(requestHeaders({ pathname, apiKey: this.apiKey })));
     }
 
     return headers;

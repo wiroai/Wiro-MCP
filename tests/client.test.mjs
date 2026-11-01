@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import {
   isTaskNotFound,
@@ -321,48 +322,223 @@ test('listTasks scopes by auth without sending uuid', { concurrency: false }, as
   }
 });
 
-test('trusted proxy context signs the caller IP and API path', { concurrency: false }, async () => {
+// Requests that WiroClient 1.4.1 sent, JSON and multipart, with and without an
+// API secret, on the default base URL and another one.
+const RECORDED = JSON.parse(readFileSync(new URL('./fixtures/client-requests-1.4.1.json', import.meta.url), 'utf8'));
+
+function recordedClient({ apiKey, apiSecret, baseUrl }, options) {
+  const args = [apiKey, apiSecret ?? undefined, baseUrl ?? undefined];
+  if (options !== undefined) args.push(options);
+  return new WiroClient(...args);
+}
+
+function describeBody(body) {
+  if (typeof body === 'string') return { type: 'string', value: body };
+  assert.ok(body instanceof FormData, 'the body is a string or FormData');
+  return {
+    type: 'FormData',
+    fields: [...body.entries()].map(([name, value]) => (typeof value === 'string'
+      ? { name, value }
+      : { name, filename: value.name, type: value.type, size: value.size })),
+  };
+}
+
+// Makes one recorded call with Date.now fixed at `now` and returns what fetch got.
+async function sendRecorded(client, call, now) {
   const originalFetch = globalThis.fetch;
   const originalNow = Date.now;
-  const sharedSecret = 's'.repeat(32);
-  let headers;
-  Date.now = () => 1_800_000_000_000;
-  globalThis.fetch = async (_url, init) => {
-    headers = init?.headers;
-    return jsonResponse(detail('task_postprocess_end', { pexit: '0' }));
+  const seen = [];
+  globalThis.fetch = async (url, init) => {
+    seen.push({ url, init });
+    return jsonResponse({ result: true, errors: [] });
   };
-
+  Date.now = () => now;
   try {
-    const client = new WiroClient(
-      'api-key',
-      undefined,
-      'http://localhost:1453/v1',
-      {
-        trustedProxy: {
-          clientIp: '203.0.113.8',
-          sharedSecret,
-        },
-      },
-    );
-    await client.getTask({ taskid: '123' });
-
-    const payload = [
-      '1800000000000',
-      '203.0.113.8',
-      'api-key',
-      '/v1/Task/Detail',
-    ].join('\n');
-    const expected = crypto
-      .createHmac('sha256', sharedSecret)
-      .update(payload)
-      .digest('hex');
-
-    assert.equal(headers['x-wiro-proxy-client-ip'], '203.0.113.8');
-    assert.equal(headers['x-wiro-proxy-timestamp'], '1800000000000');
-    assert.equal(headers['x-wiro-proxy-signature'], expected);
+    if (call.method === 'post') {
+      await client.post(call.path, call.body);
+    } else {
+      const form = new FormData();
+      for (const field of call.form) {
+        form.append(field.name, new Blob([field.text], { type: field.type }), field.filename);
+      }
+      await client.postForm(call.path, form);
+    }
   } finally {
     globalThis.fetch = originalFetch;
     Date.now = originalNow;
+  }
+  assert.equal(seen.length, 1, 'one fetch per call');
+  const [{ url, init }] = seen;
+  return { url, method: init.method, headers: init.headers, body: describeBody(init.body) };
+}
+
+function isError(type, message) {
+  return error => {
+    assert.equal(error.constructor, type);
+    assert.equal(error.message, message);
+    return true;
+  };
+}
+
+test('without requestHeaders a client sends exactly the requests 1.4.1 sent', { concurrency: false }, async () => {
+  assert.equal(RECORDED.cases.length, 8);
+  // No options, options without the hook, and a hook that adds nothing.
+  for (const options of [undefined, {}, { requestHeaders: undefined }, { requestHeaders: () => ({}) }]) {
+    for (const recorded of RECORDED.cases) {
+      const client = recordedClient(recorded.client, options);
+      for (const { now, call, expected } of recorded.requests) {
+        const sent = await sendRecorded(client, call, now);
+        assert.deepEqual(sent, expected, recorded.id);
+        assert.deepEqual(Object.keys(sent.headers), Object.keys(expected.headers), `${recorded.id}: header order`);
+      }
+    }
+  }
+});
+
+test('requestHeaders gets the path and API key of every request and adds its headers last', { concurrency: false }, async () => {
+  for (const recorded of RECORDED.cases) {
+    const seen = [];
+    const client = recordedClient(recorded.client, {
+      requestHeaders: request => {
+        seen.push(request);
+        return { 'x-example-path': request.pathname, 'X-Example-Key': `key ${request.apiKey}` };
+      },
+    });
+    for (const { now, call, expected, derived } of recorded.requests) {
+      seen.length = 0;
+      const sent = await sendRecorded(client, call, now);
+      assert.match(derived.pathname, /^\/v1\/(Tool\/List|File\/Upload)$/);
+      assert.deepEqual(seen, [{ pathname: derived.pathname, apiKey: recorded.client.apiKey }], recorded.id);
+      const added = { 'x-example-path': derived.pathname, 'X-Example-Key': `key ${recorded.client.apiKey}` };
+      // The client's own headers, the URL, the method and the body stay as they were.
+      assert.deepEqual(sent, { ...expected, headers: { ...expected.headers, ...added } }, recorded.id);
+      assert.deepEqual(
+        Object.keys(sent.headers),
+        [...Object.keys(expected.headers), ...Object.keys(added)],
+        `${recorded.id}: header order`,
+      );
+    }
+  }
+});
+
+test('requestHeaders runs again for each request', { concurrency: false }, async () => {
+  const originalFetch = globalThis.fetch;
+  const sent = [];
+  globalThis.fetch = async (url, init) => {
+    sent.push([String(url), init.headers['x-example-count'], init.headers['x-example-path']]);
+    return jsonResponse(detail('task_postprocess_end', { pexit: '0' }));
+  };
+  let count = 0;
+
+  try {
+    const client = new WiroClient('api-key', 'api-secret', undefined, {
+      requestHeaders: ({ pathname }) => ({ 'x-example-count': String(++count), 'x-example-path': pathname }),
+    });
+    await client.searchModels({ search: 'flux' });
+    await client.cancelTask('task-token');
+    await client.killTask({ taskid: '123' });
+
+    assert.deepEqual(sent, [
+      ['https://api.wiro.ai/v1/Tool/List', '1', '/v1/Tool/List'],
+      ['https://api.wiro.ai/v1/Task/Detail', '2', '/v1/Task/Detail'],
+      ['https://api.wiro.ai/v1/Task/Cancel', '3', '/v1/Task/Cancel'],
+      ['https://api.wiro.ai/v1/Task/Kill', '4', '/v1/Task/Kill'],
+    ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('requestHeaders cannot set the client\'s own auth or content headers', { concurrency: false }, async () => {
+  const originalFetch = globalThis.fetch;
+  let fetched = 0;
+  globalThis.fetch = async () => {
+    fetched += 1;
+    return jsonResponse({ result: true, errors: [] });
+  };
+
+  try {
+    const names = ['x-api-key', 'X-API-Key', 'x-signature', 'X-Signature', 'x-nonce', 'X-NONCE', 'content-type', 'Content-Type'];
+    for (const name of names) {
+      const requestHeaders = () => ({ 'x-example': 'allowed', [name]: 'replaced' });
+      const refusal = isError(Error, `requestHeaders cannot set ${name}; WiroClient sets it`);
+      for (const client of [
+        new WiroClient('api-key', 'api-secret', undefined, { requestHeaders }),
+        new WiroClient('api-key', undefined, undefined, { requestHeaders }),
+      ]) {
+        await assert.rejects(client.post('/Tool/List', {}), refusal);
+        await assert.rejects(client.postForm('/File/Upload', new FormData()), refusal);
+      }
+    }
+    assert.equal(fetched, 0, 'no request is sent');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('requestHeaders must return a plain object of string values', { concurrency: false }, async () => {
+  const originalFetch = globalThis.fetch;
+  let lastHeaders;
+  let fetched = 0;
+  globalThis.fetch = async (_url, init) => {
+    fetched += 1;
+    lastHeaders = init.headers;
+    return jsonResponse({ result: true, errors: [] });
+  };
+  const notPlain = 'requestHeaders must return a plain object of header names and string values';
+  const cases = [
+    [() => ({ 'x-example': 1 }), TypeError, 'requestHeaders returned a non-string value for x-example'],
+    [() => ({ 'x-first': 'a', 'x-example': undefined }), TypeError, 'requestHeaders returned a non-string value for x-example'],
+    [() => ({ 'x-example': null }), TypeError, 'requestHeaders returned a non-string value for x-example'],
+    [() => ({ 'x-example': ['a'] }), TypeError, 'requestHeaders returned a non-string value for x-example'],
+    [() => undefined, TypeError, notPlain],
+    [() => null, TypeError, notPlain],
+    [() => 'x-example: a', TypeError, notPlain],
+    [() => [['x-example', 'a']], TypeError, notPlain],
+    [() => new Headers({ 'x-example': 'a' }), TypeError, notPlain],
+    [() => new Map([['x-example', 'a']]), TypeError, notPlain],
+    [async () => ({ 'x-example': 'a' }), TypeError, notPlain],
+    [() => { throw new RangeError('no headers for this request'); }, RangeError, 'no headers for this request'],
+  ];
+
+  try {
+    for (const [requestHeaders, type, message] of cases) {
+      const client = new WiroClient('api-key', undefined, undefined, { requestHeaders });
+      await assert.rejects(client.post('/Tool/List', {}), isError(type, message));
+      await assert.rejects(client.postForm('/File/Upload', new FormData()), isError(type, message));
+    }
+    assert.equal(fetched, 0, 'no request is sent');
+
+    // An object without a prototype is a plain object too.
+    const client = new WiroClient('api-key', undefined, undefined, {
+      requestHeaders: () => Object.assign(Object.create(null), { 'x-example': 'a' }),
+    });
+    await client.post('/Tool/List', {});
+    assert.deepEqual(lastHeaders, { 'x-api-key': 'api-key', 'Content-Type': 'application/json', 'x-example': 'a' });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('a requestHeaders option that is not a function is refused', () => {
+  for (const requestHeaders of [null, 'x-example: a', { 'x-example': 'a' }]) {
+    assert.throws(
+      () => new WiroClient('api-key', undefined, undefined, { requestHeaders }),
+      isError(TypeError, 'requestHeaders must be a function'),
+    );
+  }
+});
+
+test('the removed trustedProxy option throws instead of being ignored', () => {
+  const removed = isError(Error, 'The trustedProxy option was removed in 1.5.0; pass requestHeaders instead.');
+  for (const options of [
+    { trustedProxy: {} },
+    { trustedProxy: undefined },
+    { trustedProxy: null },
+    { trustedProxy: {}, requestHeaders: () => ({}) },
+  ]) {
+    assert.throws(() => new WiroClient('api-key', undefined, undefined, options), removed);
+    assert.throws(() => new WiroClient('api-key', 'api-secret', 'https://api.example.test/v1', options), removed);
   }
 });
 

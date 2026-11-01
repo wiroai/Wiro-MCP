@@ -455,6 +455,8 @@ const client = new WiroClient(apiKey, apiSecret, undefined, {
 });
 ```
 
+To send headers of your own with every API request, pass `requestHeaders`: a function that gets one object, `{ pathname, apiKey }`, for each request (`pathname` such as `/v1/Tool/List`) and returns a plain object of string values. The headers it returns are sent after the client's own. If they include `x-api-key`, `x-signature`, `x-nonce` or `Content-Type`, in any letter case, the request fails before it is sent.
+
 ### Exports
 
 | Export | Description |
