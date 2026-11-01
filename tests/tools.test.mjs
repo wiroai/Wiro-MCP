@@ -1343,6 +1343,62 @@ test('the task tools still report a wrong value and a missing identifier in thei
   }
 });
 
+test('every tool with arguments refuses an unknown one and reaches nothing', async () => {
+  const calls = [];
+  const untouched = new Proxy({}, {
+    get: (_target, property) => (...args) => {
+      calls.push([property, args]);
+      throw new Error(`Unexpected call to ${String(property)}`);
+    },
+  });
+  const server = createMcpServer(untouched);
+  const client = new Client({ name: 'test-client', version: '1.0.0' });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await server.connect(serverTransport);
+  await client.connect(clientTransport);
+  try {
+    const { tools } = await client.listTools();
+    let checked = 0;
+    for (const tool of tools) {
+      if (Object.keys(tool.inputSchema.properties ?? {}).length === 0) continue;
+      const result = await client.callTool({ name: tool.name, arguments: { not_an_argument: 1 } });
+      assert.equal(result.isError, true, tool.name);
+      assert.match(result.content[0].text, /Unknown argument `not_an_argument`\. This tool takes /, tool.name);
+      assert.match(result.content[0].text, /Nothing was run\./, tool.name);
+      checked += 1;
+    }
+    assert.equal(checked, tools.length - 1, 'explore is the only tool without arguments');
+    const cases = [
+      ['get_agent_conversation', { agent: 'studio', session_id: 'a' }, /`session_id` \(use `session`\)/],
+      ['list_my_agents', { offset: 5 }, /`offset` \(use `start`\)/],
+      ['get_account', { transactions: 3 }, /`transactions` \(use `recent_transactions`\)/],
+      ['run_workflow', { slug: 'a-b1c2d', inputs: { prompt: 'x' } }, /`inputs` \(use `input`\).*Workflow input values go inside `input`\./],
+      ['run_workflow', { slug: 'a-b1c2d', breakpoint: 'node-1' }, /`breakpoint` \(use `breakpoint_node_id`\)/],
+      ['send_agent_message', { agent: 'studio', message: 'x', session_id: 'a' }, /`session_id` \(use `session`\)/],
+      ['send_agent_message', { agent: 'studio', message: 'x', attachments: ['https://example.com/a.png'] }, /`attachments` \(use `attachment_urls`\)/],
+      ['search_models', { query: 'upscale' }, /`query` \(use `search`\)/],
+      ['wait_for_workflow_run', { run_token: 'a' }, /`run_token` \(use `workflowtoken`\)/],
+      // `slug` points at `workflow` where a tool takes one, and at no key elsewhere.
+      ['send_agent_message', { agent: 'workflow-agent', message: 'x', slug: 'fox-maker-Ab3xZ' }, /`slug` \(use `workflow`\)/],
+      ['get_agent_message', { agent: 'workflow-agent', message_id: 'a', slug: 'fox-maker-Ab3xZ' }, /`slug` \(use `workflow`\)/],
+      ['save_workflow_from_agent', { message_id: 'a', slug: 'fox-maker-Ab3xZ' }, /`slug` \(use `workflow`\)/],
+      ['list_workflows', { slug: 'fox-maker-Ab3xZ' }, /Unknown argument `slug`\. This tool takes `scope`/],
+      ['run_model', { slug: 'owner/model', params: {} }, /Unknown argument `slug`\. This tool takes `model`/],
+      ['list_tasks', { slug: 'flux' }, /Unknown argument `slug`\. This tool takes `start`, `limit`, `model`/],
+      ['run_model', { model_slug: 'owner/model', params: {} }, /`model_slug` \(use `model`\)/],
+    ];
+    for (const [name, args, expected] of cases) {
+      const result = await client.callTool({ name, arguments: args });
+      assert.equal(result.isError, true, name);
+      assert.match(result.content[0].text, expected, name);
+    }
+    assert.deepEqual(calls, [], 'nothing reached Wiro');
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
+
 test('a call with the client key toolCallId reads only the known arguments, any other stays refused', async () => {
   const calls = [];
   const fake = {

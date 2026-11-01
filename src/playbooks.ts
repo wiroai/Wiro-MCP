@@ -574,7 +574,7 @@ Then offer the one fix that matches, with its price.
 
 ## Skills, custom skills and scheduled tasks
 
-- \`apply_agent_skills\` turns skills on or off. The plan price follows the skills: on a wallet plan, the difference for the rest of the period is charged at once, or credited to the wallet for use until the period ends. Quote first, then confirm as the quote's \`nextAction\` shows, with its \`idempotency_key\`. If the price changed, nothing changes and a new quote with a new key comes back.
+- \`apply_agent_skills\` turns skills on or off. The plan price follows the skills: on a wallet plan, the difference for the rest of the period is charged at once, or credited to the wallet for use until the period ends, and \`get_account\` with \`recent_transactions\` shows that row. Quote first, then confirm as the quote's \`nextAction\` shows, with its \`idempotency_key\`. If the price changed, nothing changes and a new quote with a new key comes back.
 - The quote lists the skills a change adds because others depend on them. Name them before the yes: they can add to the price and need credentials of their own, and a skill that asks for a Wiro API key bills its model runs to that key's wallet.
 - Skills turned on later with \`apply_agent_skills\` still need their credentials and add no scheduled tasks. \`list_agent_skills\` without a name lists every skill with its title and price: look there for the service the user named. Turning a skill off keeps its credentials saved: to end the agent's access to a service, the user revokes it with that service, such as deleting the Gmail app password in their Google account. A required field cannot be left empty, but saving a new value replaces the old one.
 - \`manage_agent_custom_skill\` manages the agent's own instructions:
@@ -641,6 +641,7 @@ Where to see costs afterwards:
 - A workflow run reports its cost so far and, once settled, the amount charged. \`list_workflow_runs\` shows past runs.
 - A Studio or Workflow Agent reply shows the chat part of the turn as Agent usage. \`list_studio_results\` shows the cost of each model run Studio started.
 - \`get_agent_activity\` (usage) shows an agent's credit use.
+- \`get_account\` with \`recent_transactions\` lists the wallet's latest rows: each amount, what it paid for and whether it took from the wallet or added to it. Use it to check that a charge or a credit landed. A team's wallet is shared, so its list holds the activity of the whole team. A credit transfer shows as a TRANSFER row and as the deposit rows it moved, so count one of them.
 - For spending over a period, point the user to Transactions (wiro.ai/panel/wallet/transactions) and Project Usage (wiro.ai/panel/wallet/project-usage) in the Wiro dashboard. Both open on the current month.
 
 ## Minimums and limits

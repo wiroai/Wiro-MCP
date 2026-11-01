@@ -276,7 +276,7 @@ your wallet after each reply. Your own agents run on a monthly plan with credits
 
 | Tool | Description |
 |------|-------------|
-| `get_account` | Show which workspace the connected project belongs to and its wallet balance |
+| `get_account` | Show which workspace the connected project belongs to, its wallet balance and, when you ask, the wallet's recent transactions |
 | `get_playbook` | Step-by-step guides: getting started, models, workflows, workflow graphs, the Workflow Agent, Studio, agents and billing |
 | `search_docs` | Search the Wiro documentation for guides and API references |
 

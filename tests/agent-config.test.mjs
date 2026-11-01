@@ -926,7 +926,7 @@ test('apply_agent_skills says once that a credit for skills turned off can be sp
     const description = tools.find(tool => tool.name === 'apply_agent_skills').description;
     assert.match(description, /taken from the wallet at once, or credited to it when the price drops, and that credit can be spent until the period ends; on a card plan it is added to the next invoice\./);
   });
-  assert.match(PLAYBOOKS.agents, /on a wallet plan, the difference for the rest of the period is charged at once, or credited to the wallet for use until the period ends\./);
+  assert.match(PLAYBOOKS.agents, /on a wallet plan, the difference for the rest of the period is charged at once, or credited to the wallet for use until the period ends, and `get_account` with `recent_transactions` shows that row\./);
   assert.match(PLAYBOOKS.billing, /\| Agent skill change \| The price difference for the rest of the period, charged, or credited for use until the period ends \| When applied \|/);
 });
 
