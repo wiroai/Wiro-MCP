@@ -170,6 +170,9 @@ export function withJsonSchema2020_12<T extends Transport>(transport: T): T {
 export function advertiseJsonSchema2020_12(server: McpServer): McpServer {
   const marked = server as Marked<McpServer>;
   if (marked[LISTS_2020_12]) return server;
+  // A stand-in for a server, such as a test double that only records registerTool
+  // calls, lists nothing, so there is nothing to rewrite.
+  if (!server.server || typeof server.connect !== 'function') return server;
   marked[LISTS_2020_12] = true;
   const connected = server.server.transport;
   if (connected) withJsonSchema2020_12(connected);

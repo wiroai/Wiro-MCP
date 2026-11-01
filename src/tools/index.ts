@@ -108,6 +108,7 @@ export function registerTools(
   options: RegisterToolsOptions = {},
 ): void {
   // Claude and other 2020-12-only MCP clients reject the SDK's draft-07 $schema.
+  // A stand-in without a transport is left as it is.
   advertiseJsonSchema2020_12(mcpServer);
   const server = options.wrapTool ? withToolWrapper(mcpServer, options.wrapTool) : mcpServer;
   const enabled = new Set<Toolset>(options.toolsets ?? TOOLSETS);

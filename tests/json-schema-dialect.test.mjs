@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { registerTools } from '../dist/server.js';
 import {
+  advertiseJsonSchema2020_12,
   JSON_SCHEMA_2020_12,
   normalizeOutgoingMessage,
   toJsonSchema2020_12,
@@ -110,4 +115,78 @@ test('rewrites tools/list schemas and leaves other messages untouched', () => {
 
   const ping = { jsonrpc: '2.0', id: 2, result: { ok: true } };
   assert.equal(normalizeOutgoingMessage(ping), ping);
+});
+
+const noClient = { post: async () => ({ result: true }) };
+
+function standIn(members = {}) {
+  const names = [];
+  return { names, registerTool: name => { names.push(name); }, ...members };
+}
+
+test('registerTools works on a stand-in server without server or connect', () => {
+  for (const members of [{}, { connect: async () => {} }, { server: {} }]) {
+    const server = standIn(members);
+    registerTools(server, noClient);
+    assert.ok(server.names.includes('get_account'));
+    assert.ok(server.names.includes('deploy_agent'));
+    assert.deepEqual(Object.keys(server).sort(), ['names', 'registerTool', ...Object.keys(members)].sort(), 'the stand-in is left as it was');
+    assert.equal(Object.getOwnPropertySymbols(server).length, 0, 'the stand-in is not marked');
+  }
+  const direct = standIn();
+  assert.equal(advertiseJsonSchema2020_12(direct), direct);
+});
+
+test('registerTools passes a stand-in server through wrapTool and toolsets', () => {
+  const server = standIn();
+  const wrapped = [];
+  registerTools(server, noClient, {
+    toolsets: ['models'],
+    wrapTool: (tool, handler) => {
+      wrapped.push(tool.name);
+      return handler;
+    },
+  });
+  assert.ok(server.names.includes('run_model'));
+  assert.equal(server.names.includes('deploy_agent'), false);
+  assert.deepEqual(wrapped, server.names);
+});
+
+test('registerTools still makes a real server list 2020-12, connected before or after', async () => {
+  const listSchemas = async server => {
+    const client = new Client({ name: 'test-client', version: '1.0.0' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+    const { tools } = await client.listTools();
+    await client.close();
+    await server.close();
+    return tools.map(tool => tool.inputSchema.$schema);
+  };
+
+  const before = new McpServer({ name: 'test', version: '1.0.0' });
+  const originalConnect = before.connect;
+  registerTools(before, noClient, { toolsets: ['models'] });
+  assert.notEqual(before.connect, originalConnect, 'connect is wrapped');
+  assert.deepEqual([...new Set(await listSchemas(before))], [JSON_SCHEMA_2020_12]);
+
+  // Calling it twice wraps once.
+  const twice = new McpServer({ name: 'test', version: '1.0.0' });
+  advertiseJsonSchema2020_12(twice);
+  const wrappedConnect = twice.connect;
+  registerTools(twice, noClient, { toolsets: ['models'] });
+  assert.equal(twice.connect, wrappedConnect);
+
+  // A server already connected gets its transport rewritten at once.
+  const connected = new McpServer({ name: 'test', version: '1.0.0' });
+  connected.registerTool('ping', { description: 'Ping', inputSchema: {} }, async () => ({ content: [] }));
+  const client = new Client({ name: 'test-client', version: '1.0.0' });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await connected.connect(serverTransport);
+  await client.connect(clientTransport);
+  advertiseJsonSchema2020_12(connected);
+  const { tools } = await client.listTools();
+  assert.equal(tools[0].inputSchema.$schema, JSON_SCHEMA_2020_12);
+  await client.close();
+  await connected.close();
 });
