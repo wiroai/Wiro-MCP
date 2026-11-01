@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { WiroClient } from '../client.js';
 import { formatSize } from '../utils/format.js';
 import { toStructuredFile } from '../utils/structured.js';
-import { uploadedFileOutputSchema } from './schemas.js';
+import { uploadedFileOutputSchema, strictInput } from './schemas.js';
 
 export function registerUploadFile(server: McpServer, client: WiroClient): void {
   server.registerTool(
@@ -15,10 +15,10 @@ export function registerUploadFile(server: McpServer, client: WiroClient): void 
         + 'this only when the same file feeds several runs. Single files only, not .zip '
         + 'archives. A file that is only attached in the chat has no URL: ask the user for '
         + 'a public link.',
-      inputSchema: {
+      inputSchema: strictInput({
         url: z.string().url().describe('URL of the file to upload (image, audio, video, or document).'),
         file_name: z.string().optional().describe('Optional filename. Defaults to the URL filename.'),
-      },
+      }),
       outputSchema: uploadedFileOutputSchema,
       annotations: {
         readOnlyHint: false,

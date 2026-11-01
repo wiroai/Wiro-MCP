@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { WiroClient } from '../client.js';
 import { formatTaskList } from '../utils/format.js';
 import { toStructuredTaskResult } from '../utils/structured.js';
-import { taskListOutputSchema } from './schemas.js';
+import { strictInput, taskListOutputSchema } from './schemas.js';
 
 export function registerListTasks(server: McpServer, client: WiroClient): void {
   server.registerTool(
@@ -16,14 +16,14 @@ export function registerListTasks(server: McpServer, client: WiroClient): void {
         + '`get_task` with a returned task ID for the complete result. Start times are Unix '
         + 'seconds. Steps of workflow runs and the runs Studio starts are not listed: '
         + 'list_workflow_runs and list_studio_results have those.',
-      inputSchema: {
+      inputSchema: strictInput({
         start: z.number().int().min(0).default(0)
           .describe('Pagination offset (default 0).'),
         limit: z.number().int().min(1).max(100).default(20)
           .describe('Maximum tasks to return (default 20, max 100).'),
         model: z.string().optional()
           .describe('A model or owner name, or part of one, e.g. "flux" or "flux-2-pro". Leave out the "owner/" part.'),
-      },
+      }),
       outputSchema: taskListOutputSchema,
       annotations: {
         readOnlyHint: true,

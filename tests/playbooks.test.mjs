@@ -6,6 +6,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createMcpServer } from '../dist/server.js';
 import { PLAYBOOK_TITLES, PLAYBOOK_TOPICS, PLAYBOOKS } from '../dist/playbooks.js';
 import { SERVER_INSTRUCTIONS } from '../dist/instructions.js';
+import { SESSION_NAME_RULE } from '../dist/utils/agent-message.js';
 import { WIRO_PROJECT_NOTE } from '../dist/utils/agent-config.js';
 
 // The full tool set the guidance layer is written for. A name in a playbook,
@@ -512,6 +513,18 @@ test('the README continuation example sends the session_id with the task token',
   assert.ok(typeof args.params.session_id === 'string' && args.params.session_id.length > 0, 'the example leaves out session_id');
   assert.doesNotMatch(readme, /single continuation reference/);
   assert.match(readme.replace(/\s+/g, ' '), /send the same `session_id` on every turn, the first one included/);
+});
+
+test('the session name rule reads the same in the playbooks and the tool text', async () => {
+  for (const topic of ['workflow-agent', 'studio', 'agents']) {
+    assert.ok(PLAYBOOKS[topic].includes(SESSION_NAME_RULE), topic);
+    assert.doesNotMatch(PLAYBOOKS[topic], /Session names use letters|use only letters, digits/, topic);
+  }
+  await withClient(async client => {
+    const { tools } = await client.listTools();
+    const session = tools.find(tool => tool.name === 'send_agent_message').inputSchema.properties.session;
+    assert.ok(session.description.includes(SESSION_NAME_RULE));
+  });
 });
 
 test('the agents playbook says the same as the tools about a Wiro project key, a stop and credits', () => {

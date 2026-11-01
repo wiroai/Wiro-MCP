@@ -5,9 +5,9 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { AjvJsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/ajv';
 import { WiroApiError } from '../dist/client.js';
 import { createMcpServer } from '../dist/server.js';
+import { extractMediaUrls, extractReplyLinks, SESSION_NAME_RULE } from '../dist/utils/agent-message.js';
 import { attachmentFileName, buildMessageForm } from '../dist/utils/agent-targets.js';
 import { createMediaContent, isWiroHostedFile, isWiroHostedUrl } from '../dist/utils/media.js';
-import { extractMediaUrls, extractReplyLinks } from '../dist/utils/agent-message.js';
 
 const SECRETS = [
   'secret-agent-token',
@@ -1686,7 +1686,7 @@ test('send errors with an unknown outcome name the session to check before resen
     assert.equal(result.isError, true);
     const session = transport.callsTo('/Studio/Message/Send')[0].body.sessionkey;
     assert.match(session, /^mcp-[a-z0-9]+$/);
-    assert.match(textOf(result), new RegExp(`may still have been queued\\. Check get_agent_conversation with agent "studio" and session "${session}"`));
+    assert.match(textOf(result), new RegExp(`may still have been queued\\. Check get_agent_conversation with agent "studio" and session \`${session}\``));
     assert.equal(transport.calls.length, 1);
   });
 
@@ -1694,7 +1694,7 @@ test('send errors with an unknown outcome name the session to check before resen
   await withClient(noId, async client => {
     const result = await client.callTool({ name: 'send_agent_message', arguments: { agent: 'workflow-agent', message: 'Build', session: 'mcp-flow' } });
     assert.equal(result.isError, true);
-    assert.match(textOf(result), /no message id\. Check get_agent_conversation with agent "workflow-agent" and session "mcp-flow"/);
+    assert.match(textOf(result), /no message id\. Check get_agent_conversation with agent "workflow-agent" and session `mcp-flow`/);
   });
 
   // A bare "temporarily unavailable" answer leaves open whether the message was queued.
@@ -1705,7 +1705,7 @@ test('send errors with an unknown outcome name the session to check before resen
     await withClient(unavailable, async client => {
       const result = await client.callTool({ name: 'send_agent_message', arguments: { agent, message: 'hi', session: 'support' } });
       assert.equal(result.isError, true);
-      assert.match(textOf(result), new RegExp(`temporarily unavailable\\. The message may still have been queued\\. Check get_agent_conversation with agent "${agent}" and session "support"`));
+      assert.match(textOf(result), new RegExp(`temporarily unavailable\\. The message may still have been queued\\. Check get_agent_conversation with agent "${agent}" and session \`support\``));
       assert.doesNotMatch(textOf(result), /try again shortly/);
       assert.equal(unavailable.calls.length, 1);
     });
@@ -2254,7 +2254,7 @@ test('Studio run collection reads a small page, 100 runs only when the turn star
   });
 });
 
-test('Workflow Agent session names sent from here stay within 100 characters', async () => {
+test('Studio and Workflow Agent session names sent from here stay within 100 characters', async () => {
   const fake = fakeClient({
     '/StudioWorkflow/Message/Send': { result: true, errors: [], messageguid: 'wf-s', status: 'agent_queue' },
     '/Studio/Message/Send': { result: true, errors: [], messageguid: 'st-s', status: 'agent_queue' },
@@ -2274,12 +2274,51 @@ test('Workflow Agent session names sent from here stay within 100 characters', a
     });
     assert.notEqual(longest.isError, true, textOf(longest));
 
+    const studioTooLong = await client.callTool({
+      name: 'send_agent_message',
+      arguments: { agent: 'studio', message: 'hi', session: 'b'.repeat(101), wait_seconds: 0 },
+    });
+    assert.equal(studioTooLong.isError, true);
+    assert.match(textOf(studioTooLong), /at most 100 characters/);
+    assert.equal(fake.callsTo('/Studio/Message/Send').length, 0);
+
     const studio = await client.callTool({
       name: 'send_agent_message',
-      arguments: { agent: 'studio', message: 'hi', session: 'b'.repeat(120), wait_seconds: 0 },
+      arguments: { agent: 'studio', message: 'hi', session: 'b'.repeat(100), wait_seconds: 0 },
     });
     assert.notEqual(studio.isError, true, textOf(studio));
   });
+});
+
+test('a session name over 128 characters gets the limit of the path it is on', async () => {
+  const fake = fakeClient({});
+  await withClient(fake, async client => {
+    for (const agent of ['studio', 'workflow-agent']) {
+      const refused = await client.callTool({
+        name: 'send_agent_message',
+        arguments: { agent, message: 'hi', session: 'c'.repeat(129), wait_seconds: 0 },
+      });
+      assert.equal(refused.isError, true);
+      assert.ok(textOf(refused).includes(SESSION_NAME_RULE), textOf(refused));
+      assert.equal(textOf(refused).includes('128'), false, textOf(refused));
+    }
+    const studio = await client.callTool({
+      name: 'send_agent_message',
+      arguments: { agent: 'studio', message: 'hi', session: 'C'.repeat(129), wait_seconds: 0 },
+    });
+    assert.ok(textOf(studio).includes(`"${'c'.repeat(100)}"`), textOf(studio));
+
+    const deployed = await client.callTool({
+      name: 'send_agent_message',
+      arguments: { agent: 'agent-guid-1', message: 'hi', session: 'c'.repeat(129), wait_seconds: 0 },
+    });
+    assert.equal(deployed.isError, true);
+    assert.match(textOf(deployed), /at most 128 characters/);
+    const read = await client.callTool({ name: 'get_agent_conversation', arguments: { agent: 'studio', session: 'c'.repeat(129) } });
+    assert.equal(read.isError, true);
+    assert.match(textOf(read), /at most 128 characters/);
+  });
+  assert.equal(fake.calls.length, 0);
 });
 
 test('Workflow Agent sessions longer than 100 characters that already exist can still be read', async () => {
@@ -2773,6 +2812,88 @@ test('a cancelled turn read soon after shows the same note, and later none', asy
       assert.equal(fake.callsTo('/UserAgent/Message/Detail').length, 1, 'a cancelled turn is not read again for its cost');
     });
   }
+});
+
+// ---------------------------------------------------------------------------
+// One rule for session names
+// ---------------------------------------------------------------------------
+
+test('Studio refuses a new message under a name outside the session rule, before anything is sent', async () => {
+  const fake = fakeClient({
+    '/Studio/Message/Send': { result: true, errors: [], messageguid: 'st-n', status: 'agent_queue' },
+    '/StudioWorkflow/Message/Send': { result: true, errors: [], messageguid: 'wf-n', status: 'agent_queue' },
+    '/UserAgent/Message/Send': { result: true, errors: [], messageguid: 'ua-n', status: 'agent_queue' },
+  });
+  await withClient(fake, async client => {
+    for (const [session, suggestion] of [
+      ['My Test Mug', 'my-test-mug'],
+      ['My-Test-Cup', 'my-test-cup'],
+      ['Mug', 'mug'],
+      ['my mug', 'my-mug'],
+      ['with:colon', 'with-colon'],
+    ]) {
+      const refused = await client.callTool({
+        name: 'send_agent_message',
+        arguments: { agent: 'studio', message: 'One image', session, wait_seconds: 0 },
+      });
+      assert.equal(refused.isError, true, session);
+      const text = textOf(refused);
+      assert.ok(text.includes(SESSION_NAME_RULE), text);
+      assert.ok(text.includes('^[a-z0-9._-]{1,100}$'), text);
+      assert.ok(text.includes(`"${suggestion}"`), text);
+    }
+    assert.equal(fake.callsTo('/Studio/Message/Send').length, 0);
+
+    for (const session of ['default', 'bakery-banners', 'mcp-test_2.final', 'session-mh2x8a1b2c']) {
+      const sent = await client.callTool({
+        name: 'send_agent_message',
+        arguments: { agent: 'studio', message: 'One image', session, wait_seconds: 0 },
+      });
+      assert.notEqual(sent.isError, true, textOf(sent));
+      assert.equal(sent.structuredContent.session, session);
+    }
+
+    // The names Studio refuses are still fine where they already work.
+    const workflow = await client.callTool({
+      name: 'send_agent_message',
+      arguments: { agent: 'workflow-agent', message: 'Hi', session: 'My-Test-Flow', wait_seconds: 0 },
+    });
+    assert.notEqual(workflow.isError, true, textOf(workflow));
+    const deployed = await client.callTool({
+      name: 'send_agent_message',
+      arguments: { agent: 'agent-guid-1', message: 'Hi', session: 'Weekly Report', wait_seconds: 0 },
+    });
+    assert.notEqual(deployed.isError, true, textOf(deployed));
+
+    const spaced = await client.callTool({
+      name: 'send_agent_message',
+      arguments: { agent: 'workflow-agent', message: 'Hi', session: 'My Test Flow', wait_seconds: 0 },
+    });
+    assert.equal(spaced.isError, true);
+    assert.equal(textOf(spaced).includes(SESSION_NAME_RULE), true, textOf(spaced));
+  });
+});
+
+test('a Studio session under another name can still be read, cancelled and deleted', async () => {
+  const session = 'My Test Mug';
+  const fake = fakeClient({
+    '/Studio/Message/Sessions': { result: true, errors: [], data: { sessions: [{ sessionkey: session, messagecount: '2', updatedat: '1700000000' }] } },
+    '/Studio/Message/History': { result: true, errors: [], data: { hasmore: false, messages: [] } },
+    '/Studio/Message/Detail': { result: true, errors: [], data: messageRow({ status: 'agent_end', response: 'Done.', tokencost: '5' }) },
+    '/Studio/Tasks': { result: true, errors: [], tasks: [] },
+    '/Studio/Message/Cancel': { result: false, errors: [{ code: 0, message: 'Message cannot be cancelled (status: agent_end)' }] },
+    '/Studio/Message/ClearSession': { result: true, errors: [] },
+  });
+  await withClient(fake, async client => {
+    const read = await client.callTool({ name: 'get_agent_conversation', arguments: { agent: 'studio', session } });
+    assert.notEqual(read.isError, true, textOf(read));
+    const message = await client.callTool({ name: 'get_agent_message', arguments: { agent: 'studio', message_id: 'msg-1', session, wait_seconds: 0 } });
+    assert.notEqual(message.isError, true, textOf(message));
+    const cancel = await client.callTool({ name: 'cancel_agent_message', arguments: { agent: 'studio', message_id: 'msg-1', session } });
+    assert.notEqual(cancel.isError, true, textOf(cancel));
+    const removed = await client.callTool({ name: 'delete_agent_session', arguments: { agent: 'studio', session, confirm: true } });
+    assert.equal(removed.structuredContent.deleted, true);
+  });
 });
 
 // ---------------------------------------------------------------------------

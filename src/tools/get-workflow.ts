@@ -11,7 +11,7 @@ import {
   WORKFLOW_DESCRIPTION_LABEL,
   workflowDetailSchema,
 } from '../utils/workflow.js';
-import { nextActionSchema } from './schemas.js';
+import { nextActionSchema, strictInput } from './schemas.js';
 
 export interface WorkflowDetailResponse extends ApiEnvelope {
   workflow?: Array<Record<string, unknown>>;
@@ -44,12 +44,12 @@ export function registerGetWorkflow(server: McpServer, client: WiroClient): void
         + 'the values of fields named like api_key, token, secret or password, and values that '
         + 'look like a provider key. Other saved values come back as saved: never repeat a key '
         + 'you see there.',
-      inputSchema: {
+      inputSchema: strictInput({
         slug: z.string().min(1)
           .describe('The full workflow slug ("<name>-<5 character id>") or the workflow page URL.'),
         include_graph: z.boolean().default(true)
           .describe('Include the step graph (contents). Set false for a short answer.'),
-      },
+      }),
       outputSchema: {
         workflow: workflowDetailSchema,
         nextAction: nextActionSchema.optional(),

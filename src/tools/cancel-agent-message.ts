@@ -17,6 +17,7 @@ import {
   resolveReadSession,
 } from '../utils/agent-targets.js';
 import { costPendingNote, isCostPending, notFoundMessage, projectAgentMessage } from '../utils/agent-turns.js';
+import { strictInput } from './schemas.js';
 
 // The cancel is written at once, but a turn that is already finishing can still
 // end normally, so the result is read back after a short pause.
@@ -52,12 +53,12 @@ export function registerCancelAgentMessage(server: McpServer, client: WiroClient
         + 'can still finish normally if it was already completing, so the final status is read back and '
         + 'returned. Usage up to the cancel stays billed. For Studio, model runs the turn already started keep '
         + 'running and cannot be stopped from here; list_studio_results shows them.',
-      inputSchema: {
+      inputSchema: strictInput({
         agent: z.string().min(1).describe(AGENT_INPUT_DESCRIPTION),
         message_id: z.string().min(1).describe('The message id from send_agent_message.'),
         session: z.string().optional().describe('The session the message was sent in. Required for Studio and '
           + 'the Workflow Agent unless it was "default".'),
-      },
+      }),
       outputSchema: {
         agent: z.string(),
         agentKind: z.enum(['studio', 'workflow-agent', 'deployed']),

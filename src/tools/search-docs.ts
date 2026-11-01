@@ -1,6 +1,6 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { docsSearchOutputSchema } from './schemas.js';
+import { docsSearchOutputSchema, strictInput } from './schemas.js';
 
 const DOCS_URL = 'https://wiro.ai/docs/llms.txt';
 
@@ -11,9 +11,9 @@ export function registerSearchDocs(server: McpServer): void {
       title: 'Search Wiro documentation',
       description: 'Search official Wiro guides, API references, examples, and '
         + 'how-to documentation.',
-      inputSchema: {
+      inputSchema: strictInput({
         query: z.string().describe('What you are looking for, e.g. "how to upload a file", "websocket", "authentication", or "LLM streaming".'),
-      },
+      }),
       outputSchema: docsSearchOutputSchema,
       annotations: {
         readOnlyHint: true,

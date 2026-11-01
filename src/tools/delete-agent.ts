@@ -20,7 +20,7 @@ import {
   toAgentDetail,
   type NextAction,
 } from '../utils/user-agent.js';
-import { nextActionSchema } from './schemas.js';
+import { nextActionSchema, strictInput } from './schemas.js';
 
 export function registerDeleteAgent(server: McpServer, client: WiroClient): void {
   server.registerTool(
@@ -33,12 +33,12 @@ export function registerDeleteAgent(server: McpServer, client: WiroClient): void
         + 'confirm: true the tool only checks what is still in the way and describes the deletion; repeat '
         + 'the call with confirm: true after the user agrees. On a team agent this needs a team admin or the '
         + 'person who deployed it.',
-      inputSchema: {
+      inputSchema: strictInput({
         agent_guid: z.string().min(1).max(100)
           .describe('The deployed agent\'s guid, from list_my_agents.'),
         confirm: z.boolean().default(false)
           .describe('false only checks and describes the deletion. true deletes the agent. Set it only after the user agreed.'),
-      },
+      }),
       outputSchema: {
         agentGuid: z.string(),
         title: z.string(),

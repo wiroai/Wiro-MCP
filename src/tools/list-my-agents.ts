@@ -11,7 +11,7 @@ import {
   toAgentSummary,
 } from '../utils/user-agent.js';
 import { isPlainTeamMember } from '../utils/workspace.js';
-import { nextActionSchema } from './schemas.js';
+import { nextActionSchema, strictInput } from './schemas.js';
 
 const SORTS = {
   newest: { sort: 'id', order: 'DESC' },
@@ -30,14 +30,14 @@ export function registerListMyAgents(server: McpServer, client: WiroClient): voi
         + 'lists the team\'s agents, a personal project the personal ones). Each row shows the status, '
         + 'whether setup is still required, the plan and the credit balance. Call get_my_agent with an '
         + 'agent_guid for the full state, including which credentials are missing.',
-      inputSchema: {
+      inputSchema: strictInput({
         sort: z.enum(['newest', 'oldest', 'title', 'status', 'recently_updated']).default('newest')
           .describe('Order of the list (default newest first).'),
         start: z.number().int().min(0).default(0)
           .describe('Pagination offset (default 0).'),
         limit: z.number().int().min(1).max(50).default(20)
           .describe('Maximum agents to return (default 20, max 50).'),
-      },
+      }),
       outputSchema: {
         agents: z.array(agentSummarySchema),
         start: z.number().int().nonnegative(),

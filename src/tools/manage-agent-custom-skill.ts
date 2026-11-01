@@ -32,7 +32,7 @@ import {
   type CustomSkillKind,
 } from '../utils/agent-config.js';
 import { textBlock } from '../utils/quoted-text.js';
-import { nextActionSchema } from './schemas.js';
+import { nextActionSchema, strictInput } from './schemas.js';
 
 const MAX_VALUE_ECHO = 1_500;
 
@@ -604,7 +604,7 @@ export function registerManageAgentCustomSkill(server: McpServer, client: WiroCl
         + 'current entries. Registry skills are switched with apply_agent_skills instead. On a team agent '
         + 'this needs a team admin or the person who deployed it; other team members read each entry in full '
         + 'with get_my_agent (entry). The agents playbook (get_playbook) covers custom skills and schedules.',
-      inputSchema: {
+      inputSchema: strictInput({
         action: z.enum(['upsert', 'rename', 'delete', 'history', 'revert'])
           .describe('What to do.'),
         agent_guid: z.string().min(1).describe('The deployed agent\'s guid, from list_my_agents.'),
@@ -630,7 +630,7 @@ export function registerManageAgentCustomSkill(server: McpServer, client: WiroCl
           .describe('history: how many versions to return, newest first (default 20).'),
         confirm: z.boolean().default(false)
           .describe('delete, revert and an upsert that turns off cs-approval-policy or changes its text: true to do it after the user agreed. Without it they only describe what would happen.'),
-      },
+      }),
       outputSchema,
       annotations: {
         readOnlyHint: false,

@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { WiroClient } from '../client.js';
 import { formatModelList } from '../utils/format.js';
 import { toStructuredModel } from '../utils/structured.js';
-import { modelListOutputSchema } from './schemas.js';
+import { modelListOutputSchema, strictInput } from './schemas.js';
 
 export function registerSearchModels(server: McpServer, client: WiroClient): void {
   server.registerTool(
@@ -16,7 +16,7 @@ export function registerSearchModels(server: McpServer, client: WiroClient): voi
         + 'the run ends, or turn by turn in a live session, gives the rates, and the charge is known '
         + 'after the run. "No fixed price" means the run is charged for the time it takes. Choose a '
         + 'model and call the returned `get_model_schema` next action before using `run_model`.',
-      inputSchema: {
+      inputSchema: strictInput({
         search: z.string().optional().describe('One to three key words, e.g. "flux", "upscale" or "remove background"; each extra word narrows the results. It looks at each model\'s name and owner, its description, its parameters (id, label, placeholder, notes and help) and the option names of a selectwithcover field, such as an effect. Case, spaces, dots, dashes and underscores are ignored, and a short stem such as "timestamp" also finds the longer words that contain it.'),
         categories: z.array(z.string()).optional().describe(
           'Filter by categories. Available: "text-to-image", "image-to-image", "image-editing", '
@@ -29,7 +29,7 @@ export function registerSearchModels(server: McpServer, client: WiroClient): voi
           .describe('Sort by relevance, newest (time), number of ratings (ratedusercount), comments (commentcount) or average rating (averagepoint).'),
         start: z.number().int().min(0).default(0).describe('Pagination offset (default 0).'),
         limit: z.number().int().min(1).max(100).default(20).describe('Maximum results (default 20, max 100).'),
-      },
+      }),
       outputSchema: modelListOutputSchema,
       annotations: {
         readOnlyHint: true,

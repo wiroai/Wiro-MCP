@@ -44,7 +44,7 @@ import {
   pollUntil,
   reportProgress,
 } from '../utils/poll.js';
-import { nextActionSchema } from './schemas.js';
+import { nextActionSchema, strictInput } from './schemas.js';
 
 const accountSchema = z.object({ id: z.string(), name: z.string() });
 
@@ -596,7 +596,7 @@ export function registerConnectAgentOauth(server: McpServer, client: WiroClient)
         + 'lists the skills; apply_agent_skills turns one on). Only the person who deployed the agent can connect, so the '
         + 'connected project must be one that person created. The agents playbook (get_playbook) has the '
         + 'full setup walkthrough.',
-      inputSchema: {
+      inputSchema: strictInput({
         action: z.enum(['connect', 'status', 'select_accounts']).default('connect')
           .describe('connect (default) starts a connection, status checks it, select_accounts saves the accounts to use.'),
         agent_guid: z.string().min(1).describe('The deployed agent\'s guid, from list_my_agents.'),
@@ -621,7 +621,7 @@ export function registerConnectAgentOauth(server: McpServer, client: WiroClient)
           .describe('select_accounts with picker: what to use under each account. Accounts left out get nothing.'),
         confirm: z.boolean().default(false)
           .describe('connect: true to replace an existing connection after the user agreed.'),
-      },
+      }),
       outputSchema,
       annotations: {
         readOnlyHint: false,

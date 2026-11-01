@@ -249,7 +249,7 @@ export function toAgentMessage(
 export function formatAgentMessage(message: AgentMessage, heading = 'Reply'): string {
   const lines: string[] = [];
   lines.push(`**Status:** ${message.status} (${message.state})`);
-  lines.push(`**Message ID:** \`${message.messageId}\``);
+  lines.push(`**Message ID:** ${quotedSpan(message.messageId)}`);
   if (message.toolsUsed.length > 0) {
     lines.push(`**Tools used:** ${message.toolsUsed.map(tool => quotedSpan(tool.name)).join(', ')}`);
   }
@@ -267,6 +267,17 @@ export function formatAgentMessage(message: AgentMessage, heading = 'Reply'): st
   return lines.join('\n');
 }
 
+/** The one rule for naming a session, stated the same wherever a session name is asked for. */
+export const SESSION_NAME_RULE = 'Session names use lowercase letters, digits, dots, dashes and underscores, at most 100 characters.';
+export const SESSION_NAME_MAX = 100;
+export const SESSION_NAME_PATTERN = /^[a-z0-9._-]+$/;
+
+/** A name that follows the rule, close to the one given. */
+export function sessionNameSuggestion(session: string): string {
+  const name = session.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').slice(0, SESSION_NAME_MAX).replace(/^-+|-+$/g, '');
+  return name || newSessionKey();
+}
+
 /** Why a session name cannot be used, or null when it can. */
 export function sessionKeyProblem(sessionKey: string): string | null {
   if (!sessionKey.trim()) return 'The session name cannot be empty.';
@@ -282,7 +293,7 @@ export function sessionKeyProblem(sessionKey: string): string | null {
     || lower.startsWith('cs-cron-')
     || lower.startsWith('cron:')
     || lower.includes(':cron:')) {
-    return `The session name "${sessionKey}" is reserved by Wiro. Choose another one.`;
+    return `The session name ${quotedSpan(sessionKey)} is reserved by Wiro. Choose another one.`;
   }
   return null;
 }

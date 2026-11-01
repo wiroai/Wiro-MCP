@@ -4,7 +4,7 @@ import type { WiroClient } from '../client.js';
 import { ApiResultError, asString, errorResult, requireApiSuccess, toInteger, type ApiEnvelope } from '../utils/api.js';
 import { quotedSpan } from '../utils/quoted-text.js';
 import { fullSlugOf, parseWorkflowSlug, workflowUrl } from '../utils/workflow.js';
-import { nextActionSchema } from './schemas.js';
+import { nextActionSchema, strictInput } from './schemas.js';
 
 interface CloneResponse extends ApiEnvelope {
   workflow?: Array<Record<string, unknown>>;
@@ -20,10 +20,10 @@ export function registerCloneWorkflow(server: McpServer, client: WiroClient): vo
         + 'just to run a public workflow; clone it to keep it or to edit it. A copy of a '
         + 'protected workflow keeps its steps hidden: you can run it and change its title, '
         + 'description and tags, but not its steps.',
-      inputSchema: {
+      inputSchema: strictInput({
         slug: z.string().min(1)
           .describe('The full slug or page URL of a published workflow from list_workflows scope "public".'),
-      },
+      }),
       outputSchema: {
         fullSlug: z.string(),
         url: z.string(),

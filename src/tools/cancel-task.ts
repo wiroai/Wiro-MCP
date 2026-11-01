@@ -1,7 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { WiroClient } from '../client.js';
-import { taskActionOutputSchema } from './schemas.js';
+import { strictInput, taskActionOutputSchema } from './schemas.js';
 
 export function registerCancelTask(server: McpServer, client: WiroClient): void {
   server.registerTool(
@@ -11,10 +11,10 @@ export function registerCancelTask(server: McpServer, client: WiroClient): void 
       description: 'Cancel a model task that is still queued. It is refused once '
         + 'the task has started; `kill_task` stops a task in either state. A '
         + 'task cancelled while queued is never charged.',
-      inputSchema: {
+      inputSchema: strictInput({
         tasktoken: z.string().optional().describe('The task token returned from run_model.'),
         taskid: z.string().optional().describe('The task ID (alternative to tasktoken).'),
-      },
+      }),
       outputSchema: taskActionOutputSchema,
       annotations: {
         readOnlyHint: false,

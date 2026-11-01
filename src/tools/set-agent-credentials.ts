@@ -35,7 +35,7 @@ import {
 import { fetchPublicFile, type RemoteFile } from '../utils/remote-file.js';
 import { toAgentDetail } from '../utils/user-agent.js';
 import { isPlainTeamMember } from '../utils/workspace.js';
-import { nextActionSchema } from './schemas.js';
+import { nextActionSchema, strictInput } from './schemas.js';
 
 const credentialValueSchema = z.union([
   z.string(),
@@ -309,7 +309,7 @@ export function registerSetAgentCredentials(server: McpServer, client: WiroClien
         + 'On a team agent this needs a team admin or the person who deployed it; other team members can read '
         + 'the agent with get_my_agent and message it, so do not ask them for values they cannot save. '
         + 'The agents playbook (get_playbook) has the full setup walkthrough.',
-      inputSchema: {
+      inputSchema: strictInput({
         agent_guid: z.string().min(1).describe('The deployed agent\'s guid, from list_my_agents.'),
         credential: z.string().optional()
           .describe('Describe mode: a credential key such as "telegram" or "google-ads". Used when fields is empty.'),
@@ -321,7 +321,7 @@ export function registerSetAgentCredentials(server: McpServer, client: WiroClien
           ordinal: z.number().int().min(0).optional().describe('With parent_field: the entry\'s position in the list, from 0.'),
         })).max(100).optional()
           .describe('Fields to save. Send the fields of one credential together.'),
-      },
+      }),
       outputSchema,
       annotations: {
         readOnlyHint: false,

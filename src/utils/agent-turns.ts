@@ -33,7 +33,7 @@ import {
 } from './agent-targets.js';
 import { createMediaContent, guessMimeType, isWiroHostedUrl, type MediaItem } from './media.js';
 import { defaultInterval, pollUntil, reportProgress, type ToolCallContext } from './poll.js';
-import { AGENT_REPLY_LABEL, quotedBlock, quotedSpan, quotedSubItem } from './quoted-text.js';
+import { AGENT_REPLY_LABEL, jsonSpan, quotedBlock, quotedSpan, quotedSubItem } from './quoted-text.js';
 import { formatCredits, readAgentDetail } from './user-agent.js';
 import {
   STUDIO_RUNS_MAX,
@@ -825,7 +825,7 @@ function heading(target: AgentTarget, result: AgentTurnResult): string {
 export function formatTurn(target: AgentTarget, result: AgentTurnResult): string {
   const lines: string[] = [heading(target, result), ''];
   lines.push(`**Agent:** \`${result.agent}\``);
-  lines.push(`**Session:** \`${result.session}\``);
+  lines.push(`**Session:** ${quotedSpan(result.session)}`);
   if (result.llmCostUsd !== undefined && result.llmCostUsd !== null && result.llmCostUsd > 0) {
     lines.push(`**Agent usage:** $${result.llmCostUsd}`);
   }
@@ -877,7 +877,7 @@ export function formatTurn(target: AgentTarget, result: AgentTurnResult): string
     for (const note of result.notes) lines.push(`- ${note}`);
   }
   if (result.nextAction) {
-    lines.push('', `**Next:** \`${result.nextAction.tool}\` with \`${JSON.stringify(result.nextAction.arguments)}\`. ${result.nextAction.reason}`);
+    lines.push('', `**Next:** \`${result.nextAction.tool}\` with ${jsonSpan(result.nextAction.arguments)}. ${result.nextAction.reason}`);
   }
   return lines.join('\n');
 }

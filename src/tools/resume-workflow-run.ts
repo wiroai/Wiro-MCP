@@ -15,6 +15,7 @@ import {
   workflowRunOutputSchema,
   workflowRunResult,
 } from './wait-for-workflow-run.js';
+import { strictInput } from './schemas.js';
 
 export function registerResumeWorkflowRun(server: McpServer, client: WiroClient): void {
   server.registerTool(
@@ -29,14 +30,14 @@ export function registerResumeWorkflowRun(server: McpServer, client: WiroClient)
         + 'that paid for the original run. Ask the user before resuming, unless they asked you to '
         + 'continue this run: then give the expected cost in one line and resume. Use it only when '
         + 'wait_for_workflow_run reports `canResume: true`.',
-      inputSchema: {
+      inputSchema: strictInput({
         workflowtoken: z.string().min(1).describe('The run token of a failed or stopped run.'),
         breakpoint_node_id: z.string().max(100).nullable().optional()
           .describe('Optional step id to stop after this time. Leave it out and a failed run keeps the '
             + 'breakpoint it started with, while a stopped run runs to the end. Pass null to run to the end.'),
         wait_seconds: z.number().int().min(0).max(MAX_WAIT_SECONDS).default(DEFAULT_WAIT_SECONDS)
           .describe(`How long to wait for the result (0-${MAX_WAIT_SECONDS} seconds, default ${DEFAULT_WAIT_SECONDS}).`),
-      },
+      }),
       outputSchema: workflowRunOutputSchema,
       annotations: {
         readOnlyHint: false,

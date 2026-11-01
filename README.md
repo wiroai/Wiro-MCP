@@ -237,7 +237,9 @@ are separate from your Workflow Agent chats on wiro.ai.
 ### Agents
 
 Talk to any Wiro agent with one set of tools. `agent` is `"studio"`, `"workflow-agent"`
-or the id of one of your own agents.
+or the id of one of your own agents. Session names use lowercase letters, digits, dots,
+dashes and underscores, at most 100 characters. Studio refuses a message under any other
+name.
 
 | Tool | Description |
 |------|-------------|
@@ -324,6 +326,10 @@ project uses the team wallet.
 All tools publish typed MCP input and output schemas. Successful calls return
 `structuredContent` for reliable chaining, concise text `content` for clients
 that only render text, and MCP resource links for generated media.
+Every tool that takes arguments refuses an argument it does not know and names
+the right one where it can, such as `taskid` for `task_id`. The one exception is
+a call that carries `toolCallId`, a key some clients add on their own: it reads
+only the arguments the tool takes.
 Model parameters remain catalog-driven: `json` and `json-array` fields are sent
 as structured values in the same `run_model.params` object as all other inputs.
 Use `get_model_schema` as the source of truth for continuation fields. A model

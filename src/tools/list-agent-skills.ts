@@ -25,7 +25,7 @@ import {
   type ModeRequirement,
 } from '../utils/agent-config.js';
 import { formatUsd, toStringArray } from '../utils/user-agent.js';
-import { nextActionSchema } from './schemas.js';
+import { nextActionSchema, strictInput } from './schemas.js';
 
 const PRICING_NOTE = 'A custom build costs the sum of its skills\' monthly prices, including the skills they '
   + 'depend on, and Starter has a minimum monthly price. Pro is a fixed multiple of Starter. deploy_agent '
@@ -140,7 +140,7 @@ export function registerListAgentSkills(server: McpServer, client: WiroClient): 
         + 'matches). Pass `name` with a skill name (or a credential or channel key such '
         + 'as "telegram") to get the exact fields the user must provide, with their labels, formats and setup '
         + 'help, so you know what to ask for before calling set_agent_credentials or connect_agent_oauth.',
-      inputSchema: {
+      inputSchema: strictInput({
         name: z.string().min(1).max(100).optional()
           .describe('A skill name (for example "int-gmail-check") returns its price and the setup fields of every credential it needs. A credential or channel key (for example "telegram") returns that credential\'s setup and the ways it can connect.'),
         category: z.enum(['int', 'util']).optional()
@@ -151,7 +151,7 @@ export function registerListAgentSkills(server: McpServer, client: WiroClient): 
           .describe('Also return the list of capability names with descriptions.'),
         include_deprecated: z.boolean().default(false)
           .describe('Also return deprecated skills.'),
-      },
+      }),
       outputSchema: {
         skills: z.array(skillSummarySchema),
         channels: z.array(channelSchema),

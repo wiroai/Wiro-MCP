@@ -4,7 +4,7 @@ import type { WiroClient } from '../client.js';
 import { errorResult, requireApiSuccess, toInteger, type ApiEnvelope } from '../utils/api.js';
 import { quotedSpan, quotedSubItem } from '../utils/quoted-text.js';
 import { toWorkflowSummary, WORKFLOW_DESCRIPTION_LABEL, workflowSummarySchema, type WorkflowSummary } from '../utils/workflow.js';
-import { nextActionSchema } from './schemas.js';
+import { nextActionSchema, strictInput } from './schemas.js';
 
 interface WorkflowListResponse extends ApiEnvelope {
   workflow?: Array<Record<string, unknown>>;
@@ -23,7 +23,7 @@ export function registerListWorkflows(server: McpServer, client: WiroClient): vo
         + 'run_workflow, clone_workflow or update_workflow. A row marked "graph hidden" is '
         + 'protected: it can still be run, and a clone of it keeps its steps hidden, so only '
         + 'the clone\'s title, description and tags can change.',
-      inputSchema: {
+      inputSchema: strictInput({
         scope: z.enum(['mine', 'public']).default('mine')
           .describe('"mine" for your workspace, "public" for the public gallery.'),
         search: z.string().max(200).optional()
@@ -43,7 +43,7 @@ export function registerListWorkflows(server: McpServer, client: WiroClient): vo
         order: z.enum(['desc', 'asc']).default('desc').describe('Sort direction (default desc).'),
         start: z.number().int().min(0).max(10_000).default(0).describe('Pagination offset (default 0).'),
         limit: z.number().int().min(1).max(100).default(20).describe('Maximum results (default 20, max 100).'),
-      },
+      }),
       outputSchema: {
         scope: z.enum(['mine', 'public']),
         workflows: z.array(workflowSummarySchema),

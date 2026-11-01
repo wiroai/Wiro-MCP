@@ -12,7 +12,7 @@ import {
   tagProblem,
   WorkflowPrepareError,
 } from '../utils/workflow-save.js';
-import { nextActionSchema } from './schemas.js';
+import { nextActionSchema, strictInput } from './schemas.js';
 
 export const prepareIssueSchema = z.object({
   code: z.string().optional(),
@@ -53,12 +53,12 @@ export function registerCreateWorkflow(server: McpServer, client: WiroClient): v
         + 'default (the Notes in the result list what was filled). The graph can be at most 40 KB of JSON '
         + 'with those defaults. Free. Each call creates another workflow. The result gives the '
         + 'full slug, the page link and the input keys, so no get_workflow call is needed to run it.',
-      inputSchema: {
+      inputSchema: strictInput({
         title: z.string().trim().min(1).max(160).describe('Workflow title (1-160 characters).'),
         contents: workflowContentsInputSchema,
         description: z.string().max(1000).optional().describe('What the workflow does (up to 1000 characters).'),
         tags: z.array(z.string()).max(20).optional().describe('Up to 20 tags.'),
-      },
+      }),
       outputSchema: savedWorkflowSchema,
       annotations: {
         readOnlyHint: false,

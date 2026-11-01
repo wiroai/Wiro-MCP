@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { WiroClient } from '../client.js';
 import { formatModelList } from '../utils/format.js';
 import { toStructuredModel } from '../utils/structured.js';
-import { modelListOutputSchema } from './schemas.js';
+import { modelListOutputSchema, strictInput } from './schemas.js';
 
 export function registerRecommendModel(server: McpServer, client: WiroClient): void {
   server.registerTool(
@@ -14,9 +14,9 @@ export function registerRecommendModel(server: McpServer, client: WiroClient): v
         + '"remove background", best matches first; each extra word narrows the results. For a kind '
         + 'of task, search_models with categories also works. Follow the returned `get_model_schema` '
         + 'next action before running a model.',
-      inputSchema: {
+      inputSchema: strictInput({
         task: z.string().describe('Two or three key words, e.g. "upscale image", "remove background", "transcribe audio".'),
-      },
+      }),
       outputSchema: modelListOutputSchema,
       annotations: {
         readOnlyHint: true,

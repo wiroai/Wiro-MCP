@@ -4,7 +4,7 @@ import type { WiroClient } from '../client.js';
 import { asString, isPlainObject, toNumber, type ApiEnvelope } from '../utils/api.js';
 import { formatModelSchema } from '../utils/format.js';
 import { toStructuredModelDetail } from '../utils/structured.js';
-import { modelDetailOutputSchema } from './schemas.js';
+import { modelDetailOutputSchema, strictInput } from './schemas.js';
 
 const UTILITY_PREFIX = 'workflow-utilities/';
 
@@ -122,9 +122,9 @@ export function registerGetModelSchema(
         + 'It also describes the built-in workflow utilities (workflow-utilities/output-filter, '
         + 'workflow-utilities/merge-text, workflow-utilities/split-text): their parameters and '
         + 'the output ports other workflow steps reference.',
-      inputSchema: {
+      inputSchema: strictInput({
         model: z.string().describe('Model slug in "owner/model" format, e.g. "google/veo3-1", "black-forest-labs/flux-2-pro", or a workflow utility such as "workflow-utilities/output-filter".'),
-      },
+      }),
       outputSchema: modelDetailOutputSchema,
       annotations: {
         readOnlyHint: true,

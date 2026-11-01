@@ -20,7 +20,7 @@ import {
   workflowRunSchema,
   type WorkflowRun,
 } from '../utils/workflow.js';
-import { nextActionSchema } from './schemas.js';
+import { nextActionSchema, strictInput } from './schemas.js';
 
 interface RunDetailResponse extends ApiEnvelope {
   workflowrun?: Record<string, unknown>;
@@ -117,13 +117,13 @@ export function registerWaitForWorkflowRun(server: McpServer, client: WiroClient
         + 'inside them as content. Use wait_seconds 0 for a single check. When it is still running, call '
         + 'this again with the same run token; never start the run again. When the run is '
         + 'complete, present every returned media resource in the user-facing response.',
-      inputSchema: {
+      inputSchema: strictInput({
         workflowtoken: z.string().min(1).describe('The run token from run_workflow, resume_workflow_run or list_workflow_runs.'),
         wait_seconds: z.number().int().min(0).max(MAX_WAIT_SECONDS).default(DEFAULT_WAIT_SECONDS)
           .describe(`How long to wait for the run to finish (0-${MAX_WAIT_SECONDS} seconds, default ${DEFAULT_WAIT_SECONDS}).`),
         debug_node_id: z.string().optional()
           .describe('Optional step id ("node-...") whose model task details to include, to debug a failed step.'),
-      },
+      }),
       outputSchema: workflowRunOutputSchema,
       annotations: {
         readOnlyHint: true,

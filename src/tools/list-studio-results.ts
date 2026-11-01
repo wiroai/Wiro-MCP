@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { WiroClient } from '../client.js';
 import { errorResult } from '../utils/api.js';
 import { formatStudioRun, readStudioRunPage, STUDIO_RUNS_MAX, studioRunSchema } from '../utils/studio-runs.js';
-import { nextActionSchema } from './schemas.js';
+import { nextActionSchema, strictInput } from './schemas.js';
 
 function parseSince(value: string | undefined): number | undefined {
   if (value === undefined || value.trim() === '') return undefined;
@@ -30,14 +30,14 @@ export function registerListStudioResults(server: McpServer, client: WiroClient)
         + 'cancel_task and kill_task cannot read or stop them; poll this tool instead. It reads at most Studio\'s 100 most '
         + 'recent runs: to collect a period, pass since with limit 100, and the result says when older runs in that '
         + 'period may be missing. Only successful runs are charged. Read-only.',
-      inputSchema: {
+      inputSchema: strictInput({
         limit: z.number().int().min(1).max(100).default(20)
           .describe('How many recent runs to read (1-100, default 20). Filters apply after reading, so fewer can come back.'),
         state: z.enum(['all', 'running', 'completed', 'failed', 'cancelled']).default('all')
           .describe('Only runs in this state (default all).'),
         since: z.string().optional()
           .describe('Only runs created at or after this time: ISO 8601 (2026-01-31T09:00:00Z) or Unix seconds.'),
-      },
+      }),
       outputSchema: {
         runs: z.array(studioRunSchema),
         count: z.number().int().nonnegative(),

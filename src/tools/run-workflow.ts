@@ -17,6 +17,7 @@ import {
   workflowRunOutputSchema,
   workflowRunResult,
 } from './wait-for-workflow-run.js';
+import { strictInput } from './schemas.js';
 
 interface RunResponse extends ApiEnvelope {
   workflowtoken?: string;
@@ -75,7 +76,7 @@ export function registerRunWorkflow(server: McpServer, client: WiroClient): void
         + 'from the create_workflow or save_workflow_from_agent result. If the run is still '
         + 'going when the wait ends, continue with wait_for_workflow_run; never call '
         + 'run_workflow again for the same job.',
-      inputSchema: {
+      inputSchema: strictInput({
         slug: z.string().min(1)
           .describe('The full workflow slug ("<name>-<5 character id>") or the workflow page URL.'),
         input: z.record(z.string(), workflowInputValueSchema).optional()
@@ -89,7 +90,7 @@ export function registerRunWorkflow(server: McpServer, client: WiroClient): void
             + 'Only for workflows you can edit. Not the last step.'),
         wait_seconds: z.number().int().min(0).max(MAX_WAIT_SECONDS).default(DEFAULT_WAIT_SECONDS)
           .describe(`How long to wait for the result (0-${MAX_WAIT_SECONDS} seconds, default ${DEFAULT_WAIT_SECONDS}).`),
-      },
+      }, 'Workflow input values go inside `input`.'),
       outputSchema: workflowRunOutputSchema,
       annotations: {
         readOnlyHint: false,

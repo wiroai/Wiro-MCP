@@ -7,7 +7,7 @@ import {
   readOAuthStatus,
   type OAuthStatusSnapshot,
 } from '../utils/agent-config.js';
-import { nextActionSchema } from './schemas.js';
+import { nextActionSchema, strictInput } from './schemas.js';
 
 const accountSchema = z.object({ id: z.string(), name: z.string() });
 
@@ -42,12 +42,12 @@ export function registerDisconnectAgentOauth(server: McpServer, client: WiroClie
         + 'access where it supports that, scheduled tasks that need the integration stop running, '
         + 'and a running agent restarts. It cannot be undone; reconnect with connect_agent_oauth. '
         + 'For plain credentials such as Telegram, clear fields with set_agent_credentials instead.',
-      inputSchema: {
+      inputSchema: strictInput({
         agent_guid: z.string().min(1).describe('The deployed agent\'s guid, from list_my_agents.'),
         credential: z.string().min(1).describe('The integration\'s credential key, for example "google-ads" or "meta-ads".'),
         confirm: z.boolean().default(false)
           .describe('false (default) only shows what would be removed. true disconnects.'),
-      },
+      }),
       outputSchema,
       annotations: {
         readOnlyHint: false,

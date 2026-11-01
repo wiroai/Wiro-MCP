@@ -38,7 +38,7 @@ import {
 import { asTier, outcomeUnknown, toTierPricing } from '../utils/user-agent.js';
 import { DEFAULT_WAIT_SECONDS } from '../utils/poll.js';
 import { isPlainTeamMember, teamAgentBillingRefused } from '../utils/workspace.js';
-import { nextActionSchema } from './schemas.js';
+import { nextActionSchema, strictInput } from './schemas.js';
 
 const pricingSchema = z.object({
   currentMonthlyUsd: z.number().nullable(),
@@ -266,7 +266,7 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
         + '(manage_agent_custom_skill does). Find skill names with list_agent_skills and the '
         + 'agent\'s current skills with get_my_agent. The agents playbook (get_playbook) has the '
         + 'full setup walkthrough.',
-      inputSchema: {
+      inputSchema: strictInput({
         agent_guid: z.string().min(1).describe('The deployed agent\'s guid, from list_my_agents.'),
         skills: z.record(z.string(), z.boolean())
           .describe('Skills to change, as name: true to turn on or name: false to turn off, for example {"int-instagram-post": true}. Registry names only (list_agent_skills). Custom skills and scheduled tasks (cs-...) are managed with manage_agent_custom_skill; channels such as Telegram turn on through set_agent_credentials.'),
@@ -278,7 +278,7 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
           .describe('false (default) only returns the quote. true applies the change and charges it; it needs the idempotency_key from the quote.'),
         idempotency_key: z.string().min(8).max(128).optional()
           .describe('With confirm: true, the key from the quote the user approved. It ties the approval to the quoted prices, and repeating the call with it after a timeout never applies the change twice. Omit it to get a quote.'),
-      },
+      }),
       outputSchema,
       annotations: {
         readOnlyHint: false,

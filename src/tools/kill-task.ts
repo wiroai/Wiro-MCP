@@ -1,7 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { WiroClient } from '../client.js';
-import { taskActionOutputSchema } from './schemas.js';
+import { strictInput, taskActionOutputSchema } from './schemas.js';
 
 const STOP_REQUESTED = 'Stop requested; the task now shows as cancelled. A task that was still queued is not '
   + 'charged; one that was already running can still be charged for its run.';
@@ -16,10 +16,10 @@ export function registerKillTask(server: McpServer, client: WiroClient): void {
         + 'and get_task_price shows any charge once the run ends. If the task finished first, '
         + 'the call is refused with "Process ended": read it with get_task and show the result. '
         + 'Not for the steps of a workflow run or the runs Studio starts.',
-      inputSchema: {
+      inputSchema: strictInput({
         tasktoken: z.string().optional().describe('The task token returned from run_model.'),
         taskid: z.string().optional().describe('The task ID (alternative to tasktoken).'),
-      },
+      }),
       outputSchema: taskActionOutputSchema,
       annotations: {
         readOnlyHint: false,

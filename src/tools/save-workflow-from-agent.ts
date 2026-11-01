@@ -19,6 +19,7 @@ import {
   type SavedWorkflow,
 } from '../utils/workflow-save.js';
 import { formatUpdatedWorkflow, updatedWorkflowSchema } from './update-workflow.js';
+import { strictInput } from './schemas.js';
 
 // Remembers for an hour which proposal was already saved as a new workflow, so
 // a repeated call (a retry, or the model asking twice) does not create a copy
@@ -122,7 +123,7 @@ export function registerSaveWorkflowFromAgent(server: McpServer, client: WiroCli
         + 'checks and prepares the graph against the live model catalog first; if it finds '
         + 'problems, send them back to the Workflow Agent in the same session. Save each proposal '
         + 'once; saving it again can create another copy. Saving is free; running the workflow is charged.',
-      inputSchema: {
+      inputSchema: strictInput({
         message_id: z.string().min(1).describe('The message id from send_agent_message or get_agent_message. One id covers the message and its reply.'),
         session: z.string().min(1).describe('The session that reply belongs to.'),
         artifact_hash: z.string().optional()
@@ -138,7 +139,7 @@ export function registerSaveWorkflowFromAgent(server: McpServer, client: WiroCli
           .describe('When applying: overwrite a newer version. Only when the user explicitly wants that.'),
         acknowledge_review_reset: z.boolean().default(false)
           .describe('Required to change a published workflow, after the user agreed it leaves the gallery until reviewed.'),
-      },
+      }),
       outputSchema: {
         ...updatedWorkflowSchema,
         reviewReset: z.boolean().optional(),

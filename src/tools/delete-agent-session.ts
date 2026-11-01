@@ -16,7 +16,8 @@ import {
   resolveAgentTarget,
   type AgentTarget,
 } from '../utils/agent-targets.js';
-import { nextActionSchema } from './schemas.js';
+import { quotedSpan } from '../utils/quoted-text.js';
+import { nextActionSchema, strictInput } from './schemas.js';
 
 /** The session's row in the key's session list, or null when the list cannot be read. */
 async function findSession(
@@ -47,7 +48,7 @@ export const SESSION_RECHECK_MS = 2_000;
 
 function notFoundSummary(target: AgentTarget, session: string): string {
   const owner = target.kind === 'deployed' ? 'this agent' : target.kind === 'studio' ? 'Studio' : 'the Workflow Agent';
-  return `Session "${session}" is not in this API key's session list for ${owner}, so nothing was deleted. `
+  return `Session ${quotedSpan(session)} is not in this API key's session list for ${owner}, so nothing was deleted. `
     + 'If it was started in the last few seconds, try again shortly.'
     + (target.kind === 'workflow-agent'
       ? ' An API key reaches only the Workflow Agent sessions of its own project, not chats on wiro.ai or another project\'s.'
@@ -59,7 +60,7 @@ function deletionSummary(target: AgentTarget, session: string): string {
     ? 'the main Studio chat on wiro.ai'
     : target.kind === 'deployed' && session === 'default'
       ? 'your agent\'s main chat, including its voice call records'
-      : `session "${session}"`;
+      : `session ${quotedSpan(session)}`;
   return `This permanently deletes every message you sent and received in ${scope}, including a turn that is `
     + 'still running, and resets the agent\'s memory of it. It cannot be undone.'
     + (target.kind === 'studio' ? ` ${STUDIO_RUNS_AFTER_DELETE}` : '');
@@ -77,12 +78,12 @@ export function registerDeleteAgentSession(server: McpServer, client: WiroClient
         + '(get_agent_conversation with the session shows whether one is running). Studio keeps a display name the session was given on '
         + 'wiro.ai. The Workflow Agent\'s "default" session cannot be deleted. The files models made and saved '
         + `workflows stay. ${STUDIO_RUNS_AFTER_DELETE}`,
-      inputSchema: {
+      inputSchema: strictInput({
         agent: z.string().min(1).describe(AGENT_INPUT_DESCRIPTION),
         session: z.string().min(1).describe('The session to delete (from get_agent_conversation).'),
         confirm: z.boolean().default(false)
           .describe('Set to true only after the user agreed to the permanent deletion.'),
-      },
+      }),
       outputSchema: {
         agent: z.string(),
         agentKind: z.enum(['studio', 'workflow-agent', 'deployed']),
@@ -158,7 +159,7 @@ export function registerDeleteAgentSession(server: McpServer, client: WiroClient
           'The session could not be deleted.',
         );
 
-        const summary = `Deleted session "${session}". The next message in this session starts without memory `
+        const summary = `Deleted session ${quotedSpan(session)}. The next message in this session starts without memory `
           + 'of the old conversation.'
           + (target.kind === 'studio' ? ' A display name set on wiro.ai stays on the now empty session.' : '');
         return {

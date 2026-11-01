@@ -6,6 +6,7 @@ import {
   PLAYBOOK_TOPICS,
   PLAYBOOKS,
 } from '../playbooks.js';
+import { strictInput } from './schemas.js';
 
 const topicSchema = z.enum(PLAYBOOK_TOPICS);
 
@@ -25,10 +26,10 @@ export function registerGetPlaybook(server: McpServer): void {
         + 'and follow it. Each topic is enough for its own job; read getting-started '
         + `when the route or the workspace is unclear. Topics: ${topicList}. `
         + 'Several topics can be read in one call.',
-      inputSchema: {
+      inputSchema: strictInput({
         topics: z.array(topicSchema).min(1)
           .describe('One or more playbook topics to read, e.g. ["workflows"] or ["agents", "billing"].'),
-      },
+      }),
       outputSchema: {
         topics: z.array(z.object({
           topic: topicSchema,

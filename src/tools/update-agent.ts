@@ -12,7 +12,7 @@ import {
   selectableModelSlugs,
   toAgentDetail,
 } from '../utils/user-agent.js';
-import { nextActionSchema } from './schemas.js';
+import { nextActionSchema, strictInput } from './schemas.js';
 
 const COMMANDS = [
   'agent_help',
@@ -46,7 +46,7 @@ export function registerUpdateAgent(server: McpServer, client: WiroClient): void
         + 'custom instructions have their own tools (apply_agent_skills, set_agent_credentials, '
         + 'manage_agent_custom_skill). On a team agent this needs a team admin or the person who deployed it; '
         + 'other team members can read the agent with get_my_agent and message it.',
-      inputSchema: {
+      inputSchema: strictInput({
         agent_guid: z.string().min(1).max(100)
           .describe('The deployed agent\'s guid, from list_my_agents or deploy_agent.'),
         title: z.string().trim().min(1).max(200).optional()
@@ -71,7 +71,7 @@ export function registerUpdateAgent(server: McpServer, client: WiroClient): void
           .describe('Model that summarizes voice calls; same rules as chat_model.'),
         enabled_commands: z.array(z.string().min(1).max(100)).max(50).optional()
           .describe(`Slash commands the agent offers; [] hides all of them. Commands today: ${COMMANDS.join(', ')}.`),
-      },
+      }),
       outputSchema: {
         agent: agentDetailSchema,
         changed: z.array(z.string()),

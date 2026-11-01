@@ -18,7 +18,7 @@ import {
   waitForAgentToSettle,
 } from '../utils/user-agent.js';
 import { isPlainTeamMember } from '../utils/workspace.js';
-import { nextActionSchema } from './schemas.js';
+import { nextActionSchema, strictInput } from './schemas.js';
 
 const entrySchema = z.object({
   key: z.string(),
@@ -42,14 +42,14 @@ export function registerGetMyAgent(server: McpServer, client: WiroClient): void 
         + 'queued or starting; when the wait runs out, follow the returned nextAction instead of repeating '
         + 'the action that started it. Statuses: 0 stopped, 1 stopping, 2 queued, 3 starting, 4 running, '
         + '5 error, 6 setup required.',
-      inputSchema: {
+      inputSchema: strictInput({
         agent_guid: z.string().min(1).max(100)
           .describe('The deployed agent\'s guid, from list_my_agents or deploy_agent.'),
         entry: z.string().min(1).max(80).optional()
           .describe('The key of one custom instruction or scheduled task, such as cs-brand-voice, or its bare name such as brand-voice. Adds that entry\'s whole text, which the list shortens when it is long. Read it before changing the entry with manage_agent_custom_skill.'),
         wait_seconds: z.number().int().min(0).max(MAX_WAIT_SECONDS).default(0)
           .describe('Keep reading for up to this many seconds while the agent is stopping, queued or starting (0 to 600, default 0 for an immediate read). 45 or less is safe for clients with a 60 second tool timeout; follow nextAction to keep waiting.'),
-      },
+      }),
       outputSchema: {
         agent: agentDetailSchema,
         settled: z.boolean(),

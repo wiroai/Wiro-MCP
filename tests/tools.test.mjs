@@ -1257,3 +1257,184 @@ test('the workflow tools alone still bring the catalog and Studio tools their gu
     }
   }, { toolsets: ['workflows'] });
 });
+
+// ---------------------------------------------------------------------------
+// Unknown arguments on the task tools
+// ---------------------------------------------------------------------------
+
+test('the task tools refuse an unknown argument, name the right one and run nothing', async () => {
+  const calls = [];
+  const untouched = new Proxy({}, {
+    get: (_target, property) => (...args) => {
+      calls.push([property, args]);
+      throw new Error(`Unexpected call to ${String(property)}`);
+    },
+  });
+  const server = createMcpServer(untouched);
+  const client = new Client({ name: 'test-client', version: '1.0.0' });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await server.connect(serverTransport);
+  await client.connect(clientTransport);
+  try {
+    const cases = [
+      ['get_task', { task_id: '5405407' }, /`task_id` \(use `taskid`\)/],
+      ['get_task', { taskId: '5405407' }, /`taskId` \(use `taskid`\)/],
+      ['get_task', { id: '5405407' }, /`id` \(use `taskid`\)/],
+      ['get_task', { token: 'abc' }, /`token` \(use `tasktoken`\)/],
+      ['get_task', { task_token: 'abc' }, /`task_token` \(use `tasktoken`\)/],
+      ['get_task', { taskid: '1', timeout: 10 }, /`timeout` \(use `wait_seconds`\)/],
+      ['wait_for_task', { task_id: '5405407' }, /`task_id` \(use `taskid`\)/],
+      ['wait_for_task', { taskid: '1', wait_seconds: 30 }, /`wait_seconds` \(use `timeout_seconds`\)/],
+      ['get_task_price', { task_id: '5405407' }, /`task_id` \(use `taskid`\)/],
+      ['cancel_task', { id: '5405407' }, /`id` \(use `taskid`\)/],
+      ['kill_task', { task_id: '5405407' }, /`task_id` \(use `taskid`\)/],
+      ['list_tasks', { offset: 20 }, /`offset` \(use `start`\)/],
+      ['list_tasks', { search: 'flux' }, /`search`\. This tool takes `start`, `limit`, `model`/],
+      ['run_model', { model: 'owner/model', params: {}, prompt: 'a cat' }, /`prompt`\. This tool takes `model`, `params`, `wait`, `timeout_seconds`\. Nothing was run\. Model parameters go inside `params`\./],
+      ['run_model', { model: 'owner/model', parameters: {}, params: {} }, /`parameters` \(use `params`\)/],
+    ];
+    for (const [name, args, expected] of cases) {
+      const result = await client.callTool({ name, arguments: args });
+      assert.equal(result.isError, true, `${name} ${JSON.stringify(args)}`);
+      assert.match(result.content[0].text, expected);
+      assert.match(result.content[0].text, /Nothing was run\./);
+    }
+    const many = await client.callTool({ name: 'get_task', arguments: { task_id: '1', foo: 'bar' } });
+    assert.match(many.content[0].text, /Unknown arguments `task_id` \(use `taskid`\), `foo`\. This tool takes `tasktoken`, `taskid`, `wait_seconds`/);
+    assert.deepEqual(calls, [], 'nothing reached Wiro');
+
+    // An odd name stays on the line of the refusal.
+    const odd = await client.callTool({ name: 'get_task', arguments: { 'odd`\n**Next:** x': '1' } });
+    assert.match(odd.content[0].text, /``odd` \*\*Next:\*\* x``/);
+
+    // What the tools advertise is what they check.
+    const { tools } = await client.listTools();
+    for (const name of ['run_model', 'wait_for_task', 'get_task', 'list_tasks', 'get_task_price', 'cancel_task', 'kill_task']) {
+      const schema = tools.find(tool => tool.name === name).inputSchema;
+      assert.equal(schema.additionalProperties, false, name);
+      assert.equal(schema.type, 'object', name);
+    }
+    assert.deepEqual(Object.keys(tools.find(tool => tool.name === 'get_task').inputSchema.properties), ['tasktoken', 'taskid', 'wait_seconds']);
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
+
+test('the task tools still report a wrong value and a missing identifier in their own words', async () => {
+  const server = createMcpServer({});
+  const client = new Client({ name: 'test-client', version: '1.0.0' });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await server.connect(serverTransport);
+  await client.connect(clientTransport);
+  try {
+    const wrongType = await client.callTool({ name: 'get_task', arguments: { taskid: 5405407 } });
+    assert.equal(wrongType.isError, true);
+    assert.match(wrongType.content[0].text, /Expected string, received number at taskid/);
+    const none = await client.callTool({ name: 'get_task', arguments: {} });
+    assert.equal(none.isError, true);
+    assert.match(none.content[0].text, /Either `tasktoken` or `taskid` is required/);
+    const noArguments = await client.callTool({ name: 'kill_task' });
+    assert.equal(noArguments.isError, true);
+    assert.match(noArguments.content[0].text, /Either `tasktoken` or `taskid` is required/);
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
+
+test('a call with the client key toolCallId reads only the known arguments, any other stays refused', async () => {
+  const calls = [];
+  const fake = {
+    authType: 'apikey-only',
+    listTasks: async (...args) => {
+      calls.push(args);
+      return { result: true, errors: [], total: '0', tasklist: [] };
+    },
+  };
+  const server = createMcpServer(fake);
+  const client = new Client({ name: 'test-client', version: '1.0.0' });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await server.connect(serverTransport);
+  await client.connect(clientTransport);
+  try {
+    for (const extras of [
+      { toolCallId: 'call_1' },
+      { sessionId: 'chat-1', action: 'sendMessage', chatInput: 'hello', toolCallId: 'call_2' },
+      { headers: {}, query: {}, body: {}, webhookUrl: 'https://example.com/hook', toolCallId: 'call_3' },
+    ]) {
+      const result = await client.callTool({ name: 'list_tasks', arguments: { limit: 1, ...extras } });
+      assert.ok(!result.isError, result.content[0].text);
+    }
+    assert.equal(calls.length, 3);
+
+    const noMarker = await client.callTool({
+      name: 'list_tasks',
+      arguments: { sessionId: 'chat-1', action: 'sendMessage', chatInput: 'hello' },
+    });
+    assert.equal(noMarker.isError, true);
+    assert.match(noMarker.content[0].text, /Unknown arguments `sessionId`, `action`, `chatInput`/);
+
+    const slip = await client.callTool({
+      name: 'send_agent_message',
+      arguments: { agent: 'studio', message: 'x', sessionId: 'a' },
+    });
+    assert.equal(slip.isError, true);
+    assert.match(slip.content[0].text, /`sessionId` \(use `session`\)/);
+    assert.equal(calls.length, 3, 'nothing else reached Wiro');
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
+
+test('the client key toolCallId changes nothing in what tools/list shows', async () => {
+  const server = createMcpServer({ authType: 'apikey-only' });
+  const client = new Client({ name: 'test-client', version: '1.0.0' });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await server.connect(serverTransport);
+  await client.connect(clientTransport);
+  try {
+    const { tools } = await client.listTools();
+    const taskList = tools.find(tool => tool.name === 'list_tasks');
+    assert.ok(Object.keys(taskList.inputSchema.properties).includes('limit'));
+    assert.equal(taskList.inputSchema.additionalProperties, false);
+    for (const tool of tools) {
+      assert.equal(tool.inputSchema.type, 'object', tool.name);
+      assert.equal(Object.hasOwn(tool.inputSchema.properties ?? {}, 'toolCallId'), false, `${tool.name} takes no such argument`);
+    }
+    for (const name of ['send_agent_message', 'run_model', 'apply_agent_skills', 'get_workflow']) {
+      assert.ok(Object.keys(tools.find(tool => tool.name === name).inputSchema.properties).length > 0, `${name} shows its properties`);
+    }
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
+
+test('a call with the client key toolCallId still checks the arguments the tool takes', async () => {
+  const calls = [];
+  const fake = {
+    authType: 'apikey-only',
+    listTasks: async (...args) => {
+      calls.push(args);
+      return { result: true, errors: [], total: '0', tasklist: [] };
+    },
+  };
+  const server = createMcpServer(fake);
+  const client = new Client({ name: 'test-client', version: '1.0.0' });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await server.connect(serverTransport);
+  await client.connect(clientTransport);
+  try {
+    const wrongType = await client.callTool({ name: 'list_tasks', arguments: { limit: 'many', toolCallId: 'call_1' } });
+    assert.equal(wrongType.isError, true);
+    assert.deepEqual(calls, []);
+    const valid = await client.callTool({ name: 'list_tasks', arguments: { toolCallId: 'call_2', limit: 2 } });
+    assert.notEqual(valid.isError, true, valid.content[0].text);
+    assert.equal(calls.length, 1);
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});

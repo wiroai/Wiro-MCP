@@ -19,7 +19,7 @@ import {
   toPendingTaskResult,
   toStructuredTaskResult,
 } from '../utils/structured.js';
-import { taskResultOutputSchema } from './schemas.js';
+import { strictInput, taskResultOutputSchema } from './schemas.js';
 
 export function registerWaitForTask(server: McpServer, client: WiroClient): void {
   server.registerTool(
@@ -33,12 +33,12 @@ export function registerWaitForTask(server: McpServer, client: WiroClient): void
         + 'template after its calls have been executed. '
         + 'When it completes, present every returned media resource in the '
         + 'user-facing response instead of reporting only task metadata.',
-      inputSchema: {
+      inputSchema: strictInput({
         tasktoken: z.string().optional().describe('The task token returned from run_model.'),
         taskid: z.string().optional().describe('The task ID (alternative to tasktoken).'),
         timeout_seconds: z.number().int().min(10).max(600).default(45)
           .describe('Maximum seconds to wait. The 45-second default is safe for clients with a 60-second tool timeout.'),
-      },
+      }),
       outputSchema: taskResultOutputSchema,
       annotations: {
         readOnlyHint: true,

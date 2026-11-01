@@ -23,7 +23,7 @@ import {
   type NextAction,
 } from '../utils/user-agent.js';
 import { isPlainTeamMember } from '../utils/workspace.js';
-import { nextActionSchema } from './schemas.js';
+import { nextActionSchema, strictInput } from './schemas.js';
 
 type Outcome = 'requested' | 'not_needed' | 'refused';
 
@@ -160,14 +160,14 @@ export function registerControlAgent(server: McpServer, client: WiroClient): voi
         + 'result says what to do next (subscribe, renew, buy credits or finish setup). On a team agent this '
         + 'needs a team admin or the person who deployed it; other team members can read the agent with '
         + 'get_my_agent and message it.',
-      inputSchema: {
+      inputSchema: strictInput({
         agent_guid: z.string().min(1).max(100)
           .describe('The deployed agent\'s guid, from list_my_agents or deploy_agent.'),
         action: z.enum(['start', 'stop', 'restart'])
           .describe('start queues a stopped or failed agent, stop shuts it down, restart reloads a running agent.'),
         wait_seconds: z.number().int().min(0).max(MAX_WAIT_SECONDS).default(0)
           .describe('Wait up to this many seconds for the agent to finish starting or stopping (0 to 600, default 0). 45 or less is safe for clients with a 60 second tool timeout; follow nextAction to keep waiting.'),
-      },
+      }),
       outputSchema: {
         action: z.enum(['start', 'stop', 'restart']),
         outcome: z.enum(['requested', 'not_needed', 'refused']),

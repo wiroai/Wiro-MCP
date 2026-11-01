@@ -19,7 +19,7 @@ import {
   toPendingTaskResult,
   toStructuredTaskResult,
 } from '../utils/structured.js';
-import { taskResultOutputSchema } from './schemas.js';
+import { strictInput, taskResultOutputSchema } from './schemas.js';
 
 export function registerGetTask(server: McpServer, client: WiroClient): void {
   server.registerTool(
@@ -35,12 +35,12 @@ export function registerGetTask(server: McpServer, client: WiroClient): void {
         + 'and the turn\'s `session_id` when it had one. When the task is complete, present every returned '
         + 'media resource in the user-facing response instead of reporting only '
         + 'task metadata.',
-      inputSchema: {
+      inputSchema: strictInput({
         tasktoken: z.string().optional().describe('The task token returned from run_model.'),
         taskid: z.string().optional().describe('The task ID (alternative to tasktoken).'),
         wait_seconds: z.number().int().min(0).max(45).default(0)
           .describe('Optional bounded wait before returning (0-45 seconds, default 0).'),
-      },
+      }),
       outputSchema: taskResultOutputSchema,
       annotations: {
         readOnlyHint: true,

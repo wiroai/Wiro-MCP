@@ -16,7 +16,7 @@ import {
   formatUsd,
   isGuid,
 } from '../utils/user-agent.js';
-import { nextActionSchema } from './schemas.js';
+import { nextActionSchema, strictInput } from './schemas.js';
 
 function credentialLine(credential: CredentialRequirement): string {
   const fields = credential.fields
@@ -90,12 +90,12 @@ export function registerGetAgentTemplate(server: McpServer, client: WiroClient):
         + 'with their token rates in credits per 1M tokens, and the exact Starter and Pro prices that '
         + 'deploy_agent charges. Required credentials can be added after deployment, but skills that need '
         + 'them do not work until they are set.',
-      inputSchema: {
+      inputSchema: strictInput({
         template: z.string().min(1).max(200)
           .describe('Template slug or guid from list_agent_templates.'),
         include_tasks: z.boolean().default(false)
           .describe('Also return the template\'s scheduled tasks and custom instructions (key, description, schedule, shortened instruction text).'),
-      },
+      }),
       outputSchema: {
         template: templateDetailSchema,
         nextAction: nextActionSchema.optional(),

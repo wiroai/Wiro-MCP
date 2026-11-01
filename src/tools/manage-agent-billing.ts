@@ -34,7 +34,7 @@ import {
   type AgentDetail,
   type NextAction,
 } from '../utils/user-agent.js';
-import { nextActionSchema } from './schemas.js';
+import { nextActionSchema, strictInput } from './schemas.js';
 
 const ACTIONS = ['subscribe', 'upgrade_to_pro', 'cancel', 'renew', 'buy_credits'] as const;
 type BillingAction = typeof ACTIONS[number];
@@ -692,7 +692,7 @@ export function registerManageAgentBilling(server: McpServer, client: WiroClient
         + 'card plan is cancelled there; the tool returns the link and charges nothing. On a team agent only a team '
         + 'admin, the organization\'s owner or the person who deployed the agent can pay for it or change its plan; '
         + 'other members are refused and nothing is charged.',
-      inputSchema: {
+      inputSchema: strictInput({
         agent_guid: z.string().min(1).max(100)
           .describe('The deployed agent\'s guid, from list_my_agents or deploy_agent.'),
         action: z.enum(ACTIONS)
@@ -707,7 +707,7 @@ export function registerManageAgentBilling(server: McpServer, client: WiroClient
           .describe('With confirm: true, the amount the user approved, from the quote\'s nextAction (quote.chargeNowUsd, or quote.maxChargeUsd for upgrade_to_pro). Required for every action that charges: subscribe, upgrade_to_pro, buy_credits and renewing an expired plan. If a fresh quote no longer matches it, nothing is charged and the new quote is returned. For upgrade_to_pro it is the most the user agreed to pay now.'),
         confirm: z.boolean().default(false)
           .describe('false returns only the quote. true performs the action. Set it only after the user approved it.'),
-      },
+      }),
       outputSchema: {
         action: z.enum(ACTIONS),
         agentGuid: z.string(),

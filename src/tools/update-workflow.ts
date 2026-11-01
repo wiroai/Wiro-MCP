@@ -15,6 +15,7 @@ import {
   type UpdatedWorkflow,
 } from '../utils/workflow-save.js';
 import { savedWorkflowSchema, workflowContentsInputSchema } from './create-workflow.js';
+import { strictInput } from './schemas.js';
 
 export const workflowChangesSchema = z.object({
   stepsAdded: z.array(z.string()),
@@ -103,7 +104,7 @@ export function registerUpdateWorkflow(server: McpServer, client: WiroClient): v
         + 'with `confirm: true` after they agree. Editing a published workflow takes it out of '
         + 'the public gallery until Wiro reviews it again, so that also needs '
         + '`acknowledge_review_reset: true`.',
-      inputSchema: {
+      inputSchema: strictInput({
         slug: z.string().min(1).describe('The full workflow slug or the workflow page URL.'),
         title: z.string().trim().min(1).max(160).optional().describe('New title.'),
         description: z.string().min(1).max(1000).optional().describe('New description, 1 to 1000 characters.'),
@@ -117,7 +118,7 @@ export function registerUpdateWorkflow(server: McpServer, client: WiroClient): v
           .describe('Overwrite a newer version. Only when the user explicitly wants that.'),
         acknowledge_review_reset: z.boolean().default(false)
           .describe('Required to edit a published workflow, after the user agreed it leaves the gallery until reviewed.'),
-      },
+      }),
       outputSchema: updatedWorkflowSchema,
       annotations: {
         readOnlyHint: false,

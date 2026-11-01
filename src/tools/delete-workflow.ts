@@ -6,7 +6,7 @@ import { quotedSpan } from '../utils/quoted-text.js';
 import { parseWorkflowSlug, toWorkflowDetail } from '../utils/workflow.js';
 import { postWithNotFoundRetry } from '../utils/workflow-save.js';
 import { fetchWorkflowRow } from './get-workflow.js';
-import { nextActionSchema } from './schemas.js';
+import { nextActionSchema, strictInput } from './schemas.js';
 
 export function registerDeleteWorkflow(server: McpServer, client: WiroClient): void {
   server.registerTool(
@@ -19,10 +19,10 @@ export function registerDeleteWorkflow(server: McpServer, client: WiroClient): v
         + 'project\'s key this includes teammates\' workflows. Without `confirm: true` this '
         + 'only describes what would be deleted; ask the user, then call again with '
         + '`confirm: true`.',
-      inputSchema: {
+      inputSchema: strictInput({
         slug: z.string().min(1).describe('The full workflow slug or the workflow page URL.'),
         confirm: z.boolean().default(false).describe('Set true only after the user approved the deletion.'),
-      },
+      }),
       outputSchema: {
         deleted: z.boolean(),
         fullSlug: z.string(),

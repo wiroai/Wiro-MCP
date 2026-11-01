@@ -9,7 +9,15 @@ import {
   toNumber,
   type ApiEnvelope,
 } from './api.js';
-import { newSessionKey, sessionKeyProblem } from './agent-message.js';
+import {
+  SESSION_NAME_MAX,
+  SESSION_NAME_PATTERN,
+  SESSION_NAME_RULE,
+  newSessionKey,
+  sessionKeyProblem,
+  sessionNameSuggestion,
+} from './agent-message.js';
+import { quotedSpan } from './quoted-text.js';
 import { fetchPublicFile } from './remote-file.js';
 
 // Studio, the Workflow Agent and the user's own deployed agents speak the same
@@ -79,10 +87,6 @@ export const AGENT_INPUT_DESCRIPTION = 'Which agent: "studio" (Wiro Studio, the 
 
 export const WORKFLOW_AGENT_MAX_MESSAGE_BYTES = 16 * 1024;
 const WORKFLOW_SESSION_PATTERN = /^[A-Za-z0-9._:-]+$/;
-// Workflow Agent session names sent from here stay within 100 characters, the
-// limit for a new session. Names that already exist can be longer and are read
-// as they are.
-const WORKFLOW_SEND_SESSION_MAX = 100;
 const AGENT_GUID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{2,127}$/;
 const PRODUCT_UNAVAILABLE_PATTERN = /^agent (is|has no remaining|not found)|not configured/i;
 export const BARE_UNAVAILABLE_PATTERN = /temporarily unavailable/i;
@@ -124,24 +128,30 @@ export function agentEndpoint(target: AgentTarget, operation: AgentOperation): s
 }
 
 /**
- * Why a session name cannot be used with this agent, or null. Sending checks
- * the shorter Workflow Agent limit; reading, cancelling and deleting address a
- * session that already exists, so Wiro decides about its length.
+ * Why a session name cannot be used with this agent, or null. SESSION_NAME_RULE
+ * is the rule for a new name. Studio holds every message it is sent to that
+ * rule, and the Workflow Agent holds sent messages to the length in it. Reading,
+ * cancelling and deleting address a session that already exists, under the name
+ * it has, as does sending to a deployed agent.
  */
 export function agentSessionProblem(
   target: AgentTarget,
   session: string,
   use: 'send' | 'read' = 'read',
 ): string | null {
-  const problem = sessionKeyProblem(session);
+  // A name longer than the rule allows gets the rule, not the longer limit for reading.
+  const overSendLimit = use === 'send' && target.kind !== 'deployed' && session.length > SESSION_NAME_MAX;
+  const problem = overSendLimit ? null : sessionKeyProblem(session);
   if (problem) return problem;
-  if (target.kind !== 'workflow-agent') return null;
-  if (!WORKFLOW_SESSION_PATTERN.test(session)) {
-    return 'A Workflow Agent session name may contain only letters, digits, ".", "_", ":" and "-".';
+  if (target.kind === 'studio') {
+    if (use === 'read' || (SESSION_NAME_PATTERN.test(session) && session.length <= SESSION_NAME_MAX)) return null;
+    return `Nothing was sent. ${SESSION_NAME_RULE} The pattern is ^[a-z0-9._-]{1,${SESSION_NAME_MAX}}$. Use a name such as `
+      + `"${sessionNameSuggestion(session)}". A session under another name can still be read with `
+      + 'get_agent_conversation: to go on with it, start a new session and say in the first message where it left off.';
   }
-  if (use === 'send' && session.length > WORKFLOW_SEND_SESSION_MAX) {
-    return 'A Workflow Agent session name may contain only letters, digits, ".", "_", ":" and "-", '
-      + `and at most ${WORKFLOW_SEND_SESSION_MAX} characters.`;
+  if (target.kind !== 'workflow-agent') return null;
+  if (!WORKFLOW_SESSION_PATTERN.test(session) || (use === 'send' && session.length > SESSION_NAME_MAX)) {
+    return SESSION_NAME_RULE;
   }
   return null;
 }
@@ -327,7 +337,7 @@ function formatUsd(value: number): string {
 
 /** Where to look before sending a message again whose fate is unknown. */
 function checkBeforeResending(target: AgentTarget, session: string): string {
-  return `Check get_agent_conversation with agent "${target.agent}" and session "${session}" before sending it again.`;
+  return `Check get_agent_conversation with agent "${target.agent}" and session ${quotedSpan(session)} before sending it again.`;
 }
 
 /** A readable explanation for a Send that Wiro refused. */

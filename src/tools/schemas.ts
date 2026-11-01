@@ -1,4 +1,75 @@
 import { z } from 'zod';
+import { quotedSpan } from '../utils/quoted-text.js';
+
+// Other names assistants try for an argument, written as argumentKey() writes them.
+const ARGUMENT_ALIASES: Record<string, string[]> = {
+  taskid: ['id', 'task', 'taskguid', 'guid'],
+  tasktoken: ['token', 'accesstoken', 'socketaccesstoken'],
+  wait_seconds: ['timeout', 'timeoutseconds', 'wait', 'waittime'],
+  timeout_seconds: ['timeout', 'waitseconds', 'waittime'],
+  start: ['offset', 'skip'],
+  limit: ['count', 'size', 'pagesize'],
+  model: ['modelslug'],
+  workflow: ['slug', 'fullslug', 'workflowslug'],
+  params: ['parameters', 'input', 'inputs', 'args', 'arguments'],
+  input: ['inputs', 'params', 'parameters', 'args', 'arguments'],
+  session: ['sessionid', 'sessionkey', 'sessionname', 'conversation', 'conversationid'],
+  attachment_urls: ['attachments', 'attachment', 'files', 'images', 'urls'],
+  recent_transactions: ['transactions', 'transactioncount'],
+  search: ['query', 'q', 'keywords'],
+  workflowtoken: ['token', 'runtoken', 'run'],
+  breakpoint_node_id: ['breakpoint', 'breakpointnode', 'stopafter'],
+};
+
+function argumentKey(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+/** The argument a wrong name most likely means, among the ones the tool takes. */
+function rightArgument(name: string, known: string[]): string | undefined {
+  const key = argumentKey(name);
+  return known.find(candidate => argumentKey(candidate) === key)
+    ?? known.find(candidate => ARGUMENT_ALIASES[candidate]?.includes(key));
+}
+
+function unknownArgumentsText(names: string[], known: string[], hint: string): string {
+  const named = names.map(name => {
+    const right = rightArgument(name, known);
+    return right ? `${quotedSpan(name)} (use \`${right}\`)` : quotedSpan(name);
+  });
+  return `Unknown argument${names.length > 1 ? 's' : ''} ${named.join(', ')}. This tool takes `
+    + `${known.map(key => `\`${key}\``).join(', ')}. Nothing was run.${hint ? ` ${hint}` : ''}`;
+}
+
+/**
+ * An input schema that refuses an argument it does not know instead of dropping
+ * it, naming the right one. The advertised schema stays the same: it already
+ * says additionalProperties false.
+ */
+export function strictInput<T extends z.ZodRawShape>(shape: T, hint = '') {
+  const schema = z.object(shape, {
+    errorMap: (issue, context) => ({
+      message: issue.code === 'unrecognized_keys'
+        ? unknownArgumentsText(issue.keys, Object.keys(shape), hint)
+        : context.defaultError,
+    }),
+  }).strict();
+  // A client that adds toolCallId to the arguments also adds other keys of its
+  // own, and the assistant cannot take them out, so only the known ones are read.
+  const parse = schema._parse.bind(schema);
+  schema._parse = input => {
+    const { data } = input;
+    if (!data || typeof data !== 'object' || Array.isArray(data)
+      || !Object.hasOwn(data, 'toolCallId') || Object.hasOwn(shape, 'toolCallId')) {
+      return parse(input);
+    }
+    return parse({
+      ...input,
+      data: Object.fromEntries(Object.entries(data).filter(([key]) => Object.hasOwn(shape, key))),
+    });
+  };
+  return schema;
+}
 
 export const taskStateSchema = z.enum([
   'submitted',

@@ -4,7 +4,7 @@ import type { WiroClient } from '../client.js';
 import { errorResult, isPlainObject, requireApiSuccess, toNumber, type ApiEnvelope } from '../utils/api.js';
 import { templateSummarySchema, toTemplateSummary, type TemplateSummary } from '../utils/agent-catalog.js';
 import { formatCredits, formatUsd } from '../utils/user-agent.js';
-import { nextActionSchema } from './schemas.js';
+import { nextActionSchema, strictInput } from './schemas.js';
 
 const SORTS = {
   newest: { sort: 'id', order: 'DESC' },
@@ -33,7 +33,7 @@ export function registerListAgentTemplates(server: McpServer, client: WiroClient
         + 'skills, the credentials the user must provide and the exact prices. To build an agent from '
         + 'individual skills instead, use list_agent_skills. get_playbook describes the whole flow from '
         + 'choosing a template to a running agent.',
-      inputSchema: {
+      inputSchema: strictInput({
         search: z.string().max(200).optional()
           .describe('Words to look for in the title, description, slug and categories, for example "instagram". Results are sorted by relevance when set.'),
         category: z.string().max(200).optional()
@@ -44,7 +44,7 @@ export function registerListAgentTemplates(server: McpServer, client: WiroClient
           .describe('Pagination offset (default 0).'),
         limit: z.number().int().min(1).max(100).default(20)
           .describe('Maximum templates to return (default 20, max 100).'),
-      },
+      }),
       outputSchema: {
         templates: z.array(templateSummarySchema),
         total: z.number().int().nonnegative(),
