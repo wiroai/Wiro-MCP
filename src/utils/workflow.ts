@@ -8,7 +8,7 @@ import {
   unixToIso,
 } from './api.js';
 import { formatPrice } from './format.js';
-import type { MediaItem } from './media.js';
+import { listedAddress, type MediaItem } from './media.js';
 import { oneLine, quotedBlock, quotedSpan, quotedSubItem } from './quoted-text.js';
 
 // Workflow rows and runs as the Wiro API returns them, projected to what an
@@ -559,8 +559,10 @@ function normalizeOutputValue(value: unknown, out: RunOutputItem[], depth = 0): 
     return;
   }
   if (typeof value === 'string') {
-    // Only a whole value is an address: text that starts with one stays text.
-    if (/^https?:\/\/\S+$/i.test(value.trim())) out.push({ url: value.trim() });
+    // Only a whole value is an address, under the same check as a reply's addresses.
+    const trimmed = value.trim();
+    const address = /^https?:\/\/\S+$/i.test(trimmed) ? listedAddress(trimmed) : undefined;
+    if (address) out.push({ url: address });
     else if (value) out.push({ text: truncate(value, 20_000) });
     return;
   }
@@ -582,8 +584,13 @@ function normalizeOutputValue(value: unknown, out: RunOutputItem[], depth = 0): 
     return;
   }
   if (typeof value.url === 'string' && value.url) {
+    const address = /^https?:\/\//i.test(value.url) ? listedAddress(value.url) : undefined;
+    if (!address) {
+      out.push({ text: truncate(value.url, 20_000) });
+      return;
+    }
     out.push({
-      url: value.url,
+      url: address,
       ...(asString(value.name) ? { name: asString(value.name) } : {}),
       ...(asString(value.contenttype) ? { mimeType: asString(value.contenttype) } : {}),
       sizeBytes: toNumber(value.size),

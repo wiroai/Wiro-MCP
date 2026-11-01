@@ -40,6 +40,22 @@ const EXTENSION_MIME_TYPES: Record<string, string> = {
   pdf: 'application/pdf',
 };
 
+// An address with Markdown or tag characters inside it, or a longer one, stays
+// in the text it came from.
+const MARKUP_IN_ADDRESS = /[`*<>"]|!\[|\]\(/;
+const MAX_ADDRESS_LENGTH = 2_048;
+
+/** An address in its plain form, where other characters are percent-encoded, or undefined when it stays in the text. */
+export function listedAddress(value: string): string | undefined {
+  if (MARKUP_IN_ADDRESS.test(value)) return undefined;
+  try {
+    const { href } = new URL(value);
+    return href.length <= MAX_ADDRESS_LENGTH ? href : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function guessMimeType(url: string): string | undefined {
   const path = url.split(/[?#]/)[0] ?? '';
   const extension = path.split('.').pop()?.toLowerCase() ?? '';
@@ -57,6 +73,18 @@ export function isWiroHostedUrl(url: string): boolean {
   if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return false;
   const host = parsed.hostname.toLowerCase();
   return host === 'wiro.ai' || host.endsWith('.wiro.ai');
+}
+
+/**
+ * A file on a Wiro host. On the website itself only a known media type counts,
+ * so a .php page or a page named after a version such as gpt-5.5 is not a file.
+ * The other hosts serve any file name.
+ */
+export function isWiroHostedFile(url: string): boolean {
+  if (!isWiroHostedUrl(url)) return false;
+  const { hostname, pathname } = new URL(url);
+  if (hostname === 'wiro.ai') return guessMimeType(url) !== undefined;
+  return /\.(?!\d+$)[A-Za-z0-9]{1,16}$/.test(pathname);
 }
 
 export function createMediaContent(text: string, items: MediaItem[]): MediaContentBlock[] {

@@ -35,7 +35,7 @@ import {
   workflowReplyProse,
   type WorkflowArtifactSummary,
 } from '../utils/workflow-agent.js';
-import { AGENT_REPLY_LABEL, jsonSpan, quotedBlock, quotedSpan, quotedSubItem } from '../utils/quoted-text.js';
+import { AGENT_REPLY_LABEL, jsonSpan, quotedBlock, quotedSpan, quotedSubItem, REPLY_FILES_LABEL } from '../utils/quoted-text.js';
 import type { NextAction } from '../utils/structured.js';
 import { nextActionSchema } from './schemas.js';
 
@@ -140,7 +140,7 @@ function formatHistory(session: string, messages: HistoryMessage[], nextAction?:
     }
     if (message.userText) lines.push(...quotedBlock(USER_MESSAGE_LABEL, truncate(message.userText, 500)));
     if (message.reply) lines.push(...quotedBlock(AGENT_REPLY_LABEL, truncate(message.reply, 1_500)));
-    for (const url of message.mediaUrls) lines.push(`- ${url}`);
+    if (message.mediaUrls.length > 0) lines.push(...quotedBlock(REPLY_FILES_LABEL, message.mediaUrls.join('\n')));
     for (const workflow of message.workflows ?? []) {
       const models = workflowModelsText(workflow);
       lines.push(`- Workflow ${workflow.title ? quotedSpan(workflow.title) : workflow.index + 1}: `

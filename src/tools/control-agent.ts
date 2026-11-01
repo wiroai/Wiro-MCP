@@ -19,6 +19,7 @@ import {
   toAgentSummary,
   waitForAgentToSettle,
   type AgentDetail,
+  type AgentSubscription,
   type NextAction,
 } from '../utils/user-agent.js';
 import { isPlainTeamMember } from '../utils/workspace.js';
@@ -32,8 +33,21 @@ interface Decision {
   nextAction?: NextAction;
 }
 
-const PLAN_KEEPS_RUNNING = 'Stopping does not pause the plan: a wallet plan still renews every 30 days and '
-  + 'starts the agent again. Cancel it with manage_agent_billing to stop paying.';
+/** What a stop means for the agent's plan, as the plan stood before the stop. */
+function planAfterStop(plan: AgentSubscription | null): string {
+  if (plan?.status !== 'active') return 'The agent has no active plan, so no renewal starts it again.';
+  const periodEnd = plan.periodEndsAt ?? 'the current period';
+  if (plan.atPeriodEnd === 'ends') {
+    return `The plan is already cancelled: it ends after ${periodEnd} and does not renew, so nothing starts the agent `
+      + 'again by itself.';
+  }
+  if (plan.billing === 'wallet' || plan.switchingToWallet) {
+    return 'Stopping does not pause the plan: a wallet plan still renews every 30 days and starts the agent again. '
+      + 'Cancel it with manage_agent_billing to stop paying.';
+  }
+  const state = plan.atPeriodEnd === 'renews' ? `renews after ${periodEnd}` : `is paid through ${periodEnd}`;
+  return `Stopping does not pause the plan: it is billed by card and ${state}. Card plans are managed in the Wiro dashboard.`;
+}
 
 function waitAction(guid: string): NextAction {
   return {
@@ -138,8 +152,9 @@ export function registerControlAgent(server: McpServer, client: WiroClient): voi
     {
       title: 'Start, stop or restart a Wiro agent',
       description: 'Start, stop or restart a deployed agent. Starting needs an active plan or credits left '
-        + 'and charges nothing by itself. Stopping does not pause the plan: a wallet plan still renews every '
-        + '30 days and starts the agent again, so cancel the plan with manage_agent_billing to stop paying. '
+        + 'and charges nothing by itself. Stopping does not pause the plan: a wallet plan that is not cancelled '
+        + 'still renews every 30 days and starts the agent again, so cancel the plan with manage_agent_billing to '
+        + 'stop paying. The result says what happens with this agent\'s plan. '
         + 'A restart reloads the agent with its current settings. The change finishes in the background: pass '
         + 'wait_seconds, or follow the returned nextAction, to see the result. When a start is refused, the '
         + 'result says what to do next (subscribe, renew, buy credits or finish setup). On a team agent this '
@@ -229,7 +244,7 @@ export function registerControlAgent(server: McpServer, client: WiroClient): voi
             const label = call.path === '/UserAgent/Start'
               ? 'Start requested. The agent is queued and starts on its own; this can take a while.'
               : call.path === '/UserAgent/Stop'
-                ? `Stop requested. ${PLAN_KEEPS_RUNNING}`
+                ? `Stop requested. ${planAfterStop(current.subscription)}`
                 : 'Restart requested. The agent stops and starts again with its current settings.';
             const missing = current.missingCredentials;
             decision = {
@@ -274,7 +289,10 @@ export function registerControlAgent(server: McpServer, client: WiroClient): voi
           if (!settled) {
             nextAction = waitAction(guid);
           } else {
-            if (waitedSeconds !== undefined) message += ` ${settledStatusAdvice(status, plainMember)}`;
+            // A stop that ended stopped needs no advice: the status line says so.
+            if (waitedSeconds !== undefined && !(action === 'stop' && status === 0)) {
+              message += ` ${settledStatusAdvice(status, plainMember)}`;
+            }
             nextAction = action === 'stop' ? undefined : nextAction ?? nextStepForAgent(afterView, DEFAULT_WAIT_SECONDS, plainMember);
           }
         }

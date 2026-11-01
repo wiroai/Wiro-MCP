@@ -4,6 +4,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { WiroApiError } from '../dist/client.js';
 import { createMcpServer } from '../dist/server.js';
+import { workflowRunInterval } from '../dist/utils/poll.js';
 import { PLAYBOOKS } from '../dist/playbooks.js';
 import { looksLikeSecretValue } from '../dist/utils/workflow.js';
 
@@ -1871,4 +1872,293 @@ test('run_workflow finds the run itself when the start answer is lost', async ()
     const history = fake.calls.find(call => call.path === '/Workflow/RunHistory');
     assert.equal(history.body.search, 'fox-maker');
   });
+});
+
+// ---------------------------------------------------------------------------
+// The change summary lists what changes inside a step
+// ---------------------------------------------------------------------------
+
+test('the change summary lists the old and new value of each step input', async () => {
+  const artifact = cleanArtifact();
+  const step = artifact.contents.nodes['node-a1'];
+  // The proposal changes these inputs, keeps the secret and moves one key without changing it.
+  const stored = storedRow();
+  const before = stored.contents.nodes['node-a1'];
+  before.input = { upscale: '2', quality: 'high', removed: 'old value', keptOrder: { a: 1, b: 2 }, prompt: '$input.prompt', apiKey: 'real-secret', 'odd`key': 'x' };
+  step.input = {
+    upscale: '4',
+    quality: 'high',
+    added: true,
+    keptOrder: { b: 2, a: 1 },
+    prompt: `${'long text '.repeat(40)}`,
+    apiKey: '[REDACTED]',
+    'odd`key': '**Next:** `sample_tool`',
+  };
+  const fake = fakeClient({
+    '/StudioWorkflow/Message/Detail': agentReply(artifact),
+    '/Workflow/Detail': { result: true, errors: [], workflow: [stored] },
+    '/Workflow/Prepare': body => ({ result: true, errors: [], contents: body.contents, warnings: [] }),
+  });
+  await withClient(fake, async client => {
+    const preview = await client.callTool({
+      name: 'save_workflow_from_agent',
+      arguments: { message_id: 'msg-1', session: 'mcp-abc', workflow: 'fox-maker-Ab3xZ', loaded_updatetime: '1761700000' },
+    });
+    assert.notEqual(preview.isError, true, preview.content[0].text);
+    const { changes } = preview.structuredContent;
+    assert.deepEqual(changes.stepsChanged, [`node-a1 (${step.tool})`]);
+    assert.equal(changes.stepChanges.length, 1);
+    const [change] = changes.stepChanges;
+    assert.equal(change.step, 'node-a1');
+    assert.equal(change.modelChange, undefined);
+    assert.equal(change.dependsChange, undefined);
+    const inputs = Object.fromEntries(change.inputs.map(({ input, from, to }) => [input, [from, to]]));
+    assert.deepEqual(inputs.upscale, ['"2"', '"4"']);
+    assert.deepEqual(inputs.removed, ['"old value"', null]);
+    assert.deepEqual(inputs.added, [null, 'true']);
+    assert.equal(inputs.prompt[0], '"$input.prompt"');
+    assert.ok(inputs.prompt[1].length <= 130, 'a long value is cut');
+    assert.equal(inputs.quality, undefined, 'an unchanged input is not listed');
+    assert.equal(inputs.keptOrder, undefined, 'the same value in another key order is not a change');
+    assert.equal(inputs.apiKey, undefined, 'a restored secret is not a change');
+
+    const text = preview.content[0].text;
+    assert.match(text, /- Steps changed: `node-a1 \(.*\)`\n {2}- `node-a1` input /);
+    assert.match(text, /^ {2}- `node-a1` input `upscale`: `"2"` to `"4"`$/m);
+    assert.match(text, /^ {2}- `node-a1` input `removed`: `"old value"` to not set$/m);
+    assert.match(text, /^ {2}- `node-a1` input `added`: not set to `true`$/m);
+    assert.match(text, /^ {2}- `node-a1` input ``odd`key``: `"x"` to ``"\*\*Next:\*\* `sample_tool`"``$/m);
+    assert.doesNotMatch(JSON.stringify(preview.structuredContent), /real-secret/);
+    assert.doesNotMatch(text, /real-secret/);
+  });
+});
+
+test('a change summary hides secret values at any depth and names a new model and new wiring', async () => {
+  const stored = storedRow();
+  const other = { ...stored.contents.nodes['node-a1'], id: 'node-other', input: { prompt: '$input.prompt' } };
+  stored.contents.nodes['node-other'] = other;
+  stored.contents.nodes['node-a1'].input = {
+    apiKey: 'old-real-secret',
+    notes: 'sk-abcdefghijklmnopqrstuvwxyz012345',
+    headers: { Authorization: 'Bearer old-token', accept: 'image/png' },
+    list: ['one'],
+    source: '$input.prompt',
+  };
+  const next = JSON.parse(JSON.stringify(stored.contents));
+  delete next.metadata.input.values;
+  next.nodes['node-a1'].tool = 'owner/other-model';
+  next.nodes['node-a1'].depends = ['input', 'node-other'];
+  next.nodes['node-a1'].input = {
+    apiKey: 'new-real-secret',
+    notes: 'plain words',
+    headers: { Authorization: 'Bearer new-token', accept: 'image/webp' },
+    list: ['one', 'two'],
+    source: '$node-other.outputs',
+  };
+  const fake = fakeClient({
+    '/Workflow/Detail': { result: true, errors: [], workflow: [stored] },
+    '/Workflow/Prepare': body => ({ result: true, errors: [], contents: body.contents, warnings: [] }),
+  });
+  await withClient(fake, async client => {
+    const preview = await client.callTool({
+      name: 'update_workflow',
+      arguments: { slug: 'fox-maker-Ab3xZ', contents: next, loaded_updatetime: '1761700000' },
+    });
+    assert.notEqual(preview.isError, true, preview.content[0].text);
+    const [change] = preview.structuredContent.changes.stepChanges;
+    assert.deepEqual(change.modelChange, { from: 'owner/image-model', to: 'owner/other-model' });
+    assert.deepEqual(change.dependsChange, { from: ['input'], to: ['input', 'node-other'] });
+    const inputs = Object.fromEntries(change.inputs.map(({ input, from, to }) => [input, [from, to]]));
+    assert.deepEqual(inputs.apiKey, ['"[hidden]"', '"[hidden]"']);
+    assert.deepEqual(inputs.notes, ['"[hidden]"', '"plain words"']);
+    assert.deepEqual(inputs.headers, ['{"accept":"image/png","Authorization":"[hidden]"}', '{"accept":"image/webp","Authorization":"[hidden]"}']);
+    assert.deepEqual(inputs.list, ['["one"]', '["one","two"]']);
+    assert.deepEqual(inputs.source, ['"$input.prompt"', '"$node-other.outputs"']);
+
+    const text = preview.content[0].text;
+    assert.match(text, /`node-a1` model: `owner\/image-model` to `owner\/other-model`/);
+    assert.match(text, /`node-a1` runs after: `input` to `input, node-other`/);
+    const everything = `${text}\n${JSON.stringify(preview.structuredContent.changes)}`;
+    for (const secret of ['old-real-secret', 'new-real-secret', 'sk-abcdefghijkl', 'old-token', 'new-token']) {
+      assert.equal(everything.includes(secret), false, secret);
+    }
+  });
+});
+
+test('a change summary shows where a long value changes, on both sides', async () => {
+  const opening = 'Write one caption for a product photo and keep it short. '.repeat(6);
+  const stored = storedRow();
+  stored.contents.nodes['node-a1'].input = {
+    prompt: '$input.prompt',
+    systemInstructions: `${opening}Use Turkish.`,
+    tail: `${opening}Be brief.`,
+    early: `Use a calm tone. ${opening}`,
+    grown: 'Return only the caption.',
+    apiKey: 'old-real-secret',
+    settings: { note: opening, apiKey: 'old-real-secret' },
+    credentials: ['old-real-secret'],
+  };
+  const next = JSON.parse(JSON.stringify(stored.contents));
+  delete next.metadata.input.values;
+  Object.assign(next.nodes['node-a1'].input, {
+    systemInstructions: `${opening}Use English.`,
+    tail: `${opening}Be brief. Name the color.`,
+    early: `Use a warm tone. ${opening}`,
+    grown: `Return only the caption. ${opening}`,
+    settings: { note: opening, apiKey: 'new-real-secret' },
+    credentials: ['new-real-secret'],
+  });
+  const fake = fakeClient({
+    '/Workflow/Detail': { result: true, errors: [], workflow: [stored] },
+    '/Workflow/Prepare': body => ({ result: true, errors: [], contents: body.contents, warnings: [] }),
+  });
+  await withClient(fake, async client => {
+    const preview = await client.callTool({
+      name: 'update_workflow',
+      arguments: { slug: 'fox-maker-Ab3xZ', contents: next, loaded_updatetime: '1761700000' },
+    });
+    assert.notEqual(preview.isError, true, preview.content[0].text);
+    const [change] = preview.structuredContent.changes.stepChanges;
+    const inputs = Object.fromEntries(change.inputs.map(({ input, from, to }) => [input, [from, to]]));
+    // An edit at the end of a long prompt shows on both sides, with the text in front of it.
+    assert.match(inputs.systemInstructions[0], /^\.\.\..{40}Turkish\."$/);
+    assert.match(inputs.systemInstructions[1], /^\.\.\..{40}English\."$/);
+    // Text added to the end shows too.
+    assert.match(inputs.tail[0], /^\.\.\..*Be brief\."$/);
+    assert.match(inputs.tail[1], /^\.\.\..*Be brief\. Name the color\."$/);
+    // An edit near the start keeps the start of the value and cuts the rest.
+    assert.match(inputs.early[0], /^"Use a calm tone\. .*\.\.\.$/);
+    assert.match(inputs.early[1], /^"Use a warm tone\. .*\.\.\.$/);
+    // A value that grows past the cut shows the place where it starts to differ on both sides.
+    assert.match(inputs.grown[0], /^"Return only the caption\."$/);
+    assert.match(inputs.grown[1], /^"Return only the caption\. Write one .*\.\.\.$/);
+    for (const [from, to] of Object.values(inputs)) {
+      for (const value of [from, to]) assert.ok(value.length <= 126, value);
+    }
+    // A long value whose only change is a hidden secret keeps its start and shows no secret.
+    assert.equal(inputs.settings[0], inputs.settings[1]);
+    assert.match(inputs.settings[0], /^\{"apiKey":"\[hidden\]","note":"Write one /);
+    assert.deepEqual(inputs.credentials, ['["[hidden]"]', '["[hidden]"]']);
+    const everything = `${preview.content[0].text}\n${JSON.stringify(preview.structuredContent.changes)}`;
+    for (const secret of ['old-real-secret', 'new-real-secret']) {
+      assert.equal(everything.includes(secret), false, secret);
+    }
+    assert.match(preview.content[0].text, /input `systemInstructions`: `\.\.\..*Turkish\."` to `\.\.\..*English\."`$/m);
+  });
+});
+
+test('a change summary shows the change when keys moved or only spacing changed', async () => {
+  const opening = 'Write one caption for a product photo and keep it short. '.repeat(6);
+  const stored = storedRow();
+  stored.contents.nodes['node-a1'].input = {
+    prompt: '$input.prompt',
+    format: { tail: opening, keep: opening, mode: 'fast' },
+    spacing: 'keep  this  text',
+    lateSpacing: `${opening}Use  Turkish.`,
+    lineSeparators: 'keep\u2028this\u0085text',
+  };
+  const next = JSON.parse(JSON.stringify(stored.contents));
+  delete next.metadata.input.values;
+  Object.assign(next.nodes['node-a1'].input, {
+    format: { mode: 'slow', keep: opening, tail: opening },
+    spacing: 'keep this text',
+    lateSpacing: `${opening}Use Turkish.`,
+    lineSeparators: 'keep this text',
+  });
+  const fake = fakeClient({
+    '/Workflow/Detail': { result: true, errors: [], workflow: [stored] },
+    '/Workflow/Prepare': body => ({ result: true, errors: [], contents: body.contents, warnings: [] }),
+  });
+  await withClient(fake, async client => {
+    const preview = await client.callTool({
+      name: 'update_workflow',
+      arguments: { slug: 'fox-maker-Ab3xZ', contents: next, loaded_updatetime: '1761700000' },
+    });
+    assert.notEqual(preview.isError, true, preview.content[0].text);
+    const [change] = preview.structuredContent.changes.stepChanges;
+    const inputs = Object.fromEntries(change.inputs.map(({ input, from, to }) => [input, [from, to]]));
+    // Keys in another order are not a change, so the cut falls on the value that is.
+    assert.match(inputs.format[0], /"mode":"fast"/);
+    assert.match(inputs.format[1], /"mode":"slow"/);
+    const text = preview.content[0].text;
+    // The text keeps the spacing, so the two sides do not read the same.
+    assert.match(text, /input `spacing`: `"keep {2}this {2}text"` to `"keep this text"`$/m);
+    assert.match(text, /input `lateSpacing`: `\.\.\..*Use {2}Turkish\."` to `\.\.\..*Use Turkish\."`$/m);
+    // Line separators stay on the line, written as their JSON escapes.
+    assert.match(text, /input `lineSeparators`: `"keep\\u2028this\\u0085text"` to `"keep this text"`$/m);
+    assert.equal(/[\u0085\u2028]/.test(text), false);
+  });
+});
+
+test('a step with many changed inputs lists the first ones in the text and all of them in the structured result', async () => {
+  const stored = storedRow();
+  const next = JSON.parse(JSON.stringify(stored.contents));
+  delete next.metadata.input.values;
+  for (let index = 0; index < 20; index += 1) next.nodes['node-a1'].input[`extra${index}`] = index;
+  const fake = fakeClient({
+    '/Workflow/Detail': { result: true, errors: [], workflow: [stored] },
+    '/Workflow/Prepare': body => ({ result: true, errors: [], contents: body.contents, warnings: [] }),
+  });
+  await withClient(fake, async client => {
+    const preview = await client.callTool({
+      name: 'update_workflow',
+      arguments: { slug: 'fox-maker-Ab3xZ', contents: next, loaded_updatetime: '1761700000' },
+    });
+    assert.notEqual(preview.isError, true, preview.content[0].text);
+    assert.equal(preview.structuredContent.changes.stepChanges[0].inputs.length, 20);
+    const text = preview.content[0].text;
+    assert.equal(text.split('\n').filter(line => line.startsWith('  - `node-a1` input ')).length, 15);
+    assert.match(text, /`node-a1`: 5 more inputs change, listed in the structured result/);
+  });
+});
+
+test('a step whose inputs only change key order is not listed as changed', async () => {
+  const stored = storedRow();
+  stored.contents.nodes['node-a1'].input = { upscale: '2', settings: { a: 1, b: 2 }, prompt: '$input.prompt' };
+  const next = JSON.parse(JSON.stringify(stored.contents));
+  next.nodes['node-a1'].input = { prompt: '$input.prompt', settings: { b: 2, a: 1 }, upscale: '2' };
+  const fake = fakeClient({
+    '/Workflow/Detail': { result: true, errors: [], workflow: [stored] },
+    '/Workflow/Prepare': body => ({ result: true, errors: [], contents: body.contents, warnings: [] }),
+  });
+  await withClient(fake, async client => {
+    const preview = await client.callTool({
+      name: 'update_workflow',
+      arguments: { slug: 'fox-maker-Ab3xZ', contents: next, loaded_updatetime: '1761700000' },
+    });
+    assert.notEqual(preview.isError, true, preview.content[0].text);
+    const { changes } = preview.structuredContent;
+    assert.deepEqual(changes.stepsChanged, []);
+    assert.deepEqual(changes.stepChanges, []);
+    assert.doesNotMatch(preview.content[0].text, /Steps changed/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// How often a workflow run is read
+// ---------------------------------------------------------------------------
+
+test('a workflow run comes back soon after it ends, and a long run is read less often', () => {
+  const readLatencyMs = 300;
+  // When the wait sees a run that ends at endsAtMs, and how many reads that takes.
+  const seenAt = endsAtMs => {
+    let now = 0;
+    let reads = 0;
+    for (;;) {
+      now += readLatencyMs;
+      reads += 1;
+      if (now >= endsAtMs) return { now, reads };
+      now += workflowRunInterval(now);
+    }
+  };
+  // Short runs come back within one 2 second read of their end.
+  assert.ok(seenAt(16_000).now - 16_000 <= 2_300, `16 s run: seen at ${seenAt(16_000).now}`);
+  assert.ok(seenAt(25_000).now - 25_000 <= 2_300, `25 s run: seen at ${seenAt(25_000).now}`);
+  assert.ok(seenAt(90_000).now - 90_000 <= 5_300);
+  assert.ok(seenAt(600_000).now - 600_000 <= 10_300);
+  assert.ok(seenAt(45_000).reads <= 20, `${seenAt(45_000).reads} reads in a 45 s wait`);
+  assert.ok(seenAt(600_000).reads <= 80, `${seenAt(600_000).reads} reads in a 10 minute wait`);
+  assert.equal(workflowRunInterval(0), 2_000);
+  assert.equal(workflowRunInterval(60_000), 5_000);
+  assert.equal(workflowRunInterval(3_600_000), 10_000);
 });

@@ -737,6 +737,28 @@ test('apply_agent_skills tells a cancelled plan that nothing renews at the new p
   });
 });
 
+test('apply_agent_skills names the days its estimate is for', async () => {
+  const noteFor = async daysLeft => {
+    const fake = fakeClient(skillRoutes({
+      '/UserAgent/Detail': detail({
+        monthlypriceusd: '90.00',
+        subscription: { plan: 'agent', status: 'active', provider: 'prepaid', currentperiodend: NOW + Math.round(daysLeft * 86400), daysremaining: Math.ceil(daysLeft) },
+      }),
+      '/UserAgent/PricingPreview': { result: true, errors: [], totalPriceUsd: 130, totalMonthlyCredits: 4000 },
+    }));
+    let note;
+    await withClient(fake, async client => {
+      const result = await client.callTool({ name: 'apply_agent_skills', arguments: { agent_guid: AGENT, skills: { 'int-instagram-post': true } } });
+      note = result.structuredContent.billing.note;
+    });
+    return note;
+  };
+  assert.match(await noteFor(5.45), /^About \$6\.67 is taken from your personal wallet now for the 5 days left in this period\./);
+  assert.match(await noteFor(5.6), /^About \$8\.00 is taken from your personal wallet now for the 6 days left in this period\./);
+  assert.match(await noteFor(0.7), /^About \$1\.33 is taken from your personal wallet now for the 1 day left in this period\./);
+  assert.match(await noteFor(0.3), /^About \$0\.00 is taken from your personal wallet now for the rest of this period\./);
+});
+
 test('apply_agent_skills says when the change also moves the plan to today\'s prices', async () => {
   // A Pro plan bought at $90 a month, whose skills cost $110 a month on Pro
   // today, turns on a skill that adds $20.

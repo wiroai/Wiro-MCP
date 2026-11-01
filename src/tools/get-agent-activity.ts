@@ -116,6 +116,19 @@ function tokenCounts(row: Record<string, unknown>): z.infer<typeof tokenCountsSc
   return out;
 }
 
+/** A ledger row's cached input tokens, as the end of its line. */
+function cachedTokensText(tokens: z.infer<typeof tokenCountsSchema> | undefined): string {
+  const read = tokens?.cacheRead ?? 0;
+  const written = tokens?.cacheWrite ?? 0;
+  if (read <= 0 && written <= 0) return '';
+  const parts = [
+    ...(read > 0 ? [`${formatCredits(read)} read`] : []),
+    ...(written > 0 ? [`${formatCredits(written)} written`] : []),
+  ];
+  const total = tokens?.total ? ` (${formatCredits(tokens.total)} tokens in all)` : '';
+  return `, plus cached input tokens: ${parts.join(' and ')}${total}`;
+}
+
 function eventTime(value: unknown): string | undefined {
   if (typeof value === 'string' && value.trim() && !/^\d+$/.test(value.trim())) return value;
   const numeric = toNumber(value);
@@ -288,7 +301,7 @@ export function registerGetAgentActivity(server: McpServer, client: WiroClient):
           text.push('', `### Ledger (${rows.length} of ${total}, newest first)`, '');
           if (usage.transactions.length === 0) text.push('No entries.');
           for (const entry of usage.transactions) {
-            text.push(`- ${entry.createdAt ?? ''} ${entry.type}${entry.action ? `/${entry.action}` : ''}: ${entry.credits} credits${entry.description ? `, ${entry.description}` : ''}`);
+            text.push(`- ${entry.createdAt ?? ''} ${entry.type}${entry.action ? `/${entry.action}` : ''}: ${entry.credits} credits${entry.description ? `, ${entry.description}` : ''}${cachedTokensText(entry.tokens)}`);
           }
           if (usage.nextStart !== null) text.push('', `More entries: call get_agent_activity with kind usage and start ${usage.nextStart}.`);
 

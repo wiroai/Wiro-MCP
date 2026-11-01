@@ -37,6 +37,10 @@ import { nextActionSchema } from './schemas.js';
 const PAID_FROM = 'The Wiro wallet of the connected project\'s workspace: the team wallet for a team '
   + 'project, otherwise the personal wallet.';
 
+const DEFAULT_TASKS_NOTE = 'They came with this build, with default text and schedules, run in UTC until the time zone is '
+  + 'changed, and every run spends the agent\'s credits. Agree with the user which to keep: manage_agent_custom_skill '
+  + '(upsert) changes a task\'s text or schedule, and enabled false turns it off.';
+
 const quoteCustomSkillSchema = z.object({
   key: z.string(),
   kind: z.enum(['skill', 'scheduled_task']),
@@ -81,6 +85,11 @@ const deployedCustomSkillSchema = z.object({
   onAgent: z.boolean(),
 });
 
+const defaultScheduledTaskSchema = z.object({
+  key: z.string(),
+  interval: z.string(),
+});
+
 type DeployEnvelope = ApiEnvelope & { useragents?: unknown; existingUserAgentGuid?: unknown };
 
 function customSkillLine(skill: { key: string; kind: string; interval?: string | null; enabled?: boolean }, fromTemplate?: boolean): string {
@@ -110,6 +119,9 @@ function quoteText(quote: Quote): string {
     const scheduled = quote.customSkills.some(skill => skill.kind === 'scheduled_task');
     lines.push(`- Custom skills and scheduled tasks: ${quote.customSkills.map(skill => customSkillLine(skill, skill.replacesTemplateEntry)).join('; ')}.${scheduled ? ' Scheduled tasks run in UTC until the time zone is changed, and every run spends the agent\'s credits.' : ''}`);
   }
+  if (quote.kind === 'custom') {
+    lines.push('- Scheduled tasks: a custom build comes with the tasks its skills bring, or else a starter task on Mondays at 10:00 UTC. Every run spends the agent\'s credits. The deploy result names the tasks that are on, and they can be changed or turned off.');
+  }
   if (quote.credentialsNeeded.length > 0) {
     lines.push(`- After deployment the user must provide: ${quote.credentialsNeeded.map(item => `${item.title} (\`${item.key}\`)`).join(', ')}`);
   }
@@ -130,7 +142,22 @@ function deployedCustomSkills(agent: AgentDetail, requested: DeployCustomSkill[]
   });
 }
 
-function deployedText(agent: AgentDetail, quote: Quote, chargedUsd: number | null, customSkills: Array<z.infer<typeof deployedCustomSkillSchema>>): string {
+/** The scheduled tasks a custom build came with that are already on, with the schedule they came with. */
+function defaultScheduledTasks(agent: AgentDetail, quote: Quote, requested: DeployCustomSkill[]): Array<z.infer<typeof defaultScheduledTaskSchema>> {
+  if (quote.kind !== 'custom') return [];
+  const ownKeys = new Set(requested.map(skill => skill.key));
+  return agent.scheduledTasks.flatMap(task => (task.enabled && task.interval && !ownKeys.has(task.key)
+    ? [{ key: task.key, interval: task.interval }]
+    : []));
+}
+
+function deployedText(
+  agent: AgentDetail,
+  quote: Quote,
+  chargedUsd: number | null,
+  customSkills: Array<z.infer<typeof deployedCustomSkillSchema>>,
+  defaultTasks: Array<z.infer<typeof defaultScheduledTaskSchema>>,
+): string {
   const lines = [
     '## Agent deployed',
     '',
@@ -144,6 +171,9 @@ function deployedText(agent: AgentDetail, quote: Quote, chargedUsd: number | nul
   if (saved.length > 0) lines.push(`- Custom skills saved: ${saved.map(skill => customSkillLine(skill)).join('; ')}`);
   if (missing.length > 0) {
     lines.push(`- Not found on the new agent: ${missing.map(skill => `\`${skill.key}\``).join(', ')}. get_my_agent shows its custom skills; manage_agent_custom_skill adds them.`);
+  }
+  if (defaultTasks.length > 0) {
+    lines.push(`- Scheduled tasks on by default: ${defaultTasks.map(task => `\`${task.key}\` (runs on "${task.interval}")`).join(', ')}. ${DEFAULT_TASKS_NOTE}`);
   }
   if (agent.missingCredentials.length > 0) {
     lines.push(`- Missing credentials: ${agent.missingCredentials.map(item => `${item.title} (\`${item.key}\`)`).join(', ')}. Skills that need them fail until they are set.`);
@@ -169,7 +199,8 @@ export function registerDeployAgent(server: McpServer, client: WiroClient): void
         + 'can be confirmed again once its cause is fixed and the user says yes. The '
         + 'agent starts on its own after deployment. Credentials can be added later with set_agent_credentials '
         + 'or connect_agent_oauth, but skills that need them do not work until then. A custom build also gets '
-        + 'the scheduled tasks its skills come with, or a starter task on Mondays at 10:00. To change a template\'s '
+        + 'the scheduled tasks its skills come with, or a starter task on Mondays at 10:00; the result names the ones '
+        + 'that are on, and they can be changed or turned off. To change a template\'s '
         + 'skills, deploy it first and then use apply_agent_skills. get_playbook describes the whole flow.',
       inputSchema: {
         template: z.string().min(1).max(200).optional()
@@ -203,6 +234,8 @@ export function registerDeployAgent(server: McpServer, client: WiroClient): void
         existingAgentGuid: z.string().optional(),
         chargedUsd: z.number().nullable().optional(),
         customSkills: z.array(deployedCustomSkillSchema).optional(),
+        defaultScheduledTasks: z.array(defaultScheduledTaskSchema).optional()
+          .describe('The scheduled tasks a custom build came with that are already on, with the schedule they came with.'),
         message: z.string(),
         nextAction: nextActionSchema.optional(),
       },
@@ -488,16 +521,21 @@ export function registerDeployAgent(server: McpServer, client: WiroClient): void
         const chargedUsd = toNumber(created.monthlypriceusd) ?? quote.priceUsd;
         const nextStep = nextStepForAgent(agent, DEFAULT_WAIT_SECONDS);
         const savedCustomSkills = deployedCustomSkills(agent, customSkills);
+        const defaultTasks = defaultScheduledTasks(agent, quote, customSkills);
 
         return {
-          content: [{ type: 'text' as const, text: deployedText(agent, quote, chargedUsd, savedCustomSkills) }],
+          content: [{ type: 'text' as const, text: deployedText(agent, quote, chargedUsd, savedCustomSkills, defaultTasks) }],
           structuredContent: {
             stage: 'deployed' as const,
             quote,
             agent: toDeployedAgent(agent),
             chargedUsd,
             ...(savedCustomSkills.length > 0 ? { customSkills: savedCustomSkills } : {}),
-            message: `Deployed and charged ${formatUsd(chargedUsd)}. The plan renews every 30 days until it is cancelled.`,
+            ...(defaultTasks.length > 0 ? { defaultScheduledTasks: defaultTasks } : {}),
+            message: `Deployed and charged ${formatUsd(chargedUsd)}. The plan renews every 30 days until it is cancelled.`
+              + (defaultTasks.length > 0
+                ? ` Scheduled tasks on by default: ${defaultTasks.map(task => task.key).join(', ')}. ${DEFAULT_TASKS_NOTE}`
+                : ''),
             ...(nextStep ? { nextAction: nextStep } : {}),
           },
         };

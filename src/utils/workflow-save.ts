@@ -7,7 +7,7 @@ import {
   truncate,
   type ApiEnvelope,
 } from './api.js';
-import { oneLine, quotedSpan } from './quoted-text.js';
+import { jsonTextSpan, oneLine, quotedSpan } from './quoted-text.js';
 import {
   fullSlugOf,
   isStrictlyEmpty,
@@ -528,10 +528,20 @@ export interface UpdateWorkflowParams {
   preview?: boolean;
 }
 
+/** One step's change, as short text. A value that is not set on one side is null. */
+export interface StepChange {
+  step: string;
+  modelChange?: { from: string; to: string };
+  dependsChange?: { from: string[]; to: string[] };
+  inputs: Array<{ input: string; from: string | null; to: string | null }>;
+}
+
 export interface WorkflowChangeSummary {
   stepsAdded: string[];
   stepsRemoved: string[];
   stepsChanged: string[];
+  /** What changed inside each step of stepsChanged. */
+  stepChanges?: StepChange[];
   inputsAdded: string[];
   inputsRemoved: string[];
   inputsChanged: string[];
@@ -556,13 +566,77 @@ export interface UpdatedWorkflow extends SavedWorkflow {
   changes?: WorkflowChangeSummary;
 }
 
+/** A value as JSON with its object keys in order, so the same value always reads the same. */
+function sortedJson(value: unknown): string {
+  return JSON.stringify(value, (_key, item: unknown) => (isPlainObject(item)
+    ? Object.fromEntries(Object.entries(item).sort(([left], [right]) => left.localeCompare(right)))
+    : item)) ?? '';
+}
+
 function describeStep(node: unknown): string {
   if (!isPlainObject(node)) return '';
-  return JSON.stringify({ tool: node.tool, depends: node.depends, input: node.input });
+  return sortedJson({ tool: node.tool, depends: node.depends, input: node.input });
+}
+
+// A long value in a change summary is cut to this length, around the place where the
+// old and new value first differ, with this much of the text in front of that place.
+const CHANGE_VALUE_MAX = 120;
+const CHANGE_VALUE_LEAD = 40;
+
+/** A step input with secret values hidden, at any depth. "$" references are wiring, not values, and stay. */
+function hideSecretValues(key: string, value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(entry => hideSecretValues(key, entry));
+  if (isPlainObject(value)) {
+    return Object.fromEntries(Object.entries(value).map(([name, entry]) => [
+      name,
+      hideSecretValues(SENSITIVE_INPUT_KEY.test(key) ? key : name, entry),
+    ]));
+  }
+  if (typeof value === 'string' && value.startsWith('$')) return value;
+  const secretName = SENSITIVE_INPUT_KEY.test(key) && value !== '' && value !== null && value !== undefined;
+  return secretName || looksLikeSecretValue(value) ? '[hidden]' : value;
+}
+
+function changeText(key: string, value: unknown): string | null {
+  return value === undefined ? null : sortedJson(hideSecretValues(key, value));
+}
+
+/** The old and new value of a step input. When either is long, both are cut from the same place, so the first difference shows. */
+function changeValues(key: string, before: unknown, after: unknown): { from: string | null; to: string | null } {
+  const from = changeText(key, before);
+  const to = changeText(key, after);
+  if (Math.max(from?.length ?? 0, to?.length ?? 0) <= CHANGE_VALUE_MAX) return { from, to };
+  let first = 0;
+  if (from !== null && to !== null && from !== to) {
+    while (from[first] === to[first]) first += 1;
+  }
+  const start = Math.max(0, first - CHANGE_VALUE_LEAD);
+  const cut = (text: string | null): string | null => (text === null
+    ? null
+    : `${start > 0 ? '...' : ''}${truncate(text.slice(start), CHANGE_VALUE_MAX)}`);
+  return { from: cut(from), to: cut(to) };
+}
+
+function stepChange(step: string, before: Record<string, unknown>, after: Record<string, unknown>): StepChange {
+  const inputsBefore = isPlainObject(before.input) ? before.input : {};
+  const inputsAfter = isPlainObject(after.input) ? after.input : {};
+  const dependsOf = (node: Record<string, unknown>) => (Array.isArray(node.depends) ? node.depends.map(String) : []);
+  return {
+    step,
+    ...(typeof before.tool === 'string' && typeof after.tool === 'string' && before.tool !== after.tool
+      ? { modelChange: { from: before.tool, to: after.tool } }
+      : {}),
+    ...(sortedJson(before.depends) !== sortedJson(after.depends)
+      ? { dependsChange: { from: dependsOf(before), to: dependsOf(after) } }
+      : {}),
+    inputs: [...new Set([...Object.keys(inputsBefore), ...Object.keys(inputsAfter)])]
+      .filter(input => sortedJson(inputsBefore[input]) !== sortedJson(inputsAfter[input]))
+      .map(input => ({ input, ...changeValues(input, inputsBefore[input], inputsAfter[input]) })),
+  };
 }
 
 type GraphChange = Pick<WorkflowChangeSummary,
-  'stepsAdded' | 'stepsRemoved' | 'stepsChanged' | 'inputsAdded' | 'inputsRemoved'
+  'stepsAdded' | 'stepsRemoved' | 'stepsChanged' | 'stepChanges' | 'inputsAdded' | 'inputsRemoved'
   | 'inputsChanged' | 'savedValuesChanged' | 'outputsChanged' | 'layoutOnly'>;
 
 function withoutPositions(contents: Record<string, unknown>): string {
@@ -582,7 +656,7 @@ export function summarizeWorkflowChange(
 ): GraphChange {
   if (!next) {
     return {
-      stepsAdded: [], stepsRemoved: [], stepsChanged: [], inputsAdded: [], inputsRemoved: [],
+      stepsAdded: [], stepsRemoved: [], stepsChanged: [], stepChanges: [], inputsAdded: [], inputsRemoved: [],
       inputsChanged: [], savedValuesChanged: [], outputsChanged: false, layoutOnly: false,
     };
   }
@@ -601,12 +675,14 @@ export function summarizeWorkflowChange(
     : {});
   const storedValues = values(stored);
   const nextValues = values(next);
+  const changed = steps(nextNodes)
+    .filter(id => id in storedNodes && describeStep(storedNodes[id]) !== describeStep(nextNodes[id]));
+  const nodeAt = (nodes: Record<string, unknown>, id: string) => (isPlainObject(nodes[id]) ? nodes[id] as Record<string, unknown> : {});
   return {
     stepsAdded: steps(nextNodes).filter(id => !(id in storedNodes)).map(id => label(nextNodes, id)),
     stepsRemoved: steps(storedNodes).filter(id => !(id in nextNodes)).map(id => label(storedNodes, id)),
-    stepsChanged: steps(nextNodes)
-      .filter(id => id in storedNodes && describeStep(storedNodes[id]) !== describeStep(nextNodes[id]))
-      .map(id => label(nextNodes, id)),
+    stepsChanged: changed.map(id => label(nextNodes, id)),
+    stepChanges: changed.map(id => stepChange(id, nodeAt(storedNodes, id), nodeAt(nextNodes, id))),
     inputsAdded: Object.keys(nextFields).filter(key => !(key in storedFields)),
     inputsRemoved: Object.keys(storedFields).filter(key => !(key in nextFields)),
     inputsChanged: Object.keys(nextFields)
@@ -829,6 +905,29 @@ export function formatWorkflowNotes(warnings: PrepareIssue[]): string[] {
   });
 }
 
+// The inputs listed per changed step in the text; the structured result has them all.
+const STEP_INPUTS_SHOWN = 15;
+
+/** What changed inside each changed step, one line per change, under the "Steps changed" line. */
+function stepChangeLines(changes: StepChange[]): string[] {
+  const value = (text: string | null): string => (text === null ? 'not set' : quotedSpan(text));
+  const inputValue = (text: string | null): string => (text === null ? 'not set' : jsonTextSpan(text));
+  return changes.flatMap(({ step, modelChange, dependsChange, inputs }) => {
+    const name = quotedSpan(step);
+    return [
+      ...(modelChange ? [`  - ${name} model: ${quotedSpan(modelChange.from)} to ${quotedSpan(modelChange.to)}`] : []),
+      ...(dependsChange
+        ? [`  - ${name} runs after: ${value(dependsChange.from.join(', ') || null)} to ${value(dependsChange.to.join(', ') || null)}`]
+        : []),
+      ...inputs.slice(0, STEP_INPUTS_SHOWN)
+        .map(item => `  - ${name} input ${quotedSpan(item.input)}: ${inputValue(item.from)} to ${inputValue(item.to)}`),
+      ...(inputs.length > STEP_INPUTS_SHOWN
+        ? [`  - ${name}: ${inputs.length - STEP_INPUTS_SHOWN} more inputs change, listed in the structured result`]
+        : []),
+    ];
+  });
+}
+
 export function formatWorkflowChanges(changes: WorkflowChangeSummary): string[] {
   const lines: string[] = [];
   const names = (list: string[]): string => list.map(quotedSpan).join(', ');
@@ -837,7 +936,9 @@ export function formatWorkflowChanges(changes: WorkflowChangeSummary): string[] 
   if (changes.tagsChanged) lines.push('- Tags change');
   if (changes.stepsAdded.length > 0) lines.push(`- Steps added: ${names(changes.stepsAdded)}`);
   if (changes.stepsRemoved.length > 0) lines.push(`- Steps removed: ${names(changes.stepsRemoved)}`);
-  if (changes.stepsChanged.length > 0) lines.push(`- Steps changed: ${names(changes.stepsChanged)}`);
+  if (changes.stepsChanged.length > 0) {
+    lines.push(`- Steps changed: ${names(changes.stepsChanged)}`, ...stepChangeLines(changes.stepChanges ?? []));
+  }
   if (changes.inputsAdded.length > 0) lines.push(`- Inputs added: ${names(changes.inputsAdded)}`);
   if (changes.inputsRemoved.length > 0) lines.push(`- Inputs removed: ${names(changes.inputsRemoved)}`);
   if (changes.inputsChanged.length > 0) lines.push(`- Inputs changed (type, label or default): ${names(changes.inputsChanged)}`);

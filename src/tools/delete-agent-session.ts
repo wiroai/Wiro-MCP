@@ -39,6 +39,9 @@ async function findSession(
   }
 }
 
+const STUDIO_RUNS_AFTER_DELETE = 'Deleting a Studio session can also take its model runs out of list_studio_results, so '
+  + 'read their results and costs first if they are still needed.';
+
 /** Pause before the second look at a session list that did not show the session. */
 export const SESSION_RECHECK_MS = 2_000;
 
@@ -58,7 +61,8 @@ function deletionSummary(target: AgentTarget, session: string): string {
       ? 'your agent\'s main chat, including its voice call records'
       : `session "${session}"`;
   return `This permanently deletes every message you sent and received in ${scope}, including a turn that is `
-    + 'still running, and resets the agent\'s memory of it. It cannot be undone.';
+    + 'still running, and resets the agent\'s memory of it. It cannot be undone.'
+    + (target.kind === 'studio' ? ` ${STUDIO_RUNS_AFTER_DELETE}` : '');
 }
 
 export function registerDeleteAgentSession(server: McpServer, client: WiroClient): void {
@@ -71,8 +75,8 @@ export function registerDeleteAgentSession(server: McpServer, client: WiroClient
         + 'Without confirm: true it only describes what would be deleted; ask the user before confirming. A turn '
         + 'that is still running is deleted too; to stop it instead, cancel it first with cancel_agent_message '
         + '(get_agent_conversation with the session shows whether one is running). Studio keeps a display name the session was given on '
-        + 'wiro.ai. The Workflow Agent\'s "default" session cannot be deleted. Model outputs and saved workflows '
-        + 'are not affected.',
+        + 'wiro.ai. The Workflow Agent\'s "default" session cannot be deleted. The files models made and saved '
+        + `workflows stay. ${STUDIO_RUNS_AFTER_DELETE}`,
       inputSchema: {
         agent: z.string().min(1).describe(AGENT_INPUT_DESCRIPTION),
         session: z.string().min(1).describe('The session to delete (from get_agent_conversation).'),

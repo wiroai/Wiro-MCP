@@ -16,7 +16,7 @@ import {
   resolveAgentTarget,
   resolveReadSession,
 } from '../utils/agent-targets.js';
-import { notFoundMessage, projectAgentMessage } from '../utils/agent-turns.js';
+import { costPendingNote, isCostPending, notFoundMessage, projectAgentMessage } from '../utils/agent-turns.js';
 
 // The cancel is written at once, but a turn that is already finishing can still
 // end normally, so the result is read back after a short pause.
@@ -115,6 +115,7 @@ export function registerCancelAgentMessage(server: McpServer, client: WiroClient
           await delay(READ_BACK_DELAY_MS, extra.signal);
           const row = await readAgentMessage(client, target, message_id, readSession, extra.signal);
           message = projectAgentMessage(target, row, false).message;
+          if (isCostPending(row, true)) notes.push(costPendingNote(target, row.status));
         } catch (error) {
           if (extra.signal.aborted) throw error;
           notes.push('The final status could not be read back. Check it with get_agent_message.');

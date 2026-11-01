@@ -490,7 +490,6 @@ export interface PlanBilling {
   plan: 'prepaid' | 'card' | 'none';
   status: string | null;
   periodEnd: number | null;
-  daysRemaining: number | null;
   wallet: 'team' | 'personal';
   /** true: the plan ends with this period; false: it renews; null: not known, for a card plan without its card state. */
   cancelAtPeriodEnd: boolean | null;
@@ -500,16 +499,20 @@ export function planBilling(row: Row): PlanBilling {
   const wallet = asString(row.teamguid) ? 'team' : 'personal';
   const subscription = isPlainObject(row.subscription) ? row.subscription : null;
   if (!subscription) {
-    return { plan: 'none', status: null, periodEnd: null, daysRemaining: null, wallet, cancelAtPeriodEnd: false };
+    return { plan: 'none', status: null, periodEnd: null, wallet, cancelAtPeriodEnd: false };
   }
   return {
     plan: asString(subscription.provider) === 'prepaid' ? 'prepaid' : 'card',
     status: asString(subscription.status) ?? null,
     periodEnd: toNumber(subscription.currentperiodend),
-    daysRemaining: toNumber(subscription.daysremaining),
     wallet,
     cancelAtPeriodEnd: planEndsWithPeriod(subscription, row.stripecancelatperiodend),
   };
+}
+
+/** The whole days a prepaid plan's change is charged for: what is left of the period, to the nearest day. */
+export function proratedDaysLeft(periodEndUnix: number, nowMs = Date.now()): number {
+  return Math.max(0, Math.round((periodEndUnix - nowMs / 1000) / 86400));
 }
 
 /**
@@ -523,8 +526,7 @@ export function estimateProratedUsd(
   periodDays = 30,
 ): number | null {
   if (periodEndUnix === null || !Number.isFinite(deltaUsd)) return null;
-  const remainingDays = Math.max(0, Math.round((periodEndUnix - nowMs / 1000) / 86400));
-  return Math.round((deltaUsd / periodDays) * remainingDays * 100) / 100;
+  return Math.round((deltaUsd / periodDays) * proratedDaysLeft(periodEndUnix, nowMs) * 100) / 100;
 }
 
 export interface SkillsApplyFailure {
@@ -723,6 +725,17 @@ export interface CredentialMeta {
 // calendar with the service account, are part of the setup.
 export const FIELD_HELP_MAX = 4_000;
 
+// The Wiro project field. On the dashboard it is a project picker, and the help
+// it comes with describes that picker, so this line is shown instead.
+export const WIRO_PROJECT_NOTE = 'This is the API key of a Wiro project. The user can pick the project on the agent\'s page '
+  + 'in the Wiro dashboard, which keeps the key out of this chat, or give you the key to save here. Save only a key the '
+  + 'user gives you for this; Wiro adds the project\'s secret by itself. Model runs the agent starts are billed to the '
+  + 'wallet of the workspace that owns the project.';
+
+export function isWiroProjectField(raw: Row): boolean {
+  return /^(custom:)?wiro-project-picker$/.test(asString(raw.type) ?? '');
+}
+
 export function htmlToText(value: unknown, maxLength = 400): string | undefined {
   const html = asString(value);
   if (!html) return undefined;
@@ -781,7 +794,7 @@ export function parseCredentialField(raw: Row): CredentialField {
     ...(toNumber(raw.maxsize) !== null ? { maxSizeKb: toNumber(raw.maxsize) as number } : {}),
     ...(asString(raw.item_type) ? { itemType: asString(raw.item_type) } : {}),
     itemSchema: itemSchemaOf(raw).map(parseCredentialField).filter(field => field.key),
-    ...(htmlToText(raw.help, FIELD_HELP_MAX) ? { help: htmlToText(raw.help, FIELD_HELP_MAX) } : {}),
+    ...(!isWiroProjectField(raw) && htmlToText(raw.help, FIELD_HELP_MAX) ? { help: htmlToText(raw.help, FIELD_HELP_MAX) } : {}),
     ...(asString(raw.placeholder) ? { placeholder: asString(raw.placeholder) } : {}),
   };
 }

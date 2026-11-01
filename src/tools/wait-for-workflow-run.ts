@@ -8,7 +8,7 @@ import {
   MAX_WAIT_SECONDS,
   pollUntil,
   reportProgress,
-  slowInterval,
+  workflowRunInterval,
   type ToolCallContext,
 } from '../utils/poll.js';
 import {
@@ -58,7 +58,7 @@ export async function waitForWorkflowRun(
     isDone: value => isRunTerminal(value.run.status),
     timeoutMs: waitSeconds * 1000,
     signal: extra.signal,
-    interval: slowInterval,
+    interval: workflowRunInterval,
     onPoll: (value, elapsedMs) => reportProgress(
       extra,
       elapsedMs,

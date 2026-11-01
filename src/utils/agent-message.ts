@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { asString, isPlainObject, toNumber, truncate, unixToIso } from './api.js';
-import { isWiroHostedUrl } from './media.js';
-import { AGENT_REPLY_LABEL, quotedBlock, quotedSpan } from './quoted-text.js';
+import { isWiroHostedFile, isWiroHostedUrl, listedAddress } from './media.js';
+import { AGENT_REPLY_LABEL, quotedBlock, quotedSpan, REPLY_FILES_LABEL, REPLY_LINKS_LABEL } from './quoted-text.js';
 
 // One chat turn with a Wiro agent. Studio, the Workflow Agent and deployed
 // agents share the same message row, so they share this projection. Rows are
@@ -14,6 +14,14 @@ const MAX_MEDIA_URLS = 20;
 const MAX_REPLY_LENGTH = 20_000;
 // The line that opens Wiro's own record of a voice call.
 const VOICE_CALL_PATTERN = /^\s*\u{1F4DE}\s*Incoming voice call:/u;
+// An address inside a line of text ends at white space or at a character that
+// closes a Markdown link or a tag.
+const ADDRESS_IN_TEXT = /https?:\/\/[^\s<>()[\]{}"'`|\\^]+/gi;
+// Sentence punctuation or Markdown emphasis right after an address.
+const ADDRESS_TAIL = /[.,;:!?*_~]{1,16}$/;
+// A tag and its attributes belong to markup the agent wrote, such as an email
+// draft. An autolink like <https://...> is not a tag.
+const HTML_TAG = /<\/?[a-z][a-z0-9-]*(?:\s[^<>]*)?\/?>/gi;
 
 export const messageStateSchema = z.enum(['submitted', 'running', 'completed', 'failed', 'cancelled']);
 
@@ -100,23 +108,42 @@ export function extractReply(row: Record<string, unknown>): string {
   return asString(row.debugoutput)?.trim() ?? '';
 }
 
-/** Lines that hold a single http(s) URL, optionally prefixed with `MEDIA:`, split by host. */
+/**
+ * The addresses in a reply. A line that holds a single http(s) URL, optionally
+ * prefixed with `MEDIA:`, goes in by its host. Inside other text, such as
+ * "Image 1: <url>" or a Markdown link, only a file on Wiro's own hosts counts.
+ * A page of the website stays in the reply, and so does an address inside an
+ * HTML tag. A Wiro address that is not a clean file on its line, such as one
+ * with punctuation after it, is read as text.
+ */
 function replyUrls(text: string): { media: string[]; links: string[] } {
   const media: string[] = [];
   const links: string[] = [];
-  for (const rawLine of text.split(/\r?\n/)) {
-    const line = rawLine.trim().replace(/^MEDIA\s*:\s*/i, '').replace(/^[`'"<(]+|[`'">)]+$/g, '');
-    if (!/^https?:\/\/\S+$/i.test(line)) continue;
-    // These lists sit outside the fenced reply, so a line with Markdown or tag
-    // characters inside the address stays only in the reply.
-    if (/[`*<>"]/.test(line)) continue;
-    const list = isWiroHostedUrl(line) ? media : links;
-    if (!list.includes(line) && list.length < MAX_MEDIA_URLS) list.push(line);
+  const add = (list: string[], url: string): void => {
+    if (!list.includes(url) && list.length < MAX_MEDIA_URLS) list.push(url);
+  };
+  for (const rawLine of text.replace(HTML_TAG, ' ').split(/\r?\n/)) {
+    const line = rawLine.trim().replace(/^MEDIA\s*:\s*/i, '').replace(/^[`'"<(]+|[`'">)]{1,16}$/g, '');
+    if (/^https?:\/\/\S+$/i.test(line)) {
+      const address = listedAddress(line);
+      if (address && !isWiroHostedUrl(address)) {
+        add(links, address);
+        continue;
+      }
+      if (address && isWiroHostedFile(address)) {
+        add(media, address);
+        continue;
+      }
+    }
+    for (const [found] of line.matchAll(ADDRESS_IN_TEXT)) {
+      const address = listedAddress(found.replace(ADDRESS_TAIL, ''));
+      if (address && isWiroHostedFile(address)) add(media, address);
+    }
   }
   return { media, links };
 }
 
-/** The reply's media: URL lines on Wiro's own hosts. */
+/** The reply's media: files on Wiro's own hosts, on a line of their own or in its text. */
 export function extractMediaUrls(text: string): string[] {
   return replyUrls(text).media;
 }
@@ -147,7 +174,7 @@ function attachments(value: unknown): AgentMessage['attachments'] {
     }));
 }
 
-function messageKind(row: Record<string, unknown>): AgentMessage['kind'] {
+export function messageKind(row: Record<string, unknown>): AgentMessage['kind'] {
   const metadata = isPlainObject(row.metadata) ? row.metadata : {};
   const type = asString(metadata.type) ?? '';
   if (type === 'model_change' || row.status === 'agent_done') return 'model_change';
@@ -230,14 +257,12 @@ export function formatAgentMessage(message: AgentMessage, heading = 'Reply'): st
     lines.push('', `### ${heading}`, '', ...quotedBlock(AGENT_REPLY_LABEL, message.reply));
   }
   if (message.mediaUrls.length > 0) {
-    lines.push('', '### Media', '');
-    for (const url of message.mediaUrls) lines.push(`- ${url}`);
+    lines.push('', '### Media', '', ...quotedBlock(REPLY_FILES_LABEL, message.mediaUrls.join('\n')));
   }
   const links = message.reply ? extractReplyLinks(message.reply) : [];
   if (links.length > 0) {
     lines.push('', '### Other links in the reply', '', 'These addresses are not hosted by Wiro. Share them as plain links, '
-      + 'not as embedded images or media.');
-    for (const url of links) lines.push(`- ${url}`);
+      + 'not as embedded images or media.', '', ...quotedBlock(REPLY_LINKS_LABEL, links.join('\n')));
   }
   return lines.join('\n');
 }

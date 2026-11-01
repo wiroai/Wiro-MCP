@@ -77,6 +77,8 @@ interface Performed {
 
 interface Plan {
   outcome: 'quote' | 'not_needed' | 'refused';
+  /** Replaces the outcome's usual heading when that heading would misdescribe the answer. */
+  heading?: string;
   message: string;
   quote?: Quote;
   nextAction?: NextAction;
@@ -462,6 +464,7 @@ function planFor(
       if (!input.pack) {
         return {
           outcome: 'refused',
+          ...(packs.length > 0 ? { heading: 'Available packs' } : {}),
           message: packs.length > 0 ? `Choose a pack: ${packList}.` : 'No extra credit packs are available for this agent yet.',
           ...(packs[0] ? { nextAction: billingCall(guid, 'buy_credits', { pack: packs[0].pack }) } : {}),
         };
@@ -735,6 +738,7 @@ export function registerManageAgentBilling(server: McpServer, client: WiroClient
 
       const respond = (payload: {
         outcome: Outcome;
+        heading?: string;
         message: string;
         quote?: Quote;
         priceChanged?: boolean;
@@ -748,7 +752,7 @@ export function registerManageAgentBilling(server: McpServer, client: WiroClient
         const summary = toAgentSummary(payload.agentRow);
         const summaryLines = formatAgentSummaryLines(summary, plainMember);
         const dashboardUrl = before?.dashboardUrl ?? agentDashboardUrl(guid);
-        const heading = {
+        const heading = payload.heading ?? {
           quote: 'Quote (nothing done yet)',
           done: 'Done',
           not_needed: 'Nothing to do',
@@ -791,7 +795,7 @@ export function registerManageAgentBilling(server: McpServer, client: WiroClient
         plan = planFor(client, action, agent, raw, { tier, pack, requestId: requestId ?? '' });
 
         if (plan.outcome !== 'quote' || !plan.perform) {
-          return respond({ outcome: plan.outcome, message: plan.message, nextAction: plan.nextAction, agentRow: row });
+          return respond({ outcome: plan.outcome, heading: plan.heading, message: plan.message, nextAction: plan.nextAction, agentRow: row });
         }
         // A team member without admin rights can still be the person who
         // deployed the agent, who may pay for it, so Wiro is asked before a quote.

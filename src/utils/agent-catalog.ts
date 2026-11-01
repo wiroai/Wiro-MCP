@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { asString, isPlainObject, toNumber, truncate } from './api.js';
-import { FIELD_HELP_MAX, usableConnectionModes } from './agent-config.js';
+import { FIELD_HELP_MAX, WIRO_PROJECT_NOTE, isWiroProjectField, usableConnectionModes } from './agent-config.js';
 import {
   agentTaskSchema,
   htmlToText,
@@ -392,14 +392,12 @@ export function toCredentialSetup(
       ? { channel: { id: asString(channel.id) ?? key, requiredFields: toStringArray(channel.required_fields) } }
       : {}),
     ...(usedBy.length > 0 ? { usedBySkills: usedBy } : {}),
-    ...(key === 'wiro'
-      ? { note: 'This is a Wiro project API key. Models the agent runs are billed to that project\'s wallet, so use only a key the user gives for this purpose.' }
-      : {}),
+    ...(key === 'wiro' ? { note: WIRO_PROJECT_NOTE } : {}),
     fields: schema.filter(field => asString(field.key)).map(field => {
       const onlyInModes = toStringArray(field.only_in_modes);
       const type = asString(field.type);
       const pattern = asString(field.pattern);
-      const help = htmlToText(field.help, FIELD_HELP_MAX);
+      const help = isWiroProjectField(field) ? '' : htmlToText(field.help, FIELD_HELP_MAX);
       const options = setupOptions(field);
       const items = setupItems(field, true);
       return {

@@ -43,15 +43,14 @@ export function defaultInterval(elapsedMs: number): number {
   return 10_000;
 }
 
-/** 3 s, growing by half each time, capped at 15 s. Used for workflow runs. */
-export function slowInterval(elapsedMs: number): number {
-  let delay = 3_000;
-  let total = 0;
-  while (total + delay < elapsedMs && delay < 15_000) {
-    total += delay;
-    delay = Math.min(15_000, Math.round(delay * 1.5));
-  }
-  return delay;
+/**
+ * For workflow runs: 2 s for the first 30 s, 5 s until 2 minutes, then 10 s. A
+ * short run comes back soon after it ends, and a long one is read less often.
+ */
+export function workflowRunInterval(elapsedMs: number): number {
+  if (elapsedMs < 30_000) return 2_000;
+  if (elapsedMs < 120_000) return 5_000;
+  return 10_000;
 }
 
 function isTransientHttpError(error: unknown): boolean {

@@ -3,6 +3,7 @@ import test from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createMcpServer } from '../dist/server.js';
+import { WIRO_PROJECT_NOTE } from '../dist/utils/agent-config.js';
 import { WiroApiError } from '../dist/client.js';
 import { ApiResultError } from '../dist/utils/api.js';
 import {
@@ -1633,6 +1634,28 @@ test('manage_agent_billing charges only the amount the user approved', async () 
   });
 });
 
+test('manage_agent_billing without a pack lists the packs under their own heading', async () => {
+  const fake = fakeClient({ '/UserAgent/Detail': detailResponse(agentRow({ tier: 'pro' })) });
+  await withClient(fake, async client => {
+    const result = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'buy_credits' });
+    assert.notEqual(result.isError, true);
+    assert.match(textOf(result), /^## buy_credits: Available packs\n\nChoose a pack: small \(6,000 credits for \$60\.00\), medium \(12,000 credits for \$120\.00\)\./);
+    assert.doesNotMatch(textOf(result), /Not possible/);
+    assert.equal(result.structuredContent.outcome, 'refused');
+    assert.deepEqual(result.structuredContent.nextAction.arguments, { agent_guid: 'ua-1', action: 'buy_credits', pack: 'small' });
+    assert.deepEqual(fake.calls.map(item => item.path).filter(path => path !== '/UserAgent/Detail'), []);
+  });
+
+  const none = agentRow({ tier: 'pro' });
+  none.agent.extracreditpacks = [];
+  const empty = fakeClient({ '/UserAgent/Detail': detailResponse(none) });
+  await withClient(empty, async client => {
+    const result = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'buy_credits' });
+    assert.match(textOf(result), /^## buy_credits: Not possible\n\nNo extra credit packs are available for this agent yet\./);
+    assert.equal(result.structuredContent.nextAction, undefined);
+  });
+});
+
 test('manage_agent_billing buys credits with a request id that makes retries safe', async () => {
   let bought = false;
   const fake = fakeClient({
@@ -2739,5 +2762,248 @@ test('get_my_agent with entry gives the whole text of an entry the list shortens
     const result = await call(client, 'get_my_agent', { agent_guid: 'ua-1' });
     assert.equal(result.structuredContent.entry, undefined);
     assert.doesNotMatch(textOf(result), /in full\n/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Scheduled tasks a custom build comes with
+// ---------------------------------------------------------------------------
+
+function customBuildRoutes(scheduledskills) {
+  const deployed = agentRow({
+    guid: 'ua-custom',
+    status: 2,
+    agentguid: undefined,
+    agent: { custom: true, cover: null, icon: null, slug: 'custom-77' },
+    credentials: {},
+    scheduledskills,
+  });
+  return {
+    '/Skills/List': { result: true, errors: [], skills: [{ name: 'int-gmail-check', title: 'Gmail', requires_credentials: true, credential_key: 'gmail', pricing: {} }] },
+    '/UserAgent/PricingPreview': { result: true, errors: [], totalPriceUsd: 4, totalMonthlyCredits: 400, enabledSkills: ['int-gmail-check'] },
+    '/UserAgent/Deploy': { result: true, errors: [], useragents: [deployed] },
+    '/UserAgent/Detail': detailResponse(deployed),
+  };
+}
+
+test('a custom build\'s deploy result names the scheduled tasks already on and how to change them', async () => {
+  const fake = fakeClient(customBuildRoutes([
+    { key: 'cs-cron-my-scheduled-task', description: 'A recurring task your agent runs on a schedule.', value: '# My Scheduled Task', interval: '0 10 * * 1', enabled: true, _source: 'user-created' },
+    { key: 'cs-cron-inbox-check', description: 'Checks the inbox', value: 'Check the inbox.', interval: '*/30 * * * *', enabled: false, requires_credentials: ['gmail'], _source: 'skill-bundle' },
+    { key: 'cs-cron-weekly-report', description: 'Weekly report', value: 'Summarize the week', interval: '0 9 * * 1', enabled: true, _source: 'user-created' },
+  ]));
+  await withClient(fake, async client => {
+    const quote = await call(client, 'deploy_agent', { custom: true, title: 'Inbox', tier: 'starter', skills: ['int-gmail-check'] });
+    assert.match(textOf(quote), /Scheduled tasks: a custom build comes with the tasks its skills bring, or else a starter task on Mondays at 10:00 UTC\. Every run spends the agent's credits/);
+
+    const result = await call(client, 'deploy_agent', {
+      custom: true,
+      title: 'Inbox',
+      tier: 'starter',
+      skills: ['int-gmail-check'],
+      custom_skills: [{ key: 'weekly-report', value: 'Summarize the week', interval: '0 9 * * 1' }],
+      confirm_charge_usd: 4,
+      confirm: true,
+    });
+    assert.notEqual(result.isError, true, textOf(result));
+    const output = result.structuredContent;
+    assert.deepEqual(output.defaultScheduledTasks, [{ key: 'cs-cron-my-scheduled-task', interval: '0 10 * * 1' }]);
+    for (const text of [textOf(result), output.message]) {
+      assert.match(text, /Scheduled tasks on by default: `?cs-cron-my-scheduled-task/);
+      assert.match(text, /every run spends the agent's credits/);
+      assert.match(text, /manage_agent_custom_skill \(upsert\) changes a task's text or schedule, and enabled false turns it off/);
+      assert.doesNotMatch(text, /cs-cron-inbox-check.*on by default|on by default.*cs-cron-weekly-report/);
+    }
+    assert.match(textOf(result), /`cs-cron-my-scheduled-task` \(runs on "0 10 \* \* 1"\)/);
+    assert.equal(output.nextAction.tool, 'get_my_agent', 'the wait for the agent stays the next step');
+  });
+});
+
+test('a custom build whose tasks are all off or its own, and a template deploy, name no default tasks', async () => {
+  const quiet = fakeClient(customBuildRoutes([
+    { key: 'cs-cron-inbox-check', value: 'Check the inbox.', interval: '*/30 * * * *', enabled: false, _source: 'skill-bundle' },
+    { key: 'cs-cron-by-hand', value: 'Runs when asked.', interval: null, enabled: true, _source: 'user-created' },
+  ]));
+  await withClient(quiet, async client => {
+    const result = await call(client, 'deploy_agent', { custom: true, title: 'Inbox', tier: 'starter', skills: ['int-gmail-check'], confirm_charge_usd: 4, confirm: true });
+    assert.notEqual(result.isError, true, textOf(result));
+    assert.equal(result.structuredContent.defaultScheduledTasks, undefined);
+    assert.doesNotMatch(textOf(result), /on by default/);
+    assert.doesNotMatch(result.structuredContent.message, /on by default/);
+  });
+
+  const deployed = agentRow({ guid: 'ua-new', status: 2 });
+  const template = fakeClient({
+    '/Agent/Detail': { result: true, errors: [], agents: [templateRow({ customskills: [], scheduledskills: [] })] },
+    '/UserAgent/Deploy': { result: true, errors: [], useragents: [deployed] },
+    '/UserAgent/Detail': detailResponse(deployed),
+  });
+  await withClient(template, async client => {
+    const quote = await call(client, 'deploy_agent', { template: 'instagram-manager', tier: 'starter' });
+    assert.doesNotMatch(textOf(quote), /starter task/);
+    const result = await call(client, 'deploy_agent', { template: 'instagram-manager', tier: 'starter', confirm_charge_usd: 12, confirm: true });
+    assert.notEqual(result.isError, true, textOf(result));
+    assert.equal(result.structuredContent.defaultScheduledTasks, undefined);
+    assert.doesNotMatch(textOf(result), /on by default/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The stop result and the plan
+// ---------------------------------------------------------------------------
+
+test('control_agent stop says what happens with this agent\'s plan', async () => {
+  const end = new Date((NOW + 15 * 86_400) * 1000).toISOString();
+  const stop = async (subscriptionRow, extra = {}) => {
+    const fake = fakeClient({
+      '/UserAgent/Detail': () => detailResponse(agentRow({ status: fake.called('/UserAgent/Stop').length > 0 ? 0 : 4, subscription: subscriptionRow, ...extra })),
+      '/UserAgent/Stop': { result: true, errors: [], useragents: [] },
+    });
+    let output;
+    await withClient(fake, async client => {
+      const result = await call(client, 'control_agent', { agent_guid: 'ua-1', action: 'stop', wait_seconds: 10 });
+      assert.notEqual(result.isError, true, textOf(result));
+      assert.equal(result.structuredContent.outcome, 'requested');
+      assert.equal(result.structuredContent.status, 0);
+      assert.equal(textOf(result).includes(result.structuredContent.message), true);
+      output = result.structuredContent.message;
+    });
+    return output;
+  };
+
+  const renewing = await stop(subscription());
+  assert.match(renewing, /still renews every 30 days and starts the agent again/);
+  assert.match(renewing, /Cancel it with manage_agent_billing/);
+
+  const cancelled = await stop(subscription({ pendingdowngrade: 'cancel' }));
+  assert.match(cancelled, new RegExp(`already cancelled: it ends after ${end.replace(/[.]/g, '\\.')} and does not renew`));
+  assert.doesNotMatch(cancelled, /still renews|starts the agent again\. /);
+
+  const cardUnknown = await stop(subscription({ provider: 'stripe' }));
+  assert.match(cardUnknown, new RegExp(`billed by card and is paid through ${end.replace(/[.]/g, '\\.')}`));
+  assert.doesNotMatch(cardUnknown, /still renews|manage_agent_billing/);
+
+  const cardRenews = await stop(subscription({ provider: 'stripe' }), { stripecancelatperiodend: false });
+  assert.match(cardRenews, new RegExp(`billed by card and renews after ${end.replace(/[.]/g, '\\.')}`));
+
+  const cardEnds = await stop(subscription({ provider: 'stripe' }), { stripecancelatperiodend: true });
+  assert.match(cardEnds, /already cancelled/);
+
+  const switching = await stop(subscription({ provider: 'stripe', nextprovider: 'prepaid' }));
+  assert.match(switching, /still renews every 30 days/);
+
+  const ended = await stop(subscription({ status: 'expired' }));
+  assert.match(ended, /no active plan, so no renewal starts it again/);
+  const none = await stop(null);
+  assert.match(none, /no active plan/);
+
+  for (const message of [renewing, cancelled, cardUnknown, cardRenews, cardEnds, switching, ended, none]) {
+    assert.doesNotMatch(message, /Right after a start/, 'advice about a start does not follow a stop');
+  }
+});
+
+test('control_agent start still explains an agent that ended up stopped', async () => {
+  const fake = fakeClient({
+    '/UserAgent/Detail': detailResponse(agentRow({ status: 0 })),
+    '/UserAgent/Start': { result: true, errors: [], useragents: [] },
+  });
+  await withClient(fake, async client => {
+    const result = await call(client, 'control_agent', { agent_guid: 'ua-1', action: 'start', wait_seconds: 1 });
+    assert.match(result.structuredContent.message, /Right after a start this means/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Cached input tokens in the credit ledger
+// ---------------------------------------------------------------------------
+
+test('get_agent_activity ledger lines name the cached input tokens a row carries', async () => {
+  const row = {
+    type: 'deduct',
+    action: 'tokens',
+    amount: -5,
+    balanceafter: null,
+    description: 'Input Tokens: 3 / Output Tokens: 69 / Model: openai/gpt-5.6-terra',
+    createdat: NOW - 60,
+    inputtokens: 3,
+    outputtokens: 69,
+    model: 'openai/gpt-5.6-terra',
+  };
+  const fake = fakeClient({
+    '/UserAgent/TransactionList': {
+      result: true,
+      errors: [],
+      total: 4,
+      summary: { monthlycredits: 400, extracredits: 0, usedcredits: 5, remainingcredits: 395 },
+      transactions: [
+        { ...row, cachereadtokens: 19_287, cachewritetokens: 5_520, totaltokens: 24_879 },
+        { ...row, cachereadtokens: 800, cachewritetokens: 0, totaltokens: 872 },
+        { ...row, cachereadtokens: 0, cachewritetokens: 0, totaltokens: 72 },
+        { type: 'renewal', action: 'monthly', amount: 400, balanceafter: 400, description: 'Monthly credits', createdat: NOW - 90 },
+      ],
+    },
+  });
+  await withClient(fake, async client => {
+    const result = await call(client, 'get_agent_activity', { agent_guid: 'ua-1', kind: 'usage' });
+    assert.notEqual(result.isError, true, textOf(result));
+    const lines = textOf(result).split('\n').filter(line => line.startsWith('- ') && /credits/.test(line));
+    assert.match(lines[0], /-5 credits, Input Tokens: 3 \/ Output Tokens: 69 \/ Model: openai\/gpt-5\.6-terra, plus cached input tokens: 19,287 read and 5,520 written \(24,879 tokens in all\)$/);
+    assert.match(lines[1], /, plus cached input tokens: 800 read \(872 tokens in all\)$/);
+    assert.doesNotMatch(lines[2], /cached/);
+    assert.doesNotMatch(lines[3], /cached/);
+    const { transactions } = result.structuredContent.usage;
+    assert.equal(transactions[0].description, row.description, 'the structured row keeps its own text');
+    assert.deepEqual(transactions[0].tokens, { input: 3, output: 69, cacheRead: 19_287, cacheWrite: 5_520, total: 24_879 });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The Wiro project credential
+// ---------------------------------------------------------------------------
+
+const WIRO_CREDENTIAL = {
+  key: 'wiro',
+  title: 'Wiro AI Models',
+  credential_mode: 'api_key',
+  connection_modes: [],
+  wiro_connect_pending: false,
+  credential_schema: [{
+    key: 'apikey',
+    type: 'custom:wiro-project-picker',
+    label: 'Wiro Project',
+    required: true,
+    encrypted: true,
+    help: '<p>Select one of your Wiro projects (or create a new one). Request signing is handled automatically, so there\'s no secret to paste.</p>',
+  }],
+  oauth_provider: null,
+  used_by_skills: ['int-wiro-aimodels'],
+};
+
+test('the Wiro project credential shows one line everywhere, without the help written for the dashboard', async () => {
+  const fake = fakeClient({
+    '/Skills/Detail': body => (body.name === 'int-wiro-aimodels'
+      ? { result: true, errors: [], skill: { name: 'int-wiro-aimodels', title: 'Wiro AI Models', requires_credentials: true, credential_key: 'wiro', pricing: {} } }
+      : { result: false, errors: [{ code: 404, message: 'Skill not found' }] }),
+    '/Credentials/Detail': { result: true, errors: [], credential: WIRO_CREDENTIAL },
+    '/UserAgent/Detail': detailResponse(agentRow({ credentials: {} })),
+  });
+  await withClient(fake, async client => {
+    const results = [
+      await call(client, 'list_agent_skills', { name: 'wiro' }),
+      await call(client, 'list_agent_skills', { name: 'int-wiro-aimodels' }),
+      await call(client, 'set_agent_credentials', { agent_guid: 'ua-1', credential: 'wiro' }),
+    ];
+    for (const result of results) {
+      assert.notEqual(result.isError, true, textOf(result));
+      const everything = `${textOf(result)}\n${JSON.stringify(result.structuredContent)}`;
+      assert.doesNotMatch(everything, /no secret to paste|Select one of your Wiro projects/);
+      assert.equal(textOf(result).split(WIRO_PROJECT_NOTE).length - 1, 1, textOf(result));
+    }
+    assert.equal(results[0].structuredContent.setup.credentials[0].note, WIRO_PROJECT_NOTE);
+    assert.equal(results[0].structuredContent.setup.credentials[0].fields[0].help, undefined);
+    const described = results[2].structuredContent;
+    assert.equal(described.credential.fields[0].help, undefined);
+    assert.equal(described.credential.fields[0].valueFormat, 'secret text');
+    assert.ok(described.notes.includes(WIRO_PROJECT_NOTE));
   });
 });

@@ -20,6 +20,17 @@ export const workflowChangesSchema = z.object({
   stepsAdded: z.array(z.string()),
   stepsRemoved: z.array(z.string()),
   stepsChanged: z.array(z.string()),
+  stepChanges: z.array(z.object({
+    step: z.string(),
+    modelChange: z.object({ from: z.string(), to: z.string() }).optional(),
+    dependsChange: z.object({ from: z.array(z.string()), to: z.array(z.string()) }).optional(),
+    inputs: z.array(z.object({
+      input: z.string(),
+      from: z.string().nullable(),
+      to: z.string().nullable(),
+    })),
+  })).optional()
+    .describe('What changed inside each step of stepsChanged. Input values are JSON text with object keys sorted and secrets hidden; null means not set. A long value is cut around the first place where the old and new value differ, with ... where text is left out.'),
   inputsAdded: z.array(z.string()),
   inputsRemoved: z.array(z.string()),
   inputsChanged: z.array(z.string()),

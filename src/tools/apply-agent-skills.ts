@@ -27,6 +27,7 @@ import {
   parseSkillChangeKey,
   planBilling,
   planSkillChanges,
+  proratedDaysLeft,
   readUserAgent,
   restartNote,
   skillChangeDigest,
@@ -182,7 +183,9 @@ function quoteBillingNote(billing: PlanBilling, delta: number | null, estimate: 
   if (billing.plan === 'card') {
     return `Nothing is charged now. The card subscription is updated and the prorated difference appears on the next invoice.${after}`;
   }
-  const days = billing.daysRemaining !== null ? ` for the ${billing.daysRemaining} days left in this period` : ' for the rest of this period';
+  // The days the estimate counts, so the amount adds up.
+  const daysLeft = billing.periodEnd !== null ? proratedDaysLeft(billing.periodEnd) : 0;
+  const days = daysLeft > 0 ? ` for the ${daysLeft} ${daysLeft === 1 ? 'day' : 'days'} left in this period` : ' for the rest of this period';
   if (delta > 0) {
     return `About ${formatUsd(estimate ?? 0)} is taken from ${walletName(billing)} now${days}.${after}`;
   }

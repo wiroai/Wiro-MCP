@@ -28,6 +28,7 @@ import {
   unusedCredentialNote,
   uploadFileName,
   usableConnectionModes,
+  WIRO_PROJECT_NOTE,
   type CredentialField,
   type CredentialMeta,
 } from '../utils/agent-config.js';
@@ -542,9 +543,7 @@ async function describeCredential(
   if (usableModes.length > 0) {
     notes.push(`To choose how it connects, set field authmethod to one of: ${usableModes.join(', ')}.`);
   }
-  if (key === 'wiro') {
-    notes.push('The value is a Wiro project API key. Model runs started by the agent are billed to the wallet of the workspace that owns that project. Only use a key the user gave you.');
-  }
+  if (key === 'wiro') notes.push(WIRO_PROJECT_NOTE);
 
   const unusedNote = row && meta.oauth && !status?.connected
     ? await unusedCredentialNote(client, row, key, meta.title, signal)
