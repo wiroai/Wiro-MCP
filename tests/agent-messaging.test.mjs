@@ -428,6 +428,32 @@ test('deployed agent refusals explain the fix and point to the right tool', asyn
   }
 });
 
+test('the message tools answer a guid they cannot reach with the next step', async () => {
+  const denied = { result: false, errors: [{ code: 0, message: 'Agent not found or access denied' }] };
+  const calls = [
+    ['get_agent_conversation', { agent: 'agent-guid-1' }],
+    ['get_agent_conversation', { agent: 'agent-guid-1', session: 'default' }],
+    ['send_agent_message', { agent: 'agent-guid-1', message: 'hello' }],
+    ['delete_agent_session', { agent: 'agent-guid-1', session: 'default' }],
+    ['delete_agent_session', { agent: 'agent-guid-1', session: 'default', confirm: true }],
+  ];
+  for (const [name, args] of calls) {
+    const fake = fakeClient({
+      '/UserAgent/Message/Sessions': denied,
+      '/UserAgent/Message/History': denied,
+      '/UserAgent/Message/Send': denied,
+      '/UserAgent/Message/DeleteSession': denied,
+    });
+    await withClient(fake, async client => {
+      const result = await client.callTool({ name, arguments: args });
+      assert.equal(result.isError, true, name);
+      assert.match(textOf(result), /Agent not found\. Check the guid with list_my_agents, which lists the agents this connection can reach\./, name);
+      assert.match(textOf(result), /get_account shows which one that is\./, name);
+      assert.doesNotMatch(textOf(result), /access denied/i, name);
+    });
+  }
+});
+
 test('deployed agent refusals say who can act on a team agent without reading the agent', async () => {
   const cases = [
     [0, 'Agent is stopped. Start it from the agent panel before sending messages.', /On a team agent, starting it needs a team admin or the person who deployed it\.$/],

@@ -13,7 +13,7 @@ import {
   nextStepForAgent,
   readAgentDetail,
   readAgentStatus,
-  settledStatusAdvice,
+  readStatusAdvice,
   toAgentDetail,
   waitForAgentToSettle,
 } from '../utils/user-agent.js';
@@ -99,7 +99,7 @@ export function registerGetMyAgent(server: McpServer, client: WiroClient): void 
         }
         const plainMember = await isPlainTeamMember(client, row, extra.signal);
         const advice = settled
-          ? settledStatusAdvice(agent.status, plainMember, agent)
+          ? readStatusAdvice(agent, plainMember)
           : `The agent is still ${describeAgentStatus(agent.status).toLowerCase()}. Call get_my_agent again with wait_seconds to keep waiting.`;
         const nextAction = !settled && wait_seconds > 0
           ? {

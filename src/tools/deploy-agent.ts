@@ -18,28 +18,41 @@ import {
   describeAgentStatus,
   formatCredits,
   formatUsd,
-  isGuid,
   nextStepForAgent,
   outcomeUnknown,
   readAgentDetail,
   sameAmount,
+  tierPricingSchema,
   toAgentDetail,
   toDeployedAgent,
   toStringArray,
+  toTierPricing,
   type AgentDetail,
   type AgentTier,
 } from '../utils/user-agent.js';
-import { resolveDeployCustomSkills, type DeployCustomSkill, type TemplateCustomSkill } from '../utils/agent-config.js';
-import { toSkillSummary, toTemplateDetail, type SkillSummary } from '../utils/agent-catalog.js';
-import { connectedAsPlainMember } from '../utils/workspace.js';
-import { nextActionSchema } from './schemas.js';
+import { APPROVAL_POLICY_KEY, humanizeCustomSkillKey, resolveDeployCustomSkills, type DeployCustomSkill, type TemplateCustomSkill } from '../utils/agent-config.js';
+import { readTemplateRow, toSkillSummary, toTemplateDetail, type SkillSummary } from '../utils/agent-catalog.js';
+import { quotedBlock, quotedSpan } from '../utils/quoted-text.js';
+import { readPayingWallet, type PayingWallet } from '../utils/workspace.js';
+import { nextActionSchema, strictInput } from './schemas.js';
 
 const PAID_FROM = 'The Wiro wallet of the connected project\'s workspace: the team wallet for a team '
   + 'project, otherwise the personal wallet.';
 
+// A team deploy starts with collaborative chats, and a deploy cannot set this.
+const TEAM_CHATS_MODE = 'collaborative';
+const TEAM_CHATS_NOTE = 'A team agent starts with collaborative chats, so every member of the team sees all its chats. After '
+  + 'the deploy, update_agent with team_session_mode "private" gives each person their own chat history; the change restarts the agent.';
+
 const DEFAULT_TASKS_NOTE = 'They came with this build, with default text and schedules, run in UTC until the time zone is '
   + 'changed, and every run spends the agent\'s credits. Agree with the user which to keep: manage_agent_custom_skill '
   + '(upsert) changes a task\'s text or schedule, and enabled false turns it off.';
+
+const quoteApprovalPolicySchema = z.object({
+  enabled: z.boolean(),
+  note: z.string(),
+  text: z.string().optional(),
+});
 
 const quoteCustomSkillSchema = z.object({
   key: z.string(),
@@ -47,6 +60,13 @@ const quoteCustomSkillSchema = z.object({
   interval: z.string().optional(),
   enabled: z.boolean().optional(),
   replacesTemplateEntry: z.boolean(),
+});
+
+const quoteWalletSchema = z.object({
+  kind: z.enum(['personal', 'team', 'unknown']),
+  teamName: z.string().optional(),
+  organizationName: z.string().optional(),
+  balanceUsd: z.number().optional(),
 });
 
 const quoteSchema = z.object({
@@ -57,9 +77,17 @@ const quoteSchema = z.object({
   priceUsd: z.number(),
   monthlyCredits: z.number(),
   paidFrom: z.string(),
+  wallet: quoteWalletSchema.optional()
+    .describe('The wallet this charge comes from, as far as it can be read.'),
+  pricing: tierPricingSchema.optional()
+    .describe('What this agent costs on each tier, every 30 days.'),
+  teamSessionMode: z.string().optional()
+    .describe('In a team workspace: the chat mode the new agent starts with.'),
   skills: z.array(z.string()).optional(),
   credentialsNeeded: z.array(z.object({ key: z.string(), title: z.string() })),
   customSkills: z.array(quoteCustomSkillSchema).optional(),
+  approvalPolicy: quoteApprovalPolicySchema.optional()
+    .describe('What custom_skills does to the agent\'s approval policy. Tell the user before they approve.'),
 });
 
 type Quote = z.infer<typeof quoteSchema>;
@@ -102,6 +130,51 @@ function customSkillLine(skill: { key: string; kind: string; interval?: string |
   return `\`${skill.key}\` (${details})`;
 }
 
+/** What custom_skills does to the approval policy, for the quote. A policy that is off is not read, so only one that is on shows its text. */
+function quoteApprovalPolicy(skills: DeployCustomSkill[]): z.infer<typeof quoteApprovalPolicySchema> | undefined {
+  const policy = skills.find(skill => skill.key === APPROVAL_POLICY_KEY);
+  if (!policy) return undefined;
+  if (policy.enabled === false) {
+    return {
+      enabled: false,
+      note: 'This deploy starts the agent with its approval policy turned off. It can then post, send or change things on outside services by itself, such as from a scheduled task, without waiting for the user\'s yes.',
+    };
+  }
+  if (policy.value === undefined) return undefined;
+  return {
+    enabled: true,
+    note: 'This deploy sets the agent\'s approval policy to the text below. That text decides what the agent can post, send or change on outside services by itself, without waiting for the user\'s yes.',
+    text: policy.value,
+  };
+}
+
+/** The wallet a quote charges, named when the connection can read it. */
+function paidFromText({ workspace }: PayingWallet): string {
+  if (workspace.kind === 'personal') return 'The personal wallet.';
+  if (workspace.kind !== 'team') return PAID_FROM;
+  const team = workspace.teamName ? `the team ${quotedSpan(workspace.teamName)}` : 'the connected project\'s team';
+  return `The wallet of ${team}${workspace.organizationName ? ` (${quotedSpan(workspace.organizationName)})` : ''}.`;
+}
+
+function quoteWallet({ workspace, balanceUsd }: PayingWallet): z.infer<typeof quoteWalletSchema> | undefined {
+  if (workspace.kind === 'unknown' && balanceUsd === null) return undefined;
+  return {
+    kind: workspace.kind,
+    ...(workspace.teamName ? { teamName: workspace.teamName } : {}),
+    ...(workspace.organizationName ? { organizationName: workspace.organizationName } : {}),
+    ...(balanceUsd !== null ? { balanceUsd } : {}),
+  };
+}
+
+/** The tier that was not asked for: its price and credits. */
+function otherTierLine(quote: Quote): string | null {
+  if (!quote.pricing) return null;
+  const { starter, pro } = quote.pricing;
+  return quote.tier === 'starter'
+    ? `- Pro instead: ${formatUsd(pro.priceUsd)} every 30 days with ${formatCredits(pro.monthlyCredits)} monthly credits. Only Pro can buy extra credit packs.`
+    : `- Starter instead: ${formatUsd(starter.priceUsd)} every 30 days with ${formatCredits(starter.monthlyCredits)} monthly credits.`;
+}
+
 function quoteText(quote: Quote): string {
   const what = quote.kind === 'template'
     ? `${quote.title}, from the template ${quote.template?.title ?? ''} (\`${quote.template?.slug ?? ''}\`)`
@@ -113,8 +186,11 @@ function quoteText(quote: Quote): string {
     `- Tier: ${quote.tier === 'pro' ? 'Pro' : 'Starter'}`,
     `- Price: ${formatUsd(quote.priceUsd)} now, then ${formatUsd(quote.priceUsd)} every 30 days until the plan is cancelled`,
     `- Monthly credits: ${formatCredits(quote.monthlyCredits)}. They pay for the agent's chat and scheduled tasks (100 credits = $1). Model runs it starts, for images, videos or voice calls, are billed to the wallet of the Wiro API key saved on the agent.`,
-    `- Paid from: ${quote.paidFrom} get_account shows the balance.`,
+    `- Paid from: ${quote.paidFrom} ${quote.wallet?.balanceUsd !== undefined ? `It holds ${formatUsd(quote.wallet.balanceUsd)}.` : 'get_account shows the balance.'}`,
   ];
+  const otherTier = otherTierLine(quote);
+  if (otherTier) lines.push(otherTier);
+  if (quote.teamSessionMode) lines.push(`- Chats: ${TEAM_CHATS_NOTE}`);
   if (quote.customSkills?.length) {
     const scheduled = quote.customSkills.some(skill => skill.kind === 'scheduled_task');
     lines.push(`- Custom skills and scheduled tasks: ${quote.customSkills.map(skill => customSkillLine(skill, skill.replacesTemplateEntry)).join('; ')}.${scheduled ? ' Scheduled tasks run in UTC until the time zone is changed, and every run spends the agent\'s credits.' : ''}`);
@@ -124,6 +200,10 @@ function quoteText(quote: Quote): string {
   }
   if (quote.credentialsNeeded.length > 0) {
     lines.push(`- After deployment the user must provide: ${quote.credentialsNeeded.map(item => `${item.title} (\`${item.key}\`)`).join(', ')}`);
+  }
+  if (quote.approvalPolicy) {
+    lines.push(`- Approval policy: ${quote.approvalPolicy.note} Say so when you ask the user to approve.`);
+    if (quote.approvalPolicy.text) lines.push('', ...quotedBlock('Approval policy text, from custom_skills:', quote.approvalPolicy.text));
   }
   return lines.join('\n');
 }
@@ -151,6 +231,10 @@ function defaultScheduledTasks(agent: AgentDetail, quote: Quote, requested: Depl
     : []));
 }
 
+function startsCollaborative(agent: AgentDetail): boolean {
+  return agent.workspace === 'team' && agent.teamSessionMode === TEAM_CHATS_MODE;
+}
+
 function deployedText(
   agent: AgentDetail,
   quote: Quote,
@@ -172,6 +256,7 @@ function deployedText(
   if (missing.length > 0) {
     lines.push(`- Not found on the new agent: ${missing.map(skill => `\`${skill.key}\``).join(', ')}. get_my_agent shows its custom skills; manage_agent_custom_skill adds them.`);
   }
+  if (startsCollaborative(agent)) lines.push(`- Chats: ${TEAM_CHATS_NOTE}`);
   if (defaultTasks.length > 0) {
     lines.push(`- Scheduled tasks on by default: ${defaultTasks.map(task => `\`${task.key}\` (runs on "${task.interval}")`).join(', ')}. ${DEFAULT_TASKS_NOTE}`);
   }
@@ -200,9 +285,11 @@ export function registerDeployAgent(server: McpServer, client: WiroClient): void
         + 'agent starts on its own after deployment. Credentials can be added later with set_agent_credentials '
         + 'or connect_agent_oauth, but skills that need them do not work until then. A custom build also gets '
         + 'the scheduled tasks its skills come with, or a starter task on Mondays at 10:00; the result names the ones '
-        + 'that are on, and they can be changed or turned off. To change a template\'s '
+        + 'that are on, and they can be changed or turned off. The quote names the wallet and the other tier\'s price. '
+        + 'In a team workspace the agent starts with collaborative chats, which every team member sees; update_agent '
+        + 'changes that after the deploy. To change a template\'s '
         + 'skills, deploy it first and then use apply_agent_skills. get_playbook describes the whole flow.',
-      inputSchema: {
+      inputSchema: strictInput({
         template: z.string().min(1).max(200).optional()
           .describe('Template slug or guid from list_agent_templates. Leave it out for a custom build.'),
         custom: z.boolean().default(false)
@@ -225,7 +312,7 @@ export function registerDeployAgent(server: McpServer, client: WiroClient): void
           .describe('With confirm: true, the price the user approved, from the quote\'s nextAction (quote.priceUsd). Required to deploy. If a fresh quote no longer matches it, nothing is charged and the new quote is returned.'),
         confirm: z.boolean().default(false)
           .describe('false returns only the quote. true deploys the agent and charges the wallet. Set it only after the user approved the quoted price.'),
-      },
+      }),
       outputSchema: {
         stage: z.enum(['quote', 'deployed', 'duplicate', 'retry_later']),
         quote: quoteSchema,
@@ -269,7 +356,8 @@ export function registerDeployAgent(server: McpServer, client: WiroClient): void
 
         // Every member of a team can read what a quote needs, but only a team
         // admin can deploy there, so a member gets the answer before a quote.
-        if (await connectedAsPlainMember(client, extra.signal)) {
+        const payer = await readPayingWallet(client, extra.signal);
+        if (payer.workspace.role === 'member') {
           throw new Error('Only a team admin can deploy an agent in this team, and this connection acts as a team member '
             + 'without admin rights. Nothing was quoted, created or charged. A team admin can deploy it or grant admin '
             + 'rights, or the user can deploy in the personal workspace with a personal project, by its API key or a '
@@ -282,16 +370,9 @@ export function registerDeployAgent(server: McpServer, client: WiroClient): void
         const skillNames = [...new Set(args.skills ?? [])];
 
         if (templateRef) {
-          const body = requireApiSuccess(
-            await client.post<ApiEnvelope & { agents?: unknown }>('/Agent/Detail', {
-              ...(isGuid(templateRef) ? { guid: templateRef } : { slug: templateRef }),
-              ...(requestedCustomSkills.length > 0 ? { type: 'full' } : {}),
-            }, extra.signal),
-            'The agent template could not be read.',
+          const detail = toTemplateDetail(
+            await readTemplateRow(client, templateRef, requestedCustomSkills.length > 0, extra.signal),
           );
-          const row = Array.isArray(body.agents) ? body.agents.find(isPlainObject) : undefined;
-          if (!row) throw new Error(`No agent template was found for "${templateRef}".`);
-          const detail = toTemplateDetail(row);
           if (!detail.pricing) {
             throw new Error('This template cannot be priced right now, so it cannot be deployed. Try again later.');
           }
@@ -305,7 +386,8 @@ export function registerDeployAgent(server: McpServer, client: WiroClient): void
             tier,
             priceUsd: price.priceUsd,
             monthlyCredits: price.monthlyCredits,
-            paidFrom: PAID_FROM,
+            paidFrom: paidFromText(payer),
+            pricing: detail.pricing,
             credentialsNeeded: detail.requiredCredentials.map(item => ({ key: item.key, title: item.title })),
           };
         } else {
@@ -361,17 +443,24 @@ export function registerDeployAgent(server: McpServer, client: WiroClient): void
               credentialsNeeded.set(skill.credentialKey, `${skill.title} credentials`);
             }
           }
+          // A draft preview prices both tiers at once.
+          const pricing = toTierPricing(preview.tiers);
           quote = {
             kind: 'custom',
             title: args.title ?? '',
             tier,
             priceUsd,
             monthlyCredits,
-            paidFrom: PAID_FROM,
+            paidFrom: paidFromText(payer),
+            ...(pricing ? { pricing } : {}),
             skills: build,
             credentialsNeeded: [...credentialsNeeded].map(([key, title]) => ({ key, title })),
           };
         }
+
+        const wallet = quoteWallet(payer);
+        if (wallet) quote.wallet = wallet;
+        if (payer.workspace.kind === 'team') quote.teamSessionMode = TEAM_CHATS_MODE;
 
         const resolved = resolveDeployCustomSkills(requestedCustomSkills, templateTasks);
         if (resolved.errors.length > 0) {
@@ -387,6 +476,8 @@ export function registerDeployAgent(server: McpServer, client: WiroClient): void
             replacesTemplateEntry: skill.fromTemplate,
           }));
         }
+        const approvalPolicy = quoteApprovalPolicy(customSkills);
+        if (approvalPolicy) quote.approvalPolicy = approvalPolicy;
 
         const { credentials, confirm: _confirm, ...repeat } = args;
         const hasCredentials = credentials !== undefined && Object.keys(credentials).length > 0;
@@ -433,15 +524,22 @@ export function registerDeployAgent(server: McpServer, client: WiroClient): void
           ...(credentials && Object.keys(credentials).length > 0 ? { credentials } : {}),
           ...(customSkills.length > 0
             ? {
-              customskills: customSkills.map(entry => ({
-                key: entry.key,
-                ...(entry.value !== undefined ? { value: entry.value } : {}),
-                ...(entry.description !== undefined ? { description: entry.description } : {}),
-                ...(entry.interval !== undefined ? { interval: entry.interval } : {}),
-                ...(entry.enabled !== undefined ? { enabled: entry.enabled } : {}),
-                // A key the template already has overrides it; any other key is the user's own.
-                _user_created: !entry.fromTemplate,
-              })),
+              customskills: customSkills.map(entry => {
+                // Every custom build comes with an approval policy, and one set here stays that
+                // entry, whose description is fixed from then on. A template without a policy has
+                // no such entry, so there it is the user's own, like any other new key.
+                const buildPolicy = custom && entry.key === APPROVAL_POLICY_KEY;
+                const description = entry.description ?? (buildPolicy ? humanizeCustomSkillKey(entry.key) : undefined);
+                return {
+                  key: entry.key,
+                  ...(entry.value !== undefined ? { value: entry.value } : {}),
+                  ...(description !== undefined ? { description } : {}),
+                  ...(entry.interval !== undefined ? { interval: entry.interval } : {}),
+                  ...(entry.enabled !== undefined ? { enabled: entry.enabled } : {}),
+                  // A key the template already has overrides it; any other key is the user's own.
+                  _user_created: !entry.fromTemplate && !buildPolicy,
+                };
+              }),
             }
             : {}),
         };
@@ -533,6 +631,7 @@ export function registerDeployAgent(server: McpServer, client: WiroClient): void
             ...(savedCustomSkills.length > 0 ? { customSkills: savedCustomSkills } : {}),
             ...(defaultTasks.length > 0 ? { defaultScheduledTasks: defaultTasks } : {}),
             message: `Deployed and charged ${formatUsd(chargedUsd)}. The plan renews every 30 days until it is cancelled.`
+              + (startsCollaborative(agent) ? ` ${TEAM_CHATS_NOTE}` : '')
               + (defaultTasks.length > 0
                 ? ` Scheduled tasks on by default: ${defaultTasks.map(task => task.key).join(', ')}. ${DEFAULT_TASKS_NOTE}`
                 : ''),

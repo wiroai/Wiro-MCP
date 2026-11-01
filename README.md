@@ -258,7 +258,7 @@ your wallet after each reply. Your own agents run on a monthly plan with credits
 | `list_agent_templates` | Browse ready-made agent templates and their monthly prices |
 | `get_agent_template` | Read a template's skills, plans, and the accounts and keys it needs |
 | `list_agent_skills` | Browse the skills an agent can have, and what each one needs to work |
-| `deploy_agent` | Deploy an agent from a template or build one from skills; shows the price and asks before charging |
+| `deploy_agent` | Deploy an agent from a template or build one from skills; shows the price, the wallet it charges and the other tier's price, and asks before charging |
 | `list_my_agents` | List your agents with their status, plan and credits |
 | `get_my_agent` | Read one agent's setup, plan and credits; can wait until it is running |
 | `control_agent` | Start, stop or restart an agent |

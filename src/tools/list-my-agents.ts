@@ -28,8 +28,10 @@ export function registerListMyAgents(server: McpServer, client: WiroClient): voi
       title: 'List my deployed Wiro agents',
       description: 'List the agents deployed in the connected project\'s workspace (a team project '
         + 'lists the team\'s agents, a personal project the personal ones). Each row shows the status, '
-        + 'whether setup is still required, the plan and the credit balance. Call get_my_agent with an '
-        + 'agent_guid for the full state, including which credentials are missing.',
+        + 'the plan and the credit balance, and marks an agent waiting in setup (status 6). An agent in '
+        + 'another status can still miss a required credential. get_my_agent with an agent_guid gives the '
+        + 'full state, including which credentials are missing, so read it before you say that an agent\'s '
+        + 'setup is done.',
       inputSchema: strictInput({
         sort: z.enum(['newest', 'oldest', 'title', 'status', 'recently_updated']).default('newest')
           .describe('Order of the list (default newest first).'),

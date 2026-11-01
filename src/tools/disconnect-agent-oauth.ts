@@ -3,6 +3,8 @@ import { z } from 'zod';
 import type { WiroClient } from '../client.js';
 import { errorResult, errorText, requireApiSuccess, type ApiEnvelope } from '../utils/api.js';
 import {
+  accountLabel,
+  connectionRefusalText,
   loadCredentialMeta,
   readOAuthStatus,
   type OAuthStatusSnapshot,
@@ -78,7 +80,7 @@ export function registerDisconnectAgentOauth(server: McpServer, client: WiroClie
 
         if (!confirm) {
           const message = connectedBefore
-            ? `${meta.title} is connected${accounts.length > 0 ? ` for ${accounts.map(account => account.name || account.id).join(', ')}` : ''}. ${willClear}`
+            ? `${meta.title} is connected${accounts.length > 0 ? ` for ${accounts.map(accountLabel).join(', ')}` : ''}. ${willClear}`
             : `${meta.title} does not look connected on this agent. Disconnecting still clears any saved ${meta.title} settings.`;
           return {
             content: [{ type: 'text' as const, text: `## Disconnect ${meta.title}?\n\n${message}\n\nNothing has changed yet. After the user agrees, call disconnect_agent_oauth again with confirm: true.` }],
@@ -125,7 +127,7 @@ export function registerDisconnectAgentOauth(server: McpServer, client: WiroClie
         const message = errorText(error);
         // The hint follows Wiro's message as a paragraph of its own, as in connect_agent_oauth.
         return errorResult(new Error(/not found or unauthorized/i.test(message)
-          ? `${message}\n\nIntegrations can only be changed with a project created by the person who deployed the agent: connect this server with such a project, by its API key or a browser sign-in.`
+          ? await connectionRefusalText(client, agent_guid, message, 'changed', extra.signal)
           : message));
       }
     },

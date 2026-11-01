@@ -1,9 +1,11 @@
 import crypto from 'node:crypto';
 import type { WiroClient } from '../client.js';
 import {
+  AGENT_NOT_FOUND_TEXT,
   ApiResultError,
   asString,
   hasErrorCode,
+  isAgentNotFound,
   isPlainObject,
   requireApiSuccess,
   toNumber,
@@ -11,7 +13,8 @@ import {
   unixToIso,
   type ApiEnvelope,
 } from './api.js';
-import { planEndsWithPeriod } from './user-agent.js';
+import { oneLine, quotedSpan } from './quoted-text.js';
+import { credentialKeysSetupWaitsFor, planEndsWithPeriod } from './user-agent.js';
 
 // Helpers for configuring a deployed agent: its registry skills, credentials,
 // sign-in connections and custom skills. The pure functions mirror the server
@@ -95,7 +98,7 @@ export async function readUserAgent(
     'Could not read the agent.',
   );
   const row = Array.isArray(body.useragents) ? body.useragents[0] : undefined;
-  if (!isPlainObject(row)) throw new Error(`Agent ${agentGuid} was not found.`);
+  if (!isPlainObject(row)) throw new Error(AGENT_NOT_FOUND_TEXT);
   return row;
 }
 
@@ -644,6 +647,29 @@ export function describeSkillsApplyError(error: unknown, plan?: PlanBilling['pla
     };
   }
   return { ...base, guidance: workspaceHint(message) ?? '' };
+}
+
+/**
+ * One refusal covers an agent that does not exist and an agent this project may
+ * not connect, and the fix for each is different. The agent's own read tells
+ * them apart.
+ */
+export async function connectionRefusalText(
+  client: WiroClient,
+  agentGuid: string,
+  message: string,
+  done: 'connected' | 'changed',
+  signal?: AbortSignal,
+): Promise<string> {
+  const rule = `can only be ${done} with a project created by the person who deployed the agent: `
+    + 'connect this server with such a project, by its API key or a browser sign-in.';
+  try {
+    await readUserAgent(client, agentGuid, signal);
+  } catch (error) {
+    if (isAgentNotFound(error)) return AGENT_NOT_FOUND_TEXT;
+    return `${message}\n\nCheck the guid with list_my_agents. If the agent is listed, integrations ${rule}`;
+  }
+  return `${message}\n\nIntegrations ${rule}`;
 }
 
 /** The API names a dashboard concept ("team context"); here the workspace is the connected project's. */
@@ -1312,7 +1338,8 @@ export function prepareCredentialWrite(
     const mayClear = !field.required || meta.channel !== null;
     if (isEmptyValue(input.value)) {
       if (!mayClear) {
-        prepared.errors.push(`${field.label} is required and cannot be cleared.`);
+        prepared.errors.push(`${field.label} is required and cannot be cleared. To replace the saved value, send the new one. `
+          + 'To end the agent\'s access, revoke it with the service it belongs to.');
         continue;
       }
       const cleared = shape === 'string-array' || shape === 'object-array' ? [] : '';
@@ -1441,7 +1468,7 @@ export function credentialStatus(row: Row, key: string, meta?: CredentialMeta | 
     title: asString(schema.title) ?? meta?.title ?? key,
     connected,
     filled: group._filled === true,
-    requiredMissing: group._required_missing === true,
+    requiredMissing: credentialKeysSetupWaitsFor(row).has(key),
     optional: group.optional === true,
     missingFields,
   };
@@ -1607,6 +1634,17 @@ export interface AccountRef {
   name: string;
 }
 
+/**
+ * An account in a line of this server's text. The outside service sets its name,
+ * and a service without an account choice gives that name as the id too, so both
+ * are quoted and a repeat is left out.
+ */
+export function accountLabel(account: AccountRef): string {
+  const name = oneLine(account.name);
+  const id = quotedSpan(account.id);
+  return name && name !== oneLine(account.id) ? `${quotedSpan(name)} (${id})` : id;
+}
+
 /** Candidate or saved accounts in one shape, whatever the provider calls the fields. */
 export function toAccountRefs(list: unknown, picker?: PickerMeta | null): AccountRef[] {
   if (!Array.isArray(list)) return [];
@@ -1707,7 +1745,7 @@ export function buildChainedSelections(
     if (group.errorCode) {
       return {
         skippedParents: [],
-        error: `${group.parent.name || group.parent.id} could not be read (${group.errorCode}), so nothing can be chosen for it. Leave it out.`,
+        error: `${accountLabel(group.parent)} could not be read (${group.errorCode}), so nothing can be chosen for it. Leave it out.`,
       };
     }
     const ids = chosen.get(group.parent.id) ?? [];
@@ -1716,7 +1754,7 @@ export function buildChainedSelections(
       if (!item) {
         return {
           skippedParents: [],
-          error: `"${itemId}" is not available under ${group.parent.name || group.parent.id}. Available: ${group.items.map(candidate => `${candidate.id} (${candidate.name})`).join(', ') || 'none'}.`,
+          error: `"${itemId}" is not available under ${accountLabel(group.parent)}. Available: ${group.items.map(accountLabel).join(', ') || 'none'}.`,
         };
       }
       if (!ids.includes(item.id)) ids.push(item.id);

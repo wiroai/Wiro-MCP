@@ -4,6 +4,7 @@ import type { WiroClient } from '../client.js';
 import {
   asString,
   errorResult,
+  isAgentNotFound,
   isPlainObject,
   requireApiSuccess,
   toNumber,
@@ -19,7 +20,7 @@ import {
 import { quotedSpan } from '../utils/quoted-text.js';
 import { nextActionSchema, strictInput } from './schemas.js';
 
-/** The session's row in the key's session list, or null when the list cannot be read. */
+/** The session's row in the key's session list, or null when the list cannot be read. A guid that reaches no agent stays an error. */
 async function findSession(
   client: WiroClient,
   target: AgentTarget,
@@ -35,7 +36,8 @@ async function findSession(
     const rows = Array.isArray(data.sessions) ? data.sessions.filter(isPlainObject) : [];
     const row = rows.find(candidate => asString(candidate.sessionkey) === session);
     return row ? { listed: true, messageCount: toNumber(row.messagecount) } : { listed: false, messageCount: null };
-  } catch {
+  } catch (error) {
+    if (isAgentNotFound(error)) throw error;
     return null;
   }
 }

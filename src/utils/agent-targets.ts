@@ -408,10 +408,6 @@ export async function explainSendRefusal(
     if (status !== null) {
       return DEPLOYED_STATUS_HELP[status] ?? `${message} Check the agent with get_my_agent.`;
     }
-    if (/agent not found or access denied/i.test(message)) {
-      return `${message}. Check the guid with list_my_agents. The connected project reaches only the agents of its own `
-        + 'workspace (personal or team).';
-    }
     if (/belongs to a team|personal workspace|different team/i.test(message)) {
       return `${message} The connected project decides the workspace: connect with a project from the agent's workspace, by its API key or a browser sign-in.`;
     }

@@ -1,8 +1,9 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { WiroClient } from '../client.js';
-import { errorResult, isPlainObject, requireApiSuccess, type ApiEnvelope } from '../utils/api.js';
+import { errorResult } from '../utils/api.js';
 import {
+  readTemplateRow,
   templateDetailSchema,
   toTemplateDetail,
   type CredentialRequirement,
@@ -14,7 +15,6 @@ import {
   formatModelRates,
   formatScheduledTaskLine,
   formatUsd,
-  isGuid,
 } from '../utils/user-agent.js';
 import { nextActionSchema, strictInput } from './schemas.js';
 
@@ -109,17 +109,7 @@ export function registerGetAgentTemplate(server: McpServer, client: WiroClient):
     },
     async ({ template, include_tasks }, extra) => {
       try {
-        const reference = template.trim();
-        const body = requireApiSuccess(
-          await client.post<ApiEnvelope & { agents?: unknown }>('/Agent/Detail', {
-            ...(isGuid(reference) ? { guid: reference } : { slug: reference }),
-            ...(include_tasks ? { type: 'full' } : {}),
-          }, extra.signal),
-          'The agent template could not be read.',
-        );
-        const row = Array.isArray(body.agents) ? body.agents.find(isPlainObject) : undefined;
-        if (!row) throw new Error(`No agent template was found for "${reference}".`);
-        const detail = toTemplateDetail(row);
+        const detail = toTemplateDetail(await readTemplateRow(client, template.trim(), include_tasks, extra.signal));
 
         return {
           content: [{ type: 'text' as const, text: formatTemplate(detail) }],

@@ -25,11 +25,16 @@ import {
 import { isPlainTeamMember } from '../utils/workspace.js';
 import { nextActionSchema, strictInput } from './schemas.js';
 
+type Action = 'start' | 'stop' | 'restart';
 type Outcome = 'requested' | 'not_needed' | 'refused';
 
 interface Decision {
   outcome: Outcome;
   message: string;
+  /** What happens next by itself. A wait that sees the outcome says that instead. */
+  underWay?: string;
+  /** Stands at the end of the message, whatever the wait found. */
+  closing?: string;
   nextAction?: NextAction;
 }
 
@@ -49,11 +54,32 @@ function planAfterStop(plan: AgentSubscription | null): string {
   return `Stopping does not pause the plan: it is billed by card and ${state}. Card plans are managed in the Wiro dashboard.`;
 }
 
+/** What a finished wait found, in words that fit the action. A stop that ended stopped needs none: the status line says so. */
+function outcomeAfterWait(action: Action, decided: Outcome, status: number | null, plainMember: boolean, agent: AgentDetail): string {
+  if (action !== 'stop') return settledStatusAdvice(status, plainMember, agent);
+  if (status === 0) return '';
+  if (status === 5) {
+    // A stop Wiro refused found nothing to stop, and its own message says so.
+    return decided === 'requested'
+      ? 'The stop ended in the error state, so the agent may still be running. control_agent with action stop tries again; get_agent_activity with kind logs may show why.'
+      : '';
+  }
+  return `The agent shows ${describeAgentStatus(status).toLowerCase()} after the stop, so it may have been started again. get_my_agent shows its state.`;
+}
+
 function waitAction(guid: string): NextAction {
   return {
     tool: 'get_my_agent',
     arguments: { agent_guid: guid, wait_seconds: DEFAULT_WAIT_SECONDS },
     reason: 'Wait until the agent has settled. Do not repeat the action that started it.',
+  };
+}
+
+function retryStopAction(guid: string): NextAction {
+  return {
+    tool: 'control_agent',
+    arguments: { agent_guid: guid, action: 'stop', wait_seconds: DEFAULT_WAIT_SECONDS },
+    reason: 'Try the stop again. If it ends in the error state again, tell the user the agent may still be running and that Wiro support can help.',
   };
 }
 
@@ -241,18 +267,19 @@ export function registerControlAgent(server: McpServer, client: WiroClient): voi
         if (call) {
           try {
             requireApiSuccess(await client.post(call.path, { guid }, extra.signal), call.fallback);
-            const label = call.path === '/UserAgent/Start'
-              ? 'Start requested. The agent is queued and starts on its own; this can take a while.'
-              : call.path === '/UserAgent/Stop'
-                ? `Stop requested. ${planAfterStop(current.subscription)}`
-                : 'Restart requested. The agent stops and starts again with its current settings.';
             const missing = current.missingCredentials;
-            decision = {
-              outcome: 'requested',
-              message: label + (call.path !== '/UserAgent/Stop' && missing.length > 0
-                ? ` Missing credentials: ${missing.map(item => item.title).join(', ')}. Skills that need them fail until they are set.`
-                : ''),
-            };
+            const closing = missing.length > 0
+              ? `Missing credentials: ${missing.map(item => item.title).join(', ')}. Skills that need them fail until they are set.`
+              : undefined;
+            decision = call.path === '/UserAgent/Stop'
+              ? { outcome: 'requested', message: `Stop requested. ${planAfterStop(current.subscription)}` }
+              : {
+                outcome: 'requested',
+                ...(call.path === '/UserAgent/Start'
+                  ? { message: 'Start requested.', underWay: 'The agent is queued and starts on its own; this can take a while.' }
+                  : { message: 'Restart requested.', underWay: 'The agent stops and starts again with its current settings.' }),
+                ...(closing ? { closing } : {}),
+              };
           } catch (error) {
             const refusal = error instanceof ApiResultError ? interpretRefusal(error.message, current) : null;
             if (!refusal) throw error;
@@ -283,19 +310,25 @@ export function registerControlAgent(server: McpServer, client: WiroClient): voi
 
         const afterView = toAgentDetail(after);
         const status = readFailed ? null : readAgentStatus(after);
-        let message = result.message + (readFailed ? ' The new status could not be read; get_my_agent shows it.' : '');
+        let parts = [result.message];
         let nextAction = result.nextAction;
         if (result.outcome === 'requested' || result.outcome === 'not_needed') {
-          if (!settled) {
-            nextAction = waitAction(guid);
-          } else {
-            // A stop that ended stopped needs no advice: the status line says so.
-            if (waitedSeconds !== undefined && !(action === 'stop' && status === 0)) {
-              message += ` ${settledStatusAdvice(status, plainMember)}`;
-            }
-            nextAction = action === 'stop' ? undefined : nextAction ?? nextStepForAgent(afterView, DEFAULT_WAIT_SECONDS, plainMember);
+          if (settled && waitedSeconds !== undefined) {
+            const outcome = outcomeAfterWait(action, result.outcome, status, plainMember, afterView);
+            // An action that was not needed has only the outcome to tell: the status line has the state it found.
+            if (outcome) parts = result.outcome === 'not_needed' ? [outcome] : [...parts, outcome];
+          } else if (result.underWay) {
+            parts.push(result.underWay);
           }
+          nextAction = !settled
+            ? waitAction(guid)
+            : action === 'stop'
+              ? (result.outcome === 'requested' && status === 5 ? retryStopAction(guid) : undefined)
+              : nextAction ?? nextStepForAgent(afterView, DEFAULT_WAIT_SECONDS, plainMember);
         }
+        if (result.closing) parts.push(result.closing);
+        if (readFailed) parts.push('The new status could not be read; get_my_agent shows it.');
+        const message = parts.join(' ');
 
         return {
           content: [{

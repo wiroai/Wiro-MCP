@@ -21,17 +21,28 @@ interface OrganizationListResponse extends ApiEnvelope {
   organizations?: unknown;
 }
 
+interface TeamListResponse extends ApiEnvelope {
+  team?: unknown;
+}
+
 interface WalletListResponse extends ApiEnvelope {
   wallet?: Array<Record<string, unknown>>;
 }
 
-/** Every team of the connected project's creator, in Wiro's order. Throws when the list cannot be read. */
-export async function readTeamMemberships(client: WiroClient, signal?: AbortSignal): Promise<TeamMembership[]> {
+async function readOrganizations(client: WiroClient, signal?: AbortSignal): Promise<Array<Record<string, unknown>>> {
   const body = requireApiSuccess(
     await client.post<OrganizationListResponse>('/Organization/List', {}, signal),
     'The teams could not be read.',
   );
-  const organizations = Array.isArray(body.organizations) ? body.organizations.filter(isPlainObject) : [];
+  return Array.isArray(body.organizations) ? body.organizations.filter(isPlainObject) : [];
+}
+
+/** Every team of the connected project's creator, in Wiro's order. Throws when the list cannot be read. */
+export async function readTeamMemberships(client: WiroClient, signal?: AbortSignal): Promise<TeamMembership[]> {
+  return membershipsIn(await readOrganizations(client, signal));
+}
+
+function membershipsIn(organizations: Array<Record<string, unknown>>): TeamMembership[] {
   return organizations.flatMap(organization => {
     const organizationName = asString(organization.name);
     const teams = Array.isArray(organization.teams) ? organization.teams.filter(isPlainObject) : [];
@@ -58,21 +69,116 @@ export function primaryWallet(wallets: Array<Record<string, unknown>>): Record<s
   return wallets.find(row => row.symbol === 'USD') ?? wallets[0];
 }
 
+export interface ConnectedWorkspace {
+  kind: 'personal' | 'team' | 'unknown';
+  teamName?: string;
+  organizationName?: string;
+  role?: TeamRole;
+}
+
 /**
- * Whether the connected project belongs to a team in which its creator is a
- * member without admin rights, where only a team admin can deploy. False for
- * a personal project, and when this cannot be read.
+ * The team a wallet belongs to when its person is not a member of that team. An
+ * organization's owner can use a key of a team project with no member row, so
+ * the memberships leave that team out. A wallet keyed by an owner's id is that
+ * person's own and needs no read. Throws when a team list cannot be read.
  */
-export async function connectedAsPlainMember(client: WiroClient, signal?: AbortSignal): Promise<boolean> {
+async function ownedTeamOfWallet(
+  client: WiroClient,
+  organizations: Array<Record<string, unknown>>,
+  owner: string,
+  signal?: AbortSignal,
+): Promise<ConnectedWorkspace | undefined> {
+  if (organizations.some(organization => organization.owneruuid === owner)) return undefined;
+  for (const organization of organizations) {
+    const organizationguid = asString(organization.guid);
+    if (!organizationguid) continue;
+    const body = requireApiSuccess(
+      await client.post<TeamListResponse>('/Team/List', { organizationguid }, signal),
+      'The teams could not be read.',
+    );
+    const teams = Array.isArray(body.team) ? body.team.filter(isPlainObject) : [];
+    const team = teams.find(row => row.guid === owner);
+    if (team) {
+      const teamName = asString(team.name);
+      const organizationName = asString(organization.name);
+      return { kind: 'team', ...(teamName ? { teamName } : {}), ...(organizationName ? { organizationName } : {}) };
+    }
+  }
+  return undefined;
+}
+
+/**
+ * The workspace a wallet belongs to: a team wallet is keyed by the team id.
+ * Unknown when the teams cannot be read.
+ */
+export async function workspaceOfWallet(
+  client: WiroClient,
+  wallet: Record<string, unknown> | undefined,
+  signal?: AbortSignal,
+): Promise<ConnectedWorkspace> {
+  const owner = wallet ? asString(wallet.uuid) : undefined;
   try {
-    const memberOf = (await readTeamMemberships(client, signal)).filter(team => team.role === 'member');
-    if (memberOf.length === 0) return false;
-    const wallets = (await client.post<WalletListResponse>('/Wallet/List', {}, signal)).wallet;
-    const owner = asString(primaryWallet(Array.isArray(wallets) ? wallets : [])?.uuid);
-    return owner !== undefined && memberOf.some(team => team.guid === owner);
+    const organizations = await readOrganizations(client, signal);
+    const team = owner ? membershipsIn(organizations).find(candidate => candidate.guid === owner) : undefined;
+    if (team) {
+      return {
+        kind: 'team',
+        ...(team.teamName ? { teamName: team.teamName } : {}),
+        ...(team.organizationName ? { organizationName: team.organizationName } : {}),
+        ...(team.role ? { role: team.role } : {}),
+      };
+    }
+    return (owner ? await ownedTeamOfWallet(client, organizations, owner, signal) : undefined) ?? { kind: 'personal' };
   } catch (error) {
     if (signal?.aborted) throw error;
-    return false;
+    return { kind: 'unknown' };
+  }
+}
+
+function money(value: unknown): number {
+  const parsed = typeof value === 'number' ? value : parseFloat(String(value ?? ''));
+  return Number.isFinite(parsed) ? Math.round(parsed * 100) / 100 : 0;
+}
+
+export interface WalletBalance {
+  currency: 'USD';
+  totalUsd: number;
+  depositUsd: number;
+  couponCreditUsd: number;
+  storeRevenueUsd: number;
+}
+
+export function walletBalance(wallet: Record<string, unknown>): WalletBalance {
+  const depositUsd = money(wallet.amount);
+  const couponCreditUsd = money(wallet.giftedamount);
+  const storeRevenueUsd = money(wallet.storeamount);
+  return {
+    currency: 'USD',
+    totalUsd: Math.round((depositUsd + couponCreditUsd + storeRevenueUsd) * 100) / 100,
+    depositUsd,
+    couponCreditUsd,
+    storeRevenueUsd,
+  };
+}
+
+export interface PayingWallet {
+  workspace: ConnectedWorkspace;
+  balanceUsd: number | null;
+}
+
+/**
+ * The wallet this connection pays from and its workspace, as far as they can be
+ * read. Without a wallet row the workspace cannot be told apart.
+ */
+export async function readPayingWallet(client: WiroClient, signal?: AbortSignal): Promise<PayingWallet> {
+  try {
+    const wallets = (await client.post<WalletListResponse>('/Wallet/List', {}, signal)).wallet;
+    const wallet = primaryWallet(Array.isArray(wallets) ? wallets : []);
+    if (!wallet) return { workspace: { kind: 'unknown' }, balanceUsd: null };
+    return { workspace: await workspaceOfWallet(client, wallet, signal), balanceUsd: walletBalance(wallet).totalUsd };
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    return { workspace: { kind: 'unknown' }, balanceUsd: null };
   }
 }
 

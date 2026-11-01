@@ -11,10 +11,12 @@ import {
 } from '../utils/api.js';
 import {
   OAUTH_LINK_TTL_SECONDS,
+  accountLabel,
   buildChainedSelections,
   buildPickerAccounts,
   chooseConnectionMode,
   connectionModeRequirements,
+  connectionRefusalText,
   connectionState,
   credentialGroup,
   dashboardAgentUrl,
@@ -44,6 +46,7 @@ import {
   pollUntil,
   reportProgress,
 } from '../utils/poll.js';
+import { jsonSpan } from '../utils/quoted-text.js';
 import { nextActionSchema, strictInput } from './schemas.js';
 
 const accountSchema = z.object({ id: z.string(), name: z.string() });
@@ -110,9 +113,6 @@ interface Context {
 const DONE_STATES = new Set<ConnectionState>(['connected', 'pick_accounts', 'pick_child_items']);
 
 function oauthHint(message: string, meta: CredentialMeta): string | undefined {
-  if (/not found or unauthorized/i.test(message)) {
-    return 'Integrations can only be connected with a project created by the person who deployed the agent: connect this server with such a project, by its API key or a browser sign-in.';
-  }
   if (/credentials not configured/i.test(message)) {
     return `Save your own ${meta.title} app keys with set_agent_credentials first (call it with credential "${meta.key}" to see the fields).`;
   }
@@ -151,7 +151,7 @@ function childStepOf(picker: PickerMeta | null, groups: DiscoveredGroup[], confi
 }
 
 function accountsLine(accounts: AccountRef[]): string {
-  return accounts.map(account => (account.name ? `${account.name} (${account.id})` : account.id)).join(', ');
+  return accounts.map(accountLabel).join(', ');
 }
 
 function result(
@@ -169,7 +169,7 @@ function result(
     ...textExtra,
   ];
   if (isPlainObject(extra.nextAction)) {
-    lines.push('', `Next: call ${String(extra.nextAction.tool)} with ${JSON.stringify(extra.nextAction.arguments)}.`);
+    lines.push('', `Next: call ${String(extra.nextAction.tool)} with ${jsonSpan(extra.nextAction.arguments)}.`);
   }
   return {
     content: [{ type: 'text' as const, text: lines.join('\n') }],
@@ -317,7 +317,7 @@ async function connect(
               : 'Ask the user which accounts to use, then save only those.',
           },
         },
-        ['', ...candidates.map(account => `- ${account.name || account.id} (${account.id})`)]);
+        ['', ...candidates.map(account => `- ${accountLabel(account)}`)]);
     }
     return result('connect', context, 'connected',
       `${meta.title} is connected. A running agent restarts to use it.`,
@@ -505,8 +505,8 @@ async function selectAccounts(
           },
         },
         ['', ...groups.flatMap(group => [
-          `- ${group.parent.name || group.parent.id} (${group.parent.id})${group.errorCode ? `: could not be read (${group.errorCode})` : ''}`,
-          ...group.items.map(item => `  - ${item.name || item.id} (${item.id})`),
+          `- ${accountLabel(group.parent)}${group.errorCode ? `: could not be read (${group.errorCode})` : ''}`,
+          ...group.items.map(item => `  - ${accountLabel(item)}`),
         ])]);
     }
     const built = buildChainedSelections(next, groups, input.selections);
@@ -652,7 +652,10 @@ export function registerConnectAgentOauth(server: McpServer, client: WiroClient)
         }
         return await connect(context, { mode: args.mode, redirectUrl: args.redirect_url, confirm: args.confirm });
       } catch (error) {
-        return errorResult(withHint(error, meta ?? undefined));
+        const message = errorText(error);
+        return errorResult(/not found or unauthorized/i.test(message)
+          ? new Error(await connectionRefusalText(client, args.agent_guid, message, 'connected', extra.signal))
+          : withHint(error, meta ?? undefined));
       }
     },
   );

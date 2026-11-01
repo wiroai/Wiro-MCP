@@ -8,7 +8,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createMcpServer } from '../dist/server.js';
 import { SERVER_INSTRUCTIONS } from '../dist/instructions.js';
 import { PLAYBOOKS } from '../dist/playbooks.js';
-import { ApiResultError } from '../dist/utils/api.js';
+import { AGENT_NOT_FOUND_TEXT, ApiResultError } from '../dist/utils/api.js';
 import {
   buildChainedSelections,
   credentialsNeededFor,
@@ -566,6 +566,17 @@ test('apply_agent_skills explains refusals with the server details', async () =>
     assert.equal(result.isError, true);
     assert.match(text(result), /same idempotency_key/);
     assert.match(text(result), /idempotency_key: `mcp-/);
+  });
+});
+
+test('apply_agent_skills names a skill Wiro cannot price and gives the next step', async () => {
+  const fake = fakeClient(skillRoutes({
+    '/UserAgent/PricingPreview': { result: false, errors: [{ code: 0, message: "pricing-step: skill 'int-retired' is enabled but not found in registry" }] },
+  }));
+  await withClient(fake, async client => {
+    const result = await client.callTool({ name: 'apply_agent_skills', arguments: { agent_guid: AGENT, skills: { 'int-instagram-post': true } } });
+    assert.equal(result.isError, true);
+    assert.equal(text(result), '## Error\n\nThe price could not be computed because the skill int-retired is not in the skill registry. list_agent_skills shows the current names. If the request did not name this skill, the agent already has it on, and Wiro support can take it off.');
   });
 });
 
@@ -2149,7 +2160,7 @@ test('connect_agent_oauth saves accounts and runs the chained page step', async 
         { parentvalue: '5678', items: [] },
       ],
     });
-    assert.equal(chained.structuredContent.message, 'Saved the Facebook Pages selection (1 selected). Nothing was chosen for Beta Ads (5678). A running agent restarts to use it.');
+    assert.equal(chained.structuredContent.message, 'Saved the Facebook Pages selection (1 selected). Nothing was chosen for `Beta Ads` (`5678`). A running agent restarts to use it.');
     assert.deepEqual(chained.structuredContent.childStep.groups[0].items, [{ id: '555', name: 'Acme Page' }]);
 
     const unknown = await client.callTool({
@@ -2157,7 +2168,7 @@ test('connect_agent_oauth saves accounts and runs the chained page step', async 
       arguments: { action: 'select_accounts', agent_guid: AGENT, credential: 'meta-ads', picker: 'pages', selections: [{ parent: '1234', items: ['999'] }] },
     });
     assert.equal(unknown.isError, true);
-    assert.match(text(unknown), /"999" is not available under Acme Ads/);
+    assert.match(text(unknown), /"999" is not available under `Acme Ads` \(`1234`\)\. Available: `Acme Page` \(`555`\), `Acme Two` \(`556`\)\./);
   });
 });
 
@@ -2172,7 +2183,7 @@ test('connect_agent_oauth names one saved account in the singular', async () => 
       arguments: { action: 'select_accounts', agent_guid: AGENT, credential: 'meta-ads', accounts: [{ id: '1234', name: 'Acme Ads' }] },
     });
     assert.notEqual(saved.isError, true, text(saved));
-    assert.equal(saved.structuredContent.message, 'Saved 1 account: Acme Ads (1234). Optionally, also choose Facebook Pages. A running agent restarts to use the account.');
+    assert.equal(saved.structuredContent.message, 'Saved 1 account: `Acme Ads` (`1234`). Optionally, also choose Facebook Pages. A running agent restarts to use the account.');
   });
 });
 
@@ -2554,6 +2565,18 @@ test('set_agent_credentials does not offer connect after a write when connect wo
   });
 });
 
+test('get_my_agent does not ask for a service whose saved values have no template row or skill behind them', async () => {
+  // The fields were saved on an agent that does not use the service: the setup does not wait for it.
+  const row = detailRow({ skills: skillsOn('util-chat-markdown-reporting') });
+  row.credentials = { hubspot: { clientid: 'c', clientsecret: 's', _connected: false, _filled: true, _required_missing: false, _schema: { title: 'HubSpot', oauth_provider: { auth_method_value: 'wiro' } } } };
+  const fake = fakeClient({ '/Credentials/Detail': credentialDetail, '/Skills/List': connectSkillList, '/UserAgent/Detail': { result: true, useragents: [row] } });
+  await withClient(fake, async client => {
+    const result = await client.callTool({ name: 'get_my_agent', arguments: { agent_guid: AGENT } });
+    assert.deepEqual(result.structuredContent.agent.missingCredentials, []);
+    assert.notEqual(result.structuredContent.nextAction?.tool, 'connect_agent_oauth');
+  });
+});
+
 test('connect_agent_oauth and the agents playbook state the rule on unused credentials', async () => {
   await withClient(fakeClient({}), async client => {
     const { tools } = await client.listTools();
@@ -2583,7 +2606,7 @@ test('disconnect_agent_oauth asks first and disconnects only with confirm', asyn
     const preview = await client.callTool({ name: 'disconnect_agent_oauth', arguments: { agent_guid: AGENT, credential: 'meta-ads' } });
     assert.equal(preview.structuredContent.disconnected, false);
     assert.equal(preview.structuredContent.connectedBefore, true);
-    assert.match(preview.structuredContent.message, /connected for Acme Ads/);
+    assert.match(preview.structuredContent.message, /connected for `Acme Ads`/);
     assert.match(preview.structuredContent.willClear, /own app keys are kept/);
     assert.equal(fake.paths().includes('/UserAgentOAuth/OAuthDisconnect'), false);
 
@@ -3188,7 +3211,10 @@ test('prorated charges, base64 values and picker payloads match the API', () => 
   assert.deepEqual(buildChainedSelections(next, groups, [{ parent: 'act_1234', items: ['555'] }]).selections, [
     { parentvalue: '1234', items: [{ pageid: '555', pagename: 'Page' }] },
   ]);
-  assert.match(buildChainedSelections(next, groups, [{ parent: '9', items: [] }]).error, /could not be read/);
+  assert.equal(
+    buildChainedSelections(next, groups, [{ parent: '9', items: [] }]).error,
+    '`Broken` (`9`) could not be read (provider_error), so nothing can be chosen for it. Leave it out.',
+  );
 });
 
 test('connection states follow the picker and expiry rules', () => {
@@ -3205,4 +3231,141 @@ test('connection states follow the picker and expiry rules', () => {
     childStep: { picker: 'locations', optional: false, configured: false, groups: [] },
   }, { hasPicker: true }), 'pick_child_items');
   assert.equal(connectionState(base, { hasPicker: false }), 'not_connected');
+});
+
+// ---------------------------------------------------------------------------
+// An agent that cannot be reached, and a required field that cannot be emptied
+// ---------------------------------------------------------------------------
+
+const NOT_FOUND = { result: false, errors: [{ code: 0, message: 'User agent not found' }] };
+const RANDOM_GUID = '7b0c1f4e-2d3a-4c5b-9e8f-0123456789ab';
+
+test('set_agent_credentials refuses to describe a credential on an agent that cannot be reached', async () => {
+  const fake = fakeClient({ '/Credentials/Detail': credentialDetail, '/UserAgent/Detail': NOT_FOUND });
+  await withClient(fake, async client => {
+    const result = await client.callTool({ name: 'set_agent_credentials', arguments: { agent_guid: RANDOM_GUID, credential: 'telegram' } });
+    assert.equal(result.isError, true);
+    assert.equal(text(result), `## Error\n\n${AGENT_NOT_FOUND_TEXT}`);
+    assert.doesNotMatch(text(result), /On this agent|not set yet|User agent/);
+    assert.equal(result.structuredContent, undefined);
+
+    // An unknown credential is still named first.
+    const unknown = await client.callTool({ name: 'set_agent_credentials', arguments: { agent_guid: RANDOM_GUID, credential: 'no-such-thing' } });
+    assert.match(text(unknown), /Unknown credential "no-such-thing"/);
+  });
+});
+
+test('set_agent_credentials still describes a credential when the agent read fails for another reason', async () => {
+  const fake = fakeClient({
+    '/Credentials/Detail': credentialDetail,
+    '/UserAgent/Detail': () => { throw new Error('socket hang up'); },
+  });
+  await withClient(fake, async client => {
+    const result = await client.callTool({ name: 'set_agent_credentials', arguments: { agent_guid: AGENT, credential: 'telegram' } });
+    assert.notEqual(result.isError, true, text(result));
+    assert.match(text(result), /\*\*On this agent:\*\* could not be read/);
+    assert.doesNotMatch(text(result), /not set yet/);
+    assert.ok(result.structuredContent.notes.includes('The agent could not be read: socket hang up'));
+    assert.equal(result.structuredContent.credential.key, 'telegram');
+  });
+
+  // An agent without this credential is not set yet.
+  const unset = fakeClient({ '/Credentials/Detail': credentialDetail, '/UserAgent/Detail': detail({ credentials: {} }) });
+  await withClient(unset, async client => {
+    const result = await client.callTool({ name: 'set_agent_credentials', arguments: { agent_guid: AGENT, credential: 'telegram' } });
+    assert.match(text(result), /\*\*On this agent:\*\* not set yet/);
+  });
+});
+
+test('set_agent_credentials gives the next step when a write reaches no agent', async () => {
+  const fake = fakeClient({ '/Credentials/Detail': credentialDetail, '/UserAgent/CredentialUpsert': NOT_FOUND });
+  await withClient(fake, async client => {
+    const result = await client.callTool({
+      name: 'set_agent_credentials',
+      arguments: { agent_guid: RANDOM_GUID, fields: [{ credential: 'telegram', field: 'bottoken', value: TOKEN }] },
+    });
+    assert.equal(result.isError, true);
+    assert.ok(text(result).includes(`Nothing was saved:\n\n- ${AGENT_NOT_FOUND_TEXT}`), text(result));
+  });
+});
+
+test('clearing a required field says how to replace the value or end the access, and nothing is sent', async () => {
+  const fake = fakeClient({ '/Credentials/Detail': credentialDetail });
+  await withClient(fake, async client => {
+    for (const value of ['', null, '   ']) {
+      const result = await client.callTool({
+        name: 'set_agent_credentials',
+        arguments: { agent_guid: AGENT, fields: [{ credential: 'google-play', field: 'serviceaccountjson', value }] },
+      });
+      assert.equal(result.isError, true);
+      assert.match(text(result), /Nothing was saved/);
+      assert.match(text(result), /Service account JSON is required and cannot be cleared\. To replace the saved value, send the new one\. To end the agent's access, revoke it with the service it belongs to\./);
+    }
+    assert.equal(fake.paths().includes('/UserAgent/CredentialUpsert'), false);
+  });
+});
+
+test('set_agent_credentials marks a required sign-in that is not connected as required and missing', async () => {
+  const fake = fakeClient({
+    '/Credentials/Detail': body => (body.key === 'hubspot'
+      ? { result: true, errors: [], credential: { key: 'hubspot', title: 'HubSpot', connection_modes: ['wiro', 'own'], credential_schema: [{ key: 'portalname', type: 'text', label: 'Portal', required: false }], oauth_provider: { oauth_flow: {} } } }
+      : credentialDetail(body)),
+    '/UserAgent/Detail': detail({
+      credentials: {
+        hubspot: { optional: false, _connected: false, _filled: false, _required_missing: false, _schema: { title: 'HubSpot', oauth_provider: { oauth_flow: {} } } },
+      },
+    }),
+  });
+  await withClient(fake, async client => {
+    const result = await client.callTool({ name: 'set_agent_credentials', arguments: { agent_guid: AGENT, credential: 'hubspot' } });
+    assert.equal(result.structuredContent.credential.status.requiredMissing, true, text(result));
+    assert.equal(result.structuredContent.credential.status.optional, false);
+  });
+});
+
+test('connect_agent_oauth tells a guid it cannot reach from a project that may not connect', async () => {
+  const refusal = { result: false, errors: [{ code: 0, message: 'User agent not found or unauthorized' }] };
+  const routes = detailRoute => ({
+    '/Credentials/Detail': credentialDetail,
+    '/UserAgent/Detail': detailRoute,
+    '/UserAgentOAuth/OAuthStatus': refusal,
+    '/UserAgentOAuth/SetPickerAccounts': refusal,
+    '/UserAgentOAuth/OAuthDisconnect': refusal,
+  });
+
+  // The guid reaches no agent: check the guid, nothing about the project.
+  const missing = fakeClient(routes(NOT_FOUND));
+  await withClient(missing, async client => {
+    const calls = [
+      ['connect_agent_oauth', { action: 'status', agent_guid: RANDOM_GUID, credential: 'meta-ads' }],
+      ['connect_agent_oauth', { action: 'select_accounts', agent_guid: RANDOM_GUID, credential: 'meta-ads', accounts: [{ id: '1', name: 'One' }] }],
+      ['connect_agent_oauth', { action: 'connect', agent_guid: RANDOM_GUID, credential: 'meta-ads' }],
+      ['disconnect_agent_oauth', { agent_guid: RANDOM_GUID, credential: 'meta-ads' }],
+      ['disconnect_agent_oauth', { agent_guid: RANDOM_GUID, credential: 'meta-ads', confirm: true }],
+    ];
+    for (const [name, args] of calls) {
+      const result = await client.callTool({ name, arguments: args });
+      assert.equal(result.isError, true, name);
+      assert.equal(text(result), `## Error\n\n${AGENT_NOT_FOUND_TEXT}`, `${name} ${args.action ?? ''}`);
+      assert.doesNotMatch(text(result), /connect this server with such a project|unauthorized/);
+    }
+  });
+
+  // The agent exists, and this project cannot connect it: the project is the fix.
+  const refused = fakeClient(routes(detail({ skills: skillsOn('int-hubspot-crm') })));
+  await withClient(refused, async client => {
+    const status = await client.callTool({ name: 'connect_agent_oauth', arguments: { action: 'status', agent_guid: AGENT, credential: 'meta-ads' } });
+    assert.equal(status.isError, true);
+    assert.ok(text(status).includes('User agent not found or unauthorized\n\nIntegrations can only be connected with a project created by the person who deployed the agent: connect this server with such a project, by its API key or a browser sign-in.'), text(status));
+    assert.doesNotMatch(text(status), /list_my_agents/);
+  });
+
+  // The agent cannot be read for another reason: both steps stand.
+  const unreadable = fakeClient(routes(() => { throw new Error('socket hang up'); }));
+  await withClient(unreadable, async client => {
+    const status = await client.callTool({ name: 'connect_agent_oauth', arguments: { action: 'status', agent_guid: AGENT, credential: 'meta-ads' } });
+    assert.ok(text(status).includes('User agent not found or unauthorized\n\nCheck the guid with list_my_agents. If the agent is listed, integrations can only be connected with a project created by the person who deployed the agent'), text(status));
+    const disconnect = await client.callTool({ name: 'disconnect_agent_oauth', arguments: { agent_guid: AGENT, credential: 'meta-ads', confirm: true } });
+    assert.ok(text(disconnect).includes('Check the guid with list_my_agents. If the agent is listed, integrations can only be changed with a project'), text(disconnect));
+  });
 });

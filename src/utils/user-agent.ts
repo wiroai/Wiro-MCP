@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { WiroApiError } from '../client.js';
 import {
+  AGENT_NOT_FOUND_TEXT,
   ApiResultError,
   asString,
   isPlainObject,
@@ -172,7 +173,8 @@ export const subscriptionSchema = z.object({
   status: z.string(),
   billing: z.enum(['wallet', 'card']),
   switchingToWallet: z.boolean(),
-  amountUsd: z.number().nullable(),
+  amountUsd: z.number().nullable()
+    .describe('What the plan costs every 30 days. For a plan that has ended, the agent\'s monthly price, which is what a renew charges.'),
   periodEndsAt: z.string().optional(),
   daysRemaining: z.number().nullable(),
   cancelAtPeriodEnd: z.boolean(),
@@ -430,7 +432,8 @@ export const agentSummarySchema = z.object({
   title: z.string(),
   status: z.number().int().nullable(),
   statusLabel: agentStatusLabelSchema,
-  setupRequired: z.boolean(),
+  setupRequired: z.boolean()
+    .describe('Whether the agent waits for setup. list_my_agents goes by the status (6). get_my_agent also checks each required credential and names what is missing.'),
   workspace: z.enum(['personal', 'team']),
   template: agentTemplateRefSchema,
   tier: z.string().optional(),
@@ -451,7 +454,8 @@ export const agentDetailSchema = agentSummarySchema.extend({
   cover: z.string().optional(),
   categories: z.array(z.string()),
   pricing: tierPricingSchema.nullable(),
-  extraCreditPacks: z.array(extraCreditPackSchema),
+  extraCreditPacks: z.array(extraCreditPackSchema)
+    .describe('The extra credit packs this plan can buy. Only an active Pro plan can buy them, so any other plan lists none.'),
   models: modelSettingsSchema.optional(),
   selectableModels: z.array(selectableModelSchema).optional(),
   enabledCommands: z.array(z.string()).nullable(),
@@ -507,6 +511,16 @@ function timestamps<K extends string>(row: Record<string, unknown>, map: Record<
   return out;
 }
 
+/**
+ * The plan as it is shown. A plan that has ended renews at the agent's monthly
+ * price, not at the amount of its last period, so that is its one price.
+ */
+function planOf(row: Record<string, unknown>): AgentSubscription | null {
+  const plan = toSubscription(row.subscription, row.stripecancelatperiodend);
+  const price = toNumber(row.monthlypriceusd);
+  return plan && plan.status !== 'active' && price !== null && price > 0 ? { ...plan, amountUsd: price } : plan;
+}
+
 /** The compact row used by list_my_agents. */
 export function toAgentSummary(row: Record<string, unknown>): AgentSummary {
   const status = readAgentStatus(row);
@@ -524,7 +538,7 @@ export function toAgentSummary(row: Record<string, unknown>): AgentSummary {
     ...(tier ? { tier } : {}),
     monthlyPriceUsd: toNumber(row.monthlypriceusd),
     credits: toCredits(row),
-    subscription: toSubscription(row.subscription, row.stripecancelatperiodend),
+    subscription: planOf(row),
     ...(timezone !== undefined ? { timezone } : {}),
     ...(sessionMode ? { teamSessionMode: sessionMode } : {}),
     skills: toStringArray(row.skills ?? row.enabledSkills),
@@ -557,6 +571,35 @@ export function selectableModelSlugs(row: Record<string, unknown>): Set<string> 
 }
 
 /**
+ * The keys of the credentials an agent's setup waits for: a credential with a
+ * required field empty, a required credential that holds no value yet, or a
+ * required sign-in that is not connected. A custom build's setup waits only for
+ * the main credential of each active skill, which skillsmeta lists. Its chat
+ * channels are never among them.
+ */
+export function credentialKeysSetupWaitsFor(row: Record<string, unknown>): Set<string> {
+  const channelKeys = new Set(summarizeChannels(row.communicationChannels).map(channel => channel.credentialKey));
+  const activeKeys = templateRef(row).custom && isPlainObject(row.skillsmeta)
+    ? new Set(Object.values(row.skillsmeta).filter(isPlainObject)
+      .filter(meta => meta.requires_credentials === true)
+      .map(meta => asString(meta.credential_key))
+      .filter((key): key is string => Boolean(key)))
+    : null;
+  return new Set(summarizeCredentials(row.credentials, channelKeys)
+    // A required credential whose fields are all optional has no empty required
+    // field to show, and the setup still waits until it holds a value.
+    .filter(credential => credential.requiredMissing
+      || (!credential.optional && !credential.connected && (credential.oauth || (row.setuprequired === true && !credential.filled))))
+    .filter(credential => !activeKeys || activeKeys.has(credential.key))
+    // A group with no optional flag has no template row and no skill behind it, only saved values left over.
+    .filter((credential) => {
+      const group = isPlainObject(row.credentials) ? row.credentials[credential.key] : undefined;
+      return isPlainObject(group) && typeof group.optional === 'boolean';
+    })
+    .map(credential => credential.key));
+}
+
+/**
  * The full view of one deployed agent (Detail, Deploy and Update rows): its
  * status, plan, prices, credits and settings, and the state of each
  * credential and channel.
@@ -566,20 +609,17 @@ export function toAgentDetail(row: Record<string, unknown>): AgentDetail {
   const agent = isPlainObject(row.agent) ? row.agent : {};
   const channels = summarizeChannels(row.communicationChannels);
   const channelKeys = new Set(channels.map(channel => channel.credentialKey));
-  const credentials = summarizeCredentials(row.credentials, channelKeys);
+  // A credential is required and missing exactly when the setup waits for it, so its row and the setup line agree.
+  const setupWaitsFor = credentialKeysSetupWaitsFor(row);
+  const credentials = summarizeCredentials(row.credentials, channelKeys)
+    .map(credential => ({ ...credential, requiredMissing: setupWaitsFor.has(credential.key) }));
   const description = asString(row.description);
   const cover = asString(row.cover) || asString(agent.cover);
   const agentModel = isPlainObject(row.agentModel) ? row.agentModel : undefined;
   const models = selectableModels(row.tokenRates);
-  // A custom build's setup waits only for the main credential of each active
-  // skill, which skillsmeta lists, so only those count as missing.
-  const activeKeys = summary.template.custom && isPlainObject(row.skillsmeta)
-    ? new Set(Object.values(row.skillsmeta).filter(isPlainObject)
-      .filter(meta => meta.requires_credentials === true)
-      .map(meta => asString(meta.credential_key))
-      .filter((key): key is string => Boolean(key)))
-    : null;
-  const packs = Array.isArray(agent.extracreditpacks)
+  // Packs are bought only on an active Pro plan, so only that plan lists them.
+  const canBuyPacks = summary.tier === 'pro' && summary.subscription?.status === 'active';
+  const packs = canBuyPacks && Array.isArray(agent.extracreditpacks)
     ? agent.extracreditpacks.filter(isPlainObject).filter(pack => pack.enabled !== false)
     : [];
 
@@ -608,11 +648,8 @@ export function toAgentDetail(row: Record<string, unknown>): AgentDetail {
     ...(models.length > 0 ? { selectableModels: models } : {}),
     enabledCommands: Array.isArray(row.enabledCommands) ? toStringArray(row.enabledCommands) : null,
     credentials,
-    // A required sign-in that is not connected also holds back the setup, so it
-    // is listed as missing too.
     missingCredentials: credentials
-      .filter(credential => credential.requiredMissing || (credential.oauth && !credential.optional && !credential.connected))
-      .filter(credential => !activeKeys || activeKeys.has(credential.key))
+      .filter(credential => credential.requiredMissing)
       .map(({ key, title, oauth }) => ({ key, title, oauth })),
     channels,
     scheduledTasks: summarizeTasks(row.scheduledskills),
@@ -635,7 +672,11 @@ export function formatSubscriptionLine(subscription: AgentSubscription | null, p
       : 'No plan. manage_agent_billing with action subscribe starts one.';
   }
   const parts = [`${subscription.status}, billed ${subscription.billing === 'wallet' ? 'from the wallet' : 'by card'}`];
-  if (subscription.amountUsd !== null) parts.push(`${formatUsd(subscription.amountUsd)} per 30 days`);
+  if (subscription.amountUsd !== null) {
+    parts.push(subscription.status === 'expired' && subscription.billing === 'wallet'
+      ? `a renew charges ${formatUsd(subscription.amountUsd)} per 30 days`
+      : `${formatUsd(subscription.amountUsd)} per 30 days`);
+  }
   if (subscription.periodEndsAt) {
     const atPeriodEnd = subscription.atPeriodEnd ?? (subscription.cancelAtPeriodEnd ? 'ends' : 'renews');
     if (subscription.status !== 'active') {
@@ -758,10 +799,10 @@ export function formatAgentDetail(agent: AgentDetail, plainMember = false): stri
     for (const credential of agent.credentials) {
       const state = credential.connected
         ? 'connected'
-        : credential.filled
-          ? 'filled'
-          : credential.requiredMissing
-            ? 'missing (required)'
+        : credential.requiredMissing
+          ? (credential.oauth ? 'not connected (required)' : 'missing (required)')
+          : credential.filled
+            ? 'filled'
             : 'not set';
       lines.push(`- ${credential.title} (\`${credential.key}\`): ${state}${credential.optional ? ', optional' : ''}`);
     }
@@ -835,7 +876,7 @@ export async function readAgentDetail(
     'The agent could not be read.',
   );
   const rows = Array.isArray(body.useragents) ? body.useragents.filter(isPlainObject) : [];
-  if (!rows[0]) throw new Error(`No agent was found for agent_guid "${guid}".`);
+  if (!rows[0]) throw new Error(AGENT_NOT_FOUND_TEXT);
   return rows[0];
 }
 
@@ -1016,4 +1057,13 @@ export function settledStatusAdvice(status: number | null, plainMember = false, 
     default:
       return agentStatusHint(status, plainMember);
   }
+}
+
+/** Advice for a read, which cannot tell whether a start came first: a stopped agent gets what holds now. */
+export function readStatusAdvice(agent: Pick<AgentSummary, 'status' | 'subscription' | 'credits'>, plainMember = false): string {
+  if (agent.status !== 0) return settledStatusAdvice(agent.status, plainMember, agent);
+  if (plainMember) return `The agent is stopped. On this team agent, ${TEAM_AGENT_MANAGERS} can start it.`;
+  return startNeedsPlan(agent)
+    ? `The agent is stopped. ${noPlanStartHint(agent)}`
+    : 'The agent is stopped. control_agent with action start starts it.';
 }

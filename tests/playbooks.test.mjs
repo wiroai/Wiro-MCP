@@ -34,7 +34,7 @@ const PLANNED_TOOLS = new Set([
 const NON_TOOL_IDENTIFIERS = new Set([
   'timeout_seconds', 'wait_seconds', 'call_id', 'function_call', 'custom_tool_call',
   'upgrade_to_pro', 'buy_credits', 'select_accounts', 'confirm_charge_usd', 'idempotency_key', 'redirect_url',
-  'session_id', 'debug_node_id', 'custom_skills',
+  'session_id', 'debug_node_id', 'custom_skills', 'team_session_mode',
   // An example Start field key, and an input name the Workflow Agent hides.
   'product_photo', 'api_key',
 ]);
@@ -534,4 +534,12 @@ test('the agents playbook says the same as the tools about a Wiro project key, a
   assert.match(PLAYBOOKS.agents, /The deploy result names the tasks that are on from the start/);
   assert.match(PLAYBOOKS.studio, /Deleting a session can also take its model runs out of `list_studio_results`/);
   assert.match(PLAYBOOKS['workflow-agent'], /with the old and new value of each step input that changes/);
+});
+
+test('the playbooks say what a deploy quote holds', () => {
+  const { agents } = PLAYBOOKS;
+  assert.match(agents, /The quote gives the amount charged now, the monthly credits, the paying wallet with its balance and the other tier's price\./);
+  assert.match(agents, /In a team workspace the agent starts with collaborative chats, which every team member sees, and the quote says so: tell the user\. `update_agent` \(`team_session_mode`\) changes that after the deploy\./);
+  assert.match(agents, /`get_my_agent` lists them only on an active Pro plan/);
+  assert.match(agents, /A required field cannot be left empty, but saving a new value replaces the old one\./);
 });

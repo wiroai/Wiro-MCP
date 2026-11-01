@@ -1,13 +1,15 @@
 import { z } from 'zod';
-import { asString, isPlainObject, toNumber, truncate } from './api.js';
+import { asString, isPlainObject, requireApiSuccess, toNumber, truncate, type ApiEnvelope } from './api.js';
 import { FIELD_HELP_MAX, WIRO_PROJECT_NOTE, isWiroProjectField, usableConnectionModes } from './agent-config.js';
 import {
   agentTaskSchema,
   htmlToText,
+  isGuid,
   summarizeTasks,
   tierPricingSchema,
   toStringArray,
   toTierPricing,
+  type AgentApiClient,
 } from './user-agent.js';
 
 // The agent catalog: templates, skills and the credentials they need, from
@@ -163,6 +165,33 @@ function toModelOptions(tokenRates: unknown): TemplateDetail['models'] {
       };
     });
   return { ...(defaultModel ? { default: defaultModel } : {}), selectable };
+}
+
+const TEMPLATE_MISSING_ANSWER = /^agent not found\.?$/i;
+
+/**
+ * Reads one template by slug or guid. Wiro says "Agent not found" for a template
+ * that does not exist or is not listed; here that would read like a deployed agent.
+ */
+export async function readTemplateRow(
+  client: AgentApiClient,
+  reference: string,
+  full: boolean,
+  signal?: AbortSignal,
+): Promise<Record<string, unknown>> {
+  const missing = `No agent template was found for ${JSON.stringify(reference)}. list_agent_templates shows the slugs.`;
+  const response = await client.post<ApiEnvelope & { agents?: unknown }>('/Agent/Detail', {
+    ...(isGuid(reference) ? { guid: reference } : { slug: reference }),
+    ...(full ? { type: 'full' } : {}),
+  }, signal);
+  if (response?.result !== true
+    && response?.errors?.some(item => TEMPLATE_MISSING_ANSWER.test(item?.message?.trim() ?? ''))) {
+    throw new Error(missing);
+  }
+  const body = requireApiSuccess(response, 'The agent template could not be read.');
+  const row = Array.isArray(body.agents) ? body.agents.find(isPlainObject) : undefined;
+  if (!row) throw new Error(missing);
+  return row;
 }
 
 export function toTemplateDetail(row: Record<string, unknown>): TemplateDetail {

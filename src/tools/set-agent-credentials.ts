@@ -5,7 +5,9 @@ import {
   asString,
   errorResult,
   errorText,
+  isAgentNotFound,
   isPlainObject,
+  readableApiMessage,
   toInteger,
   type ApiEnvelope,
 } from '../utils/api.js';
@@ -272,7 +274,7 @@ function afterWriteNotes(status: number | null, missing: Array<{ title: string; 
 
 function errorMessages(body: ApiEnvelope): string[] {
   return (body.errors ?? [])
-    .map(error => (typeof error?.message === 'string' ? error.message.trim() : ''))
+    .map(error => (typeof error?.message === 'string' ? readableApiMessage(error.message.trim()) : ''))
     .filter(Boolean);
 }
 
@@ -520,6 +522,8 @@ async function describeCredential(
   try {
     row = await readUserAgent(client, agentGuid, signal);
   } catch (error) {
+    // Only a read that failed for another reason still shows what the credential needs.
+    if (isAgentNotFound(error)) return errorResult(error);
     notes.push(`The agent could not be read: ${errorText(error)}`);
   }
   const group = row ? credentialGroup(row, key) : null;
@@ -577,7 +581,7 @@ async function describeCredential(
     '',
     status
       ? `**On this agent:** ${status.connected ? 'connected' : kind === 'sign_in' ? 'not connected' : status.filled ? 'set' : 'not complete'}${status.missingFields.length > 0 ? `; missing ${status.missingFields.join(', ')}` : ''}`
-      : '**On this agent:** not set yet',
+      : `**On this agent:** ${row ? 'not set yet' : 'could not be read'}`,
     '',
     '### Fields',
     '',
