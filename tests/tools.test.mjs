@@ -537,7 +537,7 @@ const EXPECTED_TOOLS = [
   'list_my_agents', 'get_my_agent', 'control_agent', 'update_agent',
   'manage_agent_billing', 'get_agent_activity', 'delete_agent',
   'apply_agent_skills', 'set_agent_credentials', 'connect_agent_oauth',
-  'disconnect_agent_oauth', 'manage_agent_custom_skill',
+  'disconnect_agent_oauth', 'manage_agent_custom_skill', 'list_projects', 'bind_agent_project',
 ];
 
 test('wrapTool sees every tool with its annotations and can answer in its place', async () => {
@@ -621,8 +621,8 @@ test('tool annotations follow the MCP meaning of each hint', async () => {
   ]);
   // Repeating one of these with the same arguments has no further effect.
   const repeatable = new Set([
-    'apply_agent_skills', 'cancel_agent_message', 'cancel_task', 'delete_agent', 'delete_agent_session',
-    'delete_workflow', 'kill_task',
+    'apply_agent_skills', 'bind_agent_project', 'cancel_agent_message', 'cancel_task', 'delete_agent',
+    'delete_agent_session', 'delete_workflow', 'kill_task',
   ]);
   await withClient({}, async client => {
     const { tools } = await client.listTools();
@@ -649,6 +649,8 @@ test('tool annotations follow the MCP meaning of each hint', async () => {
     assert.deepEqual(hints('update_agent'), [true, false]);
     // A repeat restarts a running agent again.
     assert.deepEqual(hints('disconnect_agent_oauth'), [true, false]);
+    // It can replace a project and restarts a running agent; a repeat changes nothing.
+    assert.deepEqual(hints('bind_agent_project'), [true, true]);
     // A deployed agent's turn can change or remove things, and a model switch shortens a session's memory.
     assert.deepEqual(hints('send_agent_message'), [true, false]);
   });

@@ -44,6 +44,14 @@ function detail(status, overrides = {}) {
   };
 }
 
+test('isOwnApiKey says whether a value is this client\'s key, and hands out nothing', () => {
+  const client = new WiroClient('own-api-key', 'own-api-secret');
+  assert.equal(client.isOwnApiKey('own-api-key'), true);
+  for (const value of ['other-key', 'own-api-key ', 'OWN-API-KEY', 'own-api-secret', '', null, undefined, 1, {}, ['own-api-key']]) {
+    assert.equal(client.isOwnApiKey(value), false, JSON.stringify(value));
+  }
+});
+
 test('runModel preserves first-turn and continuation tool-call payloads', { concurrency: false }, async () => {
   const originalFetch = globalThis.fetch;
   const requests = [];
@@ -681,6 +689,13 @@ test('a web page answer is one short line in the error message and stays whole i
     });
     answer = () => new Response('<html><body><h1>Maintenance</h1></body></html>', { status: 200 });
     await assert.rejects(new WiroClient('api-key').listTasks(), { message: 'Invalid JSON response: Maintenance' });
+
+    // Text that starts like JSON but does not parse stays out of the message.
+    const part = '{"result":true,"rows":[{"value":"stays-out';
+    assert.equal(new WiroApiError(500, part).message, 'Wiro API error 500: the answer could not be read');
+    assert.equal(new WiroApiError(500, part).responseBody, part);
+    answer = () => new Response(part, { status: 200 });
+    await assert.rejects(new WiroClient('api-key').listTasks(), { message: 'Invalid JSON response: the answer could not be read' });
   } finally {
     globalThis.fetch = originalFetch;
   }

@@ -122,9 +122,10 @@ function pageText(html: string): string {
 
 /**
  * An answer body as an error message shows it. JSON and plain text stay as
- * they are. A web page, such as the error page of a proxy between the client
- * and the API, becomes one short line: its title, or else its text.
- * `responseBody` keeps the full answer.
+ * they are. Text that starts like JSON but does not parse becomes one fixed
+ * line, so no part of a row reaches a message. A web page, such as the error
+ * page of a proxy between the client and the API, becomes one short line: its
+ * title, or else its text. `responseBody` keeps the full answer.
  */
 function bodyForMessage(body: string, status?: number): string {
   try {
@@ -133,6 +134,7 @@ function bodyForMessage(body: string, status?: number): string {
   } catch {
     // Not JSON.
   }
+  if (/^\s*[{[]/.test(body)) return 'the answer could not be read';
   if (!PAGE_MARKUP.test(body)) return body;
   const title = pageText(/<title[^>]*>([\s\S]*?)<\/title\s*>/i.exec(body)?.[1] ?? '');
   const full = title || pageText(body);
@@ -266,6 +268,11 @@ export class WiroClient {
   /** A short, non-reversible id of this client's API key, for per-caller bookkeeping. */
   get identity(): string {
     return crypto.createHash('sha256').update(this.apiKey).digest('hex').slice(0, 16);
+  }
+
+  /** Whether a value is this client's API key. The key itself stays inside the client. */
+  isOwnApiKey(value: unknown): boolean {
+    return typeof value === 'string' && value === this.apiKey;
   }
 
   // Without a secret, the only 401 that mentions a signature is a project

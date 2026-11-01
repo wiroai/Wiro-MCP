@@ -2,7 +2,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { WiroClient } from '../client.js';
 import { errorResult } from '../utils/api.js';
-import { customSkillEntries, resolveExistingCustomSkillKey } from '../utils/agent-config.js';
+import { customSkillEntries, resolveExistingCustomSkillKey, setupStillMissingNote } from '../utils/agent-config.js';
 import { textBlock } from '../utils/quoted-text.js';
 import { DEFAULT_WAIT_SECONDS, MAX_WAIT_SECONDS } from '../utils/poll.js';
 import {
@@ -101,6 +101,8 @@ export function registerGetMyAgent(server: McpServer, client: WiroClient): void 
         const advice = settled
           ? readStatusAdvice(agent, plainMember)
           : `The agent is still ${describeAgentStatus(agent.status).toLowerCase()}. Call get_my_agent again with wait_seconds to keep waiting.`;
+        // A client that shows only the text still learns which tool gives each missing credential.
+        const setupNote = plainMember ? null : setupStillMissingNote(agent.missingCredentials);
         const nextAction = !settled && wait_seconds > 0
           ? {
             tool: 'get_my_agent',
@@ -115,6 +117,7 @@ export function registerGetMyAgent(server: McpServer, client: WiroClient): void 
             text: [
               formatAgentDetail(agent, plainMember),
               ...(full ? ['', `### \`${full.key}\` in full`, '', ...textBlock(full.text)] : []),
+              ...(setupNote ? ['', setupNote] : []),
               '',
               advice,
             ].join('\n'),

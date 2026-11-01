@@ -297,7 +297,7 @@ const DEPLOYED_STATUS_HELP: Record<number, string> = {
     + 'get_agent_activity (logs) can show what went wrong. On a team agent, both need a team admin or the '
     + 'person who deployed it.',
   6: 'Your agent\'s setup is incomplete. get_my_agent lists the missing credentials or connections; '
-    + 'complete them with set_agent_credentials or connect_agent_oauth, then start the agent. If get_my_agent '
+    + 'complete them with set_agent_credentials, connect_agent_oauth or, for a Wiro project, bind_agent_project, then start the agent. If get_my_agent '
     + 'shows no active plan, pay for one with manage_agent_billing (action subscribe), which returns the price first. '
     + 'On a team agent, a team admin or the person who deployed it saves credentials and pays for the plan, '
     + 'and only the person who deployed it can use connect_agent_oauth.',

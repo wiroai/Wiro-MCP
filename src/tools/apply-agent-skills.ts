@@ -35,7 +35,7 @@ import {
   workspaceHint,
   type PlanBilling,
 } from '../utils/agent-config.js';
-import { asTier, outcomeUnknown, toTierPricing } from '../utils/user-agent.js';
+import { asTier, bindProjectStep, outcomeUnknown, toTierPricing, WIRO_PROJECT_CREDENTIAL } from '../utils/user-agent.js';
 import { DEFAULT_WAIT_SECONDS } from '../utils/poll.js';
 import { isPlainTeamMember, teamAgentBillingRefused } from '../utils/workspace.js';
 import { nextActionSchema, strictInput } from './schemas.js';
@@ -219,6 +219,22 @@ function appliedBillingNote(billing: PlanBilling, body: SkillsApplyBody): { note
   return warnings.length > 0 ? { ...result, note: [result.note, ...warnings].join(' ') } : result;
 }
 
+/** The sentence for a change whose skills need a Wiro project. */
+function bindProjectNote(needed: Array<{ credentials: string[] }>): string {
+  return needed.some(entry => entry.credentials.includes(WIRO_PROJECT_CREDENTIAL))
+    ? ' bind_agent_project connects a Wiro project, with no key to paste.'
+    : '';
+}
+
+/** How to give the new skills what they still need. A Wiro project comes first, since it takes no key. */
+function stillNeededSteps(needed: Array<{ credentials: string[] }>): string {
+  const keys = needed.flatMap(entry => entry.credentials);
+  const fields = 'set_agent_credentials or connect_agent_oauth.';
+  if (!keys.includes(WIRO_PROJECT_CREDENTIAL)) return `Set them with ${fields}`;
+  const others = keys.some(key => key !== WIRO_PROJECT_CREDENTIAL) ? ` Set the others with ${fields}` : '';
+  return `Connect the Wiro project with bind_agent_project, with no key to paste.${others}`;
+}
+
 function listLine(label: string, names: string[]): string | null {
   return names.length > 0 ? `**${label}:** ${names.join(', ')}` : null;
 }
@@ -262,7 +278,7 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
         + 'when the price drops, and that credit can be spent until the period ends; on a card '
         + 'plan it is added to the next invoice. A running agent '
         + 'restarts once to load the skills. Newly enabled skills may still need credentials '
-        + '(set_agent_credentials, connect_agent_oauth) and do not create scheduled tasks '
+        + '(set_agent_credentials, connect_agent_oauth, bind_agent_project for a Wiro project) and do not create scheduled tasks '
         + '(manage_agent_custom_skill does). Find skill names with list_agent_skills and the '
         + 'agent\'s current skills with get_my_agent. The agents playbook (get_playbook) has the '
         + 'full setup walkthrough.',
@@ -460,7 +476,7 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
               `**Billing:** ${note}`,
               `**Restart:** ${restart}`,
               credentialsNeeded.length > 0
-                ? `**Credentials the new skills need:** ${credentialsNeeded.map(entry => `${entry.skill} (${entry.credentials.join(', ')})`).join('; ')}`
+                ? `**Credentials the new skills need:** ${credentialsNeeded.map(entry => `${entry.skill} (${entry.credentials.join(', ')})`).join('; ')}.${bindProjectNote(credentialsNeeded)}`
                 : null,
               '',
               blocked
@@ -635,19 +651,21 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
         const firstCredential = credentialsNeeded[0]?.credentials[0];
         const nextAction = applied.noOp || replayed
           ? undefined
-          : firstCredential
-            ? {
-              tool: 'set_agent_credentials',
-              arguments: { agent_guid, credential: firstCredential },
-              reason: `See what ${firstCredential} needs before asking the user for it.`,
-            }
-            : running
+          : firstCredential === WIRO_PROJECT_CREDENTIAL
+            ? bindProjectStep(agent_guid, 'Connect the Wiro project the new skills need.')
+            : firstCredential
               ? {
-                tool: 'get_my_agent',
-                arguments: { agent_guid, wait_seconds: DEFAULT_WAIT_SECONDS },
-                reason: 'Check that the agent is running again with the new skills.',
+                tool: 'set_agent_credentials',
+                arguments: { agent_guid, credential: firstCredential },
+                reason: `See what ${firstCredential} needs before asking the user for it.`,
               }
-              : undefined;
+              : running
+                ? {
+                  tool: 'get_my_agent',
+                  arguments: { agent_guid, wait_seconds: DEFAULT_WAIT_SECONDS },
+                  reason: 'Check that the agent is running again with the new skills.',
+                }
+                : undefined;
         const lines = [
           applied.noOp ? '## No change needed' : replayed ? '## Already applied' : '## Skills updated',
           '',
@@ -663,7 +681,7 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
           `**Restart:** ${restart}`,
           holds === null ? 'The agent could not be read afterwards to confirm the new skills; get_my_agent shows them.' : null,
           credentialsNeeded.length > 0
-            ? `**Still needed:** credentials for ${credentialsNeeded.map(entry => `${entry.skill} (${entry.credentials.join(', ')})`).join('; ')}. Set them with set_agent_credentials or connect_agent_oauth.`
+            ? `**Still needed:** credentials for ${credentialsNeeded.map(entry => `${entry.skill} (${entry.credentials.join(', ')})`).join('; ')}. ${stillNeededSteps(credentialsNeeded)}`
             : null,
         ].filter((line): line is string => line !== null);
         return {

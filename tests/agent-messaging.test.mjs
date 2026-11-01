@@ -393,7 +393,7 @@ test('deployed agent refusals explain the fix and point to the right tool', asyn
         errors: [{ code: 0, message: 'Agent setup is incomplete. Complete the setup before sending messages.' }],
         agentstatus: 6,
       },
-      expect: /set_agent_credentials or connect_agent_oauth[\s\S]*manage_agent_billing \(action subscribe\)/,
+      expect: /set_agent_credentials, connect_agent_oauth or, for a Wiro project, bind_agent_project[\s\S]*manage_agent_billing \(action subscribe\)/,
     },
     {
       response: {

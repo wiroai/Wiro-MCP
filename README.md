@@ -267,6 +267,8 @@ your wallet after each reply. Your own agents run on a monthly plan with credits
 | `set_agent_credentials` | Save the keys, tokens and settings an agent's skills and channels need, such as a Telegram bot token or a Gmail app password |
 | `connect_agent_oauth` | Connect sign-in accounts such as HubSpot or X for the services an agent's skills use; you approve the connection in your browser. Some services need your own app keys or a token first |
 | `disconnect_agent_oauth` | Disconnect a connected account, after your confirmation |
+| `list_projects` | List the projects of the connected project's workspace, to pick one for an agent; no keys are shown |
+| `bind_agent_project` | Connect an agent to a Wiro project so it can run models, with no key in the chat; shows the project first, then asks for your confirmation |
 | `manage_agent_custom_skill` | Add, edit, schedule, restore or remove an agent's own instructions and scheduled tasks; turning off its approval policy or changing its rules needs your confirmation |
 | `manage_agent_billing` | Subscribe, upgrade to Pro, cancel, renew or buy extra credits from your wallet, after your confirmation |
 | `get_agent_activity` | Read an agent's credit usage and activity logs |
@@ -313,7 +315,8 @@ quote's reference (`confirm_charge_usd` with the approved amount, or the quote's
 `idempotency_key` for skill changes) after you agree. If the price changed in
 between, nothing is charged and you get a new quote. Deleting a workflow, an
 agent, a conversation or an account connection also waits for `confirm: true`,
-and so does replacing a workflow's steps with `update_workflow` or
+and so do connecting an agent to a Wiro project with `bind_agent_project` and
+replacing a workflow's steps with `update_workflow` or
 `save_workflow_from_agent`: you see a summary of the change first, with the old
 and new value of each step input that changes. No tool adds
 funds or takes a card payment: funds are added in the Wiro dashboard, and an
@@ -426,7 +429,7 @@ Workflow Agent chain:
 `send_agent_message (agent "workflow-agent") → get_agent_message → save_workflow_from_agent → run_workflow`
 
 Agent chain:
-`list_agent_templates → get_agent_template → deploy_agent → set_agent_credentials / connect_agent_oauth → control_agent → send_agent_message`
+`list_agent_templates → get_agent_template → deploy_agent → set_agent_credentials / connect_agent_oauth / bind_agent_project → control_agent → send_agent_message`
 
 ## Hosted MCP Server
 
@@ -478,7 +481,7 @@ To send headers of your own with every API request, pass `requestHeaders`: a fun
 | Export | Description |
 |--------|-------------|
 | `createMcpServer(client, options?)` | Creates an McpServer with the tools, prompts and server instructions registered. `options.toolsets` picks tool groups and the prompts that use them; `options.instructions` replaces the instructions; `options.wrapTool(tool, handler)` returns the handler to register for each tool, for your own logging or permission checks; `options.maxToolInputElements` caps the array elements and object members one tool call may carry (default 10000, `Infinity` turns the check off) |
-| `WiroClient` | API client with both auth types; `post(path, body)` calls any Wiro API endpoint with the same credentials |
+| `WiroClient` | API client with both auth types; `post(path, body)` calls any Wiro API endpoint with the same credentials, and `isOwnApiKey(value)` says whether a value is this client's key |
 | `registerTools(server, client, options?)` | Registers the tools on an McpServer you already have, with the same `toolsets` and `wrapTool` options. That server then lists every tool schema, its own tools included, as JSON Schema 2020-12 |
 | `advertiseJsonSchema2020_12(server)` | Makes an McpServer list its tool schemas as JSON Schema 2020-12. Call it when you register single tools from `@wiro-ai/wiro-mcp/tools` instead of using `registerTools` |
 | `withJsonSchema2020_12(transport)` | The same for one transport: `await server.connect(withJsonSchema2020_12(transport))` |

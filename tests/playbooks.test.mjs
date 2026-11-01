@@ -26,7 +26,7 @@ const PLANNED_TOOLS = new Set([
   'list_my_agents', 'get_my_agent', 'control_agent', 'update_agent',
   'manage_agent_billing', 'get_agent_activity', 'delete_agent',
   'apply_agent_skills', 'set_agent_credentials', 'connect_agent_oauth',
-  'disconnect_agent_oauth', 'manage_agent_custom_skill',
+  'disconnect_agent_oauth', 'manage_agent_custom_skill', 'list_projects', 'bind_agent_project',
 ]);
 
 // snake_case words in the guidance that are parameters, actions or LLM segment
@@ -34,7 +34,7 @@ const PLANNED_TOOLS = new Set([
 const NON_TOOL_IDENTIFIERS = new Set([
   'timeout_seconds', 'wait_seconds', 'call_id', 'function_call', 'custom_tool_call',
   'upgrade_to_pro', 'buy_credits', 'select_accounts', 'confirm_charge_usd', 'idempotency_key', 'redirect_url',
-  'session_id', 'debug_node_id', 'custom_skills', 'team_session_mode', 'recent_transactions',
+  'session_id', 'debug_node_id', 'custom_skills', 'team_session_mode', 'recent_transactions', 'project_id',
   // An example Start field key, and an input name the Workflow Agent hides.
   'product_photo', 'api_key',
 ]);

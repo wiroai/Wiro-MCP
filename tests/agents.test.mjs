@@ -455,7 +455,7 @@ test('list_agent_templates maps the sort, trims rows and chains to get_agent_tem
     assert.equal(JSON.stringify(result.structuredContent).includes('samples'), false);
     assert.match(textOf(result), /pricing unavailable/);
     const { tools } = await client.listTools();
-    assert.match(tools.find(tool => tool.name === 'list_agent_templates').description, /model runs it starts, for images, videos or voice calls, are billed to the wallet of the Wiro API key saved on the agent\./);
+    assert.match(tools.find(tool => tool.name === 'list_agent_templates').description, /model runs it starts, for images, videos or voice calls, are billed to the wallet of the workspace that owns the Wiro project connected to the agent\./);
   });
 });
 
@@ -470,7 +470,7 @@ test('get_agent_template returns what to ask for without preset values', async (
     assert.equal(template.requiredCredentials[0].oauth, true);
     assert.deepEqual(template.requiredCredentials[0].connectionModes, ['wiro', 'own']);
     assert.match(textOf(result), /list_agent_skills with its key shows which, so tell the user before deploying/);
-    assert.match(textOf(result), /Credits pay for the agent's chat and scheduled tasks \(100 credits = 1 USD\)\. Model runs it starts, for images, videos or voice calls, are billed to the wallet of the Wiro API key saved on the agent\./);
+    assert.match(textOf(result), /Credits pay for the agent's chat and scheduled tasks \(100 credits = 1 USD\)\. Model runs it starts, for images, videos or voice calls, are billed to the wallet of the workspace that owns the Wiro project connected to the agent\./);
     assert.deepEqual(template.requiredCredentials[0].fields.map(field => field.key), ['appid']);
     assert.deepEqual(template.optionalCredentials.map(item => item.key), ['var-website']);
     assert.equal(template.skills[0].credentialKey, 'instagram');
@@ -869,7 +869,7 @@ test('deploy_agent quotes a template without deploying or echoing credentials', 
     assert.equal(content.nextAction.arguments.credentials, undefined);
     assert.match(content.nextAction.reason, /^Ask the user to approve this charge first\./);
     assert.match(textOf(result), /\$120\.00 now, then \$120\.00 every 30 days/);
-    assert.match(textOf(result), /Model runs it starts, for images, videos or voice calls, are billed to the wallet of the Wiro API key saved on the agent\./);
+    assert.match(textOf(result), /Model runs it starts, for images, videos or voice calls, are billed to the wallet of the workspace that owns the Wiro project connected to the agent\./);
     assert.equal(content.quote.paidFrom, 'The Wiro wallet of the connected project\'s workspace: the team wallet for a team project, otherwise the personal wallet.');
     assertNoSecrets(result);
   });
@@ -927,12 +927,44 @@ test('deploy_agent quotes the credentials of every skill in a custom build, depe
       { key: 'twilio-voice', title: 'Twilio Voice Channel credentials' },
       { key: 'wiro', title: 'Wiro AI Models credentials' },
     ]);
-    assert.match(textOf(quote), /- After deployment the user must provide: Twilio Voice Channel credentials \(`twilio-voice`\), Wiro AI Models credentials \(`wiro`\)/);
-    // A voice build's calls run a model billed to the saved key's wallet, not to the plan.
-    assert.match(textOf(quote), /Model runs it starts, for images, videos or voice calls, are billed to the wallet of the Wiro API key saved on the agent\./);
+    assert.match(textOf(quote), /- After deployment the user must provide: Twilio Voice Channel credentials \(`twilio-voice`\), Wiro AI Models credentials \(`wiro`\)\. bind_agent_project connects a project after deployment, with no key to paste\./);
+    // A voice build's calls run a model billed to the project's wallet, not to the plan.
+    assert.match(textOf(quote), /Model runs it starts, for images, videos or voice calls, are billed to the wallet of the workspace that owns the Wiro project connected to the agent\./);
     // The named skills are checked first; the skills they bring are read once the build is known.
     assert.deepEqual(fake.called('/Skills/List').map(item => item.body.name_in), [['int-twilio-channel'], closure.slice(1)]);
     assert.equal(fake.called('/UserAgent/Deploy').length, 0);
+  });
+});
+
+test('deploy_agent asks the user only for credentials the call does not carry', async () => {
+  const registry = {
+    'int-gmail-check': { name: 'int-gmail-check', title: 'Gmail Check', requires_credentials: true, credential_key: 'gmail', depends_on: [], pricing: {} },
+    'int-wiro-aimodels': { name: 'int-wiro-aimodels', title: 'Wiro AI Models', requires_credentials: true, credential_key: 'wiro', depends_on: [], pricing: {} },
+  };
+  const skills = Object.keys(registry);
+  const fake = fakeClient({
+    '/Skills/List': body => ({ result: true, errors: [], skills: body.name_in.map(name => registry[name]) }),
+    '/UserAgent/PricingPreview': { result: true, errors: [], totalPriceUsd: 4, totalMonthlyCredits: 400, enabledSkills: skills },
+  });
+  const gmail = '- Provided in this call: Gmail Check credentials (`gmail`). The deploy result names any still missing.';
+  const toBind = 'bind_agent_project connects a project after deployment, with no key to paste.';
+  await withClient(fake, async client => {
+    const args = { custom: true, title: 'Mail', tier: 'starter', skills };
+    const carried = await call(client, 'deploy_agent', { ...args, credentials: { gmail: { account: 'bot@example.test', apppassword: '000000:TEST-BOT-TOKEN' } } });
+    assert.ok(textOf(carried).includes(`- After deployment the user must provide: Wiro AI Models credentials (\`wiro\`). ${toBind}\n${gmail}\n`), textOf(carried));
+    assert.deepEqual(carried.structuredContent.quote.credentialsNeeded.map(item => item.key), ['gmail', 'wiro']);
+    assertNoSecrets(carried);
+
+    const both = await call(client, 'deploy_agent', { ...args, credentials: { gmail: { account: 'bot@example.test' }, wiro: { apikey: '000000:TEST-BOT-TOKEN' } } });
+    assert.doesNotMatch(textOf(both), /must provide/);
+    assert.doesNotMatch(textOf(both), /bind_agent_project/);
+    assert.match(textOf(both), /- Provided in this call: Gmail Check credentials \(`gmail`\), Wiro AI Models credentials \(`wiro`\)\. The deploy result names any still missing\./);
+    assertNoSecrets(both);
+
+    // An empty group carries nothing.
+    const empty = await call(client, 'deploy_agent', { ...args, credentials: { gmail: {}, wiro: { apikey: ' ' } } });
+    assert.ok(textOf(empty).includes(`- After deployment the user must provide: Gmail Check credentials (\`gmail\`), Wiro AI Models credentials (\`wiro\`). ${toBind}\n`), textOf(empty));
+    assert.doesNotMatch(textOf(empty), /Provided in this call/);
   });
 });
 

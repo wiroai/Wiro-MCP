@@ -1,5 +1,6 @@
 import type { WiroClient } from '../client.js';
 import { asString, hasErrorCode, isPlainObject, requireApiSuccess, type ApiEnvelope } from './api.js';
+import { quotedSpan } from './quoted-text.js';
 
 // The teams of the person who created the connected project, with that
 // person's role in each. Calls act as that person, so team rights follow
@@ -180,6 +181,14 @@ export async function readPayingWallet(client: WiroClient, signal?: AbortSignal)
     if (signal?.aborted) throw error;
     return { workspace: { kind: 'unknown' }, balanceUsd: null };
   }
+}
+
+/** The wallet a workspace pays from, named when it can be read; otherwise the wording given. */
+export function payingWalletText(workspace: ConnectedWorkspace, whenUnknown: string): string {
+  if (workspace.kind === 'personal') return 'The personal wallet.';
+  if (workspace.kind !== 'team') return whenUnknown;
+  const team = workspace.teamName?.trim() ? `the team ${quotedSpan(workspace.teamName)}` : 'the connected project\'s team';
+  return `The wallet of ${team}${workspace.organizationName?.trim() ? ` (${quotedSpan(workspace.organizationName)})` : ''}.`;
 }
 
 /**

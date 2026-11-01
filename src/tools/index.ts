@@ -50,6 +50,8 @@ import { registerSetAgentCredentials } from './set-agent-credentials.js';
 import { registerConnectAgentOauth } from './connect-agent-oauth.js';
 import { registerDisconnectAgentOauth } from './disconnect-agent-oauth.js';
 import { registerManageAgentCustomSkill } from './manage-agent-custom-skill.js';
+import { registerListProjects } from './list-projects.js';
+import { registerBindAgentProject } from './bind-agent-project.js';
 
 export const TOOLSETS = ['models', 'workflows', 'agents'] as const;
 export type Toolset = typeof TOOLSETS[number];
@@ -185,6 +187,8 @@ export function registerTools(
     registerConnectAgentOauth(server, client);
     registerDisconnectAgentOauth(server, client);
     registerManageAgentCustomSkill(server, client);
+    registerListProjects(server, client);
+    registerBindAgentProject(server, client);
   }
 }
 
@@ -239,4 +243,6 @@ export {
   registerConnectAgentOauth,
   registerDisconnectAgentOauth,
   registerManageAgentCustomSkill,
+  registerListProjects,
+  registerBindAgentProject,
 };

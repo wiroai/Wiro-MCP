@@ -19,6 +19,7 @@ const ARGUMENT_ALIASES: Record<string, string[]> = {
   search: ['query', 'q', 'keywords'],
   workflowtoken: ['token', 'runtoken', 'run'],
   breakpoint_node_id: ['breakpoint', 'breakpointnode', 'stopafter'],
+  project_id: ['project', 'id'],
 };
 
 function argumentKey(name: string): string {

@@ -54,7 +54,7 @@ function deployAgentText(goal: string | undefined): string {
     '3. Call `get_account` to check the balance and which wallet will pay.',
     '4. Call `deploy_agent` without confirm to get the quote. Show me the amount, the wallet, and that the plan renews every 30 days until it is cancelled. Only after I say yes, repeat the call as the quote\'s `nextAction` shows: `confirm: true` with `confirm_charge_usd` set to the quoted amount. If the price changed in between, nothing is charged: show me the new quote.',
     '5. Wait with `get_my_agent` until the agent is running (status 4). It starts even while credentials are missing.',
-    '6. Set it up: ask me for each required credential and save it with `set_agent_credentials`. For sign-in accounts, call `connect_agent_oauth` and tell me what it needs: a sign-in link, my own app keys first, or a token. If it gives a link, wait for me, then check the status.',
+    '6. Set it up: ask me for each required credential and save it with `set_agent_credentials`. For a Wiro project (`wiro`), call `bind_agent_project` instead: it needs no key, shows me the project first and connects it only after my yes. For sign-in accounts, call `connect_agent_oauth` and tell me what it needs: a sign-in link, my own app keys first, or a token. If it gives a link, wait for me, then check the status.',
     '7. Tell me what works now and what still needs setup. Offer a short test message with `send_agent_message`; each message uses the agent\'s credits.',
     '',
     'Confirm every charge with me before it happens. Never repeat secret values back to me. If a deploy fails or times out, check `list_my_agents` before trying again.',

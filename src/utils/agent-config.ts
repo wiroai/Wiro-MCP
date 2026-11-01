@@ -14,7 +14,7 @@ import {
   type ApiEnvelope,
 } from './api.js';
 import { oneLine, quotedSpan } from './quoted-text.js';
-import { credentialKeysSetupWaitsFor, planEndsWithPeriod } from './user-agent.js';
+import { credentialKeysSetupWaitsFor, planEndsWithPeriod, WIRO_PROJECT_CREDENTIAL } from './user-agent.js';
 
 // Helpers for configuring a deployed agent: its registry skills, credentials,
 // sign-in connections and custom skills. The pure functions mirror the server
@@ -86,6 +86,55 @@ export function restartNote(status: number | null, what = 'change'): string {
     default:
       return `The ${what} takes effect the next time the agent starts.`;
   }
+}
+
+export function keyList(keys: string[]): string {
+  return keys.length > 1 ? `${keys.slice(0, -1).join(', ')} and ${keys[keys.length - 1]}` : keys.join('');
+}
+
+function afterWriteNote(status: number | null): string {
+  switch (status) {
+    case 1:
+      return 'The agent restarts to load the new values, which takes about a minute.';
+    case 2:
+    case 3:
+      return 'The agent is starting and loads the new values.';
+    case 4:
+      return 'The agent restarts shortly to load the new values.';
+    case 6:
+      return 'The agent still needs setup before it can start; get_my_agent shows what is missing.';
+    case 5:
+      return 'The agent stopped with an error; the values are used when it starts.';
+    case null:
+      return 'Check the agent with get_my_agent.';
+    default:
+      return `The agent is ${agentStatusLabel(status)}; the values are used when it starts.`;
+  }
+}
+
+/** What the setup still waits for and the tool that gives each one: a Wiro project, a sign-in or saved fields. */
+export function setupStillMissingNote(missing: Array<{ key: string; title: string; oauth: boolean }>): string | null {
+  if (missing.length === 0) return null;
+  const titles = (items: typeof missing) => items.map(item => item.title);
+  const isProject = (item: typeof missing[number]) => item.key === WIRO_PROJECT_CREDENTIAL;
+  const steps = [
+    { verb: 'Set', names: titles(missing.filter(item => !item.oauth && !isProject(item))), tool: 'set_agent_credentials' },
+    { verb: 'Connect', names: titles(missing.filter(item => item.oauth && !isProject(item))), tool: 'connect_agent_oauth' },
+    { verb: 'Connect', names: titles(missing.filter(isProject)), tool: 'bind_agent_project' },
+  ].filter(step => step.names.length > 0);
+  const first = steps[0];
+  const how = steps.length === 1 && first
+    ? `${first.verb} ${first.names.length > 1 ? 'them' : 'it'} with ${first.tool}`
+    : steps.map((step, index) => `${index === 0 ? step.verb : step.verb.toLowerCase()} ${keyList(step.names)} with ${step.tool}`).join(', ');
+  return `Setup is not finished: still missing ${keyList(titles(missing))}. ${how}, then check with get_my_agent.`;
+}
+
+/** When the agent loads the values, and the credentials its setup still waits for, at any status. */
+export function afterWriteNotes(status: number | null, missing: Array<{ key: string; title: string; oauth: boolean }>): string[] {
+  const setup = setupStillMissingNote(missing);
+  if (!setup) return [afterWriteNote(status)];
+  // At status 6 the general note says the same without the names.
+  return status === 6 ? [setup] : [afterWriteNote(status), setup];
 }
 
 export async function readUserAgent(
@@ -672,11 +721,11 @@ export async function connectionRefusalText(
   return `${message}\n\nIntegrations ${rule}`;
 }
 
+export const WORKSPACE_HINT = 'Connect with a project in the workspace (personal or team) that owns this agent, by its API key or a browser sign-in.';
+
 /** The API names a dashboard concept ("team context"); here the workspace is the connected project's. */
 export function workspaceHint(message: string): string | undefined {
-  return /switch to the (team|personal)|different team|personal workspace/i.test(message)
-    ? 'Connect with a project in the workspace (personal or team) that owns this agent, by its API key or a browser sign-in.'
-    : undefined;
+  return /switch to the (team|personal)|different team|personal workspace/i.test(message) ? WORKSPACE_HINT : undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -753,10 +802,11 @@ export const FIELD_HELP_MAX = 4_000;
 
 // The Wiro project field. On the dashboard it is a project picker, and the help
 // it comes with describes that picker, so this line is shown instead.
-export const WIRO_PROJECT_NOTE = 'This is the API key of a Wiro project. The user can pick the project on the agent\'s page '
-  + 'in the Wiro dashboard, which keeps the key out of this chat, or give you the key to save here. Save only a key the '
-  + 'user gives you for this; Wiro adds the project\'s secret by itself. Model runs the agent starts are billed to the '
-  + 'wallet of the workspace that owns the project.';
+export const WIRO_PROJECT_NOTE = 'Connect a Wiro project with bind_agent_project: it takes the project of this connection or '
+  + 'one from list_projects, and no key passes through this chat. The user can also pick the project on the agent\'s page in '
+  + 'the Wiro dashboard. Saving a project API key with set_agent_credentials stays possible when the user gives one for this, '
+  + 'and Wiro adds the project\'s secret by itself. Model runs the agent starts are billed to the wallet of the workspace '
+  + 'that owns the project.';
 
 export function isWiroProjectField(raw: Row): boolean {
   return /^(custom:)?wiro-project-picker$/.test(asString(raw.type) ?? '');

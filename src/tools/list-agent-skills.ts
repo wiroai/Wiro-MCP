@@ -139,7 +139,8 @@ export function registerListAgentSkills(server: McpServer, client: WiroClient): 
         + 'there for the service the user named (apply_agent_skills also answers an unknown name with close '
         + 'matches). Pass `name` with a skill name (or a credential or channel key such '
         + 'as "telegram") to get the exact fields the user must provide, with their labels, formats and setup '
-        + 'help, so you know what to ask for before calling set_agent_credentials or connect_agent_oauth.',
+        + 'help, so you know what to ask for before calling set_agent_credentials or connect_agent_oauth. '
+        + 'A Wiro project (credential "wiro") is connected with bind_agent_project, with no key to paste.',
       inputSchema: strictInput({
         name: z.string().min(1).max(100).optional()
           .describe('A skill name (for example "int-gmail-check") returns its price and the setup fields of every credential it needs. A credential or channel key (for example "telegram") returns that credential\'s setup and the ways it can connect.'),

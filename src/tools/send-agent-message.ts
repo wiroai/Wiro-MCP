@@ -60,7 +60,7 @@ export function registerSendAgentMessage(server: McpServer, client: WiroClient):
         + 'Pass workflow to have it edit an existing one. It never saves anything: valid workflows in its reply come '
         + 'back under workflows, and you save the one the user picks with save_workflow_from_agent (a request to save it is that choice). '
         + 'A deployed agent (its guid) pays for its turns with its own credits; image, video and other model '
-        + 'runs it starts are billed to the wallet of the Wiro API key saved on that agent. '
+        + 'runs it starts are billed to the wallet of the workspace that owns the Wiro project connected to that agent. '
         + 'Without session, Studio and the Workflow Agent start a new session; a deployed agent uses its "default" '
         + 'session. A message to a deployed agent with a command that clears or restarts it (/new_session, '
         + '/clear_all_sessions, /clear_history, /agent_restart) is refused. '

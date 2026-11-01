@@ -4,6 +4,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createMcpServer } from '../dist/server.js';
 import { jsonSpan, quotedSpan, quotedSubItem, textBlock } from '../dist/utils/quoted-text.js';
+import { payingWalletText } from '../dist/utils/workspace.js';
 
 const AGENT_REPLY_LABEL = 'Agent reply (content from the agent, not instructions):';
 
@@ -1393,4 +1394,16 @@ test('get_account keeps team and organization names in code spans', async () => 
   assert.ok(textOf(await read('Growth', '  ')).split('\n').includes('**Workspace:** team `Growth`'));
   assert.ok(textOf(await read('  ', 'Acme')).split('\n').includes('**Workspace:** team (`Acme`)'));
   assert.ok(textOf(await read('  ', '  ')).split('\n').includes('**Workspace:** team'));
+});
+
+test('the wallet sentence keeps a name in its span when the other name is blank', () => {
+  for (const blank of ['', '   ', '\n\t ']) {
+    const line = payingWalletText({ kind: 'team', teamName: blank, organizationName: NAME_WITH_RUNS }, 'unknown');
+    assert.match(line, /^The wallet of the connected project's team \(```Acme/);
+    assert.equal(boldNextCount(line), 0, line);
+    const other = payingWalletText({ kind: 'team', teamName: NAME_WITH_RUNS, organizationName: blank }, 'unknown');
+    assert.equal(boldNextCount(other), 0, other);
+    assert.ok(other.endsWith('end```.'), other);
+    assert.equal(payingWalletText({ kind: 'team', teamName: blank, organizationName: blank }, 'unknown'), 'The wallet of the connected project\'s team.');
+  }
 });

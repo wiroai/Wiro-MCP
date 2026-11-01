@@ -15,10 +15,14 @@ import {
   formatModelRates,
   formatScheduledTaskLine,
   formatUsd,
+  WIRO_PROJECT_CREDENTIAL,
 } from '../utils/user-agent.js';
 import { nextActionSchema, strictInput } from './schemas.js';
 
 function credentialLine(credential: CredentialRequirement): string {
+  if (credential.key === WIRO_PROJECT_CREDENTIAL) {
+    return `- ${credential.title} (\`${credential.key}\`): a Wiro project; bind_agent_project connects one after deployment, with no key to paste`;
+  }
   const fields = credential.fields
     .filter(field => !field.onlyInModes || field.onlyInModes.length === 0)
     .map(field => `${field.label}${field.required ? '' : ' (optional)'}`);
@@ -34,7 +38,7 @@ function formatTemplate(template: TemplateDetail): string {
     lines.push(
       `**Starter:** ${formatUsd(starter.priceUsd)} per 30 days, ${formatCredits(starter.monthlyCredits)} credits per month`,
       `**Pro:** ${formatUsd(pro.priceUsd)} per 30 days, ${formatCredits(pro.monthlyCredits)} credits per month`,
-      'Prices are paid from the Wiro wallet when deploying and renew every 30 days until the plan is cancelled. Credits pay for the agent\'s chat and scheduled tasks (100 credits = 1 USD). Model runs it starts, for images, videos or voice calls, are billed to the wallet of the Wiro API key saved on the agent.',
+      'Prices are paid from the Wiro wallet when deploying and renew every 30 days until the plan is cancelled. Credits pay for the agent\'s chat and scheduled tasks (100 credits = 1 USD). Model runs it starts, for images, videos or voice calls, are billed to the wallet of the workspace that owns the Wiro project connected to the agent.',
     );
   } else {
     lines.push('**Pricing:** unavailable right now. Do not deploy this template until it can be priced.');

@@ -12,6 +12,7 @@ import {
   type ApiEnvelope,
 } from '../utils/api.js';
 import {
+  afterWriteNotes,
   agentStatusLabel,
   agentStatusOf,
   channelStatuses,
@@ -22,6 +23,7 @@ import {
   credentialStatus,
   customSkillEntries,
   isWritableField,
+  keyList,
   loadCredentialMeta,
   ownAppRedirectUri,
   prepareCredentialWrite,
@@ -35,7 +37,7 @@ import {
   type CredentialMeta,
 } from '../utils/agent-config.js';
 import { fetchPublicFile, type RemoteFile } from '../utils/remote-file.js';
-import { toAgentDetail } from '../utils/user-agent.js';
+import { bindProjectStep, toAgentDetail, WIRO_PROJECT_CREDENTIAL } from '../utils/user-agent.js';
 import { isPlainTeamMember } from '../utils/workspace.js';
 import { nextActionSchema, strictInput } from './schemas.js';
 
@@ -232,46 +234,6 @@ function fieldLines(field: CredentialField, depth = 0): string[] {
   ];
 }
 
-function keyList(keys: string[]): string {
-  return keys.length > 1 ? `${keys.slice(0, -1).join(', ')} and ${keys[keys.length - 1]}` : keys.join('');
-}
-
-function afterWriteNote(status: number | null): string {
-  switch (status) {
-    case 1:
-      return 'The agent restarts to load the new values, which takes about a minute.';
-    case 2:
-    case 3:
-      return 'The agent is starting and loads the new values.';
-    case 4:
-      return 'The agent restarts shortly to load the new values.';
-    case 6:
-      return 'The agent still needs setup before it can start; get_my_agent shows what is missing.';
-    case 5:
-      return 'The agent stopped with an error; the values are used when it starts.';
-    case null:
-      return 'Check the agent with get_my_agent.';
-    default:
-      return `The agent is ${agentStatusLabel(status)}; the values are used when it starts.`;
-  }
-}
-
-/** When the agent loads the values, and the credentials its setup still waits for, at any status. */
-function afterWriteNotes(status: number | null, missing: Array<{ title: string; oauth: boolean }>): string[] {
-  if (missing.length === 0) return [afterWriteNote(status)];
-  // A sign-in is completed with connect_agent_oauth, other credentials by saving their fields.
-  const fields = missing.filter(item => !item.oauth).map(item => item.title);
-  const signIns = missing.filter(item => item.oauth).map(item => item.title);
-  const steps = fields.length > 0 && signIns.length > 0
-    ? `Set ${keyList(fields)} with set_agent_credentials, connect ${keyList(signIns)} with connect_agent_oauth, then check with get_my_agent.`
-    : fields.length > 0
-      ? `Set ${fields.length > 1 ? 'them' : 'it'} with set_agent_credentials, then check with get_my_agent.`
-      : `Connect ${signIns.length > 1 ? 'them' : 'it'} with connect_agent_oauth, then check with get_my_agent.`;
-  const setup = `Setup is not finished: still missing ${keyList(missing.map(item => item.title))}. ${steps}`;
-  // At status 6 the general note says the same without the names.
-  return status === 6 ? [setup] : [afterWriteNote(status), setup];
-}
-
 function errorMessages(body: ApiEnvelope): string[] {
   return (body.errors ?? [])
     .map(error => (typeof error?.message === 'string' ? readableApiMessage(error.message.trim()) : ''))
@@ -306,8 +268,9 @@ export function registerSetAgentCredentials(server: McpServer, client: WiroClien
         + 'their required fields are set, and turn off when one is cleared. Saving a credential turns on '
         + 'the scheduled tasks that need it; turn off any you do not want. Sign-in integrations (such as '
         + 'Google Ads, YouTube, Meta and HubSpot) are then connected with connect_agent_oauth; Gmail, Google '
-        + 'Calendar and Google Drive are not sign-ins and are set here. Only save a Wiro project API '
-        + 'key (credential "wiro") that the user gave you: model runs are billed to its wallet. '
+        + 'Calendar and Google Drive are not sign-ins and are set here. To connect a Wiro project (credential '
+        + '"wiro"), use bind_agent_project first: it takes no key. Only save a Wiro project API key here that the '
+        + 'user gave you for this: model runs are billed to the wallet of the workspace that owns the project. '
         + 'On a team agent this needs a team admin or the person who deployed it; other team members can read '
         + 'the agent with get_my_agent and message it, so do not ask them for values they cannot save. '
         + 'The agents playbook (get_playbook) has the full setup walkthrough.',
@@ -432,7 +395,7 @@ export function registerSetAgentCredentials(server: McpServer, client: WiroClien
           && entry.requiresCredentials.some(key => keys.includes(key)))) {
           notes.push('Saving these credentials turns on the scheduled tasks that need them; turn off any you do not want.');
         }
-        if (keys.includes('wiro')) {
+        if (keys.includes(WIRO_PROJECT_CREDENTIAL)) {
           notes.push('Model runs started by this agent are billed to the wallet of the workspace that owns that project key.');
         }
         // The credentials the setup still waits for, named as get_my_agent names them.
@@ -547,7 +510,7 @@ async function describeCredential(
   if (usableModes.length > 0) {
     notes.push(`To choose how it connects, set field authmethod to one of: ${usableModes.join(', ')}.`);
   }
-  if (key === 'wiro') notes.push(WIRO_PROJECT_NOTE);
+  if (key === WIRO_PROJECT_CREDENTIAL) notes.push(WIRO_PROJECT_NOTE);
 
   const unusedNote = row && meta.oauth && !status?.connected
     ? await unusedCredentialNote(client, row, key, meta.title, signal)
@@ -555,7 +518,9 @@ async function describeCredential(
   if (unusedNote) notes.push(unusedNote);
 
   let nextAction;
-  if (meta.oauth && modes && !status?.connected && !unusedNote) {
+  if (key === WIRO_PROJECT_CREDENTIAL) {
+    nextAction = bindProjectStep(agentGuid, 'Connect a Wiro project to this agent.');
+  } else if (meta.oauth && modes && !status?.connected && !unusedNote) {
     const mode = chooseConnectionMode(meta, modes);
     if (mode && !(mode === 'api_key' && !meta.oauth.directProbe)) {
       // The only usable mode is chosen even when its fields are not saved yet.

@@ -927,11 +927,26 @@ export interface NextAction {
   reason: string;
 }
 
+/** The credential that holds the Wiro project an agent runs models with. */
+export const WIRO_PROJECT_CREDENTIAL = 'wiro';
+
+/** The call that connects a Wiro project to an agent. It shows the project first; lead says why it comes now. */
+export function bindProjectStep(agentGuid: string, lead: string): NextAction {
+  return {
+    tool: 'bind_agent_project',
+    arguments: { agent_guid: agentGuid },
+    reason: `${lead} This shows the project first and changes nothing without confirm: true, and no key is needed.`,
+  };
+}
+
 /** The call that starts on the first missing credential, with every argument it needs. */
 export function missingCredentialStep(agent: Pick<AgentDetail, 'guid' | 'missingCredentials'>): NextAction | undefined {
   const missing = agent.missingCredentials[0];
   if (!missing) return undefined;
   const keys = agent.missingCredentials.map(item => item.key).join(', ');
+  if (missing.key === WIRO_PROJECT_CREDENTIAL) {
+    return bindProjectStep(agent.guid, `Provide the missing credentials (${keys}), starting with ${missing.title}.`);
+  }
   return missing.oauth
     ? {
       tool: 'connect_agent_oauth',

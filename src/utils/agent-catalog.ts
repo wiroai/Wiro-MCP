@@ -9,6 +9,7 @@ import {
   tierPricingSchema,
   toStringArray,
   toTierPricing,
+  WIRO_PROJECT_CREDENTIAL,
   type AgentApiClient,
 } from './user-agent.js';
 
@@ -59,6 +60,7 @@ export const credentialRequirementSchema = z.object({
   mode: z.string().optional(),
   oauth: z.boolean(),
   connectionModes: z.array(z.string()),
+  note: z.string().optional(),
   fields: z.array(credentialFieldSchema),
 });
 
@@ -122,6 +124,7 @@ function toCredentialRequirement(key: string, group: Record<string, unknown>): C
       connectionModes: toStringArray(schema.connection_modes),
       wiroPending: schema.wiro_connect_pending === true,
     }),
+    ...(key === WIRO_PROJECT_CREDENTIAL ? { note: WIRO_PROJECT_NOTE } : {}),
     fields: fields
       .filter(field => {
         const fieldKey = asString(field.key);
@@ -421,7 +424,7 @@ export function toCredentialSetup(
       ? { channel: { id: asString(channel.id) ?? key, requiredFields: toStringArray(channel.required_fields) } }
       : {}),
     ...(usedBy.length > 0 ? { usedBySkills: usedBy } : {}),
-    ...(key === 'wiro' ? { note: WIRO_PROJECT_NOTE } : {}),
+    ...(key === WIRO_PROJECT_CREDENTIAL ? { note: WIRO_PROJECT_NOTE } : {}),
     fields: schema.filter(field => asString(field.key)).map(field => {
       const onlyInModes = toStringArray(field.only_in_modes);
       const type = asString(field.type);

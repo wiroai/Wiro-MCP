@@ -27,13 +27,14 @@ import {
   toDeployedAgent,
   toStringArray,
   toTierPricing,
+  WIRO_PROJECT_CREDENTIAL,
   type AgentDetail,
   type AgentTier,
 } from '../utils/user-agent.js';
-import { APPROVAL_POLICY_KEY, humanizeCustomSkillKey, resolveDeployCustomSkills, type DeployCustomSkill, type TemplateCustomSkill } from '../utils/agent-config.js';
+import { APPROVAL_POLICY_KEY, humanizeCustomSkillKey, isFilledValue, resolveDeployCustomSkills, type DeployCustomSkill, type TemplateCustomSkill } from '../utils/agent-config.js';
 import { readTemplateRow, toSkillSummary, toTemplateDetail, type SkillSummary } from '../utils/agent-catalog.js';
-import { quotedBlock, quotedSpan } from '../utils/quoted-text.js';
-import { readPayingWallet, type PayingWallet } from '../utils/workspace.js';
+import { quotedBlock } from '../utils/quoted-text.js';
+import { payingWalletText, readPayingWallet, type PayingWallet } from '../utils/workspace.js';
 import { nextActionSchema, strictInput } from './schemas.js';
 
 const PAID_FROM = 'The Wiro wallet of the connected project\'s workspace: the team wallet for a team '
@@ -43,6 +44,13 @@ const PAID_FROM = 'The Wiro wallet of the connected project\'s workspace: the te
 const TEAM_CHATS_MODE = 'collaborative';
 const TEAM_CHATS_NOTE = 'A team agent starts with collaborative chats, so every member of the team sees all its chats. After '
   + 'the deploy, update_agent with team_session_mode "private" gives each person their own chat history; the change restarts the agent.';
+
+// What a Wiro project takes once the agent exists.
+const BIND_AFTER_DEPLOY = 'bind_agent_project connects a project after deployment, with no key to paste.';
+
+function bindAfterDeployNote(credentials: Array<{ key: string }>): string {
+  return credentials.some(item => item.key === WIRO_PROJECT_CREDENTIAL) ? ` ${BIND_AFTER_DEPLOY}` : '';
+}
 
 const DEFAULT_TASKS_NOTE = 'They came with this build, with default text and schedules, run in UTC until the time zone is '
   + 'changed, and every run spends the agent\'s credits. Agree with the user which to keep: manage_agent_custom_skill '
@@ -150,10 +158,7 @@ function quoteApprovalPolicy(skills: DeployCustomSkill[]): z.infer<typeof quoteA
 
 /** The wallet a quote charges, named when the connection can read it. */
 function paidFromText({ workspace }: PayingWallet): string {
-  if (workspace.kind === 'personal') return 'The personal wallet.';
-  if (workspace.kind !== 'team') return PAID_FROM;
-  const team = workspace.teamName ? `the team ${quotedSpan(workspace.teamName)}` : 'the connected project\'s team';
-  return `The wallet of ${team}${workspace.organizationName ? ` (${quotedSpan(workspace.organizationName)})` : ''}.`;
+  return payingWalletText(workspace, PAID_FROM);
 }
 
 function quoteWallet({ workspace, balanceUsd }: PayingWallet): z.infer<typeof quoteWalletSchema> | undefined {
@@ -175,7 +180,11 @@ function otherTierLine(quote: Quote): string | null {
     : `- Starter instead: ${formatUsd(starter.priceUsd)} every 30 days with ${formatCredits(starter.monthlyCredits)} monthly credits.`;
 }
 
-function quoteText(quote: Quote): string {
+function credentialList(items: Array<{ key: string; title: string }>): string {
+  return items.map(item => `${item.title} (\`${item.key}\`)`).join(', ');
+}
+
+function quoteText(quote: Quote, credentials?: Record<string, unknown>): string {
   const what = quote.kind === 'template'
     ? `${quote.title}, from the template ${quote.template?.title ?? ''} (\`${quote.template?.slug ?? ''}\`)`
     : `${quote.title}, a custom build${quote.skills?.length ? ` with ${quote.skills.join(', ')}` : ' with no extra skills'}`;
@@ -185,7 +194,7 @@ function quoteText(quote: Quote): string {
     `- Agent: ${what}`,
     `- Tier: ${quote.tier === 'pro' ? 'Pro' : 'Starter'}`,
     `- Price: ${formatUsd(quote.priceUsd)} now, then ${formatUsd(quote.priceUsd)} every 30 days until the plan is cancelled`,
-    `- Monthly credits: ${formatCredits(quote.monthlyCredits)}. They pay for the agent's chat and scheduled tasks (100 credits = $1). Model runs it starts, for images, videos or voice calls, are billed to the wallet of the Wiro API key saved on the agent.`,
+    `- Monthly credits: ${formatCredits(quote.monthlyCredits)}. They pay for the agent's chat and scheduled tasks (100 credits = $1). Model runs it starts, for images, videos or voice calls, are billed to the wallet of the workspace that owns the Wiro project connected to the agent.`,
     `- Paid from: ${quote.paidFrom} ${quote.wallet?.balanceUsd !== undefined ? `It holds ${formatUsd(quote.wallet.balanceUsd)}.` : 'get_account shows the balance.'}`,
   ];
   const otherTier = otherTierLine(quote);
@@ -198,8 +207,14 @@ function quoteText(quote: Quote): string {
   if (quote.kind === 'custom') {
     lines.push('- Scheduled tasks: a custom build comes with the tasks its skills bring, or else a starter task on Mondays at 10:00 UTC. Every run spends the agent\'s credits. The deploy result names the tasks that are on, and they can be changed or turned off.');
   }
-  if (quote.credentialsNeeded.length > 0) {
-    lines.push(`- After deployment the user must provide: ${quote.credentialsNeeded.map(item => `${item.title} (\`${item.key}\`)`).join(', ')}`);
+  // Only the deploy result can say a carried credential is complete: it may need more fields or a sign-in.
+  const toProvide = quote.credentialsNeeded.filter(item => !isFilledValue(credentials?.[item.key]));
+  const provided = quote.credentialsNeeded.filter(item => isFilledValue(credentials?.[item.key]));
+  if (toProvide.length > 0) {
+    lines.push(`- After deployment the user must provide: ${credentialList(toProvide)}.${bindAfterDeployNote(toProvide)}`);
+  }
+  if (provided.length > 0) {
+    lines.push(`- Provided in this call: ${credentialList(provided)}. The deploy result names any still missing.`);
   }
   if (quote.approvalPolicy) {
     lines.push(`- Approval policy: ${quote.approvalPolicy.note} Say so when you ask the user to approve.`);
@@ -261,7 +276,7 @@ function deployedText(
     lines.push(`- Scheduled tasks on by default: ${defaultTasks.map(task => `\`${task.key}\` (runs on "${task.interval}")`).join(', ')}. ${DEFAULT_TASKS_NOTE}`);
   }
   if (agent.missingCredentials.length > 0) {
-    lines.push(`- Missing credentials: ${agent.missingCredentials.map(item => `${item.title} (\`${item.key}\`)`).join(', ')}. Skills that need them fail until they are set.`);
+    lines.push(`- Missing credentials: ${agent.missingCredentials.map(item => `${item.title} (\`${item.key}\`)`).join(', ')}. Skills that need them fail until they are set.${bindAfterDeployNote(agent.missingCredentials)}`);
   }
   lines.push(`- Dashboard: ${agent.dashboardUrl}`);
   return lines.join('\n');
@@ -282,8 +297,8 @@ export function registerDeployAgent(server: McpServer, client: WiroClient): void
         + 'Never repeat a confirmed deploy that timed out or whose outcome is unknown without checking '
         + 'list_my_agents first. A refusal that says nothing was created or charged, such as one for balance, '
         + 'can be confirmed again once its cause is fixed and the user says yes. The '
-        + 'agent starts on its own after deployment. Credentials can be added later with set_agent_credentials '
-        + 'or connect_agent_oauth, but skills that need them do not work until then. A custom build also gets '
+        + 'agent starts on its own after deployment. Credentials can be added later with set_agent_credentials, '
+        + 'connect_agent_oauth or, for a Wiro project, bind_agent_project, but skills that need them do not work until then. A custom build also gets '
         + 'the scheduled tasks its skills come with, or a starter task on Mondays at 10:00; the result names the ones '
         + 'that are on, and they can be changed or turned off. The quote names the wallet and the other tier\'s price. '
         + 'In a team workspace the agent starts with collaborative chats, which every team member sees; update_agent '
@@ -499,7 +514,7 @@ export function registerDeployAgent(server: McpServer, client: WiroClient): void
           return {
             content: [{
               type: 'text' as const,
-              text: `${lead}${quoteText(quote)}\n\nAsk the user to approve this charge. Then call deploy_agent again with the same arguments plus confirm_charge_usd ${quote.priceUsd} and confirm: true.${credentialsNote}`,
+              text: `${lead}${quoteText(quote, credentials)}\n\nAsk the user to approve this charge. Then call deploy_agent again with the same arguments plus confirm_charge_usd ${quote.priceUsd} and confirm: true.${credentialsNote}`,
             }],
             structuredContent: {
               stage: 'quote' as const,
