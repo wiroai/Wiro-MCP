@@ -1,6 +1,6 @@
 {
   "name": "@wiro-ai/wiro-mcp",
-  "version": "1.4.1",
+  "version": "1.5.0",
   "mcpName": "ai.wiro/mcp",
   "description": "Official MCP server for Wiro AI. Run Wiro AI models, build and run workflows, and talk to Studio and your Wiro agents from Cursor, Claude, Windsurf and any MCP-compatible AI assistant",
   "type": "module",
