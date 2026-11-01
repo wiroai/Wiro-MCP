@@ -11,6 +11,7 @@ import {
   type ApiEnvelope,
 } from './api.js';
 import { pollUntil, reportProgress, type ToolCallContext } from './poll.js';
+import { quotedSpan } from './quoted-text.js';
 
 // Deployed agents and the agent catalog. Results are rebuilt from an
 // allowlist: only states, labels, prices and settings are returned.
@@ -669,6 +670,11 @@ function noPlanStartHint(agent: Pick<AgentSummary, 'subscription'>): string {
       : 'manage_agent_billing with action subscribe pays for a plan and starts the agent.');
 }
 
+/** An agent's title inside a line of this server's own text: on one line, in a code span it cannot close. */
+export function agentTitleSpan(title: string): string {
+  return title.trim() ? quotedSpan(title) : 'Untitled agent';
+}
+
 export function formatAgentSummaryLines(agent: AgentSummary, plainMember = false): string[] {
   const template = agent.template.custom
     ? 'custom build'
@@ -677,7 +683,7 @@ export function formatAgentSummaryLines(agent: AgentSummary, plainMember = false
     ? `${agent.status === 5 ? 'The start failed or the agent stopped unexpectedly.' : 'It is not running.'} ${noPlanStartHint(agent)}`
     : agentStatusHint(agent.status, plainMember);
   return [
-    `**Agent:** ${agent.title} (\`${agent.guid}\`), ${template}, ${agent.workspace} workspace`,
+    `**Agent:** ${agentTitleSpan(agent.title)} (\`${agent.guid}\`), ${template}, ${agent.workspace} workspace`,
     `**Status:** ${describeAgentStatus(agent.status)}. ${hint}`,
     `**Plan:** ${agent.tier ?? 'no tier'}; ${formatSubscriptionLine(agent.subscription, plainMember)}`,
     `**Credits:** ${formatCredits(agent.credits.remaining)} left (monthly ${formatCredits(agent.credits.monthly)}, extra ${formatCredits(agent.credits.extra)}, used ${formatCredits(agent.credits.used)})`,
@@ -691,12 +697,12 @@ function shortenedNote(key: string): string {
 
 /** A scheduled task as a list line: key, on or off, schedule and description, then shortenedNote if its text was cut. */
 export function formatScheduledTaskLine(task: AgentTask, shortenedNote = ''): string {
-  return `- \`${task.key}\` ${task.enabled ? 'on' : 'off'}${task.interval ? `, ${task.interval}` : ''}${task.description ? `: ${task.description}` : ''}${task.instructionsTruncated ? shortenedNote : ''}`;
+  return `- \`${task.key}\` ${task.enabled ? 'on' : 'off'}${task.interval ? `, ${task.interval}` : ''}${task.description ? `: ${quotedSpan(task.description)}` : ''}${task.instructionsTruncated ? shortenedNote : ''}`;
 }
 
 /** A custom instruction as a list line: key, on or off and description, then shortenedNote if its text was cut. */
 export function formatCustomInstructionLine(task: AgentTask, shortenedNote = ''): string {
-  return `- \`${task.key}\` ${task.enabled ? 'on' : 'off'}${task.description ? `: ${task.description}` : ''}${task.instructionsTruncated ? shortenedNote : ''}`;
+  return `- \`${task.key}\` ${task.enabled ? 'on' : 'off'}${task.description ? `: ${quotedSpan(task.description)}` : ''}${task.instructionsTruncated ? shortenedNote : ''}`;
 }
 
 function formatRate(credits: number): string {

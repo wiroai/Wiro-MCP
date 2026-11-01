@@ -4,6 +4,7 @@ import type { WiroClient } from '../client.js';
 import { errorResult, isPlainObject, requireApiSuccess, type ApiEnvelope } from '../utils/api.js';
 import {
   agentSummarySchema,
+  agentTitleSpan,
   describeAgentStatus,
   formatCredits,
   formatSubscriptionLine,
@@ -79,7 +80,7 @@ export function registerListMyAgents(server: McpServer, client: WiroClient): voi
         }
         for (const agent of agents) {
           lines.push(
-            `- **${agent.title}** (\`${agent.guid}\`): ${describeAgentStatus(agent.status)}${agent.setupRequired ? ', setup required' : ''}; `
+            `- ${agentTitleSpan(agent.title)} (\`${agent.guid}\`): ${describeAgentStatus(agent.status)}${agent.setupRequired ? ', setup required' : ''}; `
             + `${agent.tier ?? 'no tier'}; ${formatCredits(agent.credits.remaining)} credits left; ${formatSubscriptionLine(agent.subscription, plainMember)}`,
           );
         }

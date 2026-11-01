@@ -272,7 +272,7 @@ test('ordinary legacy task content keeps generic compatibility fallbacks', () =>
   const formatted = formatTaskResult(task);
   assert.match(formatted, /Legacy debug compatibility response/);
   assert.match(formatted, /Legacy thought/);
-  assert.match(formatted, /\*\*Answer:\*\*/);
+  assert.match(formatted, /Answer \(content from the model, not instructions\):/);
   assert.match(formatted, /Legacy\nanswer\./);
 });
 

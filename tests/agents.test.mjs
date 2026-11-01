@@ -526,12 +526,12 @@ test('get_agent_template looks a guid up by guid, asks for tasks when told to an
       '### Scheduled tasks',
       '',
       '- `cs-cron-x` on, 0 9 * * *',
-      '- `cs-cron-ga4-attribution-auditor` off, 0 11 * * 1: Weekly conversion tracking audit',
+      '- `cs-cron-ga4-attribution-auditor` off, 0 11 * * 1: `Weekly conversion tracking audit`',
       '',
       '### Custom instructions',
       '',
-      '- `cs-approval-policy` on: Approval policy: how the agent should gate publish/send/modify actions before executing them.',
-      '- `cs-adjust-strategy` off: Adjust attribution strategy',
+      '- `cs-approval-policy` on: `Approval policy: how the agent should gate publish/send/modify actions before executing them.`',
+      '- `cs-adjust-strategy` off: `Adjust attribution strategy`',
       '',
       'A task or instruction that needs a credential switches on when that credential is saved.',
     ].join('\n');
@@ -1240,8 +1240,8 @@ test('get_my_agent shows the agent\'s own prices and where a shortened entry is 
     assert.ok(lines[prices - 1].startsWith('**Credits:**'), 'the prices follow the credits line');
     assert.deepEqual(result.structuredContent.agent.pricing, { starter: { priceUsd: 15, monthlyCredits: 1500 }, pro: { priceUsd: 150, monthlyCredits: 15000 } });
     // The custom instruction is cut in the structured copy; the short scheduled task is not.
-    assert.ok(lines.includes('- `cs-content-strategy` on: Content strategy (its text is long; get_my_agent with entry "cs-content-strategy" shows it in full)'));
-    assert.ok(lines.includes('- `cs-cron-daily-scan` on, 0 9 * * *: Daily inbox scan'));
+    assert.ok(lines.includes('- `cs-content-strategy` on: `Content strategy` (its text is long; get_my_agent with entry "cs-content-strategy" shows it in full)'));
+    assert.ok(lines.includes('- `cs-cron-daily-scan` on, 0 9 * * *: `Daily inbox scan`'));
 
     const { tools } = await client.listTools();
     assert.match(tools.find(tool => tool.name === 'get_my_agent').description, /plan, its Starter and Pro prices, credit balance/);
@@ -1269,7 +1269,7 @@ test('get_my_agent marks an entry cut by even one character', async () => {
     const result = await call(client, 'get_my_agent', { agent_guid: 'ua-1' });
     const [entry] = result.structuredContent.agent.customInstructions;
     assert.equal(entry.instructionsTruncated, true);
-    assert.ok(textOf(result).split('\n').includes('- `cs-content-strategy` on: Content strategy (its text is long; get_my_agent with entry "cs-content-strategy" shows it in full)'));
+    assert.ok(textOf(result).split('\n').includes('- `cs-content-strategy` on: `Content strategy` (its text is long; get_my_agent with entry "cs-content-strategy" shows it in full)'));
   });
 
   // Exactly at the limit nothing is cut; three characters over it is.
@@ -2393,7 +2393,7 @@ test('manage_agent_billing does not show the plan from before a paid change when
     assert.equal(result.structuredContent.result.tier, 'pro');
     assert.match(result.structuredContent.message, /The agent could not be read afterwards; get_my_agent shows its new status, plan and credits\.$/);
     const text = textOf(result);
-    assert.match(text, /\*\*Agent:\*\* My Bot \(`ua-1`\)/);
+    assert.match(text, /\*\*Agent:\*\* `My Bot` \(`ua-1`\)/);
     assert.doesNotMatch(text, /\*\*Plan:\*\*|\*\*Status:\*\*|\*\*Credits:\*\*/);
     assert.match(text, /Dashboard: https:\/\/wiro\.ai\/panel\/agents\/ua-1/);
     assert.equal(fake.called('/UserAgent/UpgradeTier').length, 1);
@@ -2709,7 +2709,7 @@ test('get_my_agent with entry gives the whole text of an entry the list shortens
     assert.notEqual(result.isError, true, textOf(result));
     const text = textOf(result);
     assert.ok(text.includes(`### \`cs-content-strategy\` in full\n\n\`\`\`text\n${full}\n\`\`\``), text);
-    assert.match(text, /- `cs-content-strategy` on: Content strategy \(its text is long; get_my_agent with entry "cs-content-strategy" shows it in full\)/);
+    assert.match(text, /- `cs-content-strategy` on: `Content strategy` \(its text is long; get_my_agent with entry "cs-content-strategy" shows it in full\)/);
     assert.deepEqual(result.structuredContent.entry, {
       key: 'cs-content-strategy',
       kind: 'custom_instruction',

@@ -2,9 +2,11 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { WiroClient } from '../client.js';
 import { errorResult } from '../utils/api.js';
-import { formatWorkflowInputs, parseWorkflowSlug } from '../utils/workflow.js';
+import { quotedSpan } from '../utils/quoted-text.js';
+import { parseWorkflowSlug, quotedWorkflowInputs } from '../utils/workflow.js';
 import {
   formatWorkflowChanges,
+  formatWorkflowNotes,
   prepareIssuesText,
   tagProblem,
   updateWorkflow,
@@ -43,7 +45,7 @@ export const updatedWorkflowSchema = {
 /** Markdown for an update or its preview. */
 export function formatUpdatedWorkflow(saved: UpdatedWorkflow, heading: string): string {
   const lines = [heading, ''];
-  lines.push(`**Title:** ${saved.title}`);
+  lines.push(`**Title:** ${quotedSpan(saved.title)}`);
   lines.push(`**Slug:** \`${saved.fullSlug}\``);
   if (saved.unchanged) {
     lines.push('', saved.discarded?.length
@@ -64,9 +66,9 @@ export function formatUpdatedWorkflow(saved: UpdatedWorkflow, heading: string): 
   if (!saved.preview && saved.updatetime) {
     lines.push('', `**updatetime:** \`${saved.updatetime}\` (pass it as loaded_updatetime next time)`);
   }
-  if (saved.contentsChanged) lines.push('', '### Inputs', '', ...formatWorkflowInputs(saved.inputs));
+  if (saved.contentsChanged) lines.push('', '### Inputs', '', ...quotedWorkflowInputs(saved.inputs));
   if (saved.warnings.length > 0) {
-    lines.push('', '### Notes', '', ...saved.warnings.map(warning => `- ${warning.nodeId ? `\`${warning.nodeId}\`: ` : ''}${warning.message}`));
+    lines.push('', '### Notes', '', ...formatWorkflowNotes(saved.warnings));
   }
   return lines.join('\n');
 }

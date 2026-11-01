@@ -1979,13 +1979,6 @@ export interface CustomSkillEntry {
   requiresCredentials: string[];
 }
 
-/** Text in a fence longer than any run of backticks inside it, so it shows as is. */
-export function textBlock(value: string): string[] {
-  let fence = '```';
-  while (value.includes(fence)) fence += '`';
-  return [`${fence}text`, value, fence];
-}
-
 export function customSkillEntries(row: Row): CustomSkillEntry[] {
   const rows = [
     ...(Array.isArray(row.customskills) ? row.customskills : []),

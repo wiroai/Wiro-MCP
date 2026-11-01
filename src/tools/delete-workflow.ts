@@ -2,6 +2,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { WiroClient } from '../client.js';
 import { errorResult, requireApiSuccess, type ApiEnvelope } from '../utils/api.js';
+import { quotedSpan } from '../utils/quoted-text.js';
 import { parseWorkflowSlug, toWorkflowDetail } from '../utils/workflow.js';
 import { postWithNotFoundRetry } from '../utils/workflow-save.js';
 import { fetchWorkflowRow } from './get-workflow.js';
@@ -41,7 +42,7 @@ export function registerDeleteWorkflow(server: McpServer, client: WiroClient): v
         const fullSlug = parseWorkflowSlug(slug);
         if (!confirm) {
           const workflow = toWorkflowDetail(await fetchWorkflowRow(client, fullSlug, extra.signal), { includeGraph: false });
-          const message = `This will permanently delete "${workflow.title}" (${fullSlug})`
+          const message = `This will permanently delete ${quotedSpan(workflow.title)} (${fullSlug})`
             + (workflow.state === 'published' ? ', which is published in the public gallery' : '')
             + '. It cannot be restored.';
           return {

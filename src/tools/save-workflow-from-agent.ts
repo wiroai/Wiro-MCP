@@ -4,11 +4,13 @@ import type { WiroClient } from '../client.js';
 import { errorResult, type ApiEnvelope } from '../utils/api.js';
 import { extractReply } from '../utils/agent-message.js';
 import { readAgentMessage, resolveAgentTarget } from '../utils/agent-targets.js';
+import { quotedSpan } from '../utils/quoted-text.js';
 import { parseAgentChatArtifacts, type WorkflowArtifact } from '../utils/workflow-artifacts.js';
-import { formatWorkflowInputs, parseWorkflowSlug, workflowUrl } from '../utils/workflow.js';
+import { parseWorkflowSlug, plainInputKeys, quotedWorkflowInputs, workflowUrl } from '../utils/workflow.js';
 import {
   createWorkflow,
   findHiddenValues,
+  formatWorkflowNotes,
   prepareIssuesText,
   tagProblem,
   updateWorkflow,
@@ -37,7 +39,10 @@ function trimCreated(): void {
 function pickArtifact(text: string, artifactHash?: string): { artifact: WorkflowArtifact; hash: string } {
   const parsed = parseAgentChatArtifacts(text);
   const segments = parsed.artifacts;
-  const describe = (segment: typeof segments[number]) => segment.issues.slice(0, 4).map(issue => issue.message).join('; ');
+  // The problems can quote the proposal, so they stay on one line in a code span.
+  const describe = (segment: typeof segments[number]) => (segment.issues.length > 0
+    ? quotedSpan(segment.issues.slice(0, 4).map(issue => issue.message).join('; '))
+    : segment.status);
 
   if (artifactHash) {
     const segment = segments.find(candidate => candidate.artifactHash === artifactHash);
@@ -54,11 +59,11 @@ function pickArtifact(text: string, artifactHash?: string): { artifact: Workflow
   if (valid.length === 1) return { artifact: valid[0]!.artifact!, hash: valid[0]!.artifactHash! };
   if (valid.length > 1) {
     throw new Error(`That reply proposes ${valid.length} workflows. Pass artifact_hash to choose one: `
-      + valid.map(segment => `${segment.artifactHash} ("${segment.artifact!.title}")`).join(', '));
+      + valid.map(segment => `${segment.artifactHash} (${quotedSpan(segment.artifact!.title)})`).join(', '));
   }
   const invalid = segments.find(segment => segment.status !== 'valid' || segment.issues.length > 0);
   if (invalid) {
-    throw new Error(`The Workflow Agent's proposal is not valid (${describe(invalid) || invalid.status}). Send the problems back to the Workflow Agent in the same session and ask it to fix them.`);
+    throw new Error(`The Workflow Agent's proposal is not valid (${describe(invalid)}). Send the problems back to the Workflow Agent in the same session and ask it to fix them.`);
   }
   throw new Error('That reply does not contain a workflow proposal.');
 }
@@ -225,7 +230,7 @@ export function registerSaveWorkflowFromAgent(server: McpServer, client: WiroCli
 
         const hidden = findHiddenValues(contents);
         if (hidden.length > 0) {
-          throw new Error(`This proposal still has hidden values copied from the workflow the agent was shown (${hidden.join(', ')}). `
+          throw new Error(`This proposal still has hidden values copied from the workflow the agent was shown (${hidden.map(quotedSpan).join(', ')}). `
             + 'Apply it to that workflow with `workflow` so the real values are kept, or ask the agent to leave those inputs empty and set them yourself.');
         }
         const key = `${String(client.identity)}:${args.message_id}:${hash}`;
@@ -260,12 +265,12 @@ export function registerSaveWorkflowFromAgent(server: McpServer, client: WiroCli
 
         const saved = outcome.saved!;
         const lines = ['## Workflow saved', ''];
-        lines.push(`**Title:** ${saved.title}${saved.renamed ? ' (renamed because the title was already used)' : ''}`);
+        lines.push(`**Title:** ${quotedSpan(saved.title)}${saved.renamed ? ' (renamed because the title was already used)' : ''}`);
         lines.push(`**Slug:** \`${saved.fullSlug}\``);
         lines.push(`**Page:** ${saved.url}`);
-        lines.push('', '### Inputs', '', ...formatWorkflowInputs(saved.inputs));
+        lines.push('', '### Inputs', '', ...quotedWorkflowInputs(saved.inputs));
         if (saved.warnings.length > 0) {
-          lines.push('', '### Notes', '', ...saved.warnings.map(warning => `- ${warning.nodeId ? `\`${warning.nodeId}\`: ` : ''}${warning.message}`));
+          lines.push('', '### Notes', '', ...formatWorkflowNotes(saved.warnings));
         }
         return {
           content: [{ type: 'text' as const, text: lines.join('\n') }],
@@ -306,7 +311,7 @@ export function registerSaveWorkflowFromAgent(server: McpServer, client: WiroCli
 }
 
 function runReason(saved: SavedWorkflow): string {
-  const keys = saved.inputs.map(input => input.key);
+  const keys = plainInputKeys(saved.inputs);
   return 'Run it only if the user asked for a run, after telling them the estimate; otherwise ask the user first (each model step is charged). Call run_workflow with input values'
     + (keys.length > 0 ? ` for: ${keys.join(', ')}. A key you leave out uses its saved value or default.` : '.');
 }

@@ -24,13 +24,13 @@ import {
   resolveExistingCustomSkillKey,
   restartNote,
   templateTaskTextError,
-  textBlock,
   toIsoTime,
   upsertCustomSkillKey,
   workspaceHint,
   type CustomSkillEntry,
   type CustomSkillKind,
 } from '../utils/agent-config.js';
+import { textBlock } from '../utils/quoted-text.js';
 import { nextActionSchema } from './schemas.js';
 
 const MAX_VALUE_ECHO = 1_500;

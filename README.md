@@ -376,6 +376,15 @@ client; no base64 media payload is required. Only files on Wiro's own hosts are
 returned this way. Other links in an agent's reply stay plain links in the text,
 without the delivery instruction.
 
+In the text of a result, an agent's reply or a model's answer sits in a fenced
+block under a fixed label, and the server's own guidance (`**Next:**` lines and
+notes) stays outside it, so an assistant can treat that text as content and act
+only on that guidance and `nextAction`. `structuredContent` keeps the text
+unchanged in its own fields. A workflow run's text outputs and step errors show
+the same way, each under a fixed label. A saved workflow's title, description
+and input list are shown as data too, in every result, since an agent or another
+person can have written them.
+
 Task responses use the stable states `submitted`, `running`, `completed`,
 `failed`, and `cancelled`. When more work is required, the response includes an
 executable `nextAction`:

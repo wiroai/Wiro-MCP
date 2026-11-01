@@ -2,7 +2,8 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { WiroClient } from '../client.js';
 import { errorResult } from '../utils/api.js';
-import { customSkillEntries, resolveExistingCustomSkillKey, textBlock } from '../utils/agent-config.js';
+import { customSkillEntries, resolveExistingCustomSkillKey } from '../utils/agent-config.js';
+import { textBlock } from '../utils/quoted-text.js';
 import { DEFAULT_WAIT_SECONDS, MAX_WAIT_SECONDS } from '../utils/poll.js';
 import {
   agentDetailSchema,

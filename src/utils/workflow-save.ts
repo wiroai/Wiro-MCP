@@ -7,6 +7,7 @@ import {
   truncate,
   type ApiEnvelope,
 } from './api.js';
+import { oneLine, quotedSpan } from './quoted-text.js';
 import {
   fullSlugOf,
   isStrictlyEmpty,
@@ -193,7 +194,7 @@ export function keyLikeValueNotes(contents: Record<string, unknown>): PrepareIss
     if (looksLikeSecretValue(value)) {
       notes.push({
         code: 'saved-value-looks-like-key',
-        message: `The saved value of \`${key}\` looks like a key. Everyone who can open this workflow can read saved `
+        message: `The saved value of ${quotedSpan(key)} looks like a key. Everyone who can open this workflow can read saved `
           + `values, and copies keep them. ${noKeyNeeded}`,
       });
     }
@@ -203,7 +204,7 @@ export function keyLikeValueNotes(contents: Record<string, unknown>): PrepareIss
     if (isPlainObject(field) && looksLikeSecretValue(field.defaultValue)) {
       notes.push({
         code: 'default-looks-like-key',
-        message: `The default of \`${key}\` looks like a key. Everyone who can open this workflow can read its `
+        message: `The default of ${quotedSpan(key)} looks like a key. Everyone who can open this workflow can read its `
           + `defaults, and copies keep them. ${noKeyNeeded}`,
       });
     }
@@ -225,7 +226,7 @@ export function droppedStartFieldChanges(sent: Record<string, unknown>, prepared
     const kept = after[key];
     if (!isPlainObject(field) || !isPlainObject(kept)) continue;
     const parts = Object.keys(field).filter(part => JSON.stringify(field[part]) !== JSON.stringify(kept[part]));
-    if (parts.length > 0) dropped.push(`\`${key}\` (${parts.join(', ')})`);
+    if (parts.length > 0) dropped.push(`${quotedSpan(key)} (${parts.join(', ')})`);
   }
   return dropped;
 }
@@ -358,7 +359,7 @@ function savedStartValues(contents: Record<string, unknown>): Record<string, unk
 function restoreHidden(next: unknown, stored: unknown, path: string): unknown {
   if (typeof next === 'string' && HIDDEN_VALUES.has(next)) {
     if (stored === undefined) {
-      throw new Error(`${path} is hidden ("${next}") and the saved workflow has no value to restore there. Set it explicitly.`);
+      throw new Error(`${quotedSpan(path)} is hidden ("${next}") and the saved workflow has no value to restore there. Set it explicitly.`);
     }
     return JSON.parse(JSON.stringify(stored));
   }
@@ -453,10 +454,10 @@ export function restoreStoredValues(
       if (hidden.length === 0) continue;
       const storedNode = storedNodes[nodeId];
       if (!isPlainObject(storedNode)) {
-        throw new Error(`${hidden[0]} is hidden, but ${nodeId} is a new step, so the saved workflow has no value to restore there. Set it explicitly.`);
+        throw new Error(`${quotedSpan(hidden[0])} is hidden, but ${quotedSpan(nodeId)} is a new step, so the saved workflow has no value to restore there. Set it explicitly.`);
       }
       if (storedNode.tool !== node.tool) {
-        throw new Error(`${hidden[0]} is hidden and step ${nodeId} does not keep the same model as the saved workflow, so it cannot be restored. Set it explicitly.`);
+        throw new Error(`${quotedSpan(hidden[0])} is hidden and step ${quotedSpan(nodeId)} does not keep the same model as the saved workflow, so it cannot be restored. Set it explicitly.`);
       }
       node.input = restoreHidden(node.input, storedNode.input, `Step ${nodeId} input`);
     }
@@ -473,7 +474,7 @@ export function restoreStoredValues(
     const before = startFieldConsumers(stored, key);
     const moved = [...startFieldConsumers(contents, key)].filter(consumer => !before.has(consumer));
     if (moved.length > 0) {
-      throw new Error(`${hiddenPath} is hidden and the new steps use it in a different place (${moved.join(', ')}), so it cannot be restored. Set it explicitly.`);
+      throw new Error(`${quotedSpan(hiddenPath)} is hidden and the new steps use it in a different place (${moved.map(quotedSpan).join(', ')}), so it cannot be restored. Set it explicitly.`);
     }
   };
   for (const [key, field] of Object.entries(fields)) {
@@ -817,18 +818,30 @@ export async function updateWorkflow(
   };
 }
 
+// The notes this package writes: they say what to do, and their names are in code spans already.
+const OWN_NOTE_CODES = new Set(['sample-defaults-filled', 'defaults-filled', 'saved-value-looks-like-key', 'default-looks-like-key']);
+
+/** A save's notes, one line each. A note from Wiro's checks can quote names from the graph, so it stays in a code span. */
+export function formatWorkflowNotes(warnings: PrepareIssue[]): string[] {
+  return warnings.map(warning => {
+    const text = OWN_NOTE_CODES.has(warning.code ?? '') ? oneLine(warning.message) : quotedSpan(warning.message);
+    return `- ${warning.nodeId ? `${quotedSpan(warning.nodeId)}: ` : ''}${text}`;
+  });
+}
+
 export function formatWorkflowChanges(changes: WorkflowChangeSummary): string[] {
   const lines: string[] = [];
-  if (changes.titleChange) lines.push(`- Title: "${changes.titleChange.from}" to "${changes.titleChange.to}"`);
+  const names = (list: string[]): string => list.map(quotedSpan).join(', ');
+  if (changes.titleChange) lines.push(`- Title: ${quotedSpan(changes.titleChange.from)} to ${quotedSpan(changes.titleChange.to)}`);
   if (changes.descriptionChanged) lines.push('- Description changes');
   if (changes.tagsChanged) lines.push('- Tags change');
-  if (changes.stepsAdded.length > 0) lines.push(`- Steps added: ${changes.stepsAdded.join(', ')}`);
-  if (changes.stepsRemoved.length > 0) lines.push(`- Steps removed: ${changes.stepsRemoved.join(', ')}`);
-  if (changes.stepsChanged.length > 0) lines.push(`- Steps changed: ${changes.stepsChanged.join(', ')}`);
-  if (changes.inputsAdded.length > 0) lines.push(`- Inputs added: ${changes.inputsAdded.join(', ')}`);
-  if (changes.inputsRemoved.length > 0) lines.push(`- Inputs removed: ${changes.inputsRemoved.join(', ')}`);
-  if (changes.inputsChanged.length > 0) lines.push(`- Inputs changed (type, label or default): ${changes.inputsChanged.join(', ')}`);
-  if (changes.savedValuesChanged.length > 0) lines.push(`- Saved input values change: ${changes.savedValuesChanged.join(', ')}`);
+  if (changes.stepsAdded.length > 0) lines.push(`- Steps added: ${names(changes.stepsAdded)}`);
+  if (changes.stepsRemoved.length > 0) lines.push(`- Steps removed: ${names(changes.stepsRemoved)}`);
+  if (changes.stepsChanged.length > 0) lines.push(`- Steps changed: ${names(changes.stepsChanged)}`);
+  if (changes.inputsAdded.length > 0) lines.push(`- Inputs added: ${names(changes.inputsAdded)}`);
+  if (changes.inputsRemoved.length > 0) lines.push(`- Inputs removed: ${names(changes.inputsRemoved)}`);
+  if (changes.inputsChanged.length > 0) lines.push(`- Inputs changed (type, label or default): ${names(changes.inputsChanged)}`);
+  if (changes.savedValuesChanged.length > 0) lines.push(`- Saved input values change: ${names(changes.savedValuesChanged)}`);
   if (changes.outputsChanged) lines.push('- Outputs change');
   if (lines.length > 0) return lines;
   return [changes.layoutOnly ? '- Only step positions change' : '- Other graph changes'];
@@ -856,9 +869,10 @@ export function prepareIssuesText(error: WorkflowPrepareError): string {
   const lines = ['## The workflow was not saved', '', 'Wiro found these problems in the workflow graph:', ''];
   for (const issue of error.issues) {
     // The End and Start nodes name their fields in `input` too.
-    const where = issue.nodeId === 'output' ? 'End' : issue.nodeId === 'input' ? 'Start' : issue.nodeId ? `\`${issue.nodeId}\`` : 'Workflow';
-    const part = !issue.input ? '' : issue.nodeId === 'output' || issue.nodeId === 'input' ? ` field \`${issue.input}\`` : ` input \`${issue.input}\``;
-    lines.push(`- ${where}${part}: ${issue.message}`);
+    const where = issue.nodeId === 'output' ? 'End' : issue.nodeId === 'input' ? 'Start' : issue.nodeId ? quotedSpan(issue.nodeId) : 'Workflow';
+    const part = !issue.input ? '' : issue.nodeId === 'output' || issue.nodeId === 'input' ? ` field ${quotedSpan(issue.input)}` : ` input ${quotedSpan(issue.input)}`;
+    // The problems can quote the graph, so they stay on one line in a code span.
+    lines.push(`- ${where}${part}: ${quotedSpan(issue.message)}`);
   }
   lines.push('', 'Fix all of them and try again. Use get_model_schema to check a model\'s parameter ids and get_playbook topic "workflow-graph" for the graph format.');
   return lines.join('\n');

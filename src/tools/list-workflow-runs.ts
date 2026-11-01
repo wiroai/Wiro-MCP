@@ -9,6 +9,7 @@ import {
   toNumber,
   type ApiEnvelope,
 } from '../utils/api.js';
+import { quotedSpan } from '../utils/quoted-text.js';
 import { nextActionSchema } from './schemas.js';
 
 interface RunHistoryResponse extends ApiEnvelope {
@@ -97,7 +98,8 @@ export function registerListWorkflowRuns(server: McpServer, client: WiroClient):
         if (runs.length === 0) lines.push('No runs found.');
         for (const run of runs) {
           const cost = run.chargedUsd ?? run.listPriceUsd;
-          lines.push(`- **${run.workflowTitle ?? run.workflowSlug ?? 'Workflow'}**: ${run.status}`
+          const name = run.workflowTitle ?? run.workflowSlug;
+          lines.push(`- ${name ? quotedSpan(name) : 'Workflow'}: ${run.status}`
             + `${cost !== undefined && cost !== null ? `, $${cost}` : ''}`
             + `${run.startedAt ? `, started ${run.startedAt}` : ''} (token \`${run.workflowtoken}\`)`
             + `${run.canResume ? ', can be resumed' : ''}`);

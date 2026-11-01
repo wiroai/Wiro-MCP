@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { asString, isPlainObject, toNumber, truncate, unixToIso } from './api.js';
 import { isWiroHostedUrl } from './media.js';
+import { AGENT_REPLY_LABEL, quotedBlock, quotedSpan } from './quoted-text.js';
 
 // One chat turn with a Wiro agent. Studio, the Workflow Agent and deployed
 // agents share the same message row, so they share this projection. Rows are
@@ -106,6 +107,9 @@ function replyUrls(text: string): { media: string[]; links: string[] } {
   for (const rawLine of text.split(/\r?\n/)) {
     const line = rawLine.trim().replace(/^MEDIA\s*:\s*/i, '').replace(/^[`'"<(]+|[`'">)]+$/g, '');
     if (!/^https?:\/\/\S+$/i.test(line)) continue;
+    // These lists sit outside the fenced reply, so a line with Markdown or tag
+    // characters inside the address stays only in the reply.
+    if (/[`*<>"]/.test(line)) continue;
     const list = isWiroHostedUrl(line) ? media : links;
     if (!list.includes(line) && list.length < MAX_MEDIA_URLS) list.push(line);
   }
@@ -220,10 +224,10 @@ export function formatAgentMessage(message: AgentMessage, heading = 'Reply'): st
   lines.push(`**Status:** ${message.status} (${message.state})`);
   lines.push(`**Message ID:** \`${message.messageId}\``);
   if (message.toolsUsed.length > 0) {
-    lines.push(`**Tools used:** ${message.toolsUsed.map(tool => tool.name).join(', ')}`);
+    lines.push(`**Tools used:** ${message.toolsUsed.map(tool => quotedSpan(tool.name)).join(', ')}`);
   }
   if (message.reply) {
-    lines.push('', `### ${heading}`, '', message.reply);
+    lines.push('', `### ${heading}`, '', ...quotedBlock(AGENT_REPLY_LABEL, message.reply));
   }
   if (message.mediaUrls.length > 0) {
     lines.push('', '### Media', '');

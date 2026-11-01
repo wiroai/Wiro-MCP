@@ -2,6 +2,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { WiroClient } from '../client.js';
 import { ApiResultError, asString, errorResult, requireApiSuccess, toInteger, type ApiEnvelope } from '../utils/api.js';
+import { quotedSpan } from '../utils/quoted-text.js';
 import { fullSlugOf, parseWorkflowSlug, workflowUrl } from '../utils/workflow.js';
 import { nextActionSchema } from './schemas.js';
 
@@ -52,7 +53,7 @@ export function registerCloneWorkflow(server: McpServer, client: WiroClient): vo
         return {
           content: [{
             type: 'text' as const,
-            text: `## Workflow cloned\n\n**Title:** ${title}\n**Slug:** \`${fullSlug}\`\n**Page:** ${workflowUrl(fullSlug)}`
+            text: `## Workflow cloned\n\n**Title:** ${quotedSpan(title)}\n**Slug:** \`${fullSlug}\`\n**Page:** ${workflowUrl(fullSlug)}`
               + (isProtected ? '\n\nThe original is protected, so the copy\'s steps stay hidden. You can still run it.' : ''),
           }],
           structuredContent: {

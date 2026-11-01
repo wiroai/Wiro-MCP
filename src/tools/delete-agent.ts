@@ -13,6 +13,7 @@ import { DEFAULT_WAIT_SECONDS } from '../utils/poll.js';
 import {
   agentStatusLabel,
   agentStatusLabelSchema,
+  agentTitleSpan,
   describeAgentStatus,
   readAgentDetail,
   readAgentStatus,
@@ -101,7 +102,7 @@ export function registerDeleteAgent(server: McpServer, client: WiroClient): void
         if (blockers.length > 0) {
           const message = `The agent cannot be deleted yet.\n\n${blockers.map(item => `- ${item}`).join('\n')}`;
           return {
-            content: [{ type: 'text' as const, text: `## Delete ${agent.title}: blocked\n\n${message}` }],
+            content: [{ type: 'text' as const, text: `## Delete ${agentTitleSpan(agent.title)}: blocked\n\n${message}` }],
             structuredContent: { ...base, deleted: false, message, ...(nextAction ? { nextAction } : {}) },
           };
         }
@@ -110,9 +111,9 @@ export function registerDeleteAgent(server: McpServer, client: WiroClient): void
           const forfeit = subscription?.status === 'active'
             ? ' Its cancelled plan is still paid until the period ends; that time is lost and not refunded.'
             : '';
-          const message = `Deleting ${agent.title} (${guid}) removes it from every list at once and cannot be undone.${forfeit}`;
+          const message = `Deleting ${agentTitleSpan(agent.title)} (${guid}) removes it from every list at once and cannot be undone.${forfeit}`;
           return {
-            content: [{ type: 'text' as const, text: `## Delete ${agent.title}: confirm first\n\n${message}\n\nCall delete_agent again with confirm: true after the user agrees.` }],
+            content: [{ type: 'text' as const, text: `## Delete ${agentTitleSpan(agent.title)}: confirm first\n\n${message}\n\nCall delete_agent again with confirm: true after the user agrees.` }],
             structuredContent: {
               ...base,
               deleted: false,
@@ -136,7 +137,7 @@ export function registerDeleteAgent(server: McpServer, client: WiroClient): void
           if (error instanceof ApiResultError && /stop the agent/i.test(error.message)) {
             const message = 'The agent has to be stopped first, even when it shows an error. Stop it with control_agent, wait until it shows stopped, then delete it.';
             return {
-              content: [{ type: 'text' as const, text: `## Delete ${agent.title}: blocked\n\n${message}` }],
+              content: [{ type: 'text' as const, text: `## Delete ${agentTitleSpan(agent.title)}: blocked\n\n${message}` }],
               structuredContent: {
                 ...base,
                 deleted: false,
@@ -153,7 +154,7 @@ export function registerDeleteAgent(server: McpServer, client: WiroClient): void
           throw error;
         }
         const deletedAt = isPlainObject(body.useragent) ? unixToIso(body.useragent.deletedat) : undefined;
-        const message = `${agent.title} was deleted. It no longer appears in any list and cannot be restored.`;
+        const message = `${agentTitleSpan(agent.title)} was deleted. It no longer appears in any list and cannot be restored.`;
         return {
           content: [{ type: 'text' as const, text: `## Deleted\n\n${message}` }],
           structuredContent: {

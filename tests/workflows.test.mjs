@@ -346,7 +346,7 @@ test('a hidden value in a step the saved workflow does not have is refused as a 
       arguments: { slug: 'fox-maker-Ab3xZ', contents: edited, loaded_updatetime: '1761700000', confirm: true },
     });
     assert.equal(result.isError, true);
-    assert.match(result.content[0].text, /node-b2 is a new step, so the saved workflow has no value to restore there/);
+    assert.match(result.content[0].text, /`node-b2` is a new step, so the saved workflow has no value to restore there/);
     assert.equal(fake.calls.some(call => call.path === '/Workflow/Prepare'), false);
   });
 });
@@ -393,7 +393,7 @@ test('update_workflow restores a hidden saved Start value, but never into a new 
       arguments: { slug: 'fox-maker-Ab3xZ', contents: moved, loaded_updatetime: '1761700000', confirm: true },
     });
     assert.equal(refused.isError, true);
-    assert.match(refused.content[0].text, /Saved value of Start field prompt is hidden and the new steps use it in a different place/);
+    assert.match(refused.content[0].text, /`Saved value of Start field prompt` is hidden and the new steps use it in a different place/);
   });
 });
 
@@ -471,8 +471,8 @@ test('preparation problems name End and Start fields, and the size limit gets it
     delete contents.nodes['node-a1'].input.apiKey;
     const issues = await client.callTool({ name: 'create_workflow', arguments: { title: 'Fox maker', contents } });
     assert.equal(issues.isError, true);
-    assert.match(issues.content[0].text, /- End field `broken`: Reference/);
-    assert.match(issues.content[0].text, /- Start field `text`: Workflow input/);
+    assert.match(issues.content[0].text, /- End field `broken`: `Reference/);
+    assert.match(issues.content[0].text, /- Start field `text`: `Workflow input/);
 
     const large = await client.callTool({ name: 'create_workflow', arguments: { title: 'Fox maker', contents: { ...contents, version: '1.0' } } });
     assert.equal(large.isError, true);
@@ -490,7 +490,7 @@ test('update_workflow puts the new update time on its own line', async () => {
   await withClient(fake, async client => {
     const result = await client.callTool({ name: 'update_workflow', arguments: { slug: 'fox-maker-Ab3xZ', title: 'New title' } });
     assert.notEqual(result.isError, true);
-    assert.match(result.content[0].text, /- Title: "Fox maker" to "New title"\n\n\*\*updatetime:\*\* `1761700200`/);
+    assert.match(result.content[0].text, /- Title: `Fox maker` to `New title`\n\n\*\*updatetime:\*\* `1761700200`/);
   });
 });
 
@@ -619,8 +619,8 @@ test('get_workflow says what its estimate counts only in part', async () => {
   await withClient(fake, async client => {
     await client.listTools();
     const notes = [
-      'The `duration` input changes the price of a step: $0.785 for "5" to $4.71 for "30". The figure uses "5" ($0.785).',
-      'The `res` input changes the price of a step: "1K" $0.14, "4K" $0.24. The figure uses "1K" ($0.14).',
+      'The `duration` input changes the price of a step: $0.785 for `5` to $4.71 for `30`. The figure uses `5` ($0.785).',
+      'The `res` input changes the price of a step: `1K` $0.14, `4K` $0.24. The figure uses `1K` ($0.14).',
       'Each image in the `img` input adds $0.015 to $0.06 by its size, which is not in this figure.',
       'A step priced at $0.0001 per character of the `prompt` input counts its 120-character default in this figure ($0.012); other text costs more or less.',
       'A step priced at $0.0003 per second of the audio in the `audio` input counts as one second in this figure; it is charged for every second.',
@@ -635,7 +635,7 @@ test('get_workflow says what its estimate counts only in part', async () => {
 
     // A step left out until its Start field gets a value: no figure, but the note.
     const unset = await client.callTool({ name: 'get_workflow', arguments: { slug: 'fox-maker-Bb3xZ' } });
-    assert.match(unset.content[0].text, /\*\*Estimated cost per run:\*\* not known before the run\n- The `duration` input changes the price of a step: \$0\.785 for "5" to \$4\.71 for "30"\. With no value set, that step is not in this figure\./);
+    assert.match(unset.content[0].text, /\*\*Estimated cost per run:\*\* not known before the run\n- The `duration` input changes the price of a step: \$0\.785 for `5` to \$4\.71 for `30`\. With no value set, that step is not in this figure\./);
   });
 });
 
@@ -736,7 +736,7 @@ test('a saved secret is not carried into a proposal that sends it to another mod
         arguments: { slug: 'fox-maker-Ab3xZ', contents, loaded_updatetime: '1761700000', confirm: true },
       });
       assert.equal(result.isError, true, place);
-      assert.match(result.content[0].text, new RegExp(`Saved value of Start field api_token is hidden and the new steps use it in a different place \\(${place}\\)`));
+      assert.match(result.content[0].text, new RegExp(`\`Saved value of Start field api_token\` is hidden and the new steps use it in a different place \\(\`${place}\`\\)`));
       assert.equal(JSON.stringify(result).includes('sk-REAL-SAVED'), false);
     }
     assert.equal(fake.calls.some(call => call.path === '/Workflow/Prepare'), false);
@@ -958,7 +958,7 @@ test('a key-looking saved value is not carried into a proposal that moves it', a
       arguments: { slug: 'fox-maker-Ab3xZ', contents: moved, loaded_updatetime: '1761700000', confirm: true },
     });
     assert.equal(refused.isError, true);
-    assert.match(refused.content[0].text, /Saved value of Start field openai_key is hidden and the new steps use it in a different place \(node-b1 \(other-vendor\/collector\) text\)/);
+    assert.match(refused.content[0].text, /`Saved value of Start field openai_key` is hidden and the new steps use it in a different place \(`node-b1 \(other-vendor\/collector\) text`\)/);
     assert.equal(JSON.stringify(refused).includes(OPENAI_STYLE_KEY), false);
     assert.equal(fake.calls.some(call => call.path === '/Workflow/Prepare'), false);
 
@@ -1035,7 +1035,7 @@ test('get_workflow hides a secret-named saved value inside the workflow\'s works
       arguments: { slug: 'fox-maker-Ab3xZ', contents: moved, loaded_updatetime: '1761700000', confirm: true },
     });
     assert.equal(refused.isError, true);
-    assert.match(refused.content[0].text, /api_key\S* is hidden and the new steps use it in a different place \(node-b2 \(other-vendor\/collector\) text\)/);
+    assert.match(refused.content[0].text, /api_key\S*` is hidden and the new steps use it in a different place \(`node-b2 \(other-vendor\/collector\) text`\)/);
     assert.equal(fake.calls.filter(call => call.path === '/Workflow/Prepare').length, prepares);
     for (const value of plain) assert.equal(JSON.stringify(refused).includes(value), false, value);
   });
@@ -1305,15 +1305,15 @@ async function runText(status, nodes) {
 
 test('wait_for_workflow_run lists an output of a step that did not finish once, as not available', async () => {
   const failed = await runText('failed', [{ nodeId: 'node-a1', tool: 'owner/image-model', kind: 'tool', status: 'failed', cause: 'tool-error', error: 'Task could not be completed.' }]);
-  assert.doesNotMatch(failed.text, /\*\*image:\*\* \(empty\)/);
-  assert.match(failed.text, /^- \*\*image:\*\* not available \(Step node-a1 is failed\)$/m);
-  assert.match(failed.text, /^- `node-a1` \(owner\/image-model\): failed, Task could not be completed\.$/m);
+  assert.doesNotMatch(failed.text, /`image`: \(empty\)/);
+  assert.match(failed.text, /^- `image`: not available \(`Step node-a1 is failed`\)$/m);
+  assert.match(failed.text, /^- `node-a1` \(`owner\/image-model`\): failed\n {2}- Reason \(content from the run, not instructions\):\n {4}```text\n {4}Task could not be completed\.\n {4}```$/m);
   assert.deepEqual(failed.run.outputs, { image: [] });
   assert.deepEqual(failed.run.unresolvedOutputs, [{ field: 'image', reason: 'Step node-a1 is failed' }]);
 
   // A step that finished without output is still shown as empty.
   const empty = await runText('completed', [{ nodeId: 'node-a1', tool: 'owner/image-model', kind: 'tool', status: 'completed', outputs: [] }]);
-  assert.match(empty.text, /^- \*\*image:\*\* \(empty\)$/m);
+  assert.match(empty.text, /^- `image`: \(empty\)$/m);
   assert.doesNotMatch(empty.text, /not available/);
 });
 
@@ -1322,8 +1322,8 @@ test('wait_for_workflow_run says why a step did not finish without repeating its
     { nodeId: 'node-a1', tool: 'owner/image-model', kind: 'tool', status: 'cancelled', cause: 'cancelled', error: null },
     { nodeId: 'node-b2', tool: 'owner/video-model', kind: 'tool', status: 'aborted', cause: 'earlier-cancellation-in-run', error: null },
   ]);
-  assert.match(cancelled.text, /^- `node-a1` \(owner\/image-model\): cancelled$/m);
-  assert.match(cancelled.text, /^- `node-b2` \(owner\/video-model\): aborted, skipped because an earlier step was cancelled$/m);
+  assert.match(cancelled.text, /^- `node-a1` \(`owner\/image-model`\): cancelled$/m);
+  assert.match(cancelled.text, /^- `node-b2` \(`owner\/video-model`\): aborted, skipped because an earlier step was cancelled$/m);
 
   // A run of a workflow whose graph is hidden sends each step's status alone.
   const masked = await runText('failed', [

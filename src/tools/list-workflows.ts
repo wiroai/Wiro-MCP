@@ -2,7 +2,8 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { WiroClient } from '../client.js';
 import { errorResult, requireApiSuccess, toInteger, type ApiEnvelope } from '../utils/api.js';
-import { toWorkflowSummary, workflowSummarySchema, type WorkflowSummary } from '../utils/workflow.js';
+import { quotedSpan, quotedSubItem } from '../utils/quoted-text.js';
+import { toWorkflowSummary, WORKFLOW_DESCRIPTION_LABEL, workflowSummarySchema, type WorkflowSummary } from '../utils/workflow.js';
 import { nextActionSchema } from './schemas.js';
 
 interface WorkflowListResponse extends ApiEnvelope {
@@ -115,8 +116,8 @@ export function registerListWorkflows(server: McpServer, client: WiroClient): vo
               : undefined,
             workflow.runCount !== undefined ? `${workflow.runCount} gallery runs` : undefined,
           ].filter(Boolean).join(', ');
-          lines.push(`- **${workflow.title}** \`${workflow.fullSlug}\`${details ? ` (${details})` : ''}`);
-          if (workflow.description) lines.push(`  ${workflow.description}`);
+          lines.push(`- ${quotedSpan(workflow.title)} \`${workflow.fullSlug}\`${details ? ` (${details})` : ''}`);
+          if (workflow.description) lines.push(...quotedSubItem(WORKFLOW_DESCRIPTION_LABEL, [workflow.description]));
         }
         if (nextStart !== null) lines.push('', `More results: call again with start=${nextStart}.`);
 

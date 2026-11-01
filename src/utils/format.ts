@@ -12,6 +12,13 @@ import {
   isToolCallSegment,
   normalizeTaskRawContent,
 } from './task-segments.js';
+import {
+  MODEL_ANSWER_LABEL,
+  MODEL_THINKING_LABEL,
+  quotedBlock,
+  RUN_ERROR_LABEL,
+  RUN_RESPONSE_LABEL,
+} from './quoted-text.js';
 
 // The value Wiro accepts for an option, and a label to show next to it. Wiro
 // checks an option's value, or its id when it has no value.
@@ -143,14 +150,14 @@ export function formatTaskResult(task: Task): string {
     lines.push('');
     lines.push('### Response');
     lines.push('');
-    lines.push(task.debugoutput);
+    lines.push(...quotedBlock(RUN_RESPONSE_LABEL, task.debugoutput));
   }
 
   if (task.debugerror) {
     lines.push('');
     lines.push('### Error');
     lines.push('');
-    lines.push(task.debugerror);
+    lines.push(...quotedBlock(RUN_ERROR_LABEL, task.debugerror));
   }
 
   const displayOutputs = (task.outputs ?? []).filter(output => {
@@ -166,20 +173,14 @@ export function formatTaskResult(task: Task): string {
         const thinking = asStringArray(output.content.thinking);
         const answers = asStringArray(output.content.answer);
         if (thinking.length > 0) {
-          lines.push('**Thinking:**');
-          for (const t of thinking) {
-            lines.push(t);
-          }
+          lines.push(...quotedBlock(MODEL_THINKING_LABEL, thinking.join('\n')));
           lines.push('');
         }
         if (answers.length > 0) {
-          lines.push('**Answer:**');
-          for (const a of answers) {
-            lines.push(a);
-          }
+          lines.push(...quotedBlock(MODEL_ANSWER_LABEL, answers.join('\n')));
         } else if (typeof output.content.raw === 'string'
           && output.content.raw) {
-          lines.push(output.content.raw);
+          lines.push(...quotedBlock(MODEL_ANSWER_LABEL, output.content.raw));
         }
       } else if (output.url) {
         const name = escapeMarkdownLabel(output.name || 'Output');
@@ -228,8 +229,10 @@ function asStringArray(value: unknown): string[] {
 function appendTaskSegments(lines: string[], segments: TaskSegment[]): void {
   for (const segment of segments) {
     if (!isToolCallSegment(segment)) {
-      lines.push(segment.type === 'thinking' ? '**Thinking:**' : '**Answer:**');
-      lines.push(segment.text);
+      lines.push(...quotedBlock(
+        segment.type === 'thinking' ? MODEL_THINKING_LABEL : MODEL_ANSWER_LABEL,
+        segment.text,
+      ));
       lines.push('');
       continue;
     }

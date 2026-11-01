@@ -2,10 +2,12 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { WiroClient } from '../client.js';
 import { errorResult, isPlainObject } from '../utils/api.js';
-import { formatWorkflowInputs, workflowInputSchema } from '../utils/workflow.js';
+import { quotedSpan } from '../utils/quoted-text.js';
+import { plainInputKeys, quotedWorkflowInputs, workflowInputSchema } from '../utils/workflow.js';
 import {
   createWorkflow,
   findHiddenValues,
+  formatWorkflowNotes,
   prepareIssuesText,
   tagProblem,
   WorkflowPrepareError,
@@ -81,12 +83,12 @@ export function registerCreateWorkflow(server: McpServer, client: WiroClient): v
 
         const saved = await createWorkflow(client, { title, contents, description, tags }, extra.signal);
         const lines = ['## Workflow created', ''];
-        lines.push(`**Title:** ${saved.title}${saved.renamed ? ' (renamed because the title was already used)' : ''}`);
+        lines.push(`**Title:** ${quotedSpan(saved.title)}${saved.renamed ? ' (renamed because the title was already used)' : ''}`);
         lines.push(`**Slug:** \`${saved.fullSlug}\``);
         lines.push(`**Page:** ${saved.url}`);
-        lines.push('', '### Inputs', '', ...formatWorkflowInputs(saved.inputs));
+        lines.push('', '### Inputs', '', ...quotedWorkflowInputs(saved.inputs));
         if (saved.warnings.length > 0) {
-          lines.push('', '### Notes', '', ...saved.warnings.map(warning => `- ${warning.nodeId ? `\`${warning.nodeId}\`: ` : ''}${warning.message}`));
+          lines.push('', '### Notes', '', ...formatWorkflowNotes(saved.warnings));
         }
 
         return {
@@ -98,7 +100,7 @@ export function registerCreateWorkflow(server: McpServer, client: WiroClient): v
               arguments: { slug: saved.fullSlug },
               reason: 'Run it only if the user asked for a run, after telling them the estimate; otherwise ask the user first (each model step is charged). Pass input values'
                 + (saved.inputs.length > 0
-                  ? ` for: ${saved.inputs.map(input => input.key).join(', ')}. A key you leave out uses its saved value or default.`
+                  ? ` for: ${plainInputKeys(saved.inputs).join(', ') || 'the inputs listed'}. A key you leave out uses its saved value or default.`
                   : '. It has no inputs.'),
             },
           },
