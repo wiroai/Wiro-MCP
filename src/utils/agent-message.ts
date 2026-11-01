@@ -298,8 +298,9 @@ export function sessionKeyProblem(sessionKey: string): string | null {
   return null;
 }
 
+/** A new session name. Hex, so a draw can never end in the "-r<number>" a session name may not have. */
 export function newSessionKey(prefix = 'mcp'): string {
-  return `${prefix}-${Math.random().toString(36).slice(2, 10)}`;
+  return `${prefix}-${Math.random().toString(16).slice(2, 10).padEnd(8, '0')}`;
 }
 
 /** Whether a "Message not found" answer came in the first 10 seconds of a wait, and so is read again. */

@@ -5,7 +5,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { AjvJsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/ajv';
 import { WiroApiError } from '../dist/client.js';
 import { createMcpServer } from '../dist/server.js';
-import { extractMediaUrls, extractReplyLinks, SESSION_NAME_RULE } from '../dist/utils/agent-message.js';
+import { extractMediaUrls, extractReplyLinks, newSessionKey, sessionKeyProblem, SESSION_NAME_RULE } from '../dist/utils/agent-message.js';
 import { attachmentFileName, buildMessageForm } from '../dist/utils/agent-targets.js';
 import { createMediaContent, isWiroHostedFile, isWiroHostedUrl } from '../dist/utils/media.js';
 
@@ -168,6 +168,24 @@ function workflowContents() {
   };
 }
 
+test('a generated session name always follows the rule, whatever is drawn', () => {
+  const random = Math.random;
+  try {
+    // Draws across the range. 0.5 and 0 give fewer than eight hex digits and are padded.
+    for (const draw of [0.7638888888888888, 0.7777777777777778, 0.99999999, 0.5, 0.1, 0.001, 0]) {
+      Math.random = () => draw;
+      assert.match(newSessionKey(), /^mcp-[0-9a-f]{8}$/);
+    }
+  } finally {
+    Math.random = random;
+  }
+  for (let i = 0; i < 2000; i++) {
+    const key = newSessionKey();
+    assert.doesNotMatch(key, /-r\d+$/i, key);
+    assert.equal(sessionKeyProblem(key), null, key);
+  }
+});
+
 test('send_agent_message to Studio opens a new session, waits through a brief not-found and returns its model runs', async () => {
   const fake = fakeClient({
     '/Studio/Message/Send': {
@@ -229,7 +247,7 @@ test('send_agent_message to Studio opens a new session, waits through a brief no
 
     assert.notEqual(result.isError, true, textOf(result));
     const output = result.structuredContent;
-    assert.match(output.session, /^mcp-[a-z0-9]+$/);
+    assert.match(output.session, /^mcp-[0-9a-f]{8}$/);
     assert.equal(output.sessionCreated, true);
     assert.equal(output.agentKind, 'studio');
     assert.equal(output.done, true);
