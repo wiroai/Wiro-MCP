@@ -2274,10 +2274,12 @@ export interface CustomSkillEntry {
   requiresCredentials: string[];
   /** The starter task whose text was never written: it does not run until its text is saved. */
   notWritten?: boolean;
-  /** The skills that bring a scheduled task: it runs only while one of them is on. */
+  /** The skills that bring a scheduled task. */
   ownerSkills?: string[];
-  /** Every skill that brings the scheduled task is off, so it does not run until one of them is on. */
+  /** The skills the scheduled task needs are off, so it does not run until one of offSkills is on. */
   skillOff?: boolean;
+  /** While skillOff, the skills to turn on: any one of them lets the task run. */
+  offSkills?: string[];
 }
 
 export function customSkillEntries(row: Row): CustomSkillEntry[] {
@@ -2301,6 +2303,7 @@ export function customSkillEntries(row: Row): CustomSkillEntry[] {
       notWritten: key === STARTER_TASK_KEY && entry._edited === false,
       ownerSkills: stringList(entry._owner_skills),
       skillOff: entry._skill_off === true,
+      offSkills: stringList(entry._off_skills),
     };
   }).filter(entry => entry.key);
 }

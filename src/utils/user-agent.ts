@@ -379,9 +379,11 @@ export const agentTaskSchema = z.object({
   notWritten: z.boolean().optional()
     .describe('The starter task whose text was never written. It does not run, even when it shows on, until its text is saved with manage_agent_custom_skill.'),
   ownerSkills: z.array(z.string()).optional()
-    .describe('The skills that bring this task. It runs only while one of them is on.'),
+    .describe('The skills that bring this task.'),
   skillOff: z.boolean().optional()
-    .describe('Every skill that brings this task is off, so it does not run, even when it shows on, until one of them is turned on with apply_agent_skills. Its own on/off state, text and schedule stay as they are.'),
+    .describe('The skills this task needs are off, so it does not run, even when it shows on, until one of the skills in offSkills is turned on with apply_agent_skills. Its own on/off state, text and schedule stay as they are.'),
+  offSkills: z.array(z.string()).optional()
+    .describe('While skillOff is true, the skills to turn on: any one of them lets the task run again, while the services it needs are connected.'),
   interval: z.string().nullable().optional(),
   source: z.enum(['template', 'skill', 'user']).optional(),
   instructions: z.string().optional(),
@@ -406,6 +408,7 @@ export function summarizeTasks(value: unknown, maxInstructionLength = 300): Agen
     const shortened = truncate(instructions, maxInstructionLength);
     const source = TASK_SOURCES[asString(task._source) ?? ''];
     const ownerSkills = toStringArray(task._owner_skills);
+    const offSkills = toStringArray(task._off_skills);
     return {
       key: asString(task.key) ?? '',
       ...(description ? { description } : {}),
@@ -413,6 +416,7 @@ export function summarizeTasks(value: unknown, maxInstructionLength = 300): Agen
       ...(asString(task.key) === STARTER_TASK_KEY && task._edited === false ? { notWritten: true } : {}),
       ...(ownerSkills.length > 0 ? { ownerSkills } : {}),
       ...(task._skill_off === true ? { skillOff: true } : {}),
+      ...(offSkills.length > 0 ? { offSkills } : {}),
       ...(interval !== undefined ? { interval: interval || null } : {}),
       ...(source ? { source } : {}),
       ...(shortened ? { instructions: shortened } : {}),
@@ -771,30 +775,30 @@ function nameList(names: readonly string[], word: 'and' | 'or'): string {
 }
 
 /**
- * Why a task whose skills are all off does not run, as a clause that names the skills to turn on. Its own
- * on/off state stays as it is: a task that is on runs again once one of them is on, and one that is off
- * also needs turning on.
+ * Why a task that waits for its skills does not run, as a clause that names the skills to turn on
+ * (offSkills): any one of them lets it run. Its own on/off state stays as it is: a task that is on runs
+ * again once one of them is on, and one that is off also needs turning on.
  */
-export function skillOffText(task: Pick<AgentTask, 'enabled' | 'ownerSkills'>): string {
-  const names = task.ownerSkills ?? [];
+export function skillOffText(task: Pick<AgentTask, 'enabled' | 'offSkills'>): string {
+  const names = task.offSkills ?? [];
   if (!task.enabled) {
-    if (names.length === 1) return `it also needs its skill ${names[0]} turned on to run`;
-    return `it also needs one of ${names.length > 1 ? `its skills ${nameList(names, 'or')}` : 'the skills that bring it'} turned on to run`;
+    if (names.length === 1) return `it also needs skill ${names[0]} turned on to run`;
+    return names.length > 1 ? `it also needs one of the skills ${nameList(names, 'or')} turned on to run` : 'it also needs a skill turned on to run';
   }
-  if (names.length === 1) return `its skill ${names[0]} is off, so it does not run until ${names[0]} is turned on`;
-  return `${names.length > 1 ? `its skills ${nameList(names, 'and')}` : 'the skills that bring it'} are off, so it does not run until one of them is turned on`;
+  if (names.length === 1) return `skill ${names[0]} is off, so it does not run until ${names[0]} is turned on`;
+  return `${names.length > 1 ? `skills ${nameList(names, 'and')}` : 'the skills it needs'} are off, so it does not run until one of them is turned on`;
 }
 
 /**
- * The tasks among these whose skills are all off, each as a sentence that names the skills to turn on, with a
- * space before it. A saved credential turns such a task on, but it does not run until one of them is on.
+ * The tasks among these that wait for their skills, each as a sentence that names the skills to turn on,
+ * with a space before it. A saved credential turns such a task on, but it does not run until one of them is on.
  */
-export function skillOffTasksNote(tasks: ReadonlyArray<{ key: string; ownerSkills?: string[]; skillOff?: boolean }>): string {
+export function skillOffTasksNote(tasks: ReadonlyArray<{ key: string; offSkills?: string[]; skillOff?: boolean }>): string {
   return tasks.filter(task => task.skillOff).map(task => {
-    const names = task.ownerSkills ?? [];
+    const names = task.offSkills ?? [];
     const skills = names.length === 1
-      ? `its skill ${names[0]}`
-      : `one of ${names.length > 1 ? `its skills ${nameList(names, 'or')}` : 'the skills that bring it'}`;
+      ? `skill ${names[0]}`
+      : names.length > 1 ? `one of the skills ${nameList(names, 'or')}` : 'a skill it needs';
     return ` ${quotedSpan(task.key)} does not run until ${skills} is turned on.`;
   }).join('');
 }

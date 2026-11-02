@@ -52,9 +52,11 @@ const entrySchema = z.object({
   notWritten: z.boolean().optional()
     .describe('The starter task whose text was never written. It does not run, even when it shows on, until its text is saved.'),
   ownerSkills: z.array(z.string()).optional()
-    .describe('The skills that bring this scheduled task. It runs only while one of them is on.'),
+    .describe('The skills that bring this scheduled task.'),
   skillOff: z.boolean().optional()
-    .describe('Every skill that brings this scheduled task is off, so it does not run, even when it shows on, until one of them is turned on with apply_agent_skills. Its own on/off state, text and schedule stay as they are.'),
+    .describe('The skills this scheduled task needs are off, so it does not run, even when it shows on, until one of the skills in offSkills is turned on with apply_agent_skills. Its own on/off state, text and schedule stay as they are.'),
+  offSkills: z.array(z.string()).optional()
+    .describe('While skillOff is true, the skills to turn on: any one of them lets the task run again, while the services it needs are connected.'),
 });
 
 const outputSchema = {
@@ -142,10 +144,11 @@ function toEntry(entry: CustomSkillEntry, full = false) {
     ...(entry.notWritten ? { notWritten: true } : {}),
     ...(entry.ownerSkills && entry.ownerSkills.length > 0 ? { ownerSkills: entry.ownerSkills } : {}),
     ...(entry.skillOff ? { skillOff: true } : {}),
+    ...(entry.offSkills && entry.offSkills.length > 0 ? { offSkills: entry.offSkills } : {}),
   };
 }
 
-/** Why a scheduled task whose skills are all off does not run, as a sentence of its own. */
+/** Why a scheduled task that waits for its skills does not run, as a sentence of its own. */
 function skillOffSentence(entry: CustomSkillEntry): string {
   const text = skillOffText(entry);
   return `${text.charAt(0).toUpperCase()}${text.slice(1)}.`;
@@ -324,6 +327,7 @@ async function upsert(client: WiroClient, input: Input, signal: AbortSignal) {
     requiresCredentials: existing?.requiresCredentials ?? [],
     ownerSkills: existing?.ownerSkills,
     skillOff: existing?.skillOff,
+    offSkills: existing?.offSkills,
   };
   const warnings: string[] = [];
   if (input.key.trim() !== key) warnings.push(`Saved under the key ${key}.`);
@@ -613,6 +617,7 @@ async function revert(client: WiroClient, input: Input, signal: AbortSignal) {
       requiresCredentials: current?.requiresCredentials ?? [],
       ownerSkills: current?.ownerSkills,
       skillOff: current?.skillOff,
+      offSkills: current?.offSkills,
     });
   const messages: Record<string, string> = {
     'no-op': `${key} already matches that version; nothing changed.`,

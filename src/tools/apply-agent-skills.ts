@@ -100,9 +100,9 @@ const outputSchema = {
   })),
   scheduledTasks: z.object({
     stop: z.array(z.string())
-      .describe('Scheduled tasks that stop running because the change turns off every skill that brings them. Their text, schedule and on/off state stay, and they run again once one of those skills is on.'),
+      .describe('Scheduled tasks that stop running because the change turns off every skill that brings them. Their text, schedule and on/off state stay while they wait, and get_my_agent names the skills to turn on to run them again.'),
     resume: z.array(z.string())
-      .describe('Scheduled tasks that run again because the change turns on a skill that brings them, while the services they need are connected.'),
+      .describe('Scheduled tasks that run again because the change turns on a skill they wait for, while the services they need are connected.'),
   }).optional()
     .describe('Quote: the scheduled tasks that are on and that the change stops or brings back.'),
   agentStatus: z.string(),
@@ -447,8 +447,9 @@ function listLine(label: string, names: string[]): string | null {
 
 /**
  * The scheduled tasks a change stops, because it turns off every skill that brings them, and the ones it
- * brings back by turning on one of those skills. Wiro names the skills that bring each task and whether all
- * of them are off. Only tasks that are on count: one that is off stays off either way.
+ * brings back by turning on a skill they wait for. Wiro names the skills that bring each task and, while one
+ * waits, the skills to turn on, any one of which lets it run while a skill that brings it is on. Only tasks
+ * that are on count: one that is off stays off either way.
  */
 function tasksMoved(row: Row, enabledNow: string[], diff: SkillDiff): { stop: string[]; resume: string[] } {
   const after = new Set(enabledNow);
@@ -459,9 +460,10 @@ function tasksMoved(row: Row, enabledNow: string[], diff: SkillDiff): { stop: st
   for (const task of customSkillEntries(row)) {
     const owners = task.ownerSkills ?? [];
     if (task.kind !== 'scheduled_task' || !task.enabled || owners.length === 0) continue;
+    const ownerOn = owners.some(name => after.has(name));
     if (task.skillOff) {
-      if (owners.some(name => diff.enable.includes(name))) resume.push(task.key);
-    } else if (owners.some(name => diff.disable.includes(name)) && !owners.some(name => after.has(name))) {
+      if (ownerOn && (task.offSkills ?? []).some(name => diff.enable.includes(name))) resume.push(task.key);
+    } else if (!ownerOn && owners.some(name => diff.disable.includes(name))) {
       stop.push(task.key);
     }
   }
@@ -474,11 +476,11 @@ function movedTaskLines(moved: { stop: string[]; resume: string[] }): string[] {
   const lines: string[] = [];
   if (moved.stop.length > 0) {
     const one = moved.stop.length === 1;
-    lines.push(`**Scheduled tasks that stop:** ${keys(moved.stop)}. The change turns off every skill that brings ${one ? 'it' : 'them'}. ${one ? 'It keeps its' : 'They keep their'} text, schedule and on/off state, and ${one ? 'runs' : 'run'} again once one of those skills is on.`);
+    lines.push(`**Scheduled tasks that stop:** ${keys(moved.stop)}. The change turns off every skill that brings ${one ? 'it. It keeps its text, schedule and on/off state while it waits' : 'them. They keep their text, schedule and on/off state while they wait'}, and get_my_agent names the skills to turn on to run ${one ? 'it' : 'them'} again.`);
   }
   if (moved.resume.length > 0) {
     const one = moved.resume.length === 1;
-    lines.push(`**Scheduled tasks that run again:** ${keys(moved.resume)}. The change turns on a skill that brings ${one ? 'it, and it runs while the services it needs are' : 'them, and they run while the services they need are'} connected.`);
+    lines.push(`**Scheduled tasks that run again:** ${keys(moved.resume)}. The change turns on a skill ${one ? 'it waits for, and it runs while the services it needs are' : 'they wait for, and they run while the services they need are'} connected.`);
   }
   return lines;
 }

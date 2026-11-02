@@ -795,17 +795,17 @@ test('bind_agent_project names what turns on: all on a first bind, what is off o
 });
 
 test('bind_agent_project names the skill a task it turns on still waits for', async () => {
-  // Detail names the skills that bring a registry task and whether all of them are off; a user's own task has neither.
+  // Detail names the skills that bring a registry task, that the skills it needs are off, and the ones to turn on; a user's own task has none of them.
   const task = (key, owners) => ({
     key, description: 'Images', value: 'Make the images.', interval: '0 9 * * 1', enabled: false, requires_credentials: ['wiro'], _source: owners ? 'skill-bundle' : 'user-created', _editable: true,
-    ...(owners ? { _owner_skills: owners, _skill_off: true } : { _user_created: true }),
+    ...(owners ? { _owner_skills: owners, _skill_off: true, _off_skills: owners } : { _user_created: true }),
   });
   const row = detail({ ...NO_WIRO_SKILL, credentials: {}, customskills: [], scheduledskills: [task('cs-cron-weekly-images', ['int-wiro-aimodels']), task('cs-cron-monthly-images', null)] });
   await withTools(routes({ '/UserAgent/Detail': row }), async ({ call }) => {
     const preview = await call('bind_agent_project', { agent_guid: AGENT });
     assert.notEqual(preview.isError, true, text(preview));
     assert.equal(preview.structuredContent.state, 'preview');
-    const note = '`cs-cron-weekly-images` and `cs-cron-monthly-images` turn on once the project is connected. `cs-cron-weekly-images` does not run until its skill int-wiro-aimodels is turned on. Every run of a scheduled task uses credits; turn off any you do not want with manage_agent_custom_skill.';
+    const note = '`cs-cron-weekly-images` and `cs-cron-monthly-images` turn on once the project is connected. `cs-cron-weekly-images` does not run until skill int-wiro-aimodels is turned on. Every run of a scheduled task uses credits; turn off any you do not want with manage_agent_custom_skill.';
     assert.ok(preview.structuredContent.notes.includes(note), JSON.stringify(preview.structuredContent.notes));
     assert.ok(text(preview).includes(note));
   });

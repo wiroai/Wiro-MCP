@@ -1415,15 +1415,25 @@ const taskSkillList = {
     ...connectSkillList.skills,
     { name: 'int-appstore-events', title: 'App Store Events', depends_on: [], conflicts_with: [], credential_key: 'apple-appstore', requires_credentials: true, pricing: {} },
     { name: 'int-googleplay-events', title: 'Google Play Events', depends_on: [], conflicts_with: [], credential_key: 'google-play', requires_credentials: true, pricing: {} },
+    { name: 'util-newsletter-compose', depends_on: [], requires_credentials: false, pricing: {} },
   ],
 };
 
-/** A registry task as Detail sends it: the skills that bring it, and whether all of them are off. */
-function ownedTask(key, enabled, owners, skillOff) {
-  return { key, description: key, value: 'Run the check.', interval: '0 9 * * 1', enabled, requires_credentials: [], _source: 'skill-bundle', _editable: true, _owner_skills: owners, _skill_off: skillOff };
+/**
+ * A registry task as Detail sends it: the skills that bring it, whether the skills it needs are off, and
+ * while they are, the skills to turn on (offSkills, null when it may run).
+ */
+function ownedTask(key, enabled, owners, offSkills) {
+  return {
+    key, description: key, value: 'Run the check.', interval: '0 9 * * 1', enabled, requires_credentials: [], _source: 'skill-bundle', _editable: true,
+    _owner_skills: owners, _skill_off: offSkills !== null, ...(offSkills ? { _off_skills: offSkills } : {}),
+  };
 }
 
 const SOCIAL_OWNERS = ['int-facebookpage-post', 'int-instagram-post', 'int-linkedin-post', 'int-reddit-post', 'int-tiktok-post', 'int-twitterx-post'];
+// The skills that hold one of the social tasks' integrations: Reddit is not one of them.
+const SOCIAL_OFF = ['int-facebookpage-post', 'int-instagram-post', 'int-linkedin-post', 'int-tiktok-post', 'int-twitterx-post'];
+const NEWSLETTER_OFF = ['int-brevo-email', 'int-hubspot-crm', 'int-mailchimp-email', 'int-sendgrid-email'];
 
 test('apply_agent_skills quotes the scheduled tasks a change stops or brings back', async () => {
   const quote = async (scheduledskills, skills) => {
@@ -1431,7 +1441,7 @@ test('apply_agent_skills quotes the scheduled tasks a change stops or brings bac
     await withClient(fakeClient(skillRoutes({
       '/Skills/List': taskSkillList,
       '/UserAgent/Detail': detail({
-        skills: skillsOn('util-chat-markdown-reporting', 'int-metaads-manage', 'int-appstore-events', 'int-googleplay-events'),
+        skills: skillsOn('util-chat-markdown-reporting', 'int-metaads-manage', 'int-appstore-events', 'int-googleplay-events', 'util-newsletter-compose'),
         scheduledskills,
       }),
     })), async client => {
@@ -1441,51 +1451,54 @@ test('apply_agent_skills quotes the scheduled tasks a change stops or brings bac
     return result;
   };
 
-  const change = { 'int-metaads-manage': false, 'int-appstore-events': false, 'int-instagram-post': true };
   const mixed = await quote([
-    ownedTask('cs-cron-metaads-performance-reporter', true, ['int-metaads-manage'], false),
+    ownedTask('cs-cron-metaads-performance-reporter', true, ['int-metaads-manage'], null),
     // Off by its own switch: it stays off either way.
-    ownedTask('cs-cron-metaads-audience-scanner', false, ['int-metaads-manage'], false),
+    ownedTask('cs-cron-metaads-audience-scanner', false, ['int-metaads-manage'], null),
     // Another skill that brings it stays on.
-    ownedTask('cs-cron-app-event-scanner', true, ['int-appstore-events', 'int-googleplay-events'], false),
-    ownedTask('cs-cron-social-content-scanner', true, SOCIAL_OWNERS, true),
-    ownedTask('cs-cron-social-drive-scanner', false, SOCIAL_OWNERS, true),
-    // The change turns none of its skills on.
-    ownedTask('cs-cron-review-scanner', true, ['int-appstore-reviews', 'int-googleplay-reviews'], true),
+    ownedTask('cs-cron-app-event-scanner', true, ['int-appstore-events', 'int-googleplay-events'], null),
+    ownedTask('cs-cron-social-content-scanner', true, SOCIAL_OWNERS, SOCIAL_OFF),
+    ownedTask('cs-cron-social-drive-scanner', false, SOCIAL_OWNERS, SOCIAL_OFF),
+    // The util that brings it is on, and the change turns on a skill that holds one of its integrations.
+    ownedTask('cs-cron-newsletter-sender', true, ['util-newsletter-compose'], NEWSLETTER_OFF),
+    // The change turns on none of the skills it waits for.
+    ownedTask('cs-cron-review-scanner', true, ['int-appstore-reviews', 'int-googleplay-reviews'], ['int-appstore-reviews', 'int-googleplay-reviews']),
     { key: 'cs-cron-my-task', description: 'My task', value: 'Do my task.', interval: '0 8 * * *', enabled: true, requires_credentials: [], _source: 'user-created', _editable: true, _user_created: true },
-  ], change);
+  ], { 'int-metaads-manage': false, 'int-appstore-events': false, 'int-instagram-post': true, 'int-mailchimp-email': true });
   assert.deepEqual(mixed.structuredContent.scheduledTasks, {
     stop: ['cs-cron-metaads-performance-reporter'],
-    resume: ['cs-cron-social-content-scanner'],
+    resume: ['cs-cron-social-content-scanner', 'cs-cron-newsletter-sender'],
   });
   const lines = text(mixed).split('\n');
-  assert.ok(lines.includes('**Scheduled tasks that stop:** `cs-cron-metaads-performance-reporter`. The change turns off every skill that brings it. It keeps its text, schedule and on/off state, and runs again once one of those skills is on.'), text(mixed));
-  assert.ok(lines.includes('**Scheduled tasks that run again:** `cs-cron-social-content-scanner`. The change turns on a skill that brings it, and it runs while the services it needs are connected.'), text(mixed));
+  assert.ok(lines.includes('**Scheduled tasks that stop:** `cs-cron-metaads-performance-reporter`. The change turns off every skill that brings it. It keeps its text, schedule and on/off state while it waits, and get_my_agent names the skills to turn on to run it again.'), text(mixed));
+  assert.ok(lines.includes('**Scheduled tasks that run again:** `cs-cron-social-content-scanner`, `cs-cron-newsletter-sender`. The change turns on a skill they wait for, and they run while the services they need are connected.'), text(mixed));
   // They follow the restart line, before the credentials the new skills need.
   const at = prefix => lines.findIndex(line => line.startsWith(prefix));
   assert.ok(at('**Restart:**') < at('**Scheduled tasks that stop:**'));
   assert.ok(at('**Scheduled tasks that run again:**') < at('**Credentials the new skills need:**'));
 
   const many = await quote([
-    ownedTask('cs-cron-metaads-performance-reporter', true, ['int-metaads-manage'], false),
-    ownedTask('cs-cron-metaads-holiday-planner', true, ['int-metaads-manage'], false),
-    ownedTask('cs-cron-social-content-scanner', true, SOCIAL_OWNERS, true),
-    ownedTask('cs-cron-social-drive-scanner', true, SOCIAL_OWNERS, true),
-  ], change);
+    ownedTask('cs-cron-metaads-performance-reporter', true, ['int-metaads-manage'], null),
+    ownedTask('cs-cron-metaads-holiday-planner', true, ['int-metaads-manage'], null),
+    ownedTask('cs-cron-social-content-scanner', true, SOCIAL_OWNERS, SOCIAL_OFF),
+  ], { 'int-metaads-manage': false, 'int-instagram-post': true });
   assert.deepEqual(many.structuredContent.scheduledTasks, {
     stop: ['cs-cron-metaads-performance-reporter', 'cs-cron-metaads-holiday-planner'],
-    resume: ['cs-cron-social-content-scanner', 'cs-cron-social-drive-scanner'],
+    resume: ['cs-cron-social-content-scanner'],
   });
-  assert.match(text(many), /\*\*Scheduled tasks that stop:\*\* `cs-cron-metaads-performance-reporter`, `cs-cron-metaads-holiday-planner`\. The change turns off every skill that brings them\. They keep their text, schedule and on\/off state, and run again once one of those skills is on\./);
-  assert.match(text(many), /\*\*Scheduled tasks that run again:\*\* `cs-cron-social-content-scanner`, `cs-cron-social-drive-scanner`\. The change turns on a skill that brings them, and they run while the services they need are connected\./);
+  assert.match(text(many), /\*\*Scheduled tasks that stop:\*\* `cs-cron-metaads-performance-reporter`, `cs-cron-metaads-holiday-planner`\. The change turns off every skill that brings them\. They keep their text, schedule and on\/off state while they wait, and get_my_agent names the skills to turn on to run them again\./);
+  assert.match(text(many), /\*\*Scheduled tasks that run again:\*\* `cs-cron-social-content-scanner`\. The change turns on a skill it waits for, and it runs while the services it needs are connected\./);
 
-  // A change that turns no task's skills on or off names no task.
-  const none = await quote([
-    ownedTask('cs-cron-metaads-performance-reporter', true, ['int-metaads-manage'], false),
-    ownedTask('cs-cron-review-scanner', true, ['int-appstore-reviews', 'int-googleplay-reviews'], true),
-  ], { 'int-serper-search': true });
-  assert.equal('scheduledTasks' in none.structuredContent, false);
-  assert.doesNotMatch(text(none), /Scheduled tasks/);
+  // No task moves when the change turns on a skill a task waits for but turns off the one that brings it,
+  // or touches none of a task's skills.
+  for (const skills of [{ 'int-mailchimp-email': true, 'util-newsletter-compose': false }, { 'int-serper-search': true }]) {
+    const none = await quote([
+      ownedTask('cs-cron-newsletter-sender', true, ['util-newsletter-compose'], NEWSLETTER_OFF),
+      ownedTask('cs-cron-review-scanner', true, ['int-appstore-reviews', 'int-googleplay-reviews'], ['int-appstore-reviews', 'int-googleplay-reviews']),
+    ], skills);
+    assert.equal('scheduledTasks' in none.structuredContent, false, JSON.stringify(skills));
+    assert.doesNotMatch(text(none), /Scheduled tasks/);
+  }
 });
 
 test('apply_agent_skills reports a no-op, a dependency turned off and a tier downgrade', async () => {
@@ -3610,20 +3623,25 @@ test('connect_agent_oauth says which entries a finished sign-in turns on', async
   assert.equal(text(injected).split('\n').some(line => line.startsWith('**Next:**')), false);
 });
 
-test('connect_agent_oauth names the skill a task it turns on still waits for', async () => {
-  // Detail names the skills that bring a registry task and whether all of them are off.
-  const task = (key, requires, owners, skillOff) => ({ key, description: 'Weekly check', value: 'Check the numbers.', interval: '0 9 * * 1', enabled: false, requires_credentials: requires, _source: 'skill-bundle', _editable: true, _owner_skills: owners, _skill_off: skillOff });
+test('connect_agent_oauth names the skills a task it turns on still waits for', async () => {
+  // Detail names the skills that bring a registry task, whether the skills it needs are off, and while they are, the ones to turn on.
+  const task = (key, requires, owners, offSkills) => ({
+    key, description: 'Weekly check', value: 'Check the numbers.', interval: '0 9 * * 1', enabled: false, requires_credentials: requires, _source: 'skill-bundle', _editable: true,
+    _owner_skills: owners, _skill_off: offSkills !== null, ...(offSkills ? { _off_skills: offSkills } : {}),
+  });
   const stub = fakeClient({
     '/Credentials/Detail': credentialDetail,
     '/Skills/List': connectSkillList,
     '/UserAgent/Detail': {
       result: true,
       useragents: [customBuildRow({
-        skills: skillsOn('int-mailchimp-email', 'util-newsletter-compose', 'util-chat-markdown-reporting'),
+        skills: skillsOn('util-newsletter-compose', 'int-googleads-manage', 'int-serper-search', 'util-chat-markdown-reporting'),
         customskills: [],
         scheduledskills: [
-          task('cs-cron-lead-reply-handler', ['apollo', 'lemlist', 'hubspot'], ['int-lemlist-outreach'], true),
-          task('cs-cron-newsletter-sender', ['brevo', 'mailchimp', 'sendgrid', 'hubspot'], ['util-newsletter-compose'], false),
+          task('cs-cron-lead-reply-handler', ['apollo', 'lemlist', 'hubspot'], ['int-lemlist-outreach'], ['int-lemlist-outreach']),
+          // The util that brings it is on, but every skill that holds one of its integrations is off.
+          task('cs-cron-newsletter-sender', ['brevo', 'mailchimp', 'sendgrid', 'hubspot'], ['util-newsletter-compose'], NEWSLETTER_OFF),
+          task('cs-cron-googleads-audience-refresher', ['google-ads', 'google-drive', 'apollo', 'lemlist', 'hubspot'], ['int-googleads-manage'], null),
         ],
       })],
     },
@@ -3633,18 +3651,21 @@ test('connect_agent_oauth names the skill a task it turns on still waits for', a
   await withClient(stub, async client => {
     const result = await client.callTool({ name: 'connect_agent_oauth', arguments: { agent_guid: AGENT, credential: 'hubspot' } });
     assert.equal(result.structuredContent.state, 'authorize_in_browser', text(result));
-    assert.match(result.structuredContent.message, /`cs-cron-lead-reply-handler`, `cs-cron-newsletter-sender` turn on once HubSpot is connected\. `cs-cron-lead-reply-handler` does not run until its skill int-lemlist-outreach is turned on\. Every run of a scheduled task uses credits/);
-    assert.doesNotMatch(result.structuredContent.message, /`cs-cron-newsletter-sender` does not run/);
+    assert.match(result.structuredContent.message, /`cs-cron-lead-reply-handler`, `cs-cron-newsletter-sender`, `cs-cron-googleads-audience-refresher` turn on once HubSpot is connected\. `cs-cron-lead-reply-handler` does not run until skill int-lemlist-outreach is turned on\. `cs-cron-newsletter-sender` does not run until one of the skills int-brevo-email, int-hubspot-crm, int-mailchimp-email or int-sendgrid-email is turned on\. Every run of a scheduled task uses credits/);
+    assert.doesNotMatch(result.structuredContent.message, /`cs-cron-googleads-audience-refresher` does not run|util-newsletter-compose/);
   });
 });
 
 test('set_agent_credentials names the skills a task the save turns on still waits for', async () => {
   const json = '{"type":"service_account","project_id":"store-app"}';
-  const task = (key, requires, owners, skillOff) => ({ key, description: 'Store check', value: 'Check the store.', interval: '0 9 * * *', enabled: true, requires_credentials: requires, _source: 'skill-bundle', _editable: true, _owner_skills: owners, _skill_off: skillOff });
-  const reviews = task('cs-cron-review-scanner', ['apple-appstore', 'google-play'], ['int-appstore-reviews', 'int-googleplay-reviews'], true);
-  const events = task('cs-cron-app-event-scanner', ['apple-appstore', 'google-play', 'google-play-apps'], ['int-appstore-events', 'int-googleplay-events'], false);
-  // Off too, but it needs another service, so this save says nothing about it.
-  const ads = task('cs-cron-metaads-performance-reporter', ['meta-ads'], ['int-metaads-manage'], true);
+  const task = (key, requires, owners, offSkills) => ({
+    key, description: 'Store check', value: 'Check the store.', interval: '0 9 * * *', enabled: true, requires_credentials: requires, _source: 'skill-bundle', _editable: true,
+    _owner_skills: owners, _skill_off: offSkills !== null, ...(offSkills ? { _off_skills: offSkills } : {}),
+  });
+  const reviews = task('cs-cron-review-scanner', ['apple-appstore', 'google-play'], ['int-appstore-reviews', 'int-googleplay-reviews'], ['int-appstore-reviews', 'int-googleplay-reviews']);
+  const events = task('cs-cron-app-event-scanner', ['apple-appstore', 'google-play', 'google-play-apps'], ['int-appstore-events', 'int-googleplay-events'], null);
+  // Waiting too, but it needs another service, so this save says nothing about it.
+  const ads = task('cs-cron-metaads-performance-reporter', ['meta-ads'], ['int-metaads-manage'], ['int-metaads-manage']);
   const save = async scheduledskills => {
     let result;
     await withClient(fakeClient({
@@ -3666,7 +3687,7 @@ test('set_agent_credentials names the skills a task the save turns on still wait
   const base = 'Saving these credentials turns on the scheduled tasks that need them; turn off any you do not want.';
 
   const waiting = await save([reviews, events, ads]);
-  assert.ok(waiting.structuredContent.notes.includes(`${base} \`cs-cron-review-scanner\` does not run until one of its skills int-appstore-reviews or int-googleplay-reviews is turned on.`), JSON.stringify(waiting.structuredContent.notes));
+  assert.ok(waiting.structuredContent.notes.includes(`${base} \`cs-cron-review-scanner\` does not run until one of the skills int-appstore-reviews or int-googleplay-reviews is turned on.`), JSON.stringify(waiting.structuredContent.notes));
   assert.doesNotMatch(text(waiting), /`cs-cron-(app-event-scanner|metaads-performance-reporter)` does not run/);
 
   const running = await save([events]);
