@@ -6,6 +6,7 @@ import { customSkillEntries, pausedSkillTitles, resolveExistingCustomSkillKey, s
 import { textBlock } from '../utils/quoted-text.js';
 import { DEFAULT_WAIT_SECONDS, MAX_WAIT_SECONDS } from '../utils/poll.js';
 import {
+  activeSkillTitles,
   agentDetailSchema,
   describeAgentStatus,
   formatAgentDetail,
@@ -98,7 +99,7 @@ export function registerGetMyAgent(server: McpServer, client: WiroClient): void 
           };
         }
         const plainMember = await isPlainTeamMember(client, row, extra.signal);
-        const titles = await pausedSkillTitles(client, agent.scheduledTasks, extra.signal);
+        const titles = new Map([...activeSkillTitles(row), ...await pausedSkillTitles(client, agent.scheduledTasks, extra.signal)]);
         const advice = settled
           ? readStatusAdvice(agent, plainMember)
           : `The agent is still ${describeAgentStatus(agent.status).toLowerCase()}. Call get_my_agent again with wait_seconds to keep waiting.`;

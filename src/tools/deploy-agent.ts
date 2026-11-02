@@ -23,6 +23,7 @@ import {
   outcomeUnknown,
   readAgentDetail,
   sameAmount,
+  skillLabel,
   skillOffTasksNote,
   tierPricingSchema,
   toAgentDetail,
@@ -203,10 +204,11 @@ function credentialList(items: Array<{ key: string; title: string }>): string {
   return items.map(item => `${item.title} (\`${item.key}\`)`).join(', ');
 }
 
-function quoteText(quote: Quote, credentials?: Record<string, unknown>): string {
+/** titles names a custom build's skills as people see them. */
+function quoteText(quote: Quote, credentials?: Record<string, unknown>, titles?: ReadonlyMap<string, string>): string {
   const what = quote.kind === 'template'
     ? `${quote.title}, from the template ${quote.template?.title ?? ''} (\`${quote.template?.slug ?? ''}\`)`
-    : `${quote.title}, a custom build${quote.skills?.length ? ` with ${quote.skills.join(', ')}` : ' with no extra skills'}`;
+    : `${quote.title}, a custom build${quote.skills?.length ? ` with ${quote.skills.map(name => skillLabel(name, titles)).join(', ')}` : ' with no extra skills'}`;
   const lines = [
     '## Deployment quote (nothing charged yet)',
     '',
@@ -416,6 +418,7 @@ export function registerDeployAgent(server: McpServer, client: WiroClient): void
         }
 
         let quote: Quote;
+        let quoteTitles = new Map<string, string>();
         let agentGuid: string | undefined;
         let templateTasks: TemplateCustomSkill[] = [];
         const skillNames = [...new Set(args.skills ?? [])];
@@ -487,6 +490,7 @@ export function registerDeployAgent(server: McpServer, client: WiroClient): void
           // their credentials are needed too.
           const unread = build.filter(name => !found.has(name));
           if (unread.length > 0) await readSkills(unread);
+          quoteTitles = new Map([...found.values()].filter(skill => skill.title && skill.title !== skill.name).map(skill => [skill.name, skill.title]));
           const credentialsNeeded = new Map<string, string>();
           for (const name of build) {
             const skill = found.get(name);
@@ -550,7 +554,7 @@ export function registerDeployAgent(server: McpServer, client: WiroClient): void
           return {
             content: [{
               type: 'text' as const,
-              text: `${lead}${quoteText(quote, credentials)}\n\nAsk the user to approve this charge. Then call deploy_agent again with the same arguments plus confirm_charge_usd ${quote.priceUsd} and confirm: true.${credentialsNote}`,
+              text: `${lead}${quoteText(quote, credentials, quoteTitles)}\n\nAsk the user to approve this charge. Then call deploy_agent again with the same arguments plus confirm_charge_usd ${quote.priceUsd} and confirm: true.${credentialsNote}`,
             }],
             structuredContent: {
               stage: 'quote' as const,

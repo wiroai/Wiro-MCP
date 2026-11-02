@@ -457,6 +457,18 @@ test('deploy_agent lists a task a skill brought that is paused apart from those 
   });
 });
 
+test('the deploy_agent quote names a custom build\'s skills by their titles', async () => {
+  const routes = customBuild([]);
+  routes['/Skills/List'] = { result: true, errors: [], skills: [{ name: 'int-hubspot-crm', title: 'HubSpot CRM', requires_credentials: false }] };
+  routes['/UserAgent/PricingPreview'] = { ...routes['/UserAgent/PricingPreview'], enabledSkills: ['int-hubspot-crm'] };
+  await withClient(fakeClient(routes), async client => {
+    const quote = await call(client, 'deploy_agent', { ...DEPLOY, title: 'CRM', skills: ['int-hubspot-crm'] });
+    assert.notEqual(quote.isError, true, textOf(quote));
+    assert.match(textOf(quote), /- Agent: CRM, a custom build with HubSpot CRM \(`int-hubspot-crm`\)$/m);
+    assert.deepEqual(quote.structuredContent.quote.skills, ['int-hubspot-crm']);
+  });
+});
+
 test('deploy_agent and the playbook no longer promise a starter task on Mondays', async () => {
   const description = await toolDescription('deploy_agent');
   assert.doesNotMatch(description, /Mondays|10:00/);

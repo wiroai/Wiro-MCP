@@ -19,6 +19,7 @@ import {
   isWalletNotRead,
   nameList,
   planEndsWithPeriod,
+  skillLabel,
   STARTER_TASK_KEY,
   toSkillGroups,
   WALLET_NOT_READ_NOTE,
@@ -256,6 +257,11 @@ export function parseSkillRegistry(body: Row): SkillRegistry {
   return { skills, channels };
 }
 
+/** The catalog title of every skill the registry lists that has one, for skillLabel. */
+export function registryTitles(registry: SkillRegistry): Map<string, string> {
+  return new Map([...registry.skills.values()].filter(skill => skill.title !== skill.name).map(skill => [skill.name, skill.title]));
+}
+
 export async function loadSkillRegistry(client: WiroClient, signal?: AbortSignal): Promise<SkillRegistry> {
   return cachedRead(client, 'skills', async () => parseSkillRegistry(requireApiSuccess(
     await client.post<ApiEnvelope & Row>('/Skills/List', {}, signal),
@@ -465,7 +471,7 @@ export function credentialsUsedBySkills(skills: Iterable<string>, registry: Skil
 export interface UnusedCredential {
   /** The services the agent's active skills, custom skills and scheduled tasks connect with connect_agent_oauth, as "Title (key)". */
   services: string[];
-  /** The skills whose main credential this is, to turn on first. */
+  /** The skills whose main credential this is, to turn on first, as people see them: Title (`key`). */
   skills: string[];
 }
 
@@ -495,7 +501,7 @@ export function unusedCredential(row: Row, credential: string, registry: SkillRe
     }),
     skills: [...registry.skills.values()]
       .filter(skill => !skill.deprecated && skill.requiresCredentials && skill.credentialKeys[0] === credential)
-      .map(skill => skill.name),
+      .map(skill => skillLabel(skill.name, registryTitles(registry))),
   };
 }
 
@@ -2388,12 +2394,15 @@ export function entriesTurnedOnBy(row: Row, credential: string): { on: CustomSki
 export function connectionNeededText(row: Row, entry: Pick<CustomSkillEntry, 'usableCredentials' | 'requiresCredentials'>): string {
   const keys = entry.usableCredentials ?? entry.requiresCredentials;
   if (keys.length === 0) return '';
-  const labels = keys.map(key => {
-    const schema = credentialGroup(row, key)?._schema;
-    const title = isPlainObject(schema) ? asString(schema.title) : undefined;
-    return `${title ?? wordsFromKey(key)} (\`${key}\`)`;
-  });
+  const labels = keys.map(key => credentialLabel(row, key));
   return `It only runs while ${labels.length > 1 ? 'one of ' : ''}${nameList(labels, 'or')} is connected.`;
+}
+
+/** A credential as people see it, by the title of the agent's card for it, with its key: Google Ads (`google-ads`). */
+export function credentialLabel(row: Row, key: string): string {
+  const schema = credentialGroup(row, key)?._schema;
+  const title = isPlainObject(schema) ? asString(schema.title) : undefined;
+  return `${title ?? wordsFromKey(key)} (\`${key}\`)`;
 }
 
 /** Readable text for the API's custom skill error codes. */

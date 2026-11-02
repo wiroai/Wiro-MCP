@@ -623,6 +623,28 @@ test('apply_agent_skills applies with the quoted key and reports the wallet char
   });
 });
 
+test('apply_agent_skills names each skill by its title, with the name it takes, in the quote and the result', async () => {
+  const fake = fakeClient(skillRoutes({
+    '/UserAgent/Detail': detailAfterApply(),
+    '/UserAgent/SkillsApply': { result: true, errors: [], pricing: { previousPriceUsd: 42, newPriceUsd: 43, deltaUsd: 1 }, tier: 'starter', stripeProrationApplied: false, prepaidWalletDelta: 0.5, restartTriggered: true },
+  }));
+  await withClient(fake, async client => {
+    const quote = await quoteInstagram(client);
+    const lines = text(quote).split('\n');
+    // A skill the catalog gives no title reads as words made from its name.
+    assert.ok(lines.includes('**Turn on:** Instagram (`int-instagram-post`), Social Posting Common (`util-social-posting-common`), Anti Ai Human Copy (`util-anti-ai-human-copy`)'), text(quote));
+    assert.ok(lines.includes('**Added because other skills need them:** Social Posting Common (`util-social-posting-common`), Anti Ai Human Copy (`util-anti-ai-human-copy`)'), text(quote));
+    assert.ok(lines.some(line => line.startsWith('**Credentials the new skills need:** Instagram (`int-instagram-post`): Instagram (`instagram`).')), text(quote));
+
+    const applied = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
+    const after = text(applied).split('\n');
+    assert.ok(after.includes('**Turned on:** Instagram (`int-instagram-post`), Social Posting Common (`util-social-posting-common`), Anti Ai Human Copy (`util-anti-ai-human-copy`)'), text(applied));
+    assert.ok(after.includes('**Still needed:** credentials for Instagram (`int-instagram-post`): Instagram (`instagram`). Set them with set_agent_credentials or connect_agent_oauth.'), text(applied));
+    // The structured lists keep the names the tools take.
+    assert.deepEqual(applied.structuredContent.changes.enable, ['int-instagram-post', 'util-social-posting-common', 'util-anti-ai-human-copy']);
+  });
+});
+
 test('apply_agent_skills says when the skill change takes effect on an agent that is not running', async () => {
   for (const [status, restart] of [
     [6, 'The agent still needs setup; the skill change takes effect once it starts.'],
@@ -3416,7 +3438,7 @@ test('connect_agent_oauth refuses a service none of the active skills use, befor
     assert.equal(result.isError, true);
     assert.equal(
       text(result),
-      '## Error\n\nHubSpot is not used by any of this agent\'s active skills, custom skills or scheduled tasks, so nothing was started. Services its skills connect with this tool: Mailchimp (mailchimp). To use HubSpot, first turn on int-hubspot-crm with apply_agent_skills; list_agent_skills with name "hubspot" shows how it connects.',
+      '## Error\n\nHubSpot is not used by any of this agent\'s active skills, custom skills or scheduled tasks, so nothing was started. Services its skills connect with this tool: Mailchimp (mailchimp). To use HubSpot, first turn on HubSpot CRM (`int-hubspot-crm`) with apply_agent_skills; list_agent_skills with name "hubspot" shows how it connects.',
     );
     // Nothing else is read or written once it is refused, whatever the call asks for.
     assert.deepEqual(fake.paths(), ['/Credentials/Detail', '/UserAgent/Detail', '/Skills/List']);
@@ -3465,7 +3487,7 @@ test('connect_agent_oauth refuses a service whose skill was turned off, and poin
     // A saved token is neither switched to nor checked.
     const token = await client.callTool({ name: 'connect_agent_oauth', arguments: { agent_guid: AGENT, credential: 'meta-ads', mode: 'api_key' } });
     assert.equal(token.isError, true);
-    assert.match(text(token), /Meta Ads is not used by any of this agent's active skills.*first turn on int-metaads-manage with apply_agent_skills;/);
+    assert.match(text(token), /Meta Ads is not used by any of this agent's active skills.*first turn on Meta Ads \(`int-metaads-manage`\) with apply_agent_skills;/);
     assert.doesNotMatch(text(token), /still connected/);
     for (const path of ['/UserAgent/CredentialUpsert', '/UserAgentOAuth/OAuthConnect']) {
       assert.equal(fake.paths().includes(path), false, path);
@@ -3649,7 +3671,7 @@ test('connect_agent_oauth counts a credential for a skill\'s task only while the
     const refused = await client.callTool({ name: 'connect_agent_oauth', arguments: { agent_guid: AGENT, credential: 'hubspot' } });
     assert.equal(refused.isError, true, text(refused));
     assert.match(text(refused), /HubSpot is not used by any of this agent's active skills, custom skills or scheduled tasks, so nothing was started\./);
-    assert.match(text(refused), /turn on int-hubspot-crm/);
+    assert.match(text(refused), /turn on HubSpot CRM \(`int-hubspot-crm`\)/);
     assert.equal(fake.paths().includes('/UserAgentOAuth/OAuthConnect'), false);
   });
 });
@@ -3815,7 +3837,7 @@ test('connect_agent_oauth status offers connect only when connect would go ahead
       assert.equal(result.structuredContent.nextAction, undefined);
       assert.equal(
         result.structuredContent.message,
-        `${lead} HubSpot is not used by any of this agent's active skills, custom skills or scheduled tasks, so connect_agent_oauth refuses it for now. To use HubSpot, first turn on int-hubspot-crm with apply_agent_skills; list_agent_skills with name "hubspot" shows how it connects.`,
+        `${lead} HubSpot is not used by any of this agent's active skills, custom skills or scheduled tasks, so connect_agent_oauth refuses it for now. To use HubSpot, first turn on HubSpot CRM (\`int-hubspot-crm\`) with apply_agent_skills; list_agent_skills with name "hubspot" shows how it connects.`,
       );
       assert.doesNotMatch(text(result), /Next: call|connect again|action connect/);
     });
@@ -3959,7 +3981,7 @@ test('set_agent_credentials describe says to turn on a skill first instead of of
     '/UserAgent/Detail': { result: true, useragents: [customBuildRow()] },
   });
   await withClient(fake, async client => {
-    const note = 'HubSpot is not used by any of this agent\'s active skills, custom skills or scheduled tasks, so connect_agent_oauth refuses it for now. To use HubSpot, first turn on int-hubspot-crm with apply_agent_skills; list_agent_skills with name "hubspot" shows how it connects.';
+    const note = 'HubSpot is not used by any of this agent\'s active skills, custom skills or scheduled tasks, so connect_agent_oauth refuses it for now. To use HubSpot, first turn on HubSpot CRM (`int-hubspot-crm`) with apply_agent_skills; list_agent_skills with name "hubspot" shows how it connects.';
     const wiro = await client.callTool({ name: 'set_agent_credentials', arguments: { agent_guid: AGENT, credential: 'hubspot' } });
     assert.equal(wiro.structuredContent.nextAction, undefined);
     assert.ok(wiro.structuredContent.notes.includes(note));
@@ -3970,7 +3992,7 @@ test('set_agent_credentials describe says to turn on a skill first instead of of
     // A service with only the user's own app is told before the user is asked to make one.
     const own = await client.callTool({ name: 'set_agent_credentials', arguments: { agent_guid: AGENT, credential: 'google-ads' } });
     assert.equal(own.structuredContent.nextAction, undefined);
-    assert.match(text(own), /Google Ads is not used by any of this agent's active skills.*first turn on int-googleads-manage with apply_agent_skills/);
+    assert.match(text(own), /Google Ads is not used by any of this agent's active skills.*first turn on Google Ads \(`int-googleads-manage`\) with apply_agent_skills/);
     assert.doesNotMatch(text(own), /Mode own needs/);
   });
 
@@ -4003,7 +4025,7 @@ test('set_agent_credentials does not offer connect after a write when connect wo
     });
     assert.notEqual(result.isError, true, text(result));
     assert.equal(result.structuredContent.nextAction, undefined);
-    assert.ok(result.structuredContent.notes.some(entry => /Google Ads is not used by any of this agent's active skills.*first turn on int-googleads-manage/.test(entry)));
+    assert.ok(result.structuredContent.notes.some(entry => /Google Ads is not used by any of this agent's active skills.*first turn on Google Ads \(`int-googleads-manage`\)/.test(entry)));
   });
 });
 

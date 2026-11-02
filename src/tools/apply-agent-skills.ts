@@ -15,6 +15,7 @@ import {
   agentStatusLabel,
   agentStatusOf,
   checkSkillSet,
+  credentialLabel,
   credentialsNeededFor,
   customSkillEntries,
   daysLeftText,
@@ -31,6 +32,7 @@ import {
   planSkillChanges,
   readPlanChange,
   readUserAgent,
+  registryTitles,
   underOneDayLeft,
   restartNote,
   skillChangeDigest,
@@ -40,7 +42,7 @@ import {
   type PlanChange,
   type CustomSkillEntry,
 } from '../utils/agent-config.js';
-import { asTier, bindProjectStep, formatCredits, outcomeUnknown, skillOffTasksNote, toStringArray, toTierPricing, WIRO_PROJECT_CREDENTIAL } from '../utils/user-agent.js';
+import { asTier, bindProjectStep, formatCredits, outcomeUnknown, skillLabel, skillOffTasksNote, toStringArray, toTierPricing, WIRO_PROJECT_CREDENTIAL } from '../utils/user-agent.js';
 import { DEFAULT_WAIT_SECONDS } from '../utils/poll.js';
 import { quotedSpan } from '../utils/quoted-text.js';
 import { isPlainTeamMember, teamAgentBillingRefused } from '../utils/workspace.js';
@@ -446,8 +448,14 @@ function stillNeededSteps(needed: Array<{ credentials: string[] }>): string {
   return `Connect the Wiro project with bind_agent_project, with no key to paste.${others}`;
 }
 
-function listLine(label: string, names: string[]): string | null {
-  return names.length > 0 ? `**${label}:** ${names.join(', ')}` : null;
+/** A list of skills by title, with the names apply_agent_skills takes. */
+function listLine(label: string, names: string[], titles: ReadonlyMap<string, string>): string | null {
+  return names.length > 0 ? `**${label}:** ${names.map(name => skillLabel(name, titles)).join(', ')}` : null;
+}
+
+/** Each new skill with the credentials it still needs, by title: Instagram Post (`int-instagram-post`): Instagram (`instagram`). */
+function neededText(needed: Array<{ skill: string; credentials: string[] }>, row: Row, titles: ReadonlyMap<string, string>): string {
+  return needed.map(entry => `${skillLabel(entry.skill, titles)}: ${entry.credentials.map(key => credentialLabel(row, key)).join(', ')}`).join('; ');
 }
 
 /** The scheduled tasks a change stops or starts, as Wiro works them out with its own gates; null when there are none. */
@@ -564,6 +572,7 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
           return errorResult(new Error('Nothing to change: pass at least one skill or a tier.'));
         }
         const registry = await loadSkillRegistry(client, extra.signal);
+        const titles = registryTitles(registry);
         const plan = planSkillChanges(skills, registry, add_dependencies);
         if (plan.errors.length > 0) {
           return errorResult(new Error(`The change was not sent:\n\n- ${plan.errors.join('\n- ')}`));
@@ -725,10 +734,10 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
               '',
               ...(lead ? [lead, ''] : []),
               `**Agent:** \`${agent_guid}\` (${agentStatusLabel(status)})`,
-              listLine('Turn on', changes.enable),
-              listLine('Added because other skills need them', changes.addedDependencies),
-              listLine('Turn off', changes.disable),
-              listLine('Already as requested', changes.alreadySet),
+              listLine('Turn on', changes.enable, titles),
+              listLine('Added because other skills need them', changes.addedDependencies, titles),
+              listLine('Turn off', changes.disable, titles),
+              listLine('Already as requested', changes.alreadySet, titles),
               tierChange ? `**Plan:** ${currentTier ?? 'unknown'} to ${tierChange}` : null,
               `**Monthly price:** ${currentPrice !== null ? formatUsd(currentPrice) : 'unknown'} now, ${formatUsd(newPrice)} after the change${delta !== null ? ` (${delta >= 0 ? '+' : ''}${formatUsd(delta)})` : ''}`,
               priceNote ? `**Price update:** ${priceNote}` : null,
@@ -742,7 +751,7 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
               `**Restart:** ${restart}`,
               ...movedTaskLines(moved),
               credentialsNeeded.length > 0
-                ? `**Credentials the new skills need:** ${credentialsNeeded.map(entry => `${entry.skill} (${entry.credentials.join(', ')})`).join('; ')}.${bindProjectNote(credentialsNeeded)}`
+                ? `**Credentials the new skills need:** ${neededText(credentialsNeeded, row, titles)}.${bindProjectNote(credentialsNeeded)}`
                 : null,
               '',
               blocked
@@ -853,8 +862,8 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
                 '## Skills updated',
                 '',
                 `**Agent:** \`${agent_guid}\``,
-                listLine('Turned on', changes.enable),
-                listLine('Turned off', changes.disable),
+                listLine('Turned on', changes.enable, titles),
+                listLine('Turned off', changes.disable, titles),
                 `**Billing:** ${note}`,
                 `**Restart:** ${skillsMove ? restartNote(status, 'skill change') : TIER_ONLY_RESTART}`,
                 await pausedLine(client, paused, extra.signal),
@@ -968,9 +977,9 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
           applied.noOp ? '## No change needed' : replayed ? '## Already applied' : '## Skills updated',
           '',
           `**Agent:** \`${agent_guid}\``,
-          listLine('Turned on', changes.enable),
-          listLine('Turned off', changes.disable),
-          applied.noOp || replayed ? listLine('Already as requested', changes.alreadySet) : null,
+          listLine('Turned on', changes.enable, titles),
+          listLine('Turned off', changes.disable, titles),
+          applied.noOp || replayed ? listLine('Already as requested', changes.alreadySet, titles) : null,
           tierChange && !applied.noOp ? `**Plan:** now ${asString(applied.tier) ?? tierChange}` : null,
           pricing?.newMonthlyUsd !== undefined && pricing.newMonthlyUsd !== null
             ? `**Monthly price:** ${formatUsd(pricing.newMonthlyUsd)}${pricing.currentMonthlyUsd !== null ? ` (was ${formatUsd(pricing.currentMonthlyUsd)})` : ''}`
@@ -983,7 +992,7 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
           holds === null ? 'The agent could not be read afterwards to confirm the new skills; get_my_agent shows them.' : null,
           await pausedLine(client, paused, extra.signal),
           credentialsNeeded.length > 0
-            ? `**Still needed:** credentials for ${credentialsNeeded.map(entry => `${entry.skill} (${entry.credentials.join(', ')})`).join('; ')}. ${stillNeededSteps(credentialsNeeded)}`
+            ? `**Still needed:** credentials for ${neededText(credentialsNeeded, row, titles)}. ${stillNeededSteps(credentialsNeeded)}`
             : null,
         ].filter((line): line is string => line !== null);
         return {

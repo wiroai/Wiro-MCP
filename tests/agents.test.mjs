@@ -1652,7 +1652,7 @@ test('the schedule note names only the services a skill\'s task can use, as one 
 
 test('update_agent names the skills a paused task waits for by their titles', async () => {
   const fake = fakeClient({
-    '/UserAgent/Detail': detailResponse(agentRow(SKILL_OFF_ROW)),
+    '/UserAgent/Detail': detailResponse(agentRow({ ...SKILL_OFF_ROW, skillsmeta: { 'int-googleplay-events': { title: 'Google Play Events' } } })),
     '/Skills/List': TITLED_SKILLS,
     '/UserAgent/UpdateSettings': { result: true, errors: [] },
   });
@@ -1660,6 +1660,23 @@ test('update_agent names the skills a paused task waits for by their titles', as
     const result = await call(client, 'update_agent', { agent_guid: 'ua-1', timezone: 'Europe/Istanbul' });
     assert.notEqual(result.isError, true, textOf(result));
     assert.match(textOf(result), /- `cs-cron-blog-gmail-checker` on \(it is paused until Gmail Check \(`int-gmail-check`\) is on\)/);
+    assert.match(textOf(result), /^\*\*Skills:\*\* Google Play Events \(`int-googleplay-events`\), /m);
+  });
+});
+
+test('get_my_agent names the agent\'s skills by their titles, with the names the tools take', async () => {
+  const row = agentRow({
+    skills: [
+      { name: 'int-hubspot-crm', enabled: true, _edited: false, _user_created: false },
+      { name: 'util-chat-markdown-reporting', enabled: true, _edited: false, _user_created: false },
+    ],
+    skillsmeta: { 'int-hubspot-crm': { title: 'HubSpot CRM' } },
+  });
+  await withClient(fakeClient({ '/UserAgent/Detail': detailResponse(row) }), async client => {
+    const read = await call(client, 'get_my_agent', { agent_guid: 'ua-1' });
+    // HubSpot CRM's title comes from Detail; the reporting skill has none there, so words from its name stand in.
+    assert.match(textOf(read), /^\*\*Skills:\*\* HubSpot CRM \(`int-hubspot-crm`\), Chat Markdown Reporting \(`util-chat-markdown-reporting`\)$/m);
+    assert.deepEqual(read.structuredContent.agent.skills, ['int-hubspot-crm', 'util-chat-markdown-reporting']);
   });
 });
 

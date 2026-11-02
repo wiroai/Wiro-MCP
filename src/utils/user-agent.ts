@@ -369,6 +369,15 @@ export function summarizeChannels(value: unknown): ChannelStatus[] {
   });
 }
 
+/** The titles of the skills that are on, from Detail's skillsmeta. */
+export function activeSkillTitles(row: Record<string, unknown>): Map<string, string> {
+  const meta = isPlainObject(row.skillsmeta) ? row.skillsmeta : {};
+  return new Map(Object.entries(meta).flatMap(([name, value]) => {
+    const title = isPlainObject(value) ? asString(value.title) : undefined;
+    return title && title !== name ? [[name, title] as [string, string]] : [];
+  }));
+}
+
 /** Lists of skill names, such as the skills a paused task waits for: [["a"], ["b", "c"]]. Empty lists and non-names are dropped. */
 export function toSkillGroups(value: unknown): string[][] {
   if (!Array.isArray(value)) return [];
@@ -883,7 +892,7 @@ function formatModelsLine(agent: AgentDetail): string | null {
   return parts.length > 0 ? `**Models:** ${parts.join(' ')}` : null;
 }
 
-/** titles names the skills a paused task waits for as people see them (pausedSkillTitles). */
+/** titles names skills as people see them: the agent's own (activeSkillTitles) and those a paused task waits for (pausedSkillTitles). */
 export function formatAgentDetail(agent: AgentDetail, plainMember = false, titles?: ReadonlyMap<string, string>): string {
   const lines = formatAgentSummaryLines(agent, plainMember);
   if (agent.lastActivityAt) lines.push(`**Last activity:** ${agent.lastActivityAt}`);
@@ -903,7 +912,7 @@ export function formatAgentDetail(agent: AgentDetail, plainMember = false, title
       ? `**Setup required:** missing ${agent.missingCredentials.map(item => item.title).join(', ')}`
       : '**Setup required:** yes');
   }
-  if (agent.skills.length > 0) lines.push(`**Skills:** ${agent.skills.join(', ')}`);
+  if (agent.skills.length > 0) lines.push(`**Skills:** ${agent.skills.map(name => skillLabel(name, titles)).join(', ')}`);
   if (agent.channels.length > 0) {
     lines.push(`**Channels:** ${agent.channels.map(channel => `${channel.title} ${channel.enabled ? 'on' : channel.configured ? 'configured' : 'off'}`).join(', ')}`);
   }

@@ -530,7 +530,7 @@ test('bind_agent_project warns when no active skill uses a project, and the bind
     assert.notEqual(result.isError, true, text(result));
     assert.equal(result.structuredContent.state, 'preview');
     assert.deepEqual(result.structuredContent.warnings, [
-      'No active skill of this agent uses a Wiro project yet, so connecting one changes nothing until one does. Turn on int-wiro-aimodels with apply_agent_skills to use it.',
+      'No active skill of this agent uses a Wiro project yet, so connecting one changes nothing until one does. Turn on Wiro AI Models (`int-wiro-aimodels`) with apply_agent_skills to use it.',
     ]);
     assert.deepEqual(result.structuredContent.nextAction.arguments, { agent_guid: AGENT, project_id: '102', confirm: true });
     assert.match(text(result), /Warning: No active skill of this agent uses a Wiro project yet/);
@@ -1310,13 +1310,13 @@ test('apply_agent_skills and connect_agent_oauth point a Wiro project to bind_ag
   }), async ({ call }) => {
     const quote = await call('apply_agent_skills', { agent_guid: AGENT, skills: { 'int-wiro-aimodels': true } });
     assert.notEqual(quote.isError, true, text(quote));
-    assert.match(text(quote), /\*\*Credentials the new skills need:\*\* int-wiro-aimodels \(wiro\)\. bind_agent_project connects a Wiro project, with no key to paste\./);
+    assert.match(text(quote), /\*\*Credentials the new skills need:\*\* Wiro AI Models \(`int-wiro-aimodels`\): Wiro \(`wiro`\)\. bind_agent_project connects a Wiro project, with no key to paste\./);
 
     const applied = await call('apply_agent_skills', quote.structuredContent.nextAction.arguments);
     assert.notEqual(applied.isError, true, text(applied));
     assert.equal(applied.structuredContent.nextAction.tool, 'bind_agent_project');
     assert.deepEqual(applied.structuredContent.nextAction.arguments, { agent_guid: AGENT });
-    assert.ok(text(applied).includes('**Still needed:** credentials for int-wiro-aimodels (wiro). Connect the Wiro project with bind_agent_project, with no key to paste.'), text(applied));
+    assert.ok(text(applied).includes('**Still needed:** credentials for Wiro AI Models (`int-wiro-aimodels`): Wiro (`wiro`). Connect the Wiro project with bind_agent_project, with no key to paste.'), text(applied));
     assert.doesNotMatch(text(applied), /set_agent_credentials|connect_agent_oauth/);
 
     const signIn = await call('connect_agent_oauth', { agent_guid: AGENT, credential: 'wiro' });
@@ -1328,9 +1328,9 @@ test('apply_agent_skills and connect_agent_oauth point a Wiro project to bind_ag
 test('the still-needed line of apply_agent_skills names the tool each kind of credential takes', async () => {
   const skills = [...SKILL_LIST.skills, { name: 'int-googleads', title: 'Google Ads', depends_on: [], conflicts_with: [], credential_key: 'google-ads', requires_credentials: true, pricing: {} }];
   const cases = [
-    [{ 'int-wiro-aimodels': true }, 'int-wiro-aimodels (wiro). Connect the Wiro project with bind_agent_project, with no key to paste.'],
-    [{ 'int-wiro-aimodels': true, 'int-googleads': true }, 'int-wiro-aimodels (wiro); int-googleads (google-ads). Connect the Wiro project with bind_agent_project, with no key to paste. Set the others with set_agent_credentials or connect_agent_oauth.'],
-    [{ 'int-googleads': true }, 'int-googleads (google-ads). Set them with set_agent_credentials or connect_agent_oauth.'],
+    [{ 'int-wiro-aimodels': true }, 'Wiro AI Models (`int-wiro-aimodels`): Wiro (`wiro`). Connect the Wiro project with bind_agent_project, with no key to paste.'],
+    [{ 'int-wiro-aimodels': true, 'int-googleads': true }, 'Wiro AI Models (`int-wiro-aimodels`): Wiro (`wiro`); Google Ads (`int-googleads`): Google Ads (`google-ads`). Connect the Wiro project with bind_agent_project, with no key to paste. Set the others with set_agent_credentials or connect_agent_oauth.'],
+    [{ 'int-googleads': true }, 'Google Ads (`int-googleads`): Google Ads (`google-ads`). Set them with set_agent_credentials or connect_agent_oauth.'],
   ];
   for (const [change, expected] of cases) {
     await withTools(routes({

@@ -5,6 +5,7 @@ import { ApiResultError, errorResult, errorText, requireApiSuccess, type ApiEnve
 import { pausedSkillTitles } from '../utils/agent-config.js';
 import { DEFAULT_WAIT_SECONDS } from '../utils/poll.js';
 import {
+  activeSkillTitles,
   agentDetailSchema,
   formatAgentDetail,
   nextStepForAgent,
@@ -216,7 +217,7 @@ export function registerUpdateAgent(server: McpServer, client: WiroClient): void
             reason: restarted ? 'Wait until the agent is running again.' : 'See whether the agent restarted, and wait until it is running.',
           }
           : nextStepForAgent(agent, DEFAULT_WAIT_SECONDS);
-        const titles = await pausedSkillTitles(client, agent.scheduledTasks, extra.signal);
+        const titles = new Map([...activeSkillTitles(after), ...await pausedSkillTitles(client, agent.scheduledTasks, extra.signal)]);
 
         return {
           content: [{ type: 'text' as const, text: `${message}\n\n${formatAgentDetail(agent, false, titles)}` }],
