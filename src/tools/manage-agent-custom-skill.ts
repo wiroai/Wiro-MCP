@@ -48,6 +48,8 @@ const entrySchema = z.object({
   interval: z.string().nullable(),
   enabled: z.boolean(),
   origin: z.enum(['agent', 'user']),
+  notWritten: z.boolean().optional()
+    .describe('The starter task whose text was never written. It does not run, even when it shows on, until its text is saved.'),
 });
 
 const outputSchema = {
@@ -132,6 +134,7 @@ function toEntry(entry: CustomSkillEntry, full = false) {
     interval: entry.interval,
     enabled: entry.enabled,
     origin: entry.userCreated ? 'user' as const : 'agent' as const,
+    ...(entry.notWritten ? { notWritten: true } : {}),
   };
 }
 
@@ -492,6 +495,7 @@ async function history(client: WiroClient, input: Input, signal: AbortSignal) {
   const presetDefault = presetDefaultOf(data.presetDefault);
   const message = [
     current ? `Current: ${current.enabled ? 'on' : 'off'}${current.interval ? `, schedule "${current.interval}"` : ''}.` : 'This key has no live entry on the agent.',
+    current?.notWritten ? 'Its text is not written yet, so it does not run until its text is saved.' : '',
     `${data.entries.length} saved version${data.entries.length === 1 ? '' : 's'}${versions.length < data.entries.length ? `, showing the newest ${versions.length}` : ''}.`,
     presetDefault ? 'It has a template default (revert with source preset).' : 'It has no template default.',
     templates.length > 0 ? `${templates.length} ready-made template${templates.length === 1 ? '' : 's'} can be used as its text.` : '',

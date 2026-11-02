@@ -369,10 +369,15 @@ export function summarizeChannels(value: unknown): ChannelStatus[] {
   });
 }
 
+/** The scheduled task a custom build starts with. It runs only once its text has been written. */
+export const STARTER_TASK_KEY = 'cs-cron-my-scheduled-task';
+
 export const agentTaskSchema = z.object({
   key: z.string(),
   description: z.string().optional(),
   enabled: z.boolean(),
+  notWritten: z.boolean().optional()
+    .describe('The starter task whose text was never written. It does not run, even when it shows on, until its text is saved with manage_agent_custom_skill.'),
   interval: z.string().nullable().optional(),
   source: z.enum(['template', 'skill', 'user']).optional(),
   instructions: z.string().optional(),
@@ -400,6 +405,7 @@ export function summarizeTasks(value: unknown, maxInstructionLength = 300): Agen
       key: asString(task.key) ?? '',
       ...(description ? { description } : {}),
       enabled: task.enabled !== false,
+      ...(asString(task.key) === STARTER_TASK_KEY && task._edited === false ? { notWritten: true } : {}),
       ...(interval !== undefined ? { interval: interval || null } : {}),
       ...(source ? { source } : {}),
       ...(shortened ? { instructions: shortened } : {}),
@@ -754,7 +760,7 @@ function shortenedNote(key: string): string {
 
 /** A scheduled task as a list line: key, on or off, schedule and description, then shortenedNote if its text was cut. */
 export function formatScheduledTaskLine(task: AgentTask, shortenedNote = ''): string {
-  return `- \`${task.key}\` ${task.enabled ? 'on' : 'off'}${task.interval ? `, ${task.interval}` : ''}${task.description ? `: ${quotedSpan(task.description)}` : ''}${task.instructionsTruncated ? shortenedNote : ''}`;
+  return `- \`${task.key}\` ${task.enabled ? 'on' : 'off'}${task.notWritten ? ' (its text is not written yet, so it does not run)' : ''}${task.interval ? `, ${task.interval}` : ''}${task.description ? `: ${quotedSpan(task.description)}` : ''}${task.instructionsTruncated ? shortenedNote : ''}`;
 }
 
 /** A custom instruction as a list line: key, on or off and description, then shortenedNote if its text was cut. */

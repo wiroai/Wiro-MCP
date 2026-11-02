@@ -1400,6 +1400,34 @@ test('get_my_agent marks an entry cut by even one character', async () => {
   assert.equal(over.customInstructions[0].instructionsTruncated, true);
 });
 
+test('the starter task shows that it does not run until its text is written', async () => {
+  const starter = edited => ({
+    key: 'cs-cron-my-scheduled-task', description: 'My scheduled task', value: 'Describe what this task should do.', interval: '0 10 * * 1', enabled: true, _source: 'user-created',
+    ...(edited === undefined ? {} : { _edited: edited }),
+  });
+  for (const [edited, notWritten] of [[false, true], [true, false], [undefined, false]]) {
+    const fake = fakeClient({
+      '/UserAgent/Detail': detailResponse(agentRow({ scheduledskills: [starter(edited)] })),
+      '/UserAgent/CustomSkillHistory': { result: true, errors: [], entries: [], preset_default: null },
+      '/UserAgent/CustomSkillAlternatives': { result: true, alternatives: [] },
+    });
+    await withClient(fake, async client => {
+      const read = await call(client, 'get_my_agent', { agent_guid: 'ua-1' });
+      const task = read.structuredContent.agent.scheduledTasks.find(item => item.key === 'cs-cron-my-scheduled-task');
+      assert.equal(task.notWritten, notWritten ? true : undefined, String(edited));
+      const line = textOf(read).split('\n').find(entry => entry.includes('`cs-cron-my-scheduled-task`'));
+      if (notWritten) assert.match(line, /^- `cs-cron-my-scheduled-task` on \(its text is not written yet, so it does not run\), 0 10 \* \* 1/);
+      else assert.doesNotMatch(line, /not written/);
+
+      const history = await call(client, 'manage_agent_custom_skill', { action: 'history', agent_guid: 'ua-1', key: 'cs-cron-my-scheduled-task' });
+      assert.notEqual(history.isError, true, textOf(history));
+      assert.equal(history.structuredContent.entry.notWritten, notWritten ? true : undefined);
+      if (notWritten) assert.match(textOf(history), /Its text is not written yet, so it does not run until its text is saved\./);
+      else assert.doesNotMatch(textOf(history), /not written/);
+    });
+  }
+});
+
 test('get_my_agent names the time zone that is set', async () => {
   const fake = fakeClient({ '/UserAgent/Detail': detailResponse(agentRow({ timezone: 'Europe/Istanbul' })) });
   await withClient(fake, async client => {

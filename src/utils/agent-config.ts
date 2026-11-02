@@ -14,7 +14,7 @@ import {
   type ApiEnvelope,
 } from './api.js';
 import { oneLine, quotedSpan } from './quoted-text.js';
-import { credentialKeysSetupWaitsFor, isWalletNotRead, planEndsWithPeriod, WALLET_NOT_READ_NOTE, WIRO_PROJECT_CREDENTIAL } from './user-agent.js';
+import { credentialKeysSetupWaitsFor, isWalletNotRead, planEndsWithPeriod, STARTER_TASK_KEY, WALLET_NOT_READ_NOTE, WIRO_PROJECT_CREDENTIAL } from './user-agent.js';
 
 // Helpers for configuring a deployed agent: its registry skills, credentials,
 // sign-in connections and custom skills. The pure functions mirror the server
@@ -2272,6 +2272,8 @@ export interface CustomSkillEntry {
   source: string;
   userCreated: boolean;
   requiresCredentials: string[];
+  /** The starter task whose text was never written: it does not run until its text is saved. */
+  notWritten?: boolean;
 }
 
 export function customSkillEntries(row: Row): CustomSkillEntry[] {
@@ -2292,6 +2294,7 @@ export function customSkillEntries(row: Row): CustomSkillEntry[] {
       source,
       userCreated: source === 'user-created' || entry._user_created === true,
       requiresCredentials: stringList(entry.requires_credentials),
+      notWritten: key === STARTER_TASK_KEY && entry._edited === false,
     };
   }).filter(entry => entry.key);
 }
