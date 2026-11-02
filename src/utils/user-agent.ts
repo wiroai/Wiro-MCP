@@ -779,14 +779,22 @@ function shortenedNote(key: string): string {
 }
 
 /** Names inside a sentence: a, b and c. */
-function nameList(names: readonly string[], word: 'and' | 'or'): string {
+export function nameList(names: readonly string[], word: 'and' | 'or'): string {
   return names.length > 1 ? `${names.slice(0, -1).join(', ')} ${word} ${names[names.length - 1]}` : names.join('');
 }
 
-/** A skill as people see it, by its catalog title, with the name apply_agent_skills takes: Gmail Check (`int-gmail-check`). */
+/** Words from a skill or credential key, for when its title cannot be read: int-brevo-email reads Brevo Email. */
+export function wordsFromKey(key: string): string {
+  return key.replace(/^(int|util)-/, '').split('-').filter(Boolean)
+    .map(word => `${word.charAt(0).toUpperCase()}${word.slice(1)}`).join(' ');
+}
+
+/**
+ * A skill as people see it, by its catalog title, with the name apply_agent_skills takes: Gmail Check
+ * (`int-gmail-check`). Without the title, words made from the name stand in for it.
+ */
 export function skillLabel(name: string, titles?: ReadonlyMap<string, string>): string {
-  const title = titles?.get(name);
-  return title ? `${title} (\`${name}\`)` : `\`${name}\``;
+  return `${titles?.get(name) ?? wordsFromKey(name)} (\`${name}\`)`;
 }
 
 /**
@@ -812,18 +820,28 @@ export function skillOffText(task: Pick<AgentTask, 'enabled' | 'offSkills'>, tit
     : `it also needs ${waited.text} turned on to run`;
 }
 
+/** A task that waits for skills (lists, one from each) as a sentence with a space before it: " `key` stays paused until A is on." */
+export function waitingTaskSentence(
+  key: string,
+  groups: readonly (readonly string[])[],
+  titles?: ReadonlyMap<string, string>,
+  verb = 'stays paused',
+): string {
+  const waited = waitedSkills(groups, titles);
+  return ` ${quotedSpan(key)} ${verb} until ${waited.text} ${waited.several ? 'are' : 'is'} on.`;
+}
+
 /**
  * The paused tasks among these, each as a sentence that names the skills to turn on, with a space before it.
- * A saved credential turns such a task on, but it stays paused until they are on.
+ * A saved credential turns such a task on, but it stays paused until they are on; verb says it otherwise,
+ * such as "is paused" for a task the change at hand paused.
  */
 export function skillOffTasksNote(
   tasks: ReadonlyArray<{ key: string; offSkills?: string[][]; skillOff?: boolean }>,
   titles?: ReadonlyMap<string, string>,
+  verb = 'stays paused',
 ): string {
-  return tasks.filter(task => task.skillOff).map(task => {
-    const waited = waitedSkills(task.offSkills ?? [], titles);
-    return ` ${quotedSpan(task.key)} stays paused until ${waited.text} ${waited.several ? 'are' : 'is'} on.`;
-  }).join('');
+  return tasks.filter(task => task.skillOff).map(task => waitingTaskSentence(task.key, task.offSkills ?? [], titles, verb)).join('');
 }
 
 /**

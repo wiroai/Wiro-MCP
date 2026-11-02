@@ -14,7 +14,17 @@ import {
   type ApiEnvelope,
 } from './api.js';
 import { oneLine, quotedSpan } from './quoted-text.js';
-import { credentialKeysSetupWaitsFor, isWalletNotRead, planEndsWithPeriod, STARTER_TASK_KEY, toSkillGroups, WALLET_NOT_READ_NOTE, WIRO_PROJECT_CREDENTIAL } from './user-agent.js';
+import {
+  credentialKeysSetupWaitsFor,
+  isWalletNotRead,
+  nameList,
+  planEndsWithPeriod,
+  STARTER_TASK_KEY,
+  toSkillGroups,
+  WALLET_NOT_READ_NOTE,
+  WIRO_PROJECT_CREDENTIAL,
+  wordsFromKey,
+} from './user-agent.js';
 
 // Helpers for configuring a deployed agent: its registry skills, credentials,
 // sign-in connections and custom skills. The pure functions mirror the server
@@ -254,23 +264,28 @@ export async function loadSkillRegistry(client: WiroClient, signal?: AbortSignal
 }
 
 /**
- * The catalog titles of the skills these scheduled tasks are paused for, so a text names them as people see
- * them. The catalog is read only when a task is paused; the map is empty when none is or it cannot be read.
+ * The catalog titles of these skills, so a text names them as people see them. The catalog is read only when
+ * there is a name; the map is empty when there is none or the catalog cannot be read.
  */
+export async function skillTitles(client: WiroClient, names: Iterable<string>, signal?: AbortSignal): Promise<Map<string, string>> {
+  const titles = new Map<string, string>();
+  const wanted = new Set(names);
+  if (wanted.size === 0) return titles;
+  const registry = await loadSkillRegistry(client, signal).catch(() => null);
+  for (const name of wanted) {
+    const title = registry?.skills.get(name)?.title;
+    if (title && title !== name) titles.set(name, title);
+  }
+  return titles;
+}
+
+/** The catalog titles of the skills these scheduled tasks are paused for (skillTitles). */
 export async function pausedSkillTitles(
   client: WiroClient,
   tasks: ReadonlyArray<{ skillOff?: boolean; offSkills?: string[][] }>,
   signal?: AbortSignal,
 ): Promise<Map<string, string>> {
-  const titles = new Map<string, string>();
-  const names = new Set(tasks.filter(task => task.skillOff).flatMap(task => (task.offSkills ?? []).flat()));
-  if (names.size === 0) return titles;
-  const registry = await loadSkillRegistry(client, signal).catch(() => null);
-  for (const name of names) {
-    const title = registry?.skills.get(name)?.title;
-    if (title && title !== name) titles.set(name, title);
-  }
-  return titles;
+  return skillTitles(client, tasks.filter(task => task.skillOff).flatMap(task => (task.offSkills ?? []).flat()), signal);
 }
 
 // ---------------------------------------------------------------------------
@@ -457,7 +472,8 @@ export interface UnusedCredential {
 /**
  * Why connect_agent_oauth connect refuses a service on this agent, or null when
  * it connects: one of the agent's active skills uses it, or one of its custom
- * skills or scheduled tasks requires it. Wiro keeps such an entry off until the
+ * skills or scheduled tasks requires it (a skill's scheduled task only when it
+ * can use that credential now). Wiro keeps such an entry off until the
  * credential is connected, and connecting turns it on, so the entry counts
  * whatever its enabled says. A template agent's setup also waits for the
  * credentials its template requires, whichever skills are on, so those stay
@@ -465,8 +481,9 @@ export interface UnusedCredential {
  */
 export function unusedCredential(row: Row, credential: string, registry: SkillRegistry): UnusedCredential | null {
   const used = credentialsUsedBySkills(enabledSkillNames(row), registry);
+  // A skill's scheduled task counts only the credentials it can use now; a task of the user's own, the ones its row lists.
   for (const entry of customSkillEntries(row)) {
-    for (const key of entry.requiresCredentials) used.add(key);
+    for (const key of entry.usableCredentials ?? entry.requiresCredentials) used.add(key);
   }
   if (used.has(credential) || (!isCustomBuild(row) && credentialGroup(row, credential)?.optional === false)) return null;
   return {
@@ -2300,6 +2317,18 @@ export interface CustomSkillEntry {
   skillOff?: boolean;
   /** While skillOff, the skills that end the pause, as lists: one skill from each list. */
   offSkills?: string[][];
+  /** A skill's scheduled task: the credentials it can use now. It runs while one of them is connected. */
+  usableCredentials?: string[];
+  /**
+   * A skill's scheduled task: for each credential it needs that is not connected, the skills it would still
+   * wait for once that one is connected, as lists ([] when connecting it is enough).
+   */
+  ifConnected?: Record<string, string[][]>;
+}
+
+/** Wiro's _if_connected: each credential key with the lists of skills a task would still wait for. */
+function skillGroupsByKey(value: Row): Record<string, string[][]> {
+  return Object.fromEntries(Object.entries(value).filter(([, groups]) => Array.isArray(groups)).map(([key, groups]) => [key, toSkillGroups(groups)]));
 }
 
 export function customSkillEntries(row: Row): CustomSkillEntry[] {
@@ -2324,8 +2353,47 @@ export function customSkillEntries(row: Row): CustomSkillEntry[] {
       ownerSkills: stringList(entry._owner_skills),
       skillOff: entry._skill_off === true,
       offSkills: toSkillGroups(entry._off_skills),
+      ...(Array.isArray(entry._usable_credentials) ? { usableCredentials: stringList(entry._usable_credentials) } : {}),
+      ...(isPlainObject(entry._if_connected) ? { ifConnected: skillGroupsByKey(entry._if_connected) } : {}),
     };
   }).filter(entry => entry.key);
+}
+
+/**
+ * What connecting a credential does to the entries that are off and need it. For a skill's scheduled task
+ * Wiro says what it would still wait for once that credential is connected: with nothing left it turns on,
+ * otherwise it turns on and stays paused for those skills. Any other entry that requires it turns on.
+ */
+export function entriesTurnedOnBy(row: Row, credential: string): { on: CustomSkillEntry[]; paused: Array<{ key: string; groups: string[][] }> } {
+  const on: CustomSkillEntry[] = [];
+  const paused: Array<{ key: string; groups: string[][] }> = [];
+  for (const entry of customSkillEntries(row)) {
+    if (entry.enabled) continue;
+    if (entry.ifConnected) {
+      const groups = entry.ifConnected[credential];
+      if (groups === undefined) continue;
+      if (groups.length === 0) on.push(entry);
+      else paused.push({ key: entry.key, groups });
+    } else if (entry.requiresCredentials.includes(credential)) {
+      on.push(entry);
+    }
+  }
+  return { on, paused };
+}
+
+/**
+ * The connection a scheduled task needs, as a sentence: the credentials it can use (a skill's task) or the
+ * ones its row lists (a task of the user's own), by title where the agent's credential cards have one.
+ */
+export function connectionNeededText(row: Row, entry: Pick<CustomSkillEntry, 'usableCredentials' | 'requiresCredentials'>): string {
+  const keys = entry.usableCredentials ?? entry.requiresCredentials;
+  if (keys.length === 0) return '';
+  const labels = keys.map(key => {
+    const schema = credentialGroup(row, key)?._schema;
+    const title = isPlainObject(schema) ? asString(schema.title) : undefined;
+    return `${title ?? wordsFromKey(key)} (\`${key}\`)`;
+  });
+  return `It only runs while ${labels.length > 1 ? 'one of ' : ''}${nameList(labels, 'or')} is connected.`;
 }
 
 /** Readable text for the API's custom skill error codes. */

@@ -1555,7 +1555,7 @@ test('a scheduled task that waits for its skills says it is paused and names the
     assert.equal('ownerSkills' in own.structuredContent.entry, false);
   });
 
-  // Without a paused task the catalog is not read; when it cannot be read, the names stand alone.
+  // Without a paused task the catalog is not read; when it cannot be read, words made from each name stand in for its title.
   const quiet = fakeClient({ '/UserAgent/Detail': detailResponse(agentRow({ ...SKILL_OFF_ROW, scheduledskills: SKILL_OFF_ROW.scheduledskills.filter(task => !task._skill_off) })) });
   await withClient(quiet, async client => {
     const read = await call(client, 'get_my_agent', { agent_guid: 'ua-1' });
@@ -1569,7 +1569,9 @@ test('a scheduled task that waits for its skills says it is paused and names the
   await withClient(unread, async client => {
     const read = await call(client, 'get_my_agent', { agent_guid: 'ua-1' });
     assert.notEqual(read.isError, true, textOf(read));
-    assert.match(textOf(read), /- `cs-cron-blog-gmail-checker` on \(it is paused until `int-gmail-check` is on\)/);
+    assert.match(textOf(read), /- `cs-cron-blog-gmail-checker` on \(it is paused until Gmail Check \(`int-gmail-check`\) is on\)/);
+    assert.match(textOf(read), /- `cs-cron-metaads-performance-reporter` off \(it also needs Metaads Manage \(`int-metaads-manage`\) turned on to run\)/);
+    assert.doesNotMatch(textOf(read), /until `int-/);
   });
 
   // With every skill that brings it off, a task can wait for one skill from each of two lists: the util that
@@ -1620,6 +1622,32 @@ test('turning on a scheduled task that waits for its skills says it is paused un
     assert.notEqual(events.isError, true, textOf(events));
     assert.doesNotMatch(events.structuredContent.schedule.note, /paused/);
   });
+});
+
+test('the schedule note names only the services a skill\'s task can use, as one of them', async () => {
+  // The ads cleanup on a Google Ads Manager agent: Meta Ads reaches the agent only through Meta Ads Manager, which is off.
+  const cleanup = usable => ({
+    key: 'cs-cron-ads-recommendation-cleanup', description: 'Ads cleanup', value: 'Clean up.', interval: '0 6 * * *', enabled: false, requires_credentials: ['google-ads', 'meta-ads', 'tiktok-ads'],
+    _source: 'skill-bundle', _editable: true, _edited: false, _owner_skills: ['int-googleads-manage'], _skill_off: false, _usable_credentials: usable, _if_connected: {},
+  });
+  const own = { key: 'cs-cron-inbox-digest', description: 'Inbox digest', value: 'Sum up the inbox.', interval: '0 8 * * *', enabled: false, requires_credentials: ['gmail'], _source: 'user-created', _editable: true, _edited: true, _user_created: true };
+  const upsert = async (scheduledskills, key) => {
+    let result;
+    await withClient(fakeClient({
+      '/UserAgent/Detail': detailResponse(agentRow({ scheduledskills })),
+      '/UserAgent/CustomSkillUpsert': { result: true, errors: [], restarting: true },
+    }), async client => {
+      result = await call(client, 'manage_agent_custom_skill', { action: 'upsert', agent_guid: 'ua-1', key, enabled: true });
+      assert.notEqual(result.isError, true, textOf(result));
+    });
+    return result.structuredContent.schedule.note;
+  };
+  const one = await upsert([cleanup(['google-ads'])], 'cs-cron-ads-recommendation-cleanup');
+  assert.match(one, /It only runs while Google Ads \(`google-ads`\) is connected\./);
+  assert.doesNotMatch(one, /meta-ads|tiktok-ads/);
+  assert.match(await upsert([cleanup(['google-ads', 'meta-ads'])], 'cs-cron-ads-recommendation-cleanup'), /It only runs while one of Google Ads \(`google-ads`\) or Meta Ads \(`meta-ads`\) is connected\./);
+  // A task of the user's own needs what its row lists, named by the agent's credential card.
+  assert.match(await upsert([own], 'cs-cron-inbox-digest'), /It only runs while Gmail \(`gmail`\) is connected\./);
 });
 
 test('update_agent names the skills a paused task waits for by their titles', async () => {

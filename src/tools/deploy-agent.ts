@@ -23,6 +23,7 @@ import {
   outcomeUnknown,
   readAgentDetail,
   sameAmount,
+  skillOffTasksNote,
   tierPricingSchema,
   toAgentDetail,
   toDeployedAgent,
@@ -32,7 +33,7 @@ import {
   type AgentDetail,
   type AgentTier,
 } from '../utils/user-agent.js';
-import { APPROVAL_POLICY_KEY, humanizeCustomSkillKey, isFilledValue, resolveDeployCustomSkills, type DeployCustomSkill, type TemplateCustomSkill } from '../utils/agent-config.js';
+import { APPROVAL_POLICY_KEY, humanizeCustomSkillKey, isFilledValue, pausedSkillTitles, resolveDeployCustomSkills, type DeployCustomSkill, type TemplateCustomSkill } from '../utils/agent-config.js';
 import { readTemplateRow, toSkillSummary, toTemplateDetail, type SkillSummary } from '../utils/agent-catalog.js';
 import { quotedBlock } from '../utils/quoted-text.js';
 import { payingWalletText, readPayingWallet, type PayingWallet } from '../utils/workspace.js';
@@ -127,6 +128,12 @@ const deployedCustomSkillSchema = z.object({
 const defaultScheduledTaskSchema = z.object({
   key: z.string(),
   interval: z.string(),
+});
+
+const pausedScheduledTaskSchema = z.object({
+  key: z.string(),
+  offSkills: z.array(z.array(z.string()))
+    .describe('The skills that end the pause, as lists: turn on one skill from each list with apply_agent_skills.'),
 });
 
 type DeployEnvelope = ApiEnvelope & { useragents?: unknown; existingUserAgentGuid?: unknown };
@@ -249,12 +256,21 @@ function deployedCustomSkills(agent: AgentDetail, requested: DeployCustomSkill[]
   });
 }
 
-/** The scheduled tasks a custom build came with that are already on, with the schedule they came with. */
+/** The scheduled tasks a custom build came with that are already on and run, with the schedule they came with. */
 function defaultScheduledTasks(agent: AgentDetail, quote: Quote, requested: DeployCustomSkill[]): Array<z.infer<typeof defaultScheduledTaskSchema>> {
   if (quote.kind !== 'custom') return [];
   const ownKeys = new Set(requested.map(skill => skill.key));
-  return agent.scheduledTasks.flatMap(task => (task.enabled && task.interval && !ownKeys.has(task.key)
+  return agent.scheduledTasks.flatMap(task => (task.enabled && !task.skillOff && task.interval && !ownKeys.has(task.key)
     ? [{ key: task.key, interval: task.interval }]
+    : []));
+}
+
+/** The scheduled tasks a custom build came with that are on but paused until skills they need are on. */
+function pausedScheduledTasks(agent: AgentDetail, quote: Quote, requested: DeployCustomSkill[]): Array<z.infer<typeof pausedScheduledTaskSchema>> {
+  if (quote.kind !== 'custom') return [];
+  const ownKeys = new Set(requested.map(skill => skill.key));
+  return agent.scheduledTasks.flatMap(task => (task.enabled && task.skillOff && !ownKeys.has(task.key)
+    ? [{ key: task.key, offSkills: task.offSkills ?? [] }]
     : []));
 }
 
@@ -268,6 +284,8 @@ function deployedText(
   chargedUsd: number | null,
   customSkills: Array<z.infer<typeof deployedCustomSkillSchema>>,
   defaultTasks: Array<z.infer<typeof defaultScheduledTaskSchema>>,
+  pausedTasks: Array<z.infer<typeof pausedScheduledTaskSchema>>,
+  titles: ReadonlyMap<string, string>,
 ): string {
   const lines = [
     '## Agent deployed',
@@ -286,6 +304,9 @@ function deployedText(
   if (startsCollaborative(agent)) lines.push(`- Chats: ${TEAM_CHATS_NOTE}`);
   if (defaultTasks.length > 0) {
     lines.push(`- Scheduled tasks on by default: ${defaultTasks.map(task => `\`${task.key}\` (runs on "${task.interval}")`).join(', ')}. ${DEFAULT_TASKS_NOTE}`);
+  }
+  if (pausedTasks.length > 0) {
+    lines.push(`- Scheduled tasks that came with this build but are paused:${skillOffTasksNote(pausedTasks.map(task => ({ ...task, skillOff: true })), titles, 'is paused')}`);
   }
   if (agent.missingCredentials.length > 0) {
     lines.push(`- Missing credentials: ${agent.missingCredentials.map(item => `${item.title} (\`${item.key}\`)`).join(', ')}. Skills that need them fail until they are set.${bindAfterDeployNote(agent.missingCredentials)}`);
@@ -350,7 +371,9 @@ export function registerDeployAgent(server: McpServer, client: WiroClient): void
         chargedUsd: z.number().nullable().optional(),
         customSkills: z.array(deployedCustomSkillSchema).optional(),
         defaultScheduledTasks: z.array(defaultScheduledTaskSchema).optional()
-          .describe('The scheduled tasks a custom build came with that are already on, with the schedule they came with.'),
+          .describe('The scheduled tasks a custom build came with that are already on and run, with the schedule they came with.'),
+        pausedScheduledTasks: z.array(pausedScheduledTaskSchema).optional()
+          .describe('The scheduled tasks a custom build came with that are on but paused until skills they need are on.'),
         message: z.string(),
         nextAction: nextActionSchema.optional(),
       },
@@ -648,9 +671,11 @@ export function registerDeployAgent(server: McpServer, client: WiroClient): void
         const nextStep = nextStepForAgent(agent, DEFAULT_WAIT_SECONDS);
         const savedCustomSkills = deployedCustomSkills(agent, customSkills);
         const defaultTasks = defaultScheduledTasks(agent, quote, customSkills);
+        const pausedTasks = pausedScheduledTasks(agent, quote, customSkills);
+        const titles = await pausedSkillTitles(client, pausedTasks.map(task => ({ ...task, skillOff: true })), extra.signal);
 
         return {
-          content: [{ type: 'text' as const, text: deployedText(agent, quote, chargedUsd, savedCustomSkills, defaultTasks) }],
+          content: [{ type: 'text' as const, text: deployedText(agent, quote, chargedUsd, savedCustomSkills, defaultTasks, pausedTasks, titles) }],
           structuredContent: {
             stage: 'deployed' as const,
             quote,
@@ -658,10 +683,14 @@ export function registerDeployAgent(server: McpServer, client: WiroClient): void
             chargedUsd,
             ...(savedCustomSkills.length > 0 ? { customSkills: savedCustomSkills } : {}),
             ...(defaultTasks.length > 0 ? { defaultScheduledTasks: defaultTasks } : {}),
+            ...(pausedTasks.length > 0 ? { pausedScheduledTasks: pausedTasks } : {}),
             message: `Deployed and charged ${formatUsd(chargedUsd)}. The plan renews every 30 days until it is cancelled.`
               + (startsCollaborative(agent) ? ` ${TEAM_CHATS_NOTE}` : '')
               + (defaultTasks.length > 0
                 ? ` Scheduled tasks on by default: ${defaultTasks.map(task => task.key).join(', ')}. ${DEFAULT_TASKS_NOTE}`
+                : '')
+              + (pausedTasks.length > 0
+                ? ` Paused until skills they need are on: ${pausedTasks.map(task => task.key).join(', ')}.`
                 : ''),
             ...(nextStep ? { nextAction: nextStep } : {}),
           },

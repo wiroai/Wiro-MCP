@@ -1408,109 +1408,66 @@ test('apply_agent_skills checks names before anything is priced or written', asy
   });
 });
 
-// The skills behind the scheduled tasks the next test moves.
-const taskSkillList = {
-  ...connectSkillList,
-  skills: [
-    ...connectSkillList.skills,
-    { name: 'int-appstore-events', title: 'App Store Events', depends_on: [], conflicts_with: [], credential_key: 'apple-appstore', requires_credentials: true, pricing: {} },
-    { name: 'int-googleplay-events', title: 'Google Play Events', depends_on: [], conflicts_with: [], credential_key: 'google-play', requires_credentials: true, pricing: {} },
-    { name: 'util-newsletter-compose', depends_on: [], requires_credentials: false, pricing: {} },
-  ],
-};
-
-/**
- * A registry task as Detail sends it: the skills that bring it, whether the skills it needs are off, and
- * while they are, the skills to turn on as lists, one from each (offSkills, null when it may run).
- */
-function ownedTask(key, enabled, owners, offSkills) {
-  return {
-    key, description: key, value: 'Run the check.', interval: '0 9 * * 1', enabled, requires_credentials: [], _source: 'skill-bundle', _editable: true,
-    _owner_skills: owners, _skill_off: offSkills !== null, ...(offSkills ? { _off_skills: offSkills } : {}),
-  };
-}
-
-const SOCIAL_OWNERS = ['int-facebookpage-post', 'int-instagram-post', 'int-linkedin-post', 'int-reddit-post', 'int-tiktok-post', 'int-twitterx-post'];
-// The skills that hold one of the social tasks' integrations: Reddit is not one of them.
-const SOCIAL_OFF = ['int-facebookpage-post', 'int-instagram-post', 'int-linkedin-post', 'int-tiktok-post', 'int-twitterx-post'];
 const NEWSLETTER_OFF = ['int-brevo-email', 'int-hubspot-crm', 'int-mailchimp-email', 'int-sendgrid-email'];
 
-test('apply_agent_skills quotes the scheduled tasks a change stops or brings back', async () => {
-  const ON = ['util-chat-markdown-reporting', 'int-metaads-manage', 'int-appstore-events', 'int-googleplay-events', 'util-newsletter-compose'];
-  const quote = async (scheduledskills, skills, on = ON) => {
+test('apply_agent_skills quotes the scheduled tasks Wiro says the change stops or starts', async () => {
+  const quote = async scheduledTasks => {
     let result;
     await withClient(fakeClient(skillRoutes({
-      '/Skills/List': taskSkillList,
-      '/UserAgent/Detail': detail({
-        skills: skillsOn(...on),
-        scheduledskills,
-      }),
+      '/UserAgent/PricingPreview': preview(planChange(), scheduledTasks === undefined ? {} : { scheduledTasks }),
     })), async client => {
-      result = await client.callTool({ name: 'apply_agent_skills', arguments: { agent_guid: AGENT, skills } });
-      assert.equal(result.structuredContent.status, 'quote', text(result));
+      result = await quoteInstagram(client);
     });
     return result;
   };
 
-  const mixed = await quote([
-    ownedTask('cs-cron-metaads-performance-reporter', true, ['int-metaads-manage'], null),
-    // Off by its own switch: it stays off either way.
-    ownedTask('cs-cron-metaads-audience-scanner', false, ['int-metaads-manage'], null),
-    // Another skill that brings it stays on.
-    ownedTask('cs-cron-app-event-scanner', true, ['int-appstore-events', 'int-googleplay-events'], null),
-    ownedTask('cs-cron-social-content-scanner', true, SOCIAL_OWNERS, [SOCIAL_OFF]),
-    ownedTask('cs-cron-social-drive-scanner', false, SOCIAL_OWNERS, [SOCIAL_OFF]),
-    // The util that brings it is on, and the change turns on a skill that holds one of its integrations.
-    ownedTask('cs-cron-newsletter-sender', true, ['util-newsletter-compose'], [NEWSLETTER_OFF]),
-    // The change turns on none of the skills it waits for.
-    ownedTask('cs-cron-review-scanner', true, ['int-appstore-reviews', 'int-googleplay-reviews'], [['int-appstore-reviews', 'int-googleplay-reviews']]),
-    { key: 'cs-cron-my-task', description: 'My task', value: 'Do my task.', interval: '0 8 * * *', enabled: true, requires_credentials: [], _source: 'user-created', _editable: true, _user_created: true },
-  ], { 'int-metaads-manage': false, 'int-appstore-events': false, 'int-instagram-post': true, 'int-mailchimp-email': true });
-  assert.deepEqual(mixed.structuredContent.scheduledTasks, {
-    stop: ['cs-cron-metaads-performance-reporter'],
-    resume: ['cs-cron-social-content-scanner', 'cs-cron-newsletter-sender'],
+  const both = await quote({ stop: ['cs-cron-metaads-performance-reporter', 'cs-cron-ads-recommendation-cleanup'], resume: ['cs-cron-social-content-scanner'] });
+  assert.deepEqual(both.structuredContent.scheduledTasks, {
+    stop: ['cs-cron-metaads-performance-reporter', 'cs-cron-ads-recommendation-cleanup'],
+    resume: ['cs-cron-social-content-scanner'],
   });
-  const lines = text(mixed).split('\n');
-  assert.ok(lines.includes('**Scheduled tasks that stop:** `cs-cron-metaads-performance-reporter`. The change turns off every skill that brings it. It keeps its text, schedule and on/off state while it waits, and get_my_agent names the skills to turn on to run it again.'), text(mixed));
-  assert.ok(lines.includes('**Scheduled tasks that run again:** `cs-cron-social-content-scanner`, `cs-cron-newsletter-sender`. The change turns on the skills they wait for, and they run while the services they need are connected.'), text(mixed));
+  const lines = text(both).split('\n');
+  assert.ok(lines.includes('**Scheduled tasks that stop:** `cs-cron-metaads-performance-reporter`, `cs-cron-ads-recommendation-cleanup`. They run now and stop with this change. They keep their text, schedule and on/off state, and get_my_agent then shows what each waits for.'), text(both));
+  assert.ok(lines.includes('**Scheduled tasks that start running:** `cs-cron-social-content-scanner`. It does not run now and runs once this change is applied.'), text(both));
   // They follow the restart line, before the credentials the new skills need.
   const at = prefix => lines.findIndex(line => line.startsWith(prefix));
   assert.ok(at('**Restart:**') < at('**Scheduled tasks that stop:**'));
-  assert.ok(at('**Scheduled tasks that run again:**') < at('**Credentials the new skills need:**'));
+  assert.ok(at('**Scheduled tasks that start running:**') < at('**Credentials the new skills need:**'));
 
-  const many = await quote([
-    ownedTask('cs-cron-metaads-performance-reporter', true, ['int-metaads-manage'], null),
-    ownedTask('cs-cron-metaads-holiday-planner', true, ['int-metaads-manage'], null),
-    ownedTask('cs-cron-social-content-scanner', true, SOCIAL_OWNERS, [SOCIAL_OFF]),
-  ], { 'int-metaads-manage': false, 'int-instagram-post': true });
-  assert.deepEqual(many.structuredContent.scheduledTasks, {
-    stop: ['cs-cron-metaads-performance-reporter', 'cs-cron-metaads-holiday-planner'],
-    resume: ['cs-cron-social-content-scanner'],
-  });
-  assert.match(text(many), /\*\*Scheduled tasks that stop:\*\* `cs-cron-metaads-performance-reporter`, `cs-cron-metaads-holiday-planner`\. The change turns off every skill that brings them\. They keep their text, schedule and on\/off state while they wait, and get_my_agent names the skills to turn on to run them again\./);
-  assert.match(text(many), /\*\*Scheduled tasks that run again:\*\* `cs-cron-social-content-scanner`\. The change turns on the skills it waits for, and it runs while the services it needs are connected\./);
+  const swapped = await quote({ stop: ['cs-cron-lead-reply-handler'], resume: ['cs-cron-newsletter-sender', 'cs-cron-newsletter-subscriber-scanner'] });
+  assert.match(text(swapped), /\*\*Scheduled tasks that stop:\*\* `cs-cron-lead-reply-handler`\. It runs now and stops with this change\. It keeps its text, schedule and on\/off state, and get_my_agent then shows what it waits for\./);
+  assert.match(text(swapped), /\*\*Scheduled tasks that start running:\*\* `cs-cron-newsletter-sender`, `cs-cron-newsletter-subscriber-scanner`\. They do not run now and run once this change is applied\./);
 
-  // No task moves when the change turns on a skill a task waits for but turns off the one that brings it,
-  // or touches none of a task's skills.
-  for (const skills of [{ 'int-mailchimp-email': true, 'util-newsletter-compose': false }, { 'int-serper-search': true }]) {
-    const none = await quote([
-      ownedTask('cs-cron-newsletter-sender', true, ['util-newsletter-compose'], [NEWSLETTER_OFF]),
-      ownedTask('cs-cron-review-scanner', true, ['int-appstore-reviews', 'int-googleplay-reviews'], [['int-appstore-reviews', 'int-googleplay-reviews']]),
-    ], skills);
-    assert.equal('scheduledTasks' in none.structuredContent, false, JSON.stringify(skills));
+  // Nothing to say when Wiro names no task.
+  for (const scheduledTasks of [{ stop: [], resume: [] }, undefined]) {
+    const none = await quote(scheduledTasks);
+    assert.equal('scheduledTasks' in none.structuredContent, false, JSON.stringify(scheduledTasks));
     assert.doesNotMatch(text(none), /Scheduled tasks/);
   }
+});
 
-  // With the util off as well, the newsletter task waits for the util and one email provider: it comes back
-  // only once a skill from each list is on.
-  const paired = [ownedTask('cs-cron-newsletter-sender', true, ['util-newsletter-compose'], [['util-newsletter-compose'], NEWSLETTER_OFF])];
-  const withoutUtil = ON.filter(name => name !== 'util-newsletter-compose');
-  const both = await quote(paired, { 'util-newsletter-compose': true, 'int-mailchimp-email': true }, withoutUtil);
-  assert.deepEqual(both.structuredContent.scheduledTasks, { stop: [], resume: ['cs-cron-newsletter-sender'] });
-  for (const skills of [{ 'util-newsletter-compose': true }, { 'int-mailchimp-email': true }]) {
-    const half = await quote(paired, skills, withoutUtil);
-    assert.equal('scheduledTasks' in half.structuredContent, false, JSON.stringify(skills));
-  }
+test('apply_agent_skills names the scheduled tasks a confirmed change paused', async () => {
+  // Detail before and after turning Meta Ads Manager off. The holiday planner was paused already.
+  const task = (key, paused) => ({
+    key, description: key, value: 'Report on Meta Ads.', interval: '0 9 * * 1', enabled: true, requires_credentials: ['meta-ads'], _source: 'skill-bundle', _editable: true,
+    _owner_skills: ['int-metaads-manage'], _skill_off: paused, ...(paused ? { _off_skills: [['int-metaads-manage']] } : {}), _usable_credentials: paused ? [] : ['meta-ads'], _if_connected: {},
+  });
+  const before = detail({ skills: skillsOn('util-chat-markdown-reporting', 'int-metaads-manage'), scheduledskills: [task('cs-cron-metaads-performance-reporter', false), task('cs-cron-metaads-holiday-planner', true)] });
+  const after = detail({ skills: skillsOn('util-chat-markdown-reporting'), scheduledskills: [task('cs-cron-metaads-performance-reporter', true), task('cs-cron-metaads-holiday-planner', true)] });
+  const fake = fakeClient(skillRoutes({
+    '/Skills/List': connectSkillList,
+    '/UserAgent/Detail': (_body, calls) => structuredClone(calls.some(call => call.path === '/UserAgent/SkillsApply') ? after : before),
+    '/UserAgent/SkillsApply': { result: true, errors: [], pricing: { previousPriceUsd: 42, newPriceUsd: 43, deltaUsd: 1, previousMonthlyCredits: 4200, newMonthlyCredits: 4300, deltaCredits: 100 }, tier: 'starter', stripeProrationApplied: false, prepaidWalletDelta: 0.5, restartTriggered: true },
+  }));
+  await withClient(fake, async client => {
+    const quote = await client.callTool({ name: 'apply_agent_skills', arguments: { agent_guid: AGENT, skills: { 'int-metaads-manage': false } } });
+    assert.equal(quote.structuredContent.status, 'quote', text(quote));
+    const result = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
+    assert.equal(result.structuredContent.status, 'applied', text(result));
+    assert.deepEqual(result.structuredContent.pausedTasks, ['cs-cron-metaads-performance-reporter']);
+    assert.match(text(result), /\*\*Paused by this change:\*\* `cs-cron-metaads-performance-reporter` is paused until Meta Ads \(`int-metaads-manage`\) is on\./);
+    assert.doesNotMatch(text(result), /holiday-planner/);
+  });
 });
 
 test('apply_agent_skills reports a no-op, a dependency turned off and a tier downgrade', async () => {
@@ -3635,27 +3592,32 @@ test('connect_agent_oauth says which entries a finished sign-in turns on', async
   assert.equal(text(injected).split('\n').some(line => line.startsWith('**Next:**')), false);
 });
 
-test('connect_agent_oauth names the skills a task it turns on still waits for', async () => {
-  // Detail names the skills that bring a registry task, whether the skills it needs are off, and while they are, the ones to turn on.
-  const task = (key, requires, owners, offSkills) => ({
+test('connect_agent_oauth says which entries a sign-in turns on and which stay paused, as Wiro works it out', async () => {
+  // For a skill's task Detail says what it would still wait for once each missing credential is connected
+  // (_if_connected). Newsletter Compose Rules and HubSpot CRM are on; HubSpot is not connected yet.
+  const task = (key, requires, owners, ifConnected, extra = {}) => ({
     key, description: 'Weekly check', value: 'Check the numbers.', interval: '0 9 * * 1', enabled: false, requires_credentials: requires, _source: 'skill-bundle', _editable: true,
-    _owner_skills: owners, _skill_off: offSkills !== null, ...(offSkills ? { _off_skills: offSkills } : {}),
+    _owner_skills: owners, _skill_off: false, _usable_credentials: [], _if_connected: ifConnected, ...extra,
   });
-  const providers = [['int-brevo-email', 'Brevo Email', 'brevo'], ['int-sendgrid-email', 'SendGrid Email', 'sendgrid']]
-    .map(([name, title, credential]) => ({ name, title, depends_on: [], conflicts_with: [], credential_key: credential, requires_credentials: true, pricing: {} }));
   const stub = fakeClient({
     '/Credentials/Detail': credentialDetail,
-    '/Skills/List': { ...connectSkillList, skills: [...connectSkillList.skills, ...providers] },
+    '/Skills/List': connectSkillList,
     '/UserAgent/Detail': {
       result: true,
       useragents: [customBuildRow({
-        skills: skillsOn('util-newsletter-compose', 'int-googleads-manage', 'int-serper-search', 'util-chat-markdown-reporting'),
-        customskills: [],
+        skills: skillsOn('util-newsletter-compose', 'int-hubspot-crm', 'util-chat-markdown-reporting'),
+        // A custom skill of the user's own: the credential its row lists is enough.
+        customskills: [{ key: 'cs-crm-rules', description: 'CRM rules', value: 'Log every lead.', interval: null, enabled: false, requires_credentials: ['hubspot'], _source: 'user-created', _editable: true, _user_created: true }],
         scheduledskills: [
-          task('cs-cron-lead-reply-handler', ['apollo', 'lemlist', 'hubspot'], ['int-lemlist-outreach'], [['int-lemlist-outreach']]),
-          // The util that brings it is on, but every skill that holds one of its integrations is off.
-          task('cs-cron-newsletter-sender', ['brevo', 'mailchimp', 'sendgrid', 'hubspot'], ['util-newsletter-compose'], [NEWSLETTER_OFF]),
-          task('cs-cron-googleads-audience-refresher', ['google-ads', 'google-drive', 'apollo', 'lemlist', 'hubspot'], ['int-googleads-manage'], null),
+          task('cs-cron-newsletter-sender', ['brevo', 'mailchimp', 'sendgrid', 'hubspot'], ['util-newsletter-compose'],
+            { brevo: [['int-brevo-email']], mailchimp: [['int-mailchimp-email']], sendgrid: [['int-sendgrid-email']], hubspot: [] }, { _usable_credentials: ['hubspot'] }),
+          // Lemlist Outreach, which brings it, is off: connecting HubSpot leaves it paused.
+          task('cs-cron-lead-reply-handler', ['apollo', 'lemlist', 'hubspot'], ['int-lemlist-outreach'],
+            { apollo: [['int-lemlist-outreach'], ['int-apollo-sales']], lemlist: [['int-lemlist-outreach']], hubspot: [['int-lemlist-outreach']] },
+            { _skill_off: true, _off_skills: [['int-lemlist-outreach']], _usable_credentials: ['hubspot'] }),
+          // Needs another service, and one that is on already: neither is named.
+          task('cs-cron-blog-gmail-checker', ['gmail'], ['int-gmail-check'], { gmail: [] }),
+          task('cs-cron-crm-digest', ['hubspot'], ['int-hubspot-crm'], { hubspot: [] }, { enabled: true, _usable_credentials: ['hubspot'] }),
         ],
       })],
     },
@@ -3665,8 +3627,60 @@ test('connect_agent_oauth names the skills a task it turns on still waits for', 
   await withClient(stub, async client => {
     const result = await client.callTool({ name: 'connect_agent_oauth', arguments: { agent_guid: AGENT, credential: 'hubspot' } });
     assert.equal(result.structuredContent.state, 'authorize_in_browser', text(result));
-    assert.match(result.structuredContent.message, /`cs-cron-lead-reply-handler`, `cs-cron-newsletter-sender`, `cs-cron-googleads-audience-refresher` turn on once HubSpot is connected\. `cs-cron-lead-reply-handler` stays paused until Lemlist \(`int-lemlist-outreach`\) is on\. `cs-cron-newsletter-sender` stays paused until Brevo Email \(`int-brevo-email`\), HubSpot CRM \(`int-hubspot-crm`\), Mailchimp \(`int-mailchimp-email`\) or SendGrid Email \(`int-sendgrid-email`\) is on\. Every run of a scheduled task uses credits/);
-    assert.doesNotMatch(result.structuredContent.message, /`cs-cron-googleads-audience-refresher` stays paused|util-newsletter-compose/);
+    assert.match(result.structuredContent.message, /`cs-crm-rules`, `cs-cron-newsletter-sender` turn on once HubSpot is connected\. `cs-cron-lead-reply-handler` turns on but stays paused until Lemlist \(`int-lemlist-outreach`\) is on\. Every run of a scheduled task uses credits/);
+    assert.doesNotMatch(result.structuredContent.message, /blog-gmail-checker|crm-digest/);
+  });
+});
+
+test('connect_agent_oauth counts a credential for a skill\'s task only while the task can use it', async () => {
+  // The newsletter's util is on, but HubSpot reaches the agent only through HubSpot CRM, which is off.
+  const newsletter = {
+    key: 'cs-cron-newsletter-sender', description: 'Newsletter', value: 'Send it.', interval: '0 9 * * 1', enabled: false, requires_credentials: ['brevo', 'mailchimp', 'sendgrid', 'hubspot'], _source: 'skill-bundle', _editable: true,
+    _owner_skills: ['util-newsletter-compose'], _skill_off: true, _off_skills: [NEWSLETTER_OFF], _usable_credentials: [], _if_connected: { hubspot: [['int-hubspot-crm']] },
+  };
+  const fake = fakeClient({
+    '/Credentials/Detail': credentialDetail,
+    '/Skills/List': connectSkillList,
+    '/UserAgent/Detail': { result: true, useragents: [customBuildRow({ skills: skillsOn('util-newsletter-compose', 'util-chat-markdown-reporting'), customskills: [], scheduledskills: [newsletter] })] },
+    '/UserAgentOAuth/OAuthStatus': { result: true, connected: false, accounts: [], connectedat: '', tokenexpiresat: '' },
+    '/UserAgentOAuth/OAuthConnect': { result: true, authorizeUrl: 'https://app.hubspot.com/oauth/authorize?state=xyz' },
+  });
+  await withClient(fake, async client => {
+    const refused = await client.callTool({ name: 'connect_agent_oauth', arguments: { agent_guid: AGENT, credential: 'hubspot' } });
+    assert.equal(refused.isError, true, text(refused));
+    assert.match(text(refused), /HubSpot is not used by any of this agent's active skills, custom skills or scheduled tasks, so nothing was started\./);
+    assert.match(text(refused), /turn on int-hubspot-crm/);
+    assert.equal(fake.paths().includes('/UserAgentOAuth/OAuthConnect'), false);
+  });
+});
+
+test('connect_agent_oauth status names the tasks that stay paused once a service is connected', async () => {
+  const task = (key, requires, offSkills) => ({
+    key, description: key, value: 'Run it.', interval: '0 9 * * 1', enabled: true, requires_credentials: requires, _source: 'skill-bundle', _editable: true,
+    _owner_skills: ['int-lemlist-outreach'], _skill_off: offSkills !== null, ...(offSkills ? { _off_skills: offSkills } : {}), _usable_credentials: offSkills ? [] : requires, _if_connected: {},
+  });
+  const fake = fakeClient({
+    '/Credentials/Detail': credentialDetail,
+    '/Skills/List': connectSkillList,
+    '/UserAgentOAuth/OAuthStatus': { result: true, connected: true, accounts: [{ id: '1', name: 'Acme' }], connectedat: '2026-11-01T00:00:00Z', tokenexpiresat: '' },
+    '/UserAgent/Detail': {
+      result: true,
+      useragents: [customBuildRow({
+        skills: skillsOn('int-hubspot-crm', 'util-chat-markdown-reporting'),
+        scheduledskills: [
+          task('cs-cron-lead-reply-handler', ['apollo', 'lemlist', 'hubspot'], [['int-lemlist-outreach']]),
+          task('cs-cron-crm-digest', ['hubspot'], null),
+          // Paused too, but HubSpot is not one of its services.
+          task('cs-cron-metaads-performance-reporter', ['meta-ads'], [['int-metaads-manage']]),
+        ],
+      })],
+    },
+  });
+  await withClient(fake, async client => {
+    const result = await client.callTool({ name: 'connect_agent_oauth', arguments: { action: 'status', agent_guid: AGENT, credential: 'hubspot' } });
+    assert.equal(result.structuredContent.state, 'connected', text(result));
+    assert.match(result.structuredContent.message, /HubSpot is connected for `Acme` \(`1`\)\. `cs-cron-lead-reply-handler` stays paused until Lemlist \(`int-lemlist-outreach`\) is on\.$/);
+    assert.doesNotMatch(result.structuredContent.message, /crm-digest|metaads/);
   });
 });
 
@@ -3768,8 +3782,10 @@ test('connect_agent_oauth status, select_accounts and disconnect_agent_oauth do 
     '/UserAgentOAuth/OAuthDisconnect': { result: true, errors: [] },
   });
   await withClient(fake, async client => {
+    // Once connected, status reads the agent only to name the tasks that stay paused: it answers when that read fails.
     const status = await client.callTool({ name: 'connect_agent_oauth', arguments: { action: 'status', agent_guid: AGENT, credential: 'hubspot' } });
     assert.equal(status.structuredContent.state, 'connected');
+    const afterStatus = fake.paths().length;
     const saved = await client.callTool({ name: 'connect_agent_oauth', arguments: { action: 'select_accounts', agent_guid: AGENT, credential: 'meta-ads', accounts: [{ id: '1234', name: 'Acme Ads' }] } });
     assert.notEqual(saved.isError, true, text(saved));
     const preview = await client.callTool({ name: 'disconnect_agent_oauth', arguments: { agent_guid: AGENT, credential: 'hubspot' } });
@@ -3777,7 +3793,8 @@ test('connect_agent_oauth status, select_accounts and disconnect_agent_oauth do 
     const done = await client.callTool({ name: 'disconnect_agent_oauth', arguments: preview.structuredContent.nextAction.arguments });
     assert.notEqual(done.isError, true, text(done));
     assert.equal(done.structuredContent.disconnected, true);
-    for (const path of ['/UserAgent/Detail', '/Skills/List']) assert.equal(fake.paths().includes(path), false, path);
+    for (const path of ['/UserAgent/Detail', '/Skills/List']) assert.equal(fake.paths().slice(afterStatus).includes(path), false, path);
+    assert.equal(fake.paths().includes('/Skills/List'), false);
   });
 });
 
@@ -4007,7 +4024,9 @@ test('connect_agent_oauth and the agents playbook state the rule on unused crede
     const { tools } = await client.listTools();
     const description = tools.find(tool => tool.name === 'connect_agent_oauth').description;
     assert.match(description, /A credential that none of the agent's active skills use, that no custom skill or scheduled task of the agent requires, and that its setup does not wait for, is refused before any link is made/);
-    assert.match(description, /Connecting a service turns on the scheduled tasks that need it; turn off any you do not want\./);
+    assert.match(description, /Connecting a service turns on the scheduled tasks that need it, and the result names any that stay paused until a skill they need is on; turn off any you do not want\./);
+    const saving = tools.find(tool => tool.name === 'set_agent_credentials').description;
+    assert.match(saving, /Saving a credential turns on the scheduled tasks that need it, and the result names any that stay paused until a skill they need is on; turn off any you do not want\./);
   });
   assert.match(PLAYBOOKS.agents, /connects only a credential the agent's active skills use, a custom skill or scheduled task requires, or its setup waits for, and refuses any other before it makes a link/);
   assert.match(PLAYBOOKS.agents, /`disconnect_agent_oauth` works for any connected service\./);

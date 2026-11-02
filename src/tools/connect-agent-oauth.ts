@@ -24,6 +24,7 @@ import {
   credentialGroup,
   customSkillEntries,
   dashboardAgentUrl,
+  entriesTurnedOnBy,
   isAgentRunning,
   isAllowedRedirectUrl,
   isFilledValue,
@@ -34,6 +35,7 @@ import {
   pausedSkillTitles,
   readOAuthStatus,
   readUserAgent,
+  skillTitles,
   toAccountRefs,
   turnOnSkillText,
   unusedCredential,
@@ -55,7 +57,7 @@ import {
   reportProgress,
 } from '../utils/poll.js';
 import { jsonSpan, quotedSpan } from '../utils/quoted-text.js';
-import { readStatusAdvice, skillOffTasksNote, startNeedsPlan, toAgentDetail, WIRO_PROJECT_CREDENTIAL } from '../utils/user-agent.js';
+import { readStatusAdvice, skillOffTasksNote, startNeedsPlan, toAgentDetail, waitingTaskSentence, WIRO_PROJECT_CREDENTIAL } from '../utils/user-agent.js';
 import { nextActionSchema, strictInput } from './schemas.js';
 
 const accountSchema = z.object({ id: z.string(), name: z.string() });
@@ -224,13 +226,14 @@ function unusedCredentialRefusal(
  * What a finished sign-in also turns on: Wiro keeps an entry that requires a
  * credential off until the credential arrives. Saving keys or a token turns
  * these on earlier and says so, so an entry that reads as on is left out. A
- * paused task is named with the skills it still waits for, by their titles.
+ * skill's task that would still wait for skills once this credential is
+ * connected turns on and stays paused, and is named with them by their titles.
  */
-function turnsOnNote(row: Record<string, unknown>, { credential, meta }: Context, titles: ReadonlyMap<string, string>): string {
-  const entries = customSkillEntries(row).filter(entry => !entry.enabled && entry.requiresCredentials.includes(credential));
-  if (entries.length === 0) return '';
-  const sentence = ` ${entries.map(entry => quotedSpan(entry.key)).join(', ')} ${entries.length > 1 ? 'turn' : 'turns'} on once ${meta.title} is connected.${skillOffTasksNote(entries, titles)}`;
-  return entries.some(entry => entry.kind === 'scheduled_task')
+function turnsOnNote({ on, paused }: ReturnType<typeof entriesTurnedOnBy>, { meta }: Context, titles: ReadonlyMap<string, string>): string {
+  if (on.length === 0 && paused.length === 0) return '';
+  const sentence = (on.length > 0 ? ` ${on.map(entry => quotedSpan(entry.key)).join(', ')} ${on.length > 1 ? 'turn' : 'turns'} on once ${meta.title} is connected.` : '')
+    + paused.map(task => waitingTaskSentence(task.key, task.groups, titles, 'turns on but stays paused')).join('');
+  return on.some(entry => entry.kind === 'scheduled_task') || paused.length > 0
     ? `${sentence} Every run of a scheduled task uses credits; turn off any you do not want with manage_agent_custom_skill.`
     : sentence;
 }
@@ -405,9 +408,10 @@ async function connect(
   const after = usesDashboard
     ? `After approving, the browser returns to the agent's page in the Wiro dashboard${oauth.picker ? ', which asks which accounts the agent should use' : ''}. Use a browser where the user is signed in to wiro.ai as the agent's owner.`
     : `After approving, the browser goes to ${redirectUrl}.`;
-  const titles = await pausedSkillTitles(client, customSkillEntries(row), signal);
+  const turnsOn = entriesTurnedOnBy(row, credential);
+  const titles = await skillTitles(client, turnsOn.paused.flatMap(task => task.groups.flat()), signal);
   return result('connect', context, 'authorize_in_browser',
-    `The user must open this link in their own browser and approve access. It works for ${OAUTH_LINK_TTL_SECONDS / 60} minutes. ${after}${turnsOnNote(row, context, titles)} Give the link to the user and check the status once they say they are done.`,
+    `The user must open this link in their own browser and approve access. It works for ${OAUTH_LINK_TTL_SECONDS / 60} minutes. ${after}${turnsOnNote(turnsOn, context, titles)} Give the link to the user and check the status once they say they are done.`,
     {
       mode,
       authorizeUrl,
@@ -521,10 +525,21 @@ async function status(
       };
     }
   }
+  // Once connected, the scheduled tasks that need this service and still wait for a skill are named, with the
+  // skills they wait for. A status is still answered when the agent cannot be read.
+  let pausedNote = '';
+  if (state === 'connected') {
+    row = await readUserAgent(client, agentGuid, signal).catch(() => null);
+    const paused = row
+      ? customSkillEntries(row).filter(entry => entry.kind === 'scheduled_task' && entry.skillOff
+        && (entry.requiresCredentials.includes(credential) || (entry.usableCredentials ?? []).includes(credential)))
+      : [];
+    pausedNote = skillOffTasksNote(paused, await pausedSkillTitles(client, paused, signal));
+  }
   const childStep = snapshot.childStep
     ? { ...snapshot.childStep, label: picker?.next?.label ?? snapshot.childStep.picker }
     : undefined;
-  return result('status', context, state, statusMessage(state, meta, snapshot, unusedNote, row), {
+  return result('status', context, state, `${statusMessage(state, meta, snapshot, unusedNote, row)}${pausedNote}`, {
     ...(snapshot.connectedAt ? { connectedAt: snapshot.connectedAt } : {}),
     ...(snapshot.tokenExpiresAt ? { tokenExpiresAt: snapshot.tokenExpiresAt } : {}),
     accounts: snapshot.accounts,
@@ -667,7 +682,8 @@ export function registerConnectAgentOauth(server: McpServer, client: WiroClient)
         + 'connect), and with picker runs the extra step some providers have (Meta Ads pages, '
         + 'Google Business locations). Connecting again replaces an existing connection, and a sign-in removes a token saved for another mode; both need '
         + 'confirm: true. A running agent restarts when a connection or selection is saved. Connecting a service '
-        + 'turns on the scheduled tasks that need it; turn off any you do not want. '
+        + 'turns on the scheduled tasks that need it, and the result names any that stay paused until a skill they need is on; '
+        + 'turn off any you do not want. '
         + 'Remove a connection with disconnect_agent_oauth. A credential that none of the agent\'s active '
         + 'skills use, that no custom skill or scheduled task of the agent requires, and that its setup does not wait for, is refused before any link is made (get_my_agent '
         + 'lists the skills; apply_agent_skills turns one on). Only the person who deployed the agent can connect, so the '

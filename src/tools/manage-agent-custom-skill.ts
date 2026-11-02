@@ -14,6 +14,7 @@ import {
   APPROVAL_POLICY_KEY,
   DEFAULT_CRON_INTERVAL,
   agentStatusOf,
+  connectionNeededText,
   customSkillEntries,
   customSkillErrorMessage,
   customSkillKindOf,
@@ -225,7 +226,7 @@ function scheduleInfo(row: Row, interval: string, isDefault: boolean, entry: Cus
     'Every run spends the agent\'s credits.',
     entry.enabled ? '' : 'It is turned off, so it does not run.',
     entry.skillOff ? skillOffSentence(entry, titles) : '',
-    entry.requiresCredentials.length > 0 ? `It only runs while ${entry.requiresCredentials.join(', ')} is connected.` : '',
+    connectionNeededText(row, entry),
   ].filter(Boolean);
   return { interval, timeZone, note: parts.join(' ') };
 }
@@ -329,6 +330,8 @@ async function upsert(client: WiroClient, input: Input, signal: AbortSignal) {
     ownerSkills: existing?.ownerSkills,
     skillOff: existing?.skillOff,
     offSkills: existing?.offSkills,
+    usableCredentials: existing?.usableCredentials,
+    ifConnected: existing?.ifConnected,
   };
   const warnings: string[] = [];
   if (input.key.trim() !== key) warnings.push(`Saved under the key ${key}.`);
@@ -620,6 +623,8 @@ async function revert(client: WiroClient, input: Input, signal: AbortSignal) {
       ownerSkills: current?.ownerSkills,
       skillOff: current?.skillOff,
       offSkills: current?.offSkills,
+      usableCredentials: current?.usableCredentials,
+      ifConnected: current?.ifConnected,
     });
   const messages: Record<string, string> = {
     'no-op': `${key} already matches that version; nothing changed.`,

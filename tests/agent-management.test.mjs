@@ -430,6 +430,33 @@ test('deploy_agent: a task a skill brought that is on is still flagged, and one 
   });
 });
 
+test('deploy_agent lists a task a skill brought that is paused apart from those that run', async () => {
+  // A custom build of Lemlist Outreach deployed with an Apollo key: Apollo reaches the agent only through Apollo Sales.
+  const lead = key => ({
+    key, description: key, value: 'Work the leads.', interval: '0 9 * * *', enabled: true, requires_credentials: ['apollo', 'lemlist'], _source: 'skill-bundle', _editable: true, _edited: false, _user_created: true,
+    _owner_skills: ['int-lemlist-outreach'], _skill_off: true, _off_skills: [['int-apollo-sales']], _usable_credentials: [], _if_connected: { lemlist: [['int-apollo-sales']] },
+  });
+  const routes = customBuild([
+    { key: 'cs-cron-inbox-check', description: 'Checks the inbox', value: 'Check the inbox.', interval: '*/30 * * * *', enabled: true, requires_credentials: [], _source: 'skill-bundle', _editable: true, _edited: false, _user_created: false },
+    lead('cs-cron-lead-outreach-reporter'),
+    lead('cs-cron-lead-reply-handler'),
+  ]);
+  routes['/Skills/List'] = { ...routes['/Skills/List'], skills: [...routes['/Skills/List'].skills, { name: 'int-apollo-sales', title: 'Apollo Sales', requires_credentials: true, credential_key: 'apollo' }] };
+  await withClient(fakeClient(routes), async client => {
+    const result = await call(client, 'deploy_agent', { ...DEPLOY, confirm_charge_usd: 4, confirm: true });
+    assert.notEqual(result.isError, true, textOf(result));
+    assert.deepEqual(result.structuredContent.defaultScheduledTasks, [{ key: 'cs-cron-inbox-check', interval: '*/30 * * * *' }]);
+    assert.deepEqual(result.structuredContent.pausedScheduledTasks, [
+      { key: 'cs-cron-lead-outreach-reporter', offSkills: [['int-apollo-sales']] },
+      { key: 'cs-cron-lead-reply-handler', offSkills: [['int-apollo-sales']] },
+    ]);
+    assert.match(textOf(result), /- Scheduled tasks on by default: `cs-cron-inbox-check` \(runs on "\*\/30 \* \* \* \*"\)\./);
+    assert.match(textOf(result), /- Scheduled tasks that came with this build but are paused: `cs-cron-lead-outreach-reporter` is paused until Apollo Sales \(`int-apollo-sales`\) is on\. `cs-cron-lead-reply-handler` is paused until Apollo Sales \(`int-apollo-sales`\) is on\./);
+    assert.match(result.structuredContent.message, /Paused until skills they need are on: cs-cron-lead-outreach-reporter, cs-cron-lead-reply-handler\./);
+    assert.doesNotMatch(textOf(result).split('\n').find(line => line.includes('on by default')), /lead-/);
+  });
+});
+
 test('deploy_agent and the playbook no longer promise a starter task on Mondays', async () => {
   const description = await toolDescription('deploy_agent');
   assert.doesNotMatch(description, /Mondays|10:00/);

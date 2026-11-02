@@ -26,6 +26,7 @@ import {
   loadSkillRegistry,
   newSkillChangeKey,
   parseSkillChangeKey,
+  pausedSkillTitles,
   planBilling,
   planSkillChanges,
   readPlanChange,
@@ -37,10 +38,11 @@ import {
   workspaceHint,
   type PlanBilling,
   type PlanChange,
-  type SkillDiff,
+  type CustomSkillEntry,
 } from '../utils/agent-config.js';
-import { asTier, bindProjectStep, formatCredits, outcomeUnknown, toTierPricing, WIRO_PROJECT_CREDENTIAL } from '../utils/user-agent.js';
+import { asTier, bindProjectStep, formatCredits, outcomeUnknown, skillOffTasksNote, toStringArray, toTierPricing, WIRO_PROJECT_CREDENTIAL } from '../utils/user-agent.js';
 import { DEFAULT_WAIT_SECONDS } from '../utils/poll.js';
+import { quotedSpan } from '../utils/quoted-text.js';
 import { isPlainTeamMember, teamAgentBillingRefused } from '../utils/workspace.js';
 import { nextActionSchema, strictInput } from './schemas.js';
 
@@ -100,11 +102,13 @@ const outputSchema = {
   })),
   scheduledTasks: z.object({
     stop: z.array(z.string())
-      .describe('Scheduled tasks that stop running because the change turns off every skill that brings them. Their text, schedule and on/off state stay while they wait, and get_my_agent names the skills to turn on to run them again.'),
+      .describe('Scheduled tasks that run now and stop with this change. They keep their text, schedule and on/off state, and get_my_agent then shows what each waits for.'),
     resume: z.array(z.string())
-      .describe('Scheduled tasks that run again because the change turns on the skills they wait for, one from each list in their offSkills, while the services they need are connected.'),
+      .describe('Scheduled tasks that do not run now and start running once this change is applied.'),
   }).optional()
-    .describe('Quote: the scheduled tasks that are on and that the change stops or brings back.'),
+    .describe('Quote: the scheduled tasks this change stops or starts, as Wiro works it out.'),
+  pausedTasks: z.array(z.string()).optional()
+    .describe('After an applied change: the scheduled tasks it paused, which wait for skills that are off. get_my_agent names those skills.'),
   agentStatus: z.string(),
   restart: z.string(),
   error: z.object({
@@ -126,6 +130,7 @@ type PricingPreviewBody = ApiEnvelope & {
   totalMonthlyCredits?: unknown;
   enabledSkills?: unknown;
   planChange?: unknown;
+  scheduledTasks?: unknown;
 };
 
 type SkillsApplyBody = ApiEnvelope & {
@@ -445,65 +450,62 @@ function listLine(label: string, names: string[]): string | null {
   return names.length > 0 ? `**${label}:** ${names.join(', ')}` : null;
 }
 
-/**
- * The scheduled tasks a change stops, because it turns off every skill that brings them, and the ones it
- * brings back by turning on the skills they wait for. Wiro names the skills that bring each task and, while
- * one is paused, the skills that end the pause as lists: one skill from each list, while a skill that brings
- * it is on. Only tasks that are on count: one that is off stays off either way.
- */
-function tasksMoved(row: Row, enabledNow: string[], diff: SkillDiff): { stop: string[]; resume: string[] } {
-  const after = new Set(enabledNow);
-  for (const name of diff.disable) after.delete(name);
-  for (const name of diff.enable) after.add(name);
-  const stop: string[] = [];
-  const resume: string[] = [];
-  for (const task of customSkillEntries(row)) {
-    const owners = task.ownerSkills ?? [];
-    if (task.kind !== 'scheduled_task' || !task.enabled || owners.length === 0) continue;
-    const ownerOn = owners.some(name => after.has(name));
-    if (task.skillOff) {
-      const groups = task.offSkills ?? [];
-      const ends = groups.length > 0 && groups.every(group => group.some(name => after.has(name)));
-      if (ownerOn && ends && groups.some(group => group.some(name => diff.enable.includes(name)))) resume.push(task.key);
-    } else if (!ownerOn && owners.some(name => diff.disable.includes(name))) {
-      stop.push(task.key);
-    }
-  }
-  return { stop, resume };
+/** The scheduled tasks a change stops or starts, as Wiro works them out with its own gates; null when there are none. */
+function scheduledTasksOf(value: unknown): { stop: string[]; resume: string[] } | null {
+  if (!isPlainObject(value)) return null;
+  const stop = toStringArray(value.stop);
+  const resume = toStringArray(value.resume);
+  return stop.length > 0 || resume.length > 0 ? { stop, resume } : null;
 }
 
-/** The quote's lines for the scheduled tasks the change stops or brings back. */
-function movedTaskLines(moved: { stop: string[]; resume: string[] }): string[] {
-  const keys = (list: string[]) => list.map(key => `\`${key}\``).join(', ');
+/** The quote's lines for the scheduled tasks the change stops or starts. */
+function movedTaskLines(moved: { stop: string[]; resume: string[] } | null): string[] {
+  if (!moved) return [];
+  const keys = (list: string[]) => list.map(key => quotedSpan(key)).join(', ');
   const lines: string[] = [];
   if (moved.stop.length > 0) {
     const one = moved.stop.length === 1;
-    lines.push(`**Scheduled tasks that stop:** ${keys(moved.stop)}. The change turns off every skill that brings ${one ? 'it. It keeps its text, schedule and on/off state while it waits' : 'them. They keep their text, schedule and on/off state while they wait'}, and get_my_agent names the skills to turn on to run ${one ? 'it' : 'them'} again.`);
+    lines.push(`**Scheduled tasks that stop:** ${keys(moved.stop)}. ${one ? 'It runs now and stops with this change. It keeps its' : 'They run now and stop with this change. They keep their'} text, schedule and on/off state, and get_my_agent then shows what ${one ? 'it waits' : 'each waits'} for.`);
   }
   if (moved.resume.length > 0) {
     const one = moved.resume.length === 1;
-    lines.push(`**Scheduled tasks that run again:** ${keys(moved.resume)}. The change turns on the skills ${one ? 'it waits for, and it runs while the services it needs are' : 'they wait for, and they run while the services they need are'} connected.`);
+    lines.push(`**Scheduled tasks that start running:** ${keys(moved.resume)}. ${one ? 'It does not run now and runs' : 'They do not run now and run'} once this change is applied.`);
   }
   return lines;
 }
 
-/** Whether the agent's live skills and tier are what this change asked for; null when that cannot be read. */
-async function changeHolds(
+/** The scheduled tasks that are on and paused in the agent read after a change, and were not paused before it. */
+function newlyPaused(before: Row, after: Row | null): CustomSkillEntry[] {
+  if (!after) return [];
+  const pausedBefore = new Set(customSkillEntries(before).filter(entry => entry.skillOff).map(entry => entry.key));
+  return customSkillEntries(after).filter(entry => entry.kind === 'scheduled_task' && entry.enabled && entry.skillOff && !pausedBefore.has(entry.key));
+}
+
+/**
+ * The agent read again after the change, and whether its live skills and tier are what this change asked
+ * for; both null when it cannot be read.
+ */
+async function readAfterChange(
   client: WiroClient,
   agentGuid: string,
   requested: Record<string, boolean>,
   tier: string | undefined,
   signal: AbortSignal,
-): Promise<boolean | null> {
+): Promise<{ holds: boolean | null; live: Row | null }> {
   let live: Row;
   try {
     live = await readUserAgent(client, agentGuid, signal);
   } catch {
-    return null;
+    return { holds: null, live: null };
   }
   const enabled = new Set(enabledSkillNames(live));
   const skillsHold = Object.entries(requested).every(([name, on]) => enabled.has(name) === on);
-  return skillsHold && (!tier || asString(live.tier) === tier);
+  return { holds: skillsHold && (!tier || asString(live.tier) === tier), live };
+}
+
+/** The line that names the tasks a change paused, with the skills each waits for. */
+async function pausedLine(client: WiroClient, paused: CustomSkillEntry[], signal: AbortSignal): Promise<string | null> {
+  return paused.length > 0 ? `**Paused by this change:**${skillOffTasksNote(paused, await pausedSkillTitles(client, paused, signal), 'is paused')}` : null;
 }
 
 export function registerApplyAgentSkills(server: McpServer, client: WiroClient): void {
@@ -517,7 +519,7 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
         + 'members are refused and nothing is charged. '
         + 'Steps: 1) call without confirm. The tool checks the names, adds the skills they '
         + 'depend on, and returns the current and new monthly price, what Wiro charges or credits now, '
-        + 'the credits this period gains or loses, and an idempotency_key. Nothing changes yet. 2) Show the price to the '
+        + 'the credits this period gains or loses, the scheduled tasks it stops or starts, and an idempotency_key. Nothing changes yet. 2) Show the price to the '
         + 'user. 3) After they approve, call again with confirm: true and that idempotency_key. '
         + 'The key is tied to the quoted prices and, on a prepaid plan, the billing period: if '
         + 'either changed since the quote, nothing is applied and a new quote with a new key comes back. Reusing the key after a timeout '
@@ -681,7 +683,7 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
             const priceChanged = confirm && givenKey !== null;
             const blocked = billing.plan !== 'none' && billing.status !== 'active';
             const restart = skillsMove ? restartNote(status, 'skill change') : TIER_ONLY_RESTART;
-            const moved = tasksMoved(row, enabledNow, diff);
+            const moved = scheduledTasksOf(preview.scheduledTasks);
             const priceNote = todayPriceNote(row, billing, currentPrice, currentCredits, tierChange);
             const pricing = {
               currentMonthlyUsd: currentPrice,
@@ -762,7 +764,7 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
                   note,
                 },
                 ...(Array.isArray(preview.enabledSkills) ? { enabledSkills: preview.enabledSkills.map(String) } : {}),
-                ...(moved.stop.length > 0 || moved.resume.length > 0 ? { scheduledTasks: moved } : {}),
+                ...(moved ? { scheduledTasks: moved } : {}),
                 restart,
                 nextAction,
               },
@@ -842,8 +844,9 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
 
           // The agent is read again to see whether the change is in place
           // before anything is reported.
-          const holds = await changeHolds(client, agent_guid, plan.requested, tierChange, extra.signal);
+          const { holds, live } = await readAfterChange(client, agent_guid, plan.requested, tierChange, extra.signal);
           if (holds === true) {
+            const paused = newlyPaused(row, live);
             const note = `The agent's skills now match the request, so the change is in place. Do not repeat it. ${billing.plan === 'prepaid' && billing.status === 'active' ? `The difference for the rest of this period was probably taken from, or credited to, ${walletName(billing)}; a credit goes back to the balances that paid. get_account with recent_transactions shows the amount, and get_agent_activity with kind usage the credits it moved.` : 'Any price difference follows the plan\'s usual billing.'}`;
             return {
               content: [{ type: 'text' as const, text: [
@@ -854,6 +857,7 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
                 listLine('Turned off', changes.disable),
                 `**Billing:** ${note}`,
                 `**Restart:** ${skillsMove ? restartNote(status, 'skill change') : TIER_ONLY_RESTART}`,
+                await pausedLine(client, paused, extra.signal),
               ].filter((line): line is string => line !== null).join('\n') }],
               structuredContent: {
                 ...base,
@@ -861,6 +865,7 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
                 idempotencyKey: key,
                 billing: { ...billingBase, chargedNowUsd: null, note },
                 restart: skillsMove ? restartNote(status, 'skill change') : TIER_ONLY_RESTART,
+                ...(paused.length > 0 ? { pausedTasks: paused.map(entry => entry.key) } : {}),
               },
             };
           }
@@ -884,7 +889,7 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
 
         // The live agent is checked against this change before it is reported
         // as applied.
-        const holds = await changeHolds(client, agent_guid, plan.requested, tierChange, extra.signal);
+        const { holds, live } = await readAfterChange(client, agent_guid, plan.requested, tierChange, extra.signal);
         if (holds === false) {
           const note = 'The agent\'s skills do not match this change, so it is not in place. Check get_my_agent; if they '
             + 'still do not match the request, call apply_agent_skills again without idempotency_key to get a new quote.';
@@ -957,6 +962,8 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
                   reason: 'Check that the agent is running again with the new skills.',
                 }
                 : undefined;
+        // Read from the agent after the change: the tasks it paused, which the quote named among those that stop.
+        const paused = applied.noOp || replayed ? [] : newlyPaused(row, live);
         const lines = [
           applied.noOp ? '## No change needed' : replayed ? '## Already applied' : '## Skills updated',
           '',
@@ -974,6 +981,7 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
           `**Billing:** ${billingNote}`,
           `**Restart:** ${restart}`,
           holds === null ? 'The agent could not be read afterwards to confirm the new skills; get_my_agent shows them.' : null,
+          await pausedLine(client, paused, extra.signal),
           credentialsNeeded.length > 0
             ? `**Still needed:** credentials for ${credentialsNeeded.map(entry => `${entry.skill} (${entry.credentials.join(', ')})`).join('; ')}. ${stillNeededSteps(credentialsNeeded)}`
             : null,
@@ -994,6 +1002,7 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
             },
             ...(Array.isArray(serverPricing.enabledSkills) ? { enabledSkills: serverPricing.enabledSkills.map(String) } : {}),
             restart,
+            ...(paused.length > 0 ? { pausedTasks: paused.map(entry => entry.key) } : {}),
             ...(nextAction ? { nextAction } : {}),
           },
         };
