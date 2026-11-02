@@ -253,6 +253,26 @@ export async function loadSkillRegistry(client: WiroClient, signal?: AbortSignal
   )));
 }
 
+/**
+ * The catalog titles of the skills these scheduled tasks are paused for, so a text names them as people see
+ * them. The catalog is read only when a task is paused; the map is empty when none is or it cannot be read.
+ */
+export async function pausedSkillTitles(
+  client: WiroClient,
+  tasks: ReadonlyArray<{ skillOff?: boolean; offSkills?: string[] }>,
+  signal?: AbortSignal,
+): Promise<Map<string, string>> {
+  const titles = new Map<string, string>();
+  const names = new Set(tasks.filter(task => task.skillOff).flatMap(task => task.offSkills ?? []));
+  if (names.size === 0) return titles;
+  const registry = await loadSkillRegistry(client, signal).catch(() => null);
+  for (const name of names) {
+    const title = registry?.skills.get(name)?.title;
+    if (title && title !== name) titles.set(name, title);
+  }
+  return titles;
+}
+
 // ---------------------------------------------------------------------------
 // Skill changes (apply_agent_skills)
 // ---------------------------------------------------------------------------

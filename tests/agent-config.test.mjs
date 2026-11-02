@@ -3629,9 +3629,11 @@ test('connect_agent_oauth names the skills a task it turns on still waits for', 
     key, description: 'Weekly check', value: 'Check the numbers.', interval: '0 9 * * 1', enabled: false, requires_credentials: requires, _source: 'skill-bundle', _editable: true,
     _owner_skills: owners, _skill_off: offSkills !== null, ...(offSkills ? { _off_skills: offSkills } : {}),
   });
+  const providers = [['int-brevo-email', 'Brevo Email', 'brevo'], ['int-sendgrid-email', 'SendGrid Email', 'sendgrid']]
+    .map(([name, title, credential]) => ({ name, title, depends_on: [], conflicts_with: [], credential_key: credential, requires_credentials: true, pricing: {} }));
   const stub = fakeClient({
     '/Credentials/Detail': credentialDetail,
-    '/Skills/List': connectSkillList,
+    '/Skills/List': { ...connectSkillList, skills: [...connectSkillList.skills, ...providers] },
     '/UserAgent/Detail': {
       result: true,
       useragents: [customBuildRow({
@@ -3651,8 +3653,8 @@ test('connect_agent_oauth names the skills a task it turns on still waits for', 
   await withClient(stub, async client => {
     const result = await client.callTool({ name: 'connect_agent_oauth', arguments: { agent_guid: AGENT, credential: 'hubspot' } });
     assert.equal(result.structuredContent.state, 'authorize_in_browser', text(result));
-    assert.match(result.structuredContent.message, /`cs-cron-lead-reply-handler`, `cs-cron-newsletter-sender`, `cs-cron-googleads-audience-refresher` turn on once HubSpot is connected\. `cs-cron-lead-reply-handler` does not run until skill int-lemlist-outreach is turned on\. `cs-cron-newsletter-sender` does not run until one of the skills int-brevo-email, int-hubspot-crm, int-mailchimp-email or int-sendgrid-email is turned on\. Every run of a scheduled task uses credits/);
-    assert.doesNotMatch(result.structuredContent.message, /`cs-cron-googleads-audience-refresher` does not run|util-newsletter-compose/);
+    assert.match(result.structuredContent.message, /`cs-cron-lead-reply-handler`, `cs-cron-newsletter-sender`, `cs-cron-googleads-audience-refresher` turn on once HubSpot is connected\. `cs-cron-lead-reply-handler` stays paused until Lemlist \(`int-lemlist-outreach`\) is on\. `cs-cron-newsletter-sender` stays paused until Brevo Email \(`int-brevo-email`\), HubSpot CRM \(`int-hubspot-crm`\), Mailchimp \(`int-mailchimp-email`\) or SendGrid Email \(`int-sendgrid-email`\) is on\. Every run of a scheduled task uses credits/);
+    assert.doesNotMatch(result.structuredContent.message, /`cs-cron-googleads-audience-refresher` stays paused|util-newsletter-compose/);
   });
 });
 
@@ -3670,6 +3672,11 @@ test('set_agent_credentials names the skills a task the save turns on still wait
     let result;
     await withClient(fakeClient({
       '/Credentials/Detail': credentialDetail,
+      '/Skills/List': {
+        ...skillList,
+        skills: [...skillList.skills, ...[['int-appstore-reviews', 'App Store Reviews', 'apple-appstore'], ['int-googleplay-reviews', 'Google Play Reviews', 'google-play']]
+          .map(([name, title, credential]) => ({ name, title, depends_on: [], conflicts_with: [], credential_key: credential, requires_credentials: true, pricing: {} }))],
+      },
       '/UserAgent/CredentialUpsert': { result: true, errors: [], applied: 1 },
       '/UserAgent/Detail': detail({
         status: 6,
@@ -3687,8 +3694,8 @@ test('set_agent_credentials names the skills a task the save turns on still wait
   const base = 'Saving these credentials turns on the scheduled tasks that need them; turn off any you do not want.';
 
   const waiting = await save([reviews, events, ads]);
-  assert.ok(waiting.structuredContent.notes.includes(`${base} \`cs-cron-review-scanner\` does not run until one of the skills int-appstore-reviews or int-googleplay-reviews is turned on.`), JSON.stringify(waiting.structuredContent.notes));
-  assert.doesNotMatch(text(waiting), /`cs-cron-(app-event-scanner|metaads-performance-reporter)` does not run/);
+  assert.ok(waiting.structuredContent.notes.includes(`${base} \`cs-cron-review-scanner\` stays paused until App Store Reviews (\`int-appstore-reviews\`) or Google Play Reviews (\`int-googleplay-reviews\`) is on.`), JSON.stringify(waiting.structuredContent.notes));
+  assert.doesNotMatch(text(waiting), /`cs-cron-(app-event-scanner|metaads-performance-reporter)` stays paused/);
 
   const running = await save([events]);
   assert.ok(running.structuredContent.notes.includes(base), JSON.stringify(running.structuredContent.notes));

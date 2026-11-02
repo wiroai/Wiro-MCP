@@ -774,38 +774,44 @@ function nameList(names: readonly string[], word: 'and' | 'or'): string {
   return names.length > 1 ? `${names.slice(0, -1).join(', ')} ${word} ${names[names.length - 1]}` : names.join('');
 }
 
-/**
- * Why a task that waits for its skills does not run, as a clause that names the skills to turn on
- * (offSkills): any one of them lets it run. Its own on/off state stays as it is: a task that is on runs
- * again once one of them is on, and one that is off also needs turning on.
- */
-export function skillOffText(task: Pick<AgentTask, 'enabled' | 'offSkills'>): string {
-  const names = task.offSkills ?? [];
-  if (!task.enabled) {
-    if (names.length === 1) return `it also needs skill ${names[0]} turned on to run`;
-    return names.length > 1 ? `it also needs one of the skills ${nameList(names, 'or')} turned on to run` : 'it also needs a skill turned on to run';
-  }
-  if (names.length === 1) return `skill ${names[0]} is off, so it does not run until ${names[0]} is turned on`;
-  return `${names.length > 1 ? `skills ${nameList(names, 'and')}` : 'the skills it needs'} are off, so it does not run until one of them is turned on`;
+/** A skill as people see it, by its catalog title, with the name apply_agent_skills takes: Gmail Check (`int-gmail-check`). */
+export function skillLabel(name: string, titles?: ReadonlyMap<string, string>): string {
+  const title = titles?.get(name);
+  return title ? `${title} (\`${name}\`)` : `\`${name}\``;
 }
 
 /**
- * The tasks among these that wait for their skills, each as a sentence that names the skills to turn on,
- * with a space before it. A saved credential turns such a task on, but it does not run until one of them is on.
+ * Why a paused task does not run, as a clause that names the skills to turn on (offSkills), by their titles
+ * where titles has them: any one of them ends the pause. Its own on/off state stays as it is: a task that is
+ * on runs again once one of them is on, and one that is off also needs turning on.
  */
-export function skillOffTasksNote(tasks: ReadonlyArray<{ key: string; offSkills?: string[]; skillOff?: boolean }>): string {
+export function skillOffText(task: Pick<AgentTask, 'enabled' | 'offSkills'>, titles?: ReadonlyMap<string, string>): string {
+  const names = (task.offSkills ?? []).map(name => skillLabel(name, titles));
+  return task.enabled
+    ? `it is paused until ${names.length > 0 ? nameList(names, 'or') : 'a skill it needs'} is on`
+    : `it also needs ${names.length > 0 ? nameList(names, 'or') : 'a skill it needs'} turned on to run`;
+}
+
+/**
+ * The paused tasks among these, each as a sentence that names the skills to turn on, with a space before it.
+ * A saved credential turns such a task on, but it stays paused until one of them is on.
+ */
+export function skillOffTasksNote(
+  tasks: ReadonlyArray<{ key: string; offSkills?: string[]; skillOff?: boolean }>,
+  titles?: ReadonlyMap<string, string>,
+): string {
   return tasks.filter(task => task.skillOff).map(task => {
-    const names = task.offSkills ?? [];
-    const skills = names.length === 1
-      ? `skill ${names[0]}`
-      : names.length > 1 ? `one of the skills ${nameList(names, 'or')}` : 'a skill it needs';
-    return ` ${quotedSpan(task.key)} does not run until ${skills} is turned on.`;
+    const names = (task.offSkills ?? []).map(name => skillLabel(name, titles));
+    return ` ${quotedSpan(task.key)} stays paused until ${names.length > 0 ? nameList(names, 'or') : 'a skill it needs'} is on.`;
   }).join('');
 }
 
-/** A scheduled task as a list line: key, on or off, schedule and description, then shortenedNote if its text was cut. */
-export function formatScheduledTaskLine(task: AgentTask, shortenedNote = ''): string {
-  return `- \`${task.key}\` ${task.enabled ? 'on' : 'off'}${task.notWritten ? ' (its text is not written yet, so it does not run)' : ''}${task.skillOff ? ` (${skillOffText(task)})` : ''}${task.interval ? `, ${task.interval}` : ''}${task.description ? `: ${quotedSpan(task.description)}` : ''}${task.instructionsTruncated ? shortenedNote : ''}`;
+/**
+ * A scheduled task as a list line: key, on or off, schedule and description, then shortenedNote if its text
+ * was cut. titles names the skills a paused task waits for as people see them.
+ */
+export function formatScheduledTaskLine(task: AgentTask, shortenedNote = '', titles?: ReadonlyMap<string, string>): string {
+  return `- \`${task.key}\` ${task.enabled ? 'on' : 'off'}${task.notWritten ? ' (its text is not written yet, so it does not run)' : ''}${task.skillOff ? ` (${skillOffText(task, titles)})` : ''}${task.interval ? `, ${task.interval}` : ''}${task.description ? `: ${quotedSpan(task.description)}` : ''}${task.instructionsTruncated ? shortenedNote : ''}`;
 }
 
 /** A custom instruction as a list line: key, on or off and description, then shortenedNote if its text was cut. */
@@ -839,7 +845,8 @@ function formatModelsLine(agent: AgentDetail): string | null {
   return parts.length > 0 ? `**Models:** ${parts.join(' ')}` : null;
 }
 
-export function formatAgentDetail(agent: AgentDetail, plainMember = false): string {
+/** titles names the skills a paused task waits for as people see them (pausedSkillTitles). */
+export function formatAgentDetail(agent: AgentDetail, plainMember = false, titles?: ReadonlyMap<string, string>): string {
   const lines = formatAgentSummaryLines(agent, plainMember);
   if (agent.lastActivityAt) lines.push(`**Last activity:** ${agent.lastActivityAt}`);
   if (agent.pricing) {
@@ -877,7 +884,7 @@ export function formatAgentDetail(agent: AgentDetail, plainMember = false): stri
   }
   if (agent.scheduledTasks.length > 0) {
     lines.push('', '### Scheduled tasks', '');
-    for (const task of agent.scheduledTasks) lines.push(formatScheduledTaskLine(task, shortenedNote(task.key)));
+    for (const task of agent.scheduledTasks) lines.push(formatScheduledTaskLine(task, shortenedNote(task.key), titles));
   }
   if (agent.customInstructions.length > 0) {
     lines.push('', '### Custom instructions', '');

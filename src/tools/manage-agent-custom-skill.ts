@@ -22,6 +22,7 @@ import {
   isCustomBuild,
   looksLikeCron,
   normalizeCustomSkillKey,
+  pausedSkillTitles,
   readUserAgent,
   resolveExistingCustomSkillKey,
   restartNote,
@@ -148,9 +149,9 @@ function toEntry(entry: CustomSkillEntry, full = false) {
   };
 }
 
-/** Why a scheduled task that waits for its skills does not run, as a sentence of its own. */
-function skillOffSentence(entry: CustomSkillEntry): string {
-  const text = skillOffText(entry);
+/** Why a paused scheduled task does not run, as a sentence of its own that names the skills by their titles. */
+function skillOffSentence(entry: CustomSkillEntry, titles: ReadonlyMap<string, string>): string {
+  const text = skillOffText(entry, titles);
   return `${text.charAt(0).toUpperCase()}${text.slice(1)}.`;
 }
 
@@ -217,13 +218,13 @@ function upsertRestartNote(status: number | null, functional: boolean, textOnly:
     : 'The change is saved, but the agent was not restarted, so a running agent keeps its old settings until it restarts. control_agent with action restart loads them, and get_my_agent shows its status.';
 }
 
-function scheduleInfo(row: Row, interval: string, isDefault: boolean, entry: CustomSkillEntry) {
+function scheduleInfo(row: Row, interval: string, isDefault: boolean, entry: CustomSkillEntry, titles: ReadonlyMap<string, string>) {
   const timeZone = asString(row.timezone)?.trim() || 'UTC';
   const parts = [
     `Runs on the cron schedule "${interval}"${isDefault ? ' (the default: Mondays at 10:00)' : ''} in the agent's time zone, ${timeZone}. The time zone can be changed with update_agent.`,
     'Every run spends the agent\'s credits.',
     entry.enabled ? '' : 'It is turned off, so it does not run.',
-    entry.skillOff ? skillOffSentence(entry) : '',
+    entry.skillOff ? skillOffSentence(entry, titles) : '',
     entry.requiresCredentials.length > 0 ? `It only runs while ${entry.requiresCredentials.join(', ')} is connected.` : '',
   ].filter(Boolean);
   return { interval, timeZone, note: parts.join(' ') };
@@ -332,7 +333,7 @@ async function upsert(client: WiroClient, input: Input, signal: AbortSignal) {
   const warnings: string[] = [];
   if (input.key.trim() !== key) warnings.push(`Saved under the key ${key}.`);
   const schedule = kind === 'scheduled_task' && after.interval
-    ? scheduleInfo(row, after.interval, !existing && interval === undefined, after)
+    ? scheduleInfo(row, after.interval, !existing && interval === undefined, after, await pausedSkillTitles(client, [after], signal))
     : undefined;
   const restart = upsertRestartNote(agentStatusOf(row), functional, textOnly, restarting);
   return reply(input, key, 'saved',
@@ -513,10 +514,11 @@ async function history(client: WiroClient, input: Input, signal: AbortSignal) {
   const versions = data.entries.slice(0, input.limit).map(historyEntry);
   const current = entries.find(entry => entry.key === key) ?? null;
   const presetDefault = presetDefaultOf(data.presetDefault);
+  const titles = await pausedSkillTitles(client, current ? [current] : [], signal);
   const message = [
     current ? `Current: ${current.enabled ? 'on' : 'off'}${current.interval ? `, schedule "${current.interval}"` : ''}.` : 'This key has no live entry on the agent.',
     current?.notWritten ? 'Its text is not written yet, so it does not run until its text is saved.' : '',
-    current?.skillOff ? skillOffSentence(current) : '',
+    current?.skillOff ? skillOffSentence(current, titles) : '',
     `${data.entries.length} saved version${data.entries.length === 1 ? '' : 's'}${versions.length < data.entries.length ? `, showing the newest ${versions.length}` : ''}.`,
     presetDefault ? 'It has a template default (revert with source preset).' : 'It has no template default.',
     templates.length > 0 ? `${templates.length} ready-made template${templates.length === 1 ? '' : 's'} can be used as its text.` : '',

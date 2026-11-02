@@ -805,7 +805,7 @@ test('bind_agent_project names the skill a task it turns on still waits for', as
     const preview = await call('bind_agent_project', { agent_guid: AGENT });
     assert.notEqual(preview.isError, true, text(preview));
     assert.equal(preview.structuredContent.state, 'preview');
-    const note = '`cs-cron-weekly-images` and `cs-cron-monthly-images` turn on once the project is connected. `cs-cron-weekly-images` does not run until skill int-wiro-aimodels is turned on. Every run of a scheduled task uses credits; turn off any you do not want with manage_agent_custom_skill.';
+    const note = '`cs-cron-weekly-images` and `cs-cron-monthly-images` turn on once the project is connected. `cs-cron-weekly-images` stays paused until Wiro AI Models (`int-wiro-aimodels`) is on. Every run of a scheduled task uses credits; turn off any you do not want with manage_agent_custom_skill.';
     assert.ok(preview.structuredContent.notes.includes(note), JSON.stringify(preview.structuredContent.notes));
     assert.ok(text(preview).includes(note));
   });

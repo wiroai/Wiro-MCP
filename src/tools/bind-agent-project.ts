@@ -18,6 +18,7 @@ import {
   customSkillEntries,
   keyList,
   loadSkillRegistry,
+  pausedSkillTitles,
   readUserAgent,
   restartNote,
   setupStillMissingNote,
@@ -109,6 +110,8 @@ interface BindPlan {
   /** How many projects this connection could connect instead: not the target, and not the one the agent already uses. */
   others: number;
   unused: UnusedCredential | null;
+  /** The titles of the skills a paused task waits for (pausedSkillTitles). */
+  titles: Map<string, string>;
 }
 
 async function readBindPlan(client: WiroClient, agentGuid: string, projectId: string | undefined, signal: AbortSignal): Promise<BindPlan> {
@@ -165,6 +168,7 @@ async function readBindPlan(client: WiroClient, agentGuid: string, projectId: st
     alreadyBound: target ? target === current : holdsConnectionKey,
     others: projects.filter(project => project.view.canBind && project !== target && project !== current).length,
     unused,
+    titles: await pausedSkillTitles(client, customSkillEntries(row), signal),
   };
 }
 
@@ -186,9 +190,9 @@ function hasProject(plan: BindPlan): boolean {
 /**
  * What turns on with the project. Saving one sets every custom skill and
  * scheduled task that requires it to on: with a first project that is all of
- * them, and with a new project it is the ones that are off now. A task whose
- * skills are all off is named with the skill it still waits for. Null when
- * nothing does, as when the agent already holds this project.
+ * them, and with a new project it is the ones that are off now. A paused
+ * task is named with the skills it still waits for, by their titles. Null
+ * when nothing does, as when the agent already holds this project.
  */
 function turnsOnNote(plan: BindPlan, when: 'once' | 'now that'): string | null {
   if (plan.alreadyBound) return null;
@@ -196,7 +200,7 @@ function turnsOnNote(plan: BindPlan, when: 'once' | 'now that'): string | null {
   const entries = customSkillEntries(plan.row).filter(entry => entry.requiresCredentials.includes(WIRO_PROJECT_CREDENTIAL)
     && (!replacing || !entry.enabled));
   if (entries.length === 0) return null;
-  const sentence = `${keyList(entries.map(entry => quotedSpan(entry.key)))} ${entries.length > 1 ? 'turn' : 'turns'} on ${when} the project is connected.${skillOffTasksNote(entries)}`;
+  const sentence = `${keyList(entries.map(entry => quotedSpan(entry.key)))} ${entries.length > 1 ? 'turn' : 'turns'} on ${when} the project is connected.${skillOffTasksNote(entries, plan.titles)}`;
   return entries.some(entry => entry.kind === 'scheduled_task')
     ? `${sentence} Every run of a scheduled task uses credits; turn off any you do not want with manage_agent_custom_skill.`
     : sentence;

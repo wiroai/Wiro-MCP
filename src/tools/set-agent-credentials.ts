@@ -26,6 +26,7 @@ import {
   keyList,
   loadCredentialMeta,
   ownAppRedirectUri,
+  pausedSkillTitles,
   prepareCredentialWrite,
   readUserAgent,
   redactSecrets,
@@ -397,7 +398,8 @@ export function registerSetAgentCredentials(server: McpServer, client: WiroClien
           ? customSkillEntries(row).filter(entry => entry.kind === 'scheduled_task' && entry.requiresCredentials.some(key => keys.includes(key)))
           : [];
         if (tasks.length > 0) {
-          notes.push(`Saving these credentials turns on the scheduled tasks that need them; turn off any you do not want.${skillOffTasksNote(tasks)}`);
+          const titles = await pausedSkillTitles(client, tasks, extra.signal);
+          notes.push(`Saving these credentials turns on the scheduled tasks that need them; turn off any you do not want.${skillOffTasksNote(tasks, titles)}`);
         }
         if (keys.includes(WIRO_PROJECT_CREDENTIAL)) {
           notes.push('Model runs started by this agent are billed to the wallet of the workspace that owns that project key.');

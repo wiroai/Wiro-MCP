@@ -31,6 +31,7 @@ import {
   loadSkillRegistry,
   ownAppRedirectUri,
   parseDiscoveredGroups,
+  pausedSkillTitles,
   readOAuthStatus,
   readUserAgent,
   toAccountRefs,
@@ -223,12 +224,12 @@ function unusedCredentialRefusal(
  * What a finished sign-in also turns on: Wiro keeps an entry that requires a
  * credential off until the credential arrives. Saving keys or a token turns
  * these on earlier and says so, so an entry that reads as on is left out. A
- * task whose skills are all off is named with the skill it still waits for.
+ * paused task is named with the skills it still waits for, by their titles.
  */
-function turnsOnNote(row: Record<string, unknown>, { credential, meta }: Context): string {
+function turnsOnNote(row: Record<string, unknown>, { credential, meta }: Context, titles: ReadonlyMap<string, string>): string {
   const entries = customSkillEntries(row).filter(entry => !entry.enabled && entry.requiresCredentials.includes(credential));
   if (entries.length === 0) return '';
-  const sentence = ` ${entries.map(entry => quotedSpan(entry.key)).join(', ')} ${entries.length > 1 ? 'turn' : 'turns'} on once ${meta.title} is connected.${skillOffTasksNote(entries)}`;
+  const sentence = ` ${entries.map(entry => quotedSpan(entry.key)).join(', ')} ${entries.length > 1 ? 'turn' : 'turns'} on once ${meta.title} is connected.${skillOffTasksNote(entries, titles)}`;
   return entries.some(entry => entry.kind === 'scheduled_task')
     ? `${sentence} Every run of a scheduled task uses credits; turn off any you do not want with manage_agent_custom_skill.`
     : sentence;
@@ -404,8 +405,9 @@ async function connect(
   const after = usesDashboard
     ? `After approving, the browser returns to the agent's page in the Wiro dashboard${oauth.picker ? ', which asks which accounts the agent should use' : ''}. Use a browser where the user is signed in to wiro.ai as the agent's owner.`
     : `After approving, the browser goes to ${redirectUrl}.`;
+  const titles = await pausedSkillTitles(client, customSkillEntries(row), signal);
   return result('connect', context, 'authorize_in_browser',
-    `The user must open this link in their own browser and approve access. It works for ${OAUTH_LINK_TTL_SECONDS / 60} minutes. ${after}${turnsOnNote(row, context)} Give the link to the user and check the status once they say they are done.`,
+    `The user must open this link in their own browser and approve access. It works for ${OAUTH_LINK_TTL_SECONDS / 60} minutes. ${after}${turnsOnNote(row, context, titles)} Give the link to the user and check the status once they say they are done.`,
     {
       mode,
       authorizeUrl,
