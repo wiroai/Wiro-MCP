@@ -785,6 +785,20 @@ export function skillOffText(task: Pick<AgentTask, 'enabled' | 'ownerSkills'>): 
   return `${names.length > 1 ? `its skills ${nameList(names, 'and')}` : 'the skills that bring it'} are off, so it does not run until one of them is turned on`;
 }
 
+/**
+ * The tasks among these whose skills are all off, each as a sentence that names the skills to turn on, with a
+ * space before it. A saved credential turns such a task on, but it does not run until one of them is on.
+ */
+export function skillOffTasksNote(tasks: ReadonlyArray<{ key: string; ownerSkills?: string[]; skillOff?: boolean }>): string {
+  return tasks.filter(task => task.skillOff).map(task => {
+    const names = task.ownerSkills ?? [];
+    const skills = names.length === 1
+      ? `its skill ${names[0]}`
+      : `one of ${names.length > 1 ? `its skills ${nameList(names, 'or')}` : 'the skills that bring it'}`;
+    return ` ${quotedSpan(task.key)} does not run until ${skills} is turned on.`;
+  }).join('');
+}
+
 /** A scheduled task as a list line: key, on or off, schedule and description, then shortenedNote if its text was cut. */
 export function formatScheduledTaskLine(task: AgentTask, shortenedNote = ''): string {
   return `- \`${task.key}\` ${task.enabled ? 'on' : 'off'}${task.notWritten ? ' (its text is not written yet, so it does not run)' : ''}${task.skillOff ? ` (${skillOffText(task)})` : ''}${task.interval ? `, ${task.interval}` : ''}${task.description ? `: ${quotedSpan(task.description)}` : ''}${task.instructionsTruncated ? shortenedNote : ''}`;

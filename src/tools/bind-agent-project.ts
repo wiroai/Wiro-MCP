@@ -31,6 +31,7 @@ import { jsonSpan, quotedSpan } from '../utils/quoted-text.js';
 import {
   agentTitleSpan,
   nextStepForAgent,
+  skillOffTasksNote,
   toAgentDetail,
   WIRO_PROJECT_CREDENTIAL,
   type AgentDetail,
@@ -185,7 +186,8 @@ function hasProject(plan: BindPlan): boolean {
 /**
  * What turns on with the project. Saving one sets every custom skill and
  * scheduled task that requires it to on: with a first project that is all of
- * them, and with a new project it is the ones that are off now. Null when
+ * them, and with a new project it is the ones that are off now. A task whose
+ * skills are all off is named with the skill it still waits for. Null when
  * nothing does, as when the agent already holds this project.
  */
 function turnsOnNote(plan: BindPlan, when: 'once' | 'now that'): string | null {
@@ -194,7 +196,7 @@ function turnsOnNote(plan: BindPlan, when: 'once' | 'now that'): string | null {
   const entries = customSkillEntries(plan.row).filter(entry => entry.requiresCredentials.includes(WIRO_PROJECT_CREDENTIAL)
     && (!replacing || !entry.enabled));
   if (entries.length === 0) return null;
-  const sentence = `${keyList(entries.map(entry => quotedSpan(entry.key)))} ${entries.length > 1 ? 'turn' : 'turns'} on ${when} the project is connected.`;
+  const sentence = `${keyList(entries.map(entry => quotedSpan(entry.key)))} ${entries.length > 1 ? 'turn' : 'turns'} on ${when} the project is connected.${skillOffTasksNote(entries)}`;
   return entries.some(entry => entry.kind === 'scheduled_task')
     ? `${sentence} Every run of a scheduled task uses credits; turn off any you do not want with manage_agent_custom_skill.`
     : sentence;

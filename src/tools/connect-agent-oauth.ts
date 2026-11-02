@@ -54,7 +54,7 @@ import {
   reportProgress,
 } from '../utils/poll.js';
 import { jsonSpan, quotedSpan } from '../utils/quoted-text.js';
-import { readStatusAdvice, startNeedsPlan, toAgentDetail, WIRO_PROJECT_CREDENTIAL } from '../utils/user-agent.js';
+import { readStatusAdvice, skillOffTasksNote, startNeedsPlan, toAgentDetail, WIRO_PROJECT_CREDENTIAL } from '../utils/user-agent.js';
 import { nextActionSchema, strictInput } from './schemas.js';
 
 const accountSchema = z.object({ id: z.string(), name: z.string() });
@@ -222,12 +222,13 @@ function unusedCredentialRefusal(
 /**
  * What a finished sign-in also turns on: Wiro keeps an entry that requires a
  * credential off until the credential arrives. Saving keys or a token turns
- * these on earlier and says so, so an entry that reads as on is left out.
+ * these on earlier and says so, so an entry that reads as on is left out. A
+ * task whose skills are all off is named with the skill it still waits for.
  */
 function turnsOnNote(row: Record<string, unknown>, { credential, meta }: Context): string {
   const entries = customSkillEntries(row).filter(entry => !entry.enabled && entry.requiresCredentials.includes(credential));
   if (entries.length === 0) return '';
-  const sentence = ` ${entries.map(entry => quotedSpan(entry.key)).join(', ')} ${entries.length > 1 ? 'turn' : 'turns'} on once ${meta.title} is connected.`;
+  const sentence = ` ${entries.map(entry => quotedSpan(entry.key)).join(', ')} ${entries.length > 1 ? 'turn' : 'turns'} on once ${meta.title} is connected.${skillOffTasksNote(entries)}`;
   return entries.some(entry => entry.kind === 'scheduled_task')
     ? `${sentence} Every run of a scheduled task uses credits; turn off any you do not want with manage_agent_custom_skill.`
     : sentence;

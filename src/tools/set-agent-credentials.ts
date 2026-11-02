@@ -39,7 +39,7 @@ import {
   type CredentialMeta,
 } from '../utils/agent-config.js';
 import { fetchPublicFile, type RemoteFile } from '../utils/remote-file.js';
-import { bindProjectStep, toAgentDetail, WIRO_PROJECT_CREDENTIAL } from '../utils/user-agent.js';
+import { bindProjectStep, skillOffTasksNote, toAgentDetail, WIRO_PROJECT_CREDENTIAL } from '../utils/user-agent.js';
 import { isPlainTeamMember } from '../utils/workspace.js';
 import { nextActionSchema, strictInput } from './schemas.js';
 
@@ -393,9 +393,11 @@ export function registerSetAgentCredentials(server: McpServer, client: WiroClien
             ? `${channel.title} is on.`
             : `${channel.title} turns on once these are set: ${channel.missingFields.join(', ') || 'its required fields'}.`);
         }
-        if (row && customSkillEntries(row).some(entry => entry.kind === 'scheduled_task'
-          && entry.requiresCredentials.some(key => keys.includes(key)))) {
-          notes.push('Saving these credentials turns on the scheduled tasks that need them; turn off any you do not want.');
+        const tasks = row
+          ? customSkillEntries(row).filter(entry => entry.kind === 'scheduled_task' && entry.requiresCredentials.some(key => keys.includes(key)))
+          : [];
+        if (tasks.length > 0) {
+          notes.push(`Saving these credentials turns on the scheduled tasks that need them; turn off any you do not want.${skillOffTasksNote(tasks)}`);
         }
         if (keys.includes(WIRO_PROJECT_CREDENTIAL)) {
           notes.push('Model runs started by this agent are billed to the wallet of the workspace that owns that project key.');

@@ -3610,6 +3610,69 @@ test('connect_agent_oauth says which entries a finished sign-in turns on', async
   assert.equal(text(injected).split('\n').some(line => line.startsWith('**Next:**')), false);
 });
 
+test('connect_agent_oauth names the skill a task it turns on still waits for', async () => {
+  // Detail names the skills that bring a registry task and whether all of them are off.
+  const task = (key, requires, owners, skillOff) => ({ key, description: 'Weekly check', value: 'Check the numbers.', interval: '0 9 * * 1', enabled: false, requires_credentials: requires, _source: 'skill-bundle', _editable: true, _owner_skills: owners, _skill_off: skillOff });
+  const stub = fakeClient({
+    '/Credentials/Detail': credentialDetail,
+    '/Skills/List': connectSkillList,
+    '/UserAgent/Detail': {
+      result: true,
+      useragents: [customBuildRow({
+        skills: skillsOn('int-mailchimp-email', 'util-newsletter-compose', 'util-chat-markdown-reporting'),
+        customskills: [],
+        scheduledskills: [
+          task('cs-cron-lead-reply-handler', ['apollo', 'lemlist', 'hubspot'], ['int-lemlist-outreach'], true),
+          task('cs-cron-newsletter-sender', ['brevo', 'mailchimp', 'sendgrid', 'hubspot'], ['util-newsletter-compose'], false),
+        ],
+      })],
+    },
+    '/UserAgentOAuth/OAuthStatus': { result: true, connected: false, accounts: [], connectedat: '', tokenexpiresat: '' },
+    '/UserAgentOAuth/OAuthConnect': { result: true, authorizeUrl: 'https://app.hubspot.com/oauth/authorize?state=xyz' },
+  });
+  await withClient(stub, async client => {
+    const result = await client.callTool({ name: 'connect_agent_oauth', arguments: { agent_guid: AGENT, credential: 'hubspot' } });
+    assert.equal(result.structuredContent.state, 'authorize_in_browser', text(result));
+    assert.match(result.structuredContent.message, /`cs-cron-lead-reply-handler`, `cs-cron-newsletter-sender` turn on once HubSpot is connected\. `cs-cron-lead-reply-handler` does not run until its skill int-lemlist-outreach is turned on\. Every run of a scheduled task uses credits/);
+    assert.doesNotMatch(result.structuredContent.message, /`cs-cron-newsletter-sender` does not run/);
+  });
+});
+
+test('set_agent_credentials names the skills a task the save turns on still waits for', async () => {
+  const json = '{"type":"service_account","project_id":"store-app"}';
+  const task = (key, requires, owners, skillOff) => ({ key, description: 'Store check', value: 'Check the store.', interval: '0 9 * * *', enabled: true, requires_credentials: requires, _source: 'skill-bundle', _editable: true, _owner_skills: owners, _skill_off: skillOff });
+  const reviews = task('cs-cron-review-scanner', ['apple-appstore', 'google-play'], ['int-appstore-reviews', 'int-googleplay-reviews'], true);
+  const events = task('cs-cron-app-event-scanner', ['apple-appstore', 'google-play', 'google-play-apps'], ['int-appstore-events', 'int-googleplay-events'], false);
+  // Off too, but it needs another service, so this save says nothing about it.
+  const ads = task('cs-cron-metaads-performance-reporter', ['meta-ads'], ['int-metaads-manage'], true);
+  const save = async scheduledskills => {
+    let result;
+    await withClient(fakeClient({
+      '/Credentials/Detail': credentialDetail,
+      '/UserAgent/CredentialUpsert': { result: true, errors: [], applied: 1 },
+      '/UserAgent/Detail': detail({
+        status: 6,
+        skills: skillsOn('int-googleplay-events', 'util-chat-markdown-reporting'),
+        credentials: { 'google-play': { serviceaccountjson: Buffer.from(json).toString('base64'), optional: false, _connected: false, _filled: true, _required_missing: false, _schema: { title: 'Google Play' } } },
+        communicationChannels: [],
+        scheduledskills,
+      }),
+    }), async client => {
+      result = await client.callTool({ name: 'set_agent_credentials', arguments: { agent_guid: AGENT, fields: [{ credential: 'google-play', field: 'serviceaccountjson', value: json }] } });
+      assert.notEqual(result.isError, true, text(result));
+    });
+    return result;
+  };
+  const base = 'Saving these credentials turns on the scheduled tasks that need them; turn off any you do not want.';
+
+  const waiting = await save([reviews, events, ads]);
+  assert.ok(waiting.structuredContent.notes.includes(`${base} \`cs-cron-review-scanner\` does not run until one of its skills int-appstore-reviews or int-googleplay-reviews is turned on.`), JSON.stringify(waiting.structuredContent.notes));
+  assert.doesNotMatch(text(waiting), /`cs-cron-(app-event-scanner|metaads-performance-reporter)` does not run/);
+
+  const running = await save([events]);
+  assert.ok(running.structuredContent.notes.includes(base), JSON.stringify(running.structuredContent.notes));
+});
+
 test('connect_agent_oauth keeps a credential a template agent\'s setup waits for connectable', async () => {
   // The skill is off, but the template requires the credential, so get_my_agent's next step still works.
   const required = fakeClient({
