@@ -310,11 +310,12 @@ group that is not loaded, the server instructions tell the assistant to say so.
 Running a model or workflow, sending a message to Studio or the Workflow Agent,
 and messages to your own agents (which use the agent's credits) cost money. Agent
 plans, plan changes, credit packs and skill changes are charged to your wallet,
-so those tools first return the price (an estimate for prorated changes such as
-an upgrade to Pro) and only act when called again with `confirm: true` and the
-quote's reference (`confirm_charge_usd` with the approved amount, or the quote's
-`idempotency_key` for skill changes) after you agree. If the price changed in
-between, nothing is charged and you get a new quote. Deleting a workflow, an
+so those tools first return the price (for a change inside a billing period,
+the amount Wiro works out for the time left) and only act when called again
+with `confirm: true` and the quote's reference (`confirm_charge_usd` with the
+approved amount, or the quote's `idempotency_key` for skill changes) after you
+agree. If the price changed in between, nothing is charged and you get a new
+quote. Deleting a workflow, an
 agent, a conversation or an account connection also waits for `confirm: true`,
 and so do connecting an agent to a Wiro project with `bind_agent_project` and
 replacing a workflow's steps with `update_workflow` or

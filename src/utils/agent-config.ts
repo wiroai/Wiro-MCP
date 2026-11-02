@@ -572,43 +572,59 @@ export function planBilling(row: Row): PlanBilling {
 }
 
 const DAY_SECONDS = 86400;
-const WALLET_PLAN_PERIOD_SECONDS = 30 * DAY_SECONDS;
-
-/** The time left in a period, in seconds. */
-export function periodSecondsLeft(periodEndUnix: number, nowMs = Date.now()): number {
-  return Math.max(0, periodEndUnix - nowMs / 1000);
-}
-
-/** Whether a rise now costs the one-day minimum: under a day is left of the period, or none. */
-export function underOneDayLeft(periodEndUnix: number | null, nowMs = Date.now()): boolean {
-  return periodEndUnix !== null && periodEndUnix - Math.floor(nowMs / 1000) < DAY_SECONDS;
-}
-
-/** Drops float noise only, so it cannot move a whole cent. */
-function withoutFloatNoise(usd: number): number {
-  return Math.round(usd * 1e9) / 1e9;
-}
 
 /**
- * Wiro charges a prepaid plan the monthly difference for the time left in the
- * period, by the second: a charge rounds up to the cent, a credit down, and a
- * rise pays for at least one day. This is that sum. The agent's row does not say
- * when the period started, so the period is taken as 30 days, the length of a plan
- * paid from the wallet.
+ * What a plan change does today, as Wiro works it out on the plan the agent has
+ * now (PricingPreview with the agent's guid answers it as planChange). The money
+ * moves only on a wallet plan: a card plan's difference goes to the card
+ * subscription instead.
  */
-export function estimateProratedUsd(
-  deltaUsd: number,
-  periodEndUnix: number | null,
-  nowMs = Date.now(),
-  periodSeconds = WALLET_PLAN_PERIOD_SECONDS,
-): number | null {
-  if (periodEndUnix === null || !Number.isFinite(deltaUsd)) return null;
-  const total = Math.max(1, periodSeconds);
-  const left = Math.min(total, Math.max(0, periodEndUnix - Math.floor(nowMs / 1000)));
-  if (deltaUsd > 0) {
-    return Math.ceil(withoutFloatNoise((deltaUsd * Math.min(total, Math.max(DAY_SECONDS, left))) / total) * 100 - 1e-6) / 100;
-  }
-  return -Math.floor(withoutFloatNoise((Math.abs(deltaUsd) * left) / total) * 100 + 1e-6) / 100 || 0;
+export interface PlanChange {
+  /** Who pays the plan: the wallet, or a card. */
+  wallet: boolean;
+  /** When the current period ends, in unix seconds. */
+  periodEnd: number | null;
+  secondsLeft: number | null;
+  /** What this period gains, below 0 when it loses. */
+  creditsNow: number | null;
+  /** What this period grants in all after the change. */
+  creditsThisPeriod: number | null;
+  /** What each renewal grants after the change. */
+  creditsFromRenewal: number | null;
+  /** Taken from the wallet now, at list price. 0 on a card plan. */
+  chargeNowUsd: number | null;
+  /** Credited back now on a wallet plan; null when Wiro works it out only when the change is applied. */
+  creditNowUsd: number | null;
+  /** The part of the credit that goes on credits already used. */
+  usedCreditsUsd: number | null;
+}
+
+/** The plan change of a pricing answer, or null when the agent has no active plan or Wiro sent none. */
+export function readPlanChange(value: unknown): PlanChange | null {
+  if (!isPlainObject(value)) return null;
+  return {
+    wallet: asString(value.provider) === 'prepaid',
+    periodEnd: toNumber(value.periodEnd),
+    secondsLeft: toNumber(value.secondsLeft),
+    creditsNow: toNumber(value.creditsNow),
+    creditsThisPeriod: toNumber(value.creditsThisPeriod),
+    creditsFromRenewal: toNumber(value.creditsFromRenewal),
+    chargeNowUsd: toNumber(value.chargeNowUsd),
+    creditNowUsd: toNumber(value.creditNowUsd),
+    usedCreditsUsd: toNumber(value.usedCreditsUsd),
+  };
+}
+
+/** Whether a rise now pays the one-day minimum: under a day is left of the period. */
+export function underOneDayLeft(secondsLeft: number | null): boolean {
+  return secondsLeft !== null && secondsLeft < DAY_SECONDS;
+}
+
+/** The time left of a period in whole days, at least 1, for a sentence such as "(27 days)". */
+export function daysLeftText(secondsLeft: number | null): string | null {
+  if (secondsLeft === null || secondsLeft < 0) return null;
+  const days = Math.max(1, Math.round(secondsLeft / DAY_SECONDS));
+  return `${days} ${days === 1 ? 'day' : 'days'}`;
 }
 
 export interface SkillsApplyFailure {
@@ -678,10 +694,13 @@ export function describeSkillsApplyError(error: unknown, plan?: PlanBilling['pla
       };
     }
     case 104:
+      // Two refusals share the code: another skill change of the agent, or another payment from its wallet.
       return {
         ...base,
         retrySameKey: true,
-        guidance: 'Another skill change for this agent is still running, and one runs at a time. Nothing was changed or charged by this call. Wait a few seconds, then repeat the call with the same idempotency_key. If it keeps saying so, it clears within 15 minutes.',
+        guidance: /wallet/i.test(message)
+          ? 'Another payment from the same wallet was going through, so this change was not made and nothing was charged. It is not a low balance, and no funds need to be added. Offer to try again in a minute: repeat the call with the same idempotency_key.'
+          : 'Another skill change for this agent is still running, and one runs at a time. Nothing was changed or charged by this call. Wait a few seconds, then repeat the call with the same idempotency_key. If it keeps saying so, it clears within 15 minutes.',
       };
     case 105:
       return {

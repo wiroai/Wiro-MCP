@@ -16,10 +16,10 @@ import {
   agentStatusOf,
   checkSkillSet,
   credentialsNeededFor,
+  daysLeftText,
   describeSkillsApplyError,
   diffSkills,
   enabledSkillNames,
-  estimateProratedUsd,
   formatUsd,
   isAgentRunning,
   loadSkillRegistry,
@@ -27,7 +27,7 @@ import {
   parseSkillChangeKey,
   planBilling,
   planSkillChanges,
-  periodSecondsLeft,
+  readPlanChange,
   readUserAgent,
   underOneDayLeft,
   restartNote,
@@ -35,8 +35,9 @@ import {
   skillPriceTag,
   workspaceHint,
   type PlanBilling,
+  type PlanChange,
 } from '../utils/agent-config.js';
-import { asTier, bindProjectStep, outcomeUnknown, toTierPricing, WIRO_PROJECT_CREDENTIAL } from '../utils/user-agent.js';
+import { asTier, bindProjectStep, formatCredits, outcomeUnknown, toTierPricing, WIRO_PROJECT_CREDENTIAL } from '../utils/user-agent.js';
 import { DEFAULT_WAIT_SECONDS } from '../utils/poll.js';
 import { isPlainTeamMember, teamAgentBillingRefused } from '../utils/workspace.js';
 import { nextActionSchema, strictInput } from './schemas.js';
@@ -45,9 +46,19 @@ const pricingSchema = z.object({
   currentMonthlyUsd: z.number().nullable(),
   newMonthlyUsd: z.number().nullable(),
   deltaMonthlyUsd: z.number().nullable(),
-  currentMonthlyCredits: z.number().nullable(),
-  newMonthlyCredits: z.number().nullable(),
+  currentMonthlyCredits: z.number().nullable()
+    .describe('The monthly credits each renewal grants now.'),
+  newMonthlyCredits: z.number().nullable()
+    .describe('The monthly credits each renewal grants after the change.'),
   deltaMonthlyCredits: z.number().nullable(),
+  creditsNow: z.number().optional()
+    .describe('The credits this period gains now, below 0 when it loses them: the change counts for the time left in the period.'),
+  creditsThisPeriod: z.number().optional()
+    .describe('The monthly credits this period grants in all after the change.'),
+  creditsFromRenewal: z.number().optional()
+    .describe('The monthly credits every renewal grants after the change.'),
+  periodEnd: z.string().optional()
+    .describe('When the current period ends.'),
   note: z.string().optional(),
 });
 
@@ -71,7 +82,12 @@ const outputSchema = {
     plan: z.enum(['prepaid', 'card', 'none']),
     subscriptionStatus: z.string().nullable(),
     wallet: z.enum(['team', 'personal']),
-    estimatedChargeNowUsd: z.number().nullable().optional(),
+    estimatedChargeNowUsd: z.number().nullable().optional()
+      .describe('What a wallet plan pays now, as Wiro works it out; 0 on a card plan, whose difference goes to the card subscription.'),
+    creditNowUsd: z.number().nullable().optional()
+      .describe('For a drop on a wallet plan, what goes back to the balances that paid; null when it is worked out when the change is applied.'),
+    usedCreditsUsd: z.number().nullable().optional()
+      .describe('The part of a credit that comes off for credits already used above what the plan keeps.'),
     chargedNowUsd: z.number().nullable().optional(),
     note: z.string(),
   }),
@@ -100,6 +116,7 @@ type PricingPreviewBody = ApiEnvelope & {
   totalPriceUsd?: unknown;
   totalMonthlyCredits?: unknown;
   enabledSkills?: unknown;
+  planChange?: unknown;
 };
 
 type SkillsApplyBody = ApiEnvelope & {
@@ -109,37 +126,57 @@ type SkillsApplyBody = ApiEnvelope & {
   stripeProrationApplied?: boolean;
   prepaidWalletDelta?: unknown;
   prepaidCreditParts?: unknown;
+  usedCreditsUsd?: unknown;
   warnings?: unknown;
 };
 
 const UNCHANGED_RESTART = 'Nothing changed, so the agent does not restart.';
-
-// A credit for skills turned off goes back to the balances that paid for the plan.
-// Which ones is known once it is applied (creditTerms).
-const CREDIT_TERMS = 'Coupon credit keeps its coupon\'s end date, and other credit lasts until this period ends.';
 
 function roundCents(usd: number): number {
   return Math.round(usd * 100) / 100;
 }
 
 /**
- * How long an applied credit lasts, from the parts Wiro says it split into. Coupon
- * credit keeps the end date of the coupon that paid. What came back from a coupon
- * that has ended since, from store revenue or from deposits lasts until the plan's
- * current period ends. The two amounts add up to the credit, and parts that come
- * to nothing say nothing.
+ * How long an applied credit lasts, from the parts Wiro says it split into. Each
+ * part went back to the balance that paid it and keeps that balance's end date,
+ * except the part whose source has ended since (each ...UntilPeriodEndUsd): that
+ * part lasts until the plan's current period ends. The two amounts add up to the
+ * credit, and parts that come to nothing say nothing.
  */
 function creditTerms(parts: unknown): string {
-  if (!isPlainObject(parts)) return CREDIT_TERMS;
-  const coupon = toNumber(parts.couponUsd) ?? 0;
-  const others = (toNumber(parts.storeUsd) ?? 0) + (toNumber(parts.depositUsd) ?? 0);
-  const untilEnd = roundCents((toNumber(parts.couponUntilPeriodEndUsd) ?? 0) + others);
-  const keepsEnd = roundCents(roundCents(coupon + others) - untilEnd);
+  if (!isPlainObject(parts)) return '';
+  const usd = (key: string) => toNumber(parts[key]) ?? 0;
+  const untilEnd = roundCents(usd('couponUntilPeriodEndUsd') + usd('storeUntilPeriodEndUsd') + usd('depositUntilPeriodEndUsd'));
+  const keepsEnd = roundCents(roundCents(usd('couponUsd') + usd('storeUsd') + usd('depositUsd')) - untilEnd);
   if (keepsEnd > 0 && untilEnd > 0) {
-    return `${formatUsd(keepsEnd)} of it went back as coupon credit and keeps its coupon's end date, and ${formatUsd(untilEnd)} lasts until this period ends.`;
+    return `${formatUsd(keepsEnd)} of it went back to the balances that paid and keeps their end dates, and ${formatUsd(untilEnd)} lasts until this period ends, because the credit that paid it has ended.`;
   }
-  if (keepsEnd > 0) return 'It went back as coupon credit and keeps its coupon\'s end date.';
-  return untilEnd > 0 ? 'It lasts until this period ends.' : '';
+  if (keepsEnd > 0) return 'It went back to the balances that paid and keeps their end dates.';
+  return untilEnd > 0 ? 'It lasts until this period ends, because the credit that paid it has ended.' : '';
+}
+
+/** A count of credits with its sign, such as +97 or -690. */
+function signedCredits(credits: number): string {
+  return `${credits > 0 ? '+' : ''}${formatCredits(credits)}`;
+}
+
+/** The fields of Wiro's plan change that the pricing output carries. */
+function periodFields(change: PlanChange | null) {
+  if (!change) return {};
+  const periodEnd = unixToIso(change.periodEnd);
+  return {
+    ...(change.creditsNow !== null ? { creditsNow: change.creditsNow } : {}),
+    ...(change.creditsThisPeriod !== null ? { creditsThisPeriod: change.creditsThisPeriod } : {}),
+    ...(change.creditsFromRenewal !== null ? { creditsFromRenewal: change.creditsFromRenewal } : {}),
+    ...(periodEnd ? { periodEnd } : {}),
+  };
+}
+
+/** What a price drop does to this period's credits: those of the time left end, and the period keeps the rest. */
+function creditsEndNote(skillsOff: number, creditsThisPeriod: number | null): string {
+  const keeps = creditsThisPeriod !== null ? `, and this period keeps ${formatCredits(creditsThisPeriod)}` : '';
+  if (skillsOff === 0) return `The credits the change takes away end now for the time left${keeps}.`;
+  return `${skillsOff === 1 ? 'Its' : 'Their'} credits for the time left end now${keeps}.`;
 }
 
 function difference(next: number | null, current: number | null): number | null {
@@ -162,7 +199,7 @@ function todayPriceNote(row: Row, billing: PlanBilling, currentPrice: number | n
   const today = tier && tiers ? tiers[tier] : null;
   if (billing.status !== 'active' || currentPrice === null || today === null || !difference(today.priceUsd, currentPrice)) return null;
   const versus = currentCredits !== null && today.monthlyCredits !== currentCredits
-    ? ` with ${today.monthlyCredits} monthly credits, not its current ${formatUsd(currentPrice)} and ${currentCredits}`
+    ? ` with ${formatCredits(today.monthlyCredits)} monthly credits, not its current ${formatUsd(currentPrice)} and ${formatCredits(currentCredits)}`
     : `, not its current ${formatUsd(currentPrice)}`;
   return `Today's ${tier === 'pro' ? 'Pro' : 'Starter'} price for the skills this plan already has is ${formatUsd(today.priceUsd)} a month${versus}. A skill change counts from today's price, and the new price in this quote already includes that.`;
 }
@@ -183,6 +220,12 @@ function creditsWhen(billing: PlanBilling): string {
   return billing.status === 'active' && billing.cancelAtPeriodEnd === true
     ? 'at each renewal after the change, if the plan is kept'
     : 'at each renewal after the change';
+}
+
+/** When an active plan's next renewal gives the new monthly credits. A card plan whose renewal is not known names it as a condition. */
+function renewalWhen(billing: PlanBilling): string {
+  if (billing.cancelAtPeriodEnd === true) return 'from the next renewal, if the plan is kept';
+  return billing.cancelAtPeriodEnd === null ? 'from the next renewal, if the plan renews' : 'from the next renewal';
 }
 
 /** For a cancelled plan, a skill change only covers the time left: nothing renews at the new price. */
@@ -213,7 +256,27 @@ function renewsBack(billing: PlanBilling): boolean {
   return billing.plan === 'prepaid' && billing.status === 'expired';
 }
 
-function quoteBillingNote(billing: PlanBilling, delta: number | null, estimate: number | null, nextPrice: number | null): string {
+/** What a price drop on a wallet plan gives back now, from Wiro's own plan change. */
+function walletCreditNote(change: PlanChange): string {
+  const used = change.usedCreditsUsd ?? 0;
+  if (change.creditNowUsd === null) {
+    return 'What comes back is worked out when the change is applied: what the time left is worth, less 1 cent for each credit already used above what the plan keeps.';
+  }
+  if (change.creditNowUsd > 0) {
+    return `${formatUsd(change.creditNowUsd)} goes back to the balances that paid, and each keeps its own end date.`
+      + (used > 0 ? ` ${formatUsd(used)} came off for credits already used above what the plan keeps.` : '');
+  }
+  return used > 0
+    ? 'Nothing comes back: the credits already used are worth more than the time left.'
+    : 'Nothing comes back to the wallet now.';
+}
+
+/**
+ * The quote's billing line. An active plan's money and credits come from the
+ * plan change Wiro works out on the plan as it is now (change); without it,
+ * the line says what happens without a number.
+ */
+function quoteBillingNote(billing: PlanBilling, delta: number | null, change: PlanChange | null, nextPrice: number | null, skillsOff: number): string {
   // A card plan whose renewal is not known gets the new price without a renewal claim.
   const after = billing.cancelAtPeriodEnd === true
     ? ` ${cancelledNote(billing)}`
@@ -232,59 +295,76 @@ function quoteBillingNote(billing: PlanBilling, delta: number | null, estimate: 
       ? `The subscription is ${billing.status ?? 'not active'}. Skills can only change on an active subscription, so renew it with manage_agent_billing first.`
       : `The subscription is ${billing.status ?? 'not active'}. Skills can only change on an active subscription, so start a new plan with manage_agent_billing (subscribe) first.`;
   }
-  if (delta === null) {
+  if (delta !== null && Math.abs(delta) < 0.005) return 'The monthly price does not change, so nothing is charged.';
+  if (delta === null || change === null) {
     return billing.plan === 'prepaid'
-      ? `The difference for the rest of this period is taken from, or credited to, ${walletName(billing)} when the change is applied. ${CREDIT_TERMS}${after}`
+      ? `The difference for the rest of this period is taken from, or credited to, ${walletName(billing)} when the change is applied. A credit goes back to the balances that paid, and each keeps its own end date.${after}`
       : cardEndsWithPeriod(billing)
         ? `${CARD_ENDS_QUOTE}${after}`
         : billing.cancelAtPeriodEnd === null
           ? `${CARD_UNKNOWN_QUOTE}${after}`
           : `Any prorated difference appears on the next invoice.${after}`;
   }
-  if (Math.abs(delta) < 0.005) return 'The monthly price does not change, so nothing is charged.';
-  if (billing.plan === 'card') {
-    return cardEndsWithPeriod(billing)
-      ? `${CARD_ENDS_QUOTE}${after}`
-      : billing.cancelAtPeriodEnd === null
-        ? `${CARD_UNKNOWN_QUOTE}${after}`
-        : `Nothing is charged now. The card subscription is updated and the prorated difference appears on the next invoice.${after}`;
+  const ends = creditsEndNote(skillsOff, change.creditsThisPeriod);
+  if (!change.wallet) {
+    if (delta > 0) {
+      const added = change.creditsNow !== null ? `${formatCredits(change.creditsNow)} credits come now for the rest of this period.` : '';
+      if (cardEndsWithPeriod(billing)) return `${CARD_ENDS_QUOTE}${added ? ` ${added}` : ''}${after}`;
+      if (billing.cancelAtPeriodEnd === null) return `${CARD_UNKNOWN_QUOTE}${added ? ` ${added}` : ''}${after}`;
+      return change.creditsNow !== null
+        ? `Nothing is charged now. The prorated difference appears on the next invoice, and ${formatCredits(change.creditsNow)} credits come now for the rest of this period.${after}`
+        : `Nothing is charged now. The prorated difference appears on the next invoice.${after}`;
+    }
+    if (cardEndsWithPeriod(billing)) return `${CARD_ENDS_QUOTE} ${ends}${after}`;
+    if (billing.cancelAtPeriodEnd === null) return `${CARD_UNKNOWN_QUOTE} ${ends}${after}`;
+    return `The prorated difference comes off the next invoice. ${ends}${after}`;
   }
-  // The amount goes by the second, so the days are only a guide. A rise pays for at least a day.
-  const secondsLeft = billing.periodEnd !== null ? periodSecondsLeft(billing.periodEnd) : null;
-  const daysLeft = secondsLeft !== null ? Math.round(secondsLeft / 86400) : 0;
-  const days = daysLeft > 0 ? ` for the rest of this period (about ${daysLeft} ${daysLeft === 1 ? 'day' : 'days'})` : ' for the rest of this period';
   if (delta > 0) {
-    return `About ${formatUsd(estimate ?? delta)} is taken from ${walletName(billing)} now${underOneDayLeft(billing.periodEnd) ? ' for the rest of this period, at the one-day minimum' : days}.${after}`;
+    const charge = formatUsd(change.chargeNowUsd ?? 0);
+    const credits = change.creditsNow !== null ? `, and ${formatCredits(change.creditsNow)} credits come with it` : '';
+    const days = daysLeftText(change.secondsLeft);
+    return underOneDayLeft(change.secondsLeft)
+      ? `${charge} is taken from ${walletName(billing)} now at the one-day minimum${credits}.${after}`
+      : `${charge} is taken from ${walletName(billing)} now for the rest of this period${days ? ` (${days})` : ''}${credits}.${after}`;
   }
-  // A credit rounds down, so what is left of the period can come to nothing.
-  if (estimate === 0) return `Nothing is credited now: what is left of this period comes to under a cent.${after}`;
-  return `Up to about ${formatUsd(Math.abs(estimate ?? delta))} is credited back to ${walletName(billing)} now${days}. ${CREDIT_TERMS}${after}`;
+  return `${walletCreditNote(change)} ${ends}${after}`;
 }
 
 function chargeNote(billing: PlanBilling, body: SkillsApplyBody): { note: string; charged: number | null } {
   const charged = toNumber(body.prepaidWalletDelta);
+  const used = toNumber(body.usedCreditsUsd) ?? 0;
+  const creditsNow = isPlainObject(body.pricing) ? toNumber(body.pricing.creditsNow) : null;
   const cancelled = billing.cancelAtPeriodEnd === true && billing.status === 'active' ? ` ${cancelledNote(billing)}` : '';
   if (charged !== null && charged > 0) {
-    return { charged, note: `${formatUsd(charged)} was taken from ${walletName(billing)} for the rest of this period.${cancelled}` };
+    const credits = creditsNow !== null && creditsNow > 0 ? `, and ${formatCredits(creditsNow)} credits came with it` : '';
+    return { charged, note: `${formatUsd(charged)} was taken from ${walletName(billing)} for the rest of this period${credits}.${cancelled}` };
   }
   if (charged !== null && charged < 0) {
     const terms = creditTerms(body.prepaidCreditParts);
-    return { charged, note: `${formatUsd(Math.abs(charged))} was credited to ${walletName(billing)}.${terms ? ` ${terms}` : ''}${cancelled}` };
+    const usedNote = used > 0 ? ` ${formatUsd(used)} came off for credits already used above what the plan keeps.` : '';
+    return { charged, note: `${formatUsd(Math.abs(charged))} was credited to ${walletName(billing)}.${terms ? ` ${terms}` : ''}${usedNote}${cancelled}` };
+  }
+  // The credits already used came to more than the time left was worth: no credit, and nothing failed.
+  if (billing.plan === 'prepaid' && used > 0) {
+    return { charged: null, note: `Nothing came back: the credits already used were worth more than the time left.${cancelled}` };
   }
   if (body.stripeProrationApplied === true) {
     const moved = isPlainObject(body.pricing) ? toNumber(body.pricing.deltaUsd) : null;
     if (moved !== null && Math.abs(moved) < 0.005) {
       return { charged: null, note: `The monthly price did not change, so nothing was charged.${cancelled}` };
     }
+    const added = moved !== null && moved > 0 && creditsNow !== null && creditsNow > 0
+      ? ` ${formatCredits(creditsNow)} credits came now for the rest of this period.`
+      : '';
     if (cardEndsWithPeriod(billing)) {
       const price = isPlainObject(body.pricing) ? toNumber(body.pricing.newPriceUsd) : null;
       const switching = billing.switchingToWallet ? ` ${walletSwitchNote(billing, price)}` : '';
-      return { charged: null, note: `Nothing was charged now. The card subscription was updated to the new price for the rest of this period.${cancelled}${switching}` };
+      return { charged: null, note: `Nothing was charged now. The card subscription was updated to the new price for the rest of this period.${added}${cancelled}${switching}` };
     }
     if (billing.cancelAtPeriodEnd === null) {
-      return { charged: null, note: 'Nothing was charged now. The card subscription was updated to the new price, and a plan that renews by card shows the prorated difference on its next invoice.' };
+      return { charged: null, note: `Nothing was charged now. The card subscription was updated to the new price, and a plan that renews by card shows the prorated difference on its next invoice.${added}` };
     }
-    return { charged: null, note: `The card subscription was updated; any prorated difference appears on the next invoice.${cancelled}` };
+    return { charged: null, note: `The card subscription was updated; any prorated difference appears on the next invoice.${added}${cancelled}` };
   }
   if (billing.plan === 'none') {
     return { charged: null, note: 'Nothing was charged: the agent has no subscription yet.' };
@@ -350,17 +430,20 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
         + 'On a team agent only a team admin or the person who deployed the agent can change its skills; other '
         + 'members are refused and nothing is charged. '
         + 'Steps: 1) call without confirm. The tool checks the names, adds the skills they '
-        + 'depend on, and returns the current and new monthly price, an estimate of what is '
-        + 'charged now and an idempotency_key. Nothing changes yet. 2) Show the price to the '
+        + 'depend on, and returns the current and new monthly price, what Wiro charges or credits now, '
+        + 'the credits this period gains or loses, and an idempotency_key. Nothing changes yet. 2) Show the price to the '
         + 'user. 3) After they approve, call again with confirm: true and that idempotency_key. '
         + 'The key is tied to the quoted prices and, on a prepaid plan, the billing period: if '
         + 'either changed since the quote, nothing is applied and a new quote with a new key comes back. Reusing the key after a timeout '
         + 'is safe, the change is applied once. Billing: on a prepaid plan the monthly difference '
-        + 'for the time left in the period is taken from the wallet at once, or credited back to '
-        + 'the balances that paid when the price drops: coupon credit keeps its coupon\'s end date, '
-        + 'and other credit lasts until the period ends; on a card '
-        + 'plan nothing is charged at once: the card subscription is updated to the new price, and a '
-        + 'plan that renews by card shows the prorated difference on its next invoice. A running agent '
+        + 'for the time left in the period is taken from the wallet at once, and the added credits come '
+        + 'for that same time; every renewal gives all of them. When the price drops, what the time left '
+        + 'is worth goes back to the balances that paid, less 1 cent for each credit already used above '
+        + 'what the plan keeps, and each balance keeps its own end date. A skill that comes off loses its '
+        + 'credits for the time left; the ones the time already passed paid for stay until the renewal. '
+        + 'On a card plan nothing is charged at once: the card subscription is updated to the new price, '
+        + 'a plan that renews by card shows the difference on its next invoice, and the added credits come '
+        + 'for the time left. A running agent '
         + 'restarts once to load the skills. Newly enabled skills may still need credentials '
         + '(set_agent_credentials, connect_agent_oauth, bind_agent_project for a Wiro project) and do not create scheduled tasks '
         + '(manage_agent_custom_skill does). Find skill names with list_agent_skills and the '
@@ -458,7 +541,8 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
         }
 
         const currentPrice = toNumber(row.monthlypriceusd);
-        const currentCredits = toNumber(row.monthlycredits);
+        // The plan's monthly figure is what each renewal grants. This period's can differ after a change inside it.
+        const currentCredits = toNumber(row.renewalcredits) ?? toNumber(row.monthlycredits);
         const key = idempotency_key?.trim() ?? '';
 
         // Every team member can read a team agent and price a change, but only a
@@ -501,10 +585,10 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
           if (!approved) {
             const newCredits = toNumber(preview.totalMonthlyCredits);
             const delta = difference(newPrice, currentPrice);
-            const estimate = billing.plan === 'prepaid' && billing.status === 'active' && delta !== null
-              ? estimateProratedUsd(delta, billing.periodEnd) ?? delta
-              : null;
-            const note = quoteBillingNote(billing, delta, estimate, newPrice);
+            // What Wiro works out for this change on the plan as it is now. Only an active plan has one.
+            const change = billing.plan !== 'none' && billing.status === 'active' ? readPlanChange(preview.planChange) : null;
+            const note = quoteBillingNote(billing, delta, change, newPrice, changes.disable.length);
+            const walletDrop = change !== null && change.wallet && delta !== null && delta < 0;
             const quoteKey = givenKey?.priceTag === priceTag ? key : newSkillChangeKey(digest, priceTag);
             const priceChanged = confirm && givenKey !== null;
             const blocked = billing.plan !== 'none' && billing.status !== 'active';
@@ -517,6 +601,7 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
               currentMonthlyCredits: currentCredits,
               newMonthlyCredits: newCredits,
               deltaMonthlyCredits: difference(newCredits, currentCredits),
+              ...periodFields(change),
               ...(priceNote ? { note: priceNote } : {}),
             };
             const nextAction = blocked
@@ -556,7 +641,12 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
               tierChange ? `**Plan:** ${currentTier ?? 'unknown'} to ${tierChange}` : null,
               `**Monthly price:** ${currentPrice !== null ? formatUsd(currentPrice) : 'unknown'} now, ${formatUsd(newPrice)} after the change${delta !== null ? ` (${delta >= 0 ? '+' : ''}${formatUsd(delta)})` : ''}`,
               priceNote ? `**Price update:** ${priceNote}` : null,
-              newCredits !== null ? `**Monthly credits:** ${currentCredits ?? 'unknown'} now, ${newCredits} ${creditsWhen(billing)}` : null,
+              change?.creditsFromRenewal !== null && change?.creditsFromRenewal !== undefined
+                ? `**Monthly credits:** ${currentCredits !== null ? formatCredits(currentCredits) : 'unknown'} now, ${formatCredits(change.creditsFromRenewal)} ${renewalWhen(billing)}`
+                : newCredits !== null ? `**Monthly credits:** ${currentCredits !== null ? formatCredits(currentCredits) : 'unknown'} now, ${formatCredits(newCredits)} ${creditsWhen(billing)}` : null,
+              change && change.creditsNow !== null && change.creditsThisPeriod !== null
+                ? `**This period:** ${signedCredits(change.creditsNow)} credits now, ${formatCredits(change.creditsThisPeriod)} in all until ${unixToIso(change.periodEnd) ?? 'the period ends'}`
+                : null,
               `**Billing:** ${note}`,
               `**Restart:** ${restart}`,
               credentialsNeeded.length > 0
@@ -575,7 +665,12 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
                 idempotencyKey: quoteKey,
                 ...(priceChanged ? { priceChanged: true } : {}),
                 pricing,
-                billing: { ...billingBase, estimatedChargeNowUsd: estimate, note },
+                billing: {
+                  ...billingBase,
+                  estimatedChargeNowUsd: change ? change.chargeNowUsd : null,
+                  ...(walletDrop ? { creditNowUsd: change.creditNowUsd, usedCreditsUsd: change.usedCreditsUsd } : {}),
+                  note,
+                },
                 ...(Array.isArray(preview.enabledSkills) ? { enabledSkills: preview.enabledSkills.map(String) } : {}),
                 restart,
                 nextAction,
@@ -658,7 +753,7 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
           // before anything is reported.
           const holds = await changeHolds(client, agent_guid, plan.requested, tierChange, extra.signal);
           if (holds === true) {
-            const note = `The agent's skills now match the request, so the change is in place. Do not repeat it. ${billing.plan === 'prepaid' && billing.status === 'active' ? `The difference for the rest of this period was probably taken from, or credited to, ${walletName(billing)}; get_account with recent_transactions shows it.` : 'Any price difference follows the plan\'s usual billing.'}`;
+            const note = `The agent's skills now match the request, so the change is in place. Do not repeat it. ${billing.plan === 'prepaid' && billing.status === 'active' ? `The difference for the rest of this period was probably taken from, or credited to, ${walletName(billing)}; a credit goes back to the balances that paid. get_agent_activity with kind usage and get_account with recent_transactions show it.` : 'Any price difference follows the plan\'s usual billing.'}`;
             return {
               content: [{ type: 'text' as const, text: [
                 '## Skills updated',
@@ -725,6 +820,12 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
         // result of the earlier call with this key, not a new charge.
         const replayed = sentEmpty && !applied.noOp;
         const serverPricing = applied.pricing ?? {};
+        const appliedChange = readPlanChange({
+          creditsNow: serverPricing.creditsNow,
+          creditsThisPeriod: serverPricing.creditsThisPeriod,
+          creditsFromRenewal: serverPricing.creditsFromRenewal,
+          periodEnd: serverPricing.periodEnd,
+        });
         const pricing = applied.noOp
           ? undefined
           : {
@@ -734,8 +835,10 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
             currentMonthlyCredits: toNumber(serverPricing.previousMonthlyCredits),
             newMonthlyCredits: toNumber(serverPricing.newMonthlyCredits),
             deltaMonthlyCredits: toNumber(serverPricing.deltaCredits),
+            ...periodFields(appliedChange),
           };
         const charge = appliedBillingNote(billing, applied);
+        const usedCreditsUsd = toNumber(applied.usedCreditsUsd);
         const billingNote = replayed
           ? `This change was already applied by an earlier call with this idempotency_key, and nothing new was charged now. That call's billing: ${charge.note}`
           : charge.note;
@@ -771,6 +874,9 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
           pricing?.newMonthlyUsd !== undefined && pricing.newMonthlyUsd !== null
             ? `**Monthly price:** ${formatUsd(pricing.newMonthlyUsd)}${pricing.currentMonthlyUsd !== null ? ` (was ${formatUsd(pricing.currentMonthlyUsd)})` : ''}`
             : null,
+          pricing && appliedChange?.creditsNow !== null && appliedChange?.creditsNow !== undefined && appliedChange.creditsThisPeriod !== null
+            ? `**This period:** ${signedCredits(appliedChange.creditsNow)} credits, ${formatCredits(appliedChange.creditsThisPeriod)} in all until ${unixToIso(appliedChange.periodEnd) ?? 'the period ends'}${appliedChange.creditsFromRenewal !== null ? `; every renewal gives ${formatCredits(appliedChange.creditsFromRenewal)}` : ''}`
+            : null,
           `**Billing:** ${billingNote}`,
           `**Restart:** ${restart}`,
           holds === null ? 'The agent could not be read afterwards to confirm the new skills; get_my_agent shows them.' : null,
@@ -786,7 +892,12 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
             idempotencyKey: key,
             ...(pricing ? { pricing } : {}),
             // The saved answer of an earlier call: its charge is in the note, and this call charged nothing.
-            billing: { ...billingBase, chargedNowUsd: replayed ? 0 : charge.charged, note: billingNote },
+            billing: {
+              ...billingBase,
+              chargedNowUsd: replayed ? 0 : charge.charged,
+              ...(usedCreditsUsd !== null && usedCreditsUsd > 0 ? { usedCreditsUsd } : {}),
+              note: billingNote,
+            },
             ...(Array.isArray(serverPricing.enabledSkills) ? { enabledSkills: serverPricing.enabledSkills.map(String) } : {}),
             restart,
             ...(nextAction ? { nextAction } : {}),

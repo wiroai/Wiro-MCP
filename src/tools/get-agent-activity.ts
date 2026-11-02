@@ -16,6 +16,7 @@ import { DEFAULT_WAIT_SECONDS } from '../utils/poll.js';
 import { oneLine, quotedBlock } from '../utils/quoted-text.js';
 import {
   formatCredits,
+  monthlyCreditsText,
   nextStepForAgent,
   readAgentDetail,
   readStatusAdvice,
@@ -44,7 +45,10 @@ const usageSchema = z.object({
   limit: z.number().int().positive(),
   nextStart: z.number().int().nonnegative().nullable(),
   balance: z.object({
-    monthlyCredits: z.number(),
+    monthlyCredits: z.number()
+      .describe('The monthly credits this period grants. A plan change inside a period moves it for the time left.'),
+    renewalCredits: z.number().optional()
+      .describe('The monthly credits each renewal grants.'),
     extraCredits: z.number(),
     usedCredits: z.number(),
     remainingCredits: z.number(),
@@ -340,6 +344,7 @@ export function registerGetAgentActivity(server: McpServer, client: WiroClient):
           const rows = Array.isArray(body.transactions) ? body.transactions.filter(isPlainObject) : [];
           const total = Math.max(0, Math.trunc(toNumber(body.total) ?? rows.length));
           const period = asString(summary.creditperiod);
+          const renewalCredits = toNumber(summary.renewalcredits);
           const usage: z.infer<typeof usageSchema> = {
             total,
             start,
@@ -347,6 +352,7 @@ export function registerGetAgentActivity(server: McpServer, client: WiroClient):
             nextStart: start + rows.length < total ? start + rows.length : null,
             balance: {
               monthlyCredits: toNumber(summary.monthlycredits) ?? 0,
+              ...(renewalCredits !== null ? { renewalCredits } : {}),
               extraCredits: toNumber(summary.extracredits) ?? 0,
               usedCredits: toNumber(summary.usedcredits) ?? 0,
               remainingCredits: toNumber(summary.remainingcredits) ?? 0,
@@ -394,7 +400,7 @@ export function registerGetAgentActivity(server: McpServer, client: WiroClient):
           const text = [
             `## Usage of agent \`${guid}\``,
             '',
-            `**Balance:** ${formatCredits(usage.balance.remainingCredits)} credits left (monthly ${formatCredits(usage.balance.monthlyCredits)}, extra ${formatCredits(usage.balance.extraCredits)}, used ${formatCredits(usage.balance.usedCredits)}${period ? `, period ${period}` : ''})`,
+            `**Balance:** ${formatCredits(usage.balance.remainingCredits)} credits left (${monthlyCreditsText({ monthly: usage.balance.monthlyCredits, renewal: usage.balance.renewalCredits })}, extra ${formatCredits(usage.balance.extraCredits)}, used ${formatCredits(usage.balance.usedCredits)}${period ? `, period ${period}` : ''})`,
           ];
           if (usage.byModel.length > 0) {
             text.push('', '### This period by model', '');

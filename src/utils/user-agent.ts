@@ -225,7 +225,10 @@ export function chargeRoute(subscription: unknown): 'wallet' | 'card' | null {
 }
 
 export const creditsSchema = z.object({
-  monthly: z.number(),
+  monthly: z.number()
+    .describe('The monthly credits this period grants. A plan change inside a period moves it for the time left, so it can differ from renewal.'),
+  renewal: z.number().optional()
+    .describe('The monthly credits each renewal grants.'),
   extra: z.number(),
   used: z.number(),
   remaining: z.number(),
@@ -236,13 +239,22 @@ export type AgentCredits = z.infer<typeof creditsSchema>;
 
 export function toCredits(row: Record<string, unknown>): AgentCredits {
   const period = asString(row.creditperiod);
+  const renewal = toNumber(row.renewalcredits);
   return {
     monthly: toNumber(row.monthlycredits) ?? 0,
+    ...(renewal !== null ? { renewal } : {}),
     extra: toNumber(row.extracredits) ?? 0,
     used: toNumber(row.usedcredits) ?? 0,
     remaining: toNumber(row.remainingcredits) ?? 0,
     ...(period ? { period } : {}),
   };
+}
+
+/** The monthly credits as said in a line: those of this period, and those of each renewal when they differ. */
+export function monthlyCreditsText(credits: Pick<AgentCredits, 'monthly' | 'renewal'>): string {
+  return credits.renewal !== undefined && credits.renewal !== credits.monthly
+    ? `${formatCredits(credits.monthly)} credits this period, ${formatCredits(credits.renewal)} from each renewal`
+    : `monthly ${formatCredits(credits.monthly)}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -731,7 +743,7 @@ export function formatAgentSummaryLines(agent: AgentSummary, plainMember = false
     `**Agent:** ${agentTitleSpan(agent.title)} (\`${agent.guid}\`), ${template}, ${agent.workspace} workspace`,
     `**Status:** ${describeAgentStatus(agent.status)}. ${hint}`,
     `**Plan:** ${agent.tier ?? 'no tier'}; ${formatSubscriptionLine(agent.subscription, plainMember)}`,
-    `**Credits:** ${formatCredits(agent.credits.remaining)} left (monthly ${formatCredits(agent.credits.monthly)}, extra ${formatCredits(agent.credits.extra)}, used ${formatCredits(agent.credits.used)})`,
+    `**Credits:** ${formatCredits(agent.credits.remaining)} left (${monthlyCreditsText(agent.credits)}, extra ${formatCredits(agent.credits.extra)}, used ${formatCredits(agent.credits.used)})`,
   ];
 }
 

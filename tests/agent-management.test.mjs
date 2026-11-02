@@ -1289,3 +1289,60 @@ test('list_my_agents and get_my_agent show when the agent last did anything', as
     assert.doesNotMatch(textOf(quiet), /Last activity/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Credits this period and from each renewal
+// ---------------------------------------------------------------------------
+
+test('get_my_agent and list_my_agents show this period\'s credits apart from what each renewal gives', async () => {
+  // A skill added halfway through a period: 2,500 credits this period, 3,300 from each renewal.
+  const changed = { monthlycredits: 2500, renewalcredits: 3300, usedcredits: 100, remainingcredits: 2400 };
+  const fake = fakeClient({
+    '/UserAgent/MyAgents': { result: true, errors: [], useragents: [agentRow(changed), agentRow({ guid: 'ua-2', title: 'Same', renewalcredits: 1200 })] },
+    '/UserAgent/Detail': body => detail(body.guid === 'ua-2' ? { guid: 'ua-2', renewalcredits: 1200 } : changed),
+  });
+  await withClient(fake, async client => {
+    const one = await call(client, 'get_my_agent', { agent_guid: GUID });
+    assert.notEqual(one.isError, true, textOf(one));
+    assert.deepEqual(one.structuredContent.agent.credits, { monthly: 2500, renewal: 3300, extra: 0, used: 100, remaining: 2400 });
+    assert.match(textOf(one), /^\*\*Credits:\*\* 2,400 left \(2,500 credits this period, 3,300 from each renewal, extra 0, used 100\)$/m);
+
+    // The same figure twice is said once, as before.
+    const same = await call(client, 'get_my_agent', { agent_guid: 'ua-2' });
+    assert.equal(same.structuredContent.agent.credits.renewal, 1200);
+    assert.match(textOf(same), /^\*\*Credits:\*\* 1,000 left \(monthly 1,200, extra 0, used 200\)$/m);
+
+    const list = await call(client, 'list_my_agents', {});
+    assert.equal(list.structuredContent.agents[0].credits.monthly, 2500);
+    assert.equal(list.structuredContent.agents[0].credits.renewal, 3300);
+    assert.equal(list.structuredContent.agents[1].credits.renewal, 1200);
+  });
+
+  // An answer without the field leaves it out.
+  const older = fakeClient({ '/UserAgent/Detail': detail({}) });
+  await withClient(older, async client => {
+    const one = await call(client, 'get_my_agent', { agent_guid: GUID });
+    assert.equal(Object.hasOwn(one.structuredContent.agent.credits, 'renewal'), false);
+    assert.match(textOf(one), /\(monthly 1,200, extra 0, used 200\)/);
+  });
+});
+
+test('get_agent_activity usage shows this period\'s credits apart from what each renewal gives', async () => {
+  const fake = fakeClient({
+    '/UserAgent/TransactionList': {
+      result: true,
+      errors: [],
+      total: 1,
+      summary: { monthlycredits: 690, renewalcredits: 400, extracredits: 0, usedcredits: 310, remainingcredits: 380, creditperiod: '2026-11' },
+      transactions: [{ type: 'expired', action: 'skills-apply', amount: -2610, balanceafter: 380, createdat: NOW - 60, description: 'Skill changes (1)', metadata: { creditsFromRenewal: 400, usedCreditsUsd: 3.1 } }],
+    },
+  });
+  await withClient(fake, async client => {
+    const result = await call(client, 'get_agent_activity', { agent_guid: GUID, kind: 'usage' });
+    assert.notEqual(result.isError, true, textOf(result));
+    assert.equal(result.structuredContent.usage.balance.monthlyCredits, 690);
+    assert.equal(result.structuredContent.usage.balance.renewalCredits, 400);
+    assert.match(textOf(result), /^\*\*Balance:\*\* 380 credits left \(690 credits this period, 400 from each renewal, extra 0, used 310, period 2026-11\)$/m);
+    assert.match(textOf(result), /expired\/skills-apply: -2610 credits, Skill changes \(1\)/);
+  });
+});

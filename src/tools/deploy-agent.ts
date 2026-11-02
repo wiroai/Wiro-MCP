@@ -676,6 +676,9 @@ export function registerDeployAgent(server: McpServer, client: WiroClient): void
         if (isWalletNotRead(error)) {
           return errorResult(new Error(`${errorText(error)}\n\nWiro could not read the balance just now. That is not a low balance, and nothing was created or charged. Try again in a moment by confirming the same quote; if it keeps saying so, get_account shows the wallet.`));
         }
+        if (hasErrorCode(error, 104)) {
+          return errorResult(new Error(`${errorText(error)}\n\nNothing was created or charged, and it is not a low balance. Offer to try again in a minute by confirming the same quote.`));
+        }
         if (error instanceof ApiResultError && /insufficient wallet balance/i.test(error.message)) {
           return errorResult(new Error(`${error.message}\n\nNothing was created or charged. Give the user the amounts above. Funds are added at https://wiro.ai/panel/wallet/deposit/credit-card (for a team project, select that team in the dashboard first); once the user has added them and says yes, confirm the same quote again.`));
         }

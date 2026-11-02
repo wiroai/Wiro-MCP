@@ -17,7 +17,6 @@ import {
   buildPickerAccounts,
   connectionState,
   credentialsUsedBySkills,
-  estimateProratedUsd,
   idempotencyKeyMismatch,
   isAllowedRedirectUrl,
   newSkillChangeKey,
@@ -384,11 +383,40 @@ test('agent configuration tools advertise output schemas, annotations and plain 
 // apply_agent_skills
 // ---------------------------------------------------------------------------
 
+/**
+ * PricingPreview's planChange: what a change does today on the plan the agent has,
+ * as Wiro works it out. The default is the default agent's wallet plan with 15 of
+ * its 30 days left, moving from $42 and 4200 credits to $43 and 4300.
+ */
+function planChange(overrides = {}) {
+  return {
+    provider: 'prepaid',
+    periodEnd: NOW + 15 * 86400,
+    secondsLeft: 15 * 86400,
+    creditsNow: 50,
+    creditsThisPeriod: 4250,
+    creditsFromRenewal: 4300,
+    chargeNowUsd: 0.5,
+    creditNowUsd: 0,
+    usedCreditsUsd: 0,
+    ...overrides,
+  };
+}
+
+/** A card plan's planChange: no wallet money, and a rise's credits for the time left. */
+function cardPlanChange(overrides = {}) {
+  return planChange({ provider: 'stripe', chargeNowUsd: 0, creditNowUsd: 0, usedCreditsUsd: 0, ...overrides });
+}
+
+function preview(change, overrides = {}) {
+  return { result: true, errors: [], tier: 'starter', totalPriceUsd: 43, totalMonthlyCredits: 4300, planChange: change, ...overrides };
+}
+
 function skillRoutes(extra = {}) {
   return {
     '/Skills/List': skillList,
     '/UserAgent/Detail': detail(),
-    '/UserAgent/PricingPreview': { result: true, errors: [], tier: 'starter', totalPriceUsd: 43, totalMonthlyCredits: 4300, enabledSkills: ['int-instagram-post', 'util-anti-ai-human-copy', 'util-chat-markdown-reporting', 'util-social-posting-common'], tokenRates: { huge: true } },
+    '/UserAgent/PricingPreview': { result: true, errors: [], tier: 'starter', totalPriceUsd: 43, totalMonthlyCredits: 4300, enabledSkills: ['int-instagram-post', 'util-anti-ai-human-copy', 'util-chat-markdown-reporting', 'util-social-posting-common'], tokenRates: { huge: true }, planChange: planChange() },
     ...extra,
   };
 }
@@ -405,24 +433,49 @@ function detailAfterApply(overrides = {}) {
 test('apply_agent_skills names the new monthly credits only for renewals the plan will have', async () => {
   const wallet = { plan: 'agent', status: 'active', provider: 'prepaid', currentperiodend: NOW + 15 * 86400, daysremaining: 15 };
   const card = { plan: 'agent', status: 'active', provider: 'stripe', currentperiodend: NOW + 15 * 86400, daysremaining: 15 };
-  const creditsLine = async overrides => {
-    let line;
-    await withClient(fakeClient(skillRoutes({ '/UserAgent/Detail': detail(overrides) })), async client => {
+  // Wiro answers planChange only for an active plan.
+  const creditsLines = async (overrides, change) => {
+    let lines;
+    await withClient(fakeClient(skillRoutes({ '/UserAgent/Detail': detail(overrides), '/UserAgent/PricingPreview': preview(change) })), async client => {
       const quote = await client.callTool({ name: 'apply_agent_skills', arguments: { agent_guid: AGENT, skills: { 'int-instagram-post': true } } });
-      line = text(quote).split('\n').find(entry => entry.startsWith('**Monthly credits:**'));
+      lines = text(quote).split('\n').filter(entry => entry.startsWith('**Monthly credits:**') || entry.startsWith('**This period:**'));
     });
-    return line;
+    return lines;
   };
-  assert.equal(await creditsLine({ subscription: wallet }), '**Monthly credits:** 4200 now, 4300 at each renewal after the change');
+  const thisPeriod = `**This period:** +50 credits now, 4,250 in all until ${new Date((NOW + 15 * 86400) * 1000).toISOString()}`;
+  assert.deepEqual(await creditsLines({ subscription: wallet }, planChange()), ['**Monthly credits:** 4,200 now, 4,300 from the next renewal', thisPeriod]);
   // A cancelled plan renews only if the cancellation is undone, as its Billing line says.
-  assert.equal(await creditsLine({ subscription: { ...wallet, pendingdowngrade: 'cancel' } }), '**Monthly credits:** 4200 now, 4300 at each renewal after the change, if the plan is kept');
-  assert.equal(await creditsLine({ subscription: card, stripecancelatperiodend: true }), '**Monthly credits:** 4200 now, 4300 at each renewal after the change, if the plan is kept');
-  assert.equal(await creditsLine({ subscription: card, stripecancelatperiodend: false }), '**Monthly credits:** 4200 now, 4300 at each renewal after the change');
+  assert.deepEqual(await creditsLines({ subscription: { ...wallet, pendingdowngrade: 'cancel' } }, planChange()), ['**Monthly credits:** 4,200 now, 4,300 from the next renewal, if the plan is kept', thisPeriod]);
+  assert.deepEqual(await creditsLines({ subscription: card, stripecancelatperiodend: true }, cardPlanChange()), ['**Monthly credits:** 4,200 now, 4,300 from the next renewal, if the plan is kept', thisPeriod]);
+  assert.deepEqual(await creditsLines({ subscription: card, stripecancelatperiodend: false }, cardPlanChange()), ['**Monthly credits:** 4,200 now, 4,300 from the next renewal', thisPeriod]);
+  // A card plan whose renewal is not known names the renewal as a condition.
+  assert.deepEqual(await creditsLines({ subscription: card }, cardPlanChange()), ['**Monthly credits:** 4,200 now, 4,300 from the next renewal, if the plan renews', thisPeriod]);
   // A card plan moving to wallet billing renews from the wallet, even if a row carries the card subscription's end flag.
-  assert.equal(await creditsLine({ subscription: { ...card, nextprovider: 'prepaid' }, stripecancelatperiodend: true }), '**Monthly credits:** 4200 now, 4300 at each renewal after the change');
+  assert.deepEqual(await creditsLines({ subscription: { ...card, nextprovider: 'prepaid' }, stripecancelatperiodend: true }, cardPlanChange()), ['**Monthly credits:** 4,200 now, 4,300 from the next renewal', thisPeriod]);
   // A plan that has ended is renewed first, as its Billing line says.
-  assert.equal(await creditsLine({ subscription: { ...wallet, status: 'expired', currentperiodend: NOW - 86400, pendingdowngrade: 'cancel' } }), '**Monthly credits:** 4200 now, 4300 at each renewal after the change');
-  assert.equal(await creditsLine({ subscription: null }), '**Monthly credits:** 4200 now, 4300 a month once it is subscribed');
+  assert.deepEqual(await creditsLines({ subscription: { ...wallet, status: 'expired', currentperiodend: NOW - 86400, pendingdowngrade: 'cancel' } }, null), ['**Monthly credits:** 4,200 now, 4,300 at each renewal after the change']);
+  assert.deepEqual(await creditsLines({ subscription: null }, null), ['**Monthly credits:** 4,200 now, 4,300 a month once it is subscribed']);
+});
+
+test('apply_agent_skills reads the plan\'s monthly credits from what each renewal grants', async () => {
+  // An earlier drop in this period left it 4000 credits; each renewal grants 4200.
+  const fake = fakeClient(skillRoutes({
+    '/UserAgent/Detail': detail({ monthlycredits: 4000, renewalcredits: 4200 }),
+    '/UserAgent/PricingPreview': preview(planChange({ creditsThisPeriod: 4050 })),
+  }));
+  await withClient(fake, async client => {
+    const quote = await quoteInstagram(client);
+    const { pricing } = quote.structuredContent;
+    assert.equal(pricing.currentMonthlyCredits, 4200);
+    assert.equal(pricing.newMonthlyCredits, 4300);
+    assert.equal(pricing.deltaMonthlyCredits, 100);
+    assert.equal(pricing.creditsNow, 50);
+    assert.equal(pricing.creditsThisPeriod, 4050);
+    assert.equal(pricing.creditsFromRenewal, 4300);
+    assert.equal(pricing.periodEnd, new Date((NOW + 15 * 86400) * 1000).toISOString());
+    assert.match(text(quote), /^\*\*Monthly credits:\*\* 4,200 now, 4,300 from the next renewal$/m);
+    assert.match(text(quote), /^\*\*This period:\*\* \+50 credits now, 4,050 in all until /m);
+  });
 });
 
 async function quoteInstagram(client) {
@@ -454,6 +507,11 @@ test('apply_agent_skills quotes first, adds dependencies and returns a reusable 
     assert.equal(out.billing.wallet, 'personal');
     assert.equal(out.billing.estimatedChargeNowUsd, 0.5);
     assert.match(out.billing.note, /taken from your personal wallet now/);
+    assert.equal(out.billing.note, '$0.50 is taken from your personal wallet now for the rest of this period (15 days), and 50 credits come with it. The plan then renews at $43.00 a month.');
+    assert.equal(out.pricing.creditsNow, 50);
+    assert.equal(out.pricing.creditsThisPeriod, 4250);
+    assert.equal(out.pricing.creditsFromRenewal, 4300);
+    assert.equal('creditNowUsd' in out.billing, false, 'a rise has no credit');
     assert.match(out.restart, /restarts/);
     assert.deepEqual(out.credentialsNeeded, [{ skill: 'int-instagram-post', credentials: ['instagram'] }]);
     assert.match(out.idempotencyKey, /^mcp-[0-9a-f]{16}-[0-9a-f]{10}-[0-9a-f]{8}$/);
@@ -742,11 +800,15 @@ test('apply_agent_skills asks again when a wallet plan started a new period afte
   let periodEnd = NOW + 3600;
   const fake = fakeClient(skillRoutes({
     '/UserAgent/Detail': () => detail({ subscription: { ...plan, currentperiodend: periodEnd } }),
+    // Wiro's own amount: the one-day minimum in the period's last hour, the whole difference in a new period.
+    '/UserAgent/PricingPreview': () => preview(periodEnd - NOW < 86400
+      ? planChange({ periodEnd, secondsLeft: periodEnd - NOW, chargeNowUsd: 0.04, creditsNow: 3, creditsThisPeriod: 4203 })
+      : planChange({ periodEnd, secondsLeft: periodEnd - NOW, chargeNowUsd: 1, creditsNow: 100, creditsThisPeriod: 4300 })),
     '/UserAgent/SkillsApply': { result: true },
   }));
   await withClient(fake, async client => {
     const quote = await quoteInstagram(client);
-    assert.match(quote.structuredContent.billing.note, /at the one-day minimum/);
+    assert.match(quote.structuredContent.billing.note, /^\$0\.04 is taken from your personal wallet now at the one-day minimum, and 3 credits come with it\./);
     periodEnd = NOW + 30 * 86400;
     const renewed = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
     assert.equal(renewed.structuredContent.status, 'quote');
@@ -788,7 +850,7 @@ test('apply_agent_skills checks the live agent when Wiro answers with an error o
     assert.equal(result.structuredContent.status, 'applied');
     assert.match(result.structuredContent.billing.note, /^The agent's skills now match the request, so the change is in place\. Do not repeat it\./);
     assert.match(text(result), /^## Skills updated$/m);
-    assert.match(result.structuredContent.billing.note, /probably taken from, or credited to, your personal wallet; get_account with recent_transactions shows it\.$/);
+    assert.match(result.structuredContent.billing.note, /probably taken from, or credited to, your personal wallet; a credit goes back to the balances that paid\. get_agent_activity with kind usage and get_account with recent_transactions show it\.$/);
     assert.doesNotMatch(text(result), /Nothing changed/);
 
     // The repeat goes out with no skills and its answer is lost too: the amount is on the wallet's rows.
@@ -881,7 +943,7 @@ test('apply_agent_skills checks the live agent when Wiro answers with an error o
 test('apply_agent_skills tells a cancelled plan that nothing renews at the new price', async () => {
   const fake = fakeClient(skillRoutes({
     '/UserAgent/Detail': detail({ subscription: { plan: 'agent', status: 'active', provider: 'prepaid', currentperiodend: NOW + 15 * 86400, daysremaining: 15, pendingdowngrade: 'cancel' } }),
-    '/UserAgent/PricingPreview': { result: true, errors: [], totalPriceUsd: 40, totalMonthlyCredits: 4000 },
+    '/UserAgent/PricingPreview': preview(planChange({ chargeNowUsd: 0, creditNowUsd: 1, creditsNow: -100, creditsThisPeriod: 4100, creditsFromRenewal: 4000 }), { totalPriceUsd: 40, totalMonthlyCredits: 4000 }),
   }));
   await withClient(fake, async client => {
     const result = await client.callTool({
@@ -889,41 +951,44 @@ test('apply_agent_skills tells a cancelled plan that nothing renews at the new p
       arguments: { agent_guid: AGENT, skills: { 'util-chat-markdown-reporting': false } },
     });
     const note = result.structuredContent.billing.note;
-    assert.match(note, /credited back to your personal wallet now for the rest of this period \(about 15 days\)\. Coupon credit keeps its coupon's end date, and other credit lasts until this period ends\./);
+    assert.match(note, /^\$1\.00 goes back to the balances that paid, and each keeps its own end date\. Its credits for the time left end now, and this period keeps 4,100\./);
     assert.match(note, /The plan is cancelled and ends about a day after .*, so this covers only the time left/);
     assert.doesNotMatch(note, /renews at|expire/);
   });
 });
 
-test('apply_agent_skills says how much of the period its estimate is for', async () => {
-  const noteFor = async daysLeft => {
+test('apply_agent_skills says how much of the period Wiro\'s amount is for', async () => {
+  // Wiro's own amounts for a $40 rise in a 30-day period, by the time left.
+  const noteFor = async (daysLeft, chargeNowUsd) => {
+    const periodEnd = NOW + Math.round(daysLeft * 86400);
     const fake = fakeClient(skillRoutes({
       '/UserAgent/Detail': detail({
         monthlypriceusd: '90.00',
-        subscription: { plan: 'agent', status: 'active', provider: 'prepaid', currentperiodend: NOW + Math.round(daysLeft * 86400), daysremaining: Math.ceil(daysLeft) },
+        subscription: { plan: 'agent', status: 'active', provider: 'prepaid', currentperiodend: periodEnd, daysremaining: Math.ceil(daysLeft) },
       }),
-      '/UserAgent/PricingPreview': { result: true, errors: [], totalPriceUsd: 130, totalMonthlyCredits: 4000 },
+      '/UserAgent/PricingPreview': preview(planChange({ periodEnd, secondsLeft: Math.max(0, periodEnd - NOW), chargeNowUsd, creditsNow: Math.round(chargeNowUsd * 100) }), { totalPriceUsd: 130, totalMonthlyCredits: 13000 }),
     }));
-    let note;
+    let result;
     await withClient(fake, async client => {
-      const result = await client.callTool({ name: 'apply_agent_skills', arguments: { agent_guid: AGENT, skills: { 'int-instagram-post': true } } });
-      note = result.structuredContent.billing.note;
+      result = await client.callTool({ name: 'apply_agent_skills', arguments: { agent_guid: AGENT, skills: { 'int-instagram-post': true } } });
     });
-    return note;
+    assert.equal(result.structuredContent.billing.estimatedChargeNowUsd, chargeNowUsd);
+    return result.structuredContent.billing.note;
   };
-  assert.match(await noteFor(5.45), /^About \$7\.27 is taken from your personal wallet now for the rest of this period \(about 5 days\)\./);
-  assert.match(await noteFor(5.6), /^About \$7\.47 is taken from your personal wallet now for the rest of this period \(about 6 days\)\./);
-  assert.match(await noteFor(1.2), /^About \$1\.60 is taken from your personal wallet now for the rest of this period \(about 1 day\)\./);
-  assert.match(await noteFor(0.7), /^About \$1\.34 is taken from your personal wallet now for the rest of this period, at the one-day minimum\./);
-  assert.match(await noteFor(0.3), /^About \$1\.34 is taken from your personal wallet now for the rest of this period, at the one-day minimum\./);
-  assert.match(await noteFor(-0.95), /^About \$1\.34 is taken from your personal wallet now for the rest of this period, at the one-day minimum\./);
+  assert.match(await noteFor(5.45, 7.27), /^\$7\.27 is taken from your personal wallet now for the rest of this period \(5 days\), and 727 credits come with it\./);
+  assert.match(await noteFor(5.6, 7.47), /^\$7\.47 is taken from your personal wallet now for the rest of this period \(6 days\), and 747 credits come with it\./);
+  assert.match(await noteFor(1.2, 1.6), /^\$1\.60 is taken from your personal wallet now for the rest of this period \(1 day\), and 160 credits come with it\./);
+  assert.match(await noteFor(0.7, 1.34), /^\$1\.34 is taken from your personal wallet now at the one-day minimum, and 134 credits come with it\./);
+  assert.match(await noteFor(0.3, 1.34), /^\$1\.34 is taken from your personal wallet now at the one-day minimum/);
+  // In the day of grace after the period's end, nothing is left of it.
+  assert.match(await noteFor(-0.95, 1.34), /^\$1\.34 is taken from your personal wallet now at the one-day minimum/);
 });
 
-test('apply_agent_skills quotes the whole difference for a plan with no period end, and no credit when none comes back', async () => {
-  const quoteOf = async (subscription, skills, preview) => {
+test('apply_agent_skills quotes Wiro\'s amount for a plan with no period end, and no credit when none comes back', async () => {
+  const quoteOf = async (subscription, skills, answer) => {
     const fake = fakeClient(skillRoutes({
       '/UserAgent/Detail': detail({ subscription }),
-      ...(preview ? { '/UserAgent/PricingPreview': preview } : {}),
+      '/UserAgent/PricingPreview': answer,
     }));
     let quote;
     await withClient(fake, async client => {
@@ -933,16 +998,20 @@ test('apply_agent_skills quotes the whole difference for a plan with no period e
     return quote.structuredContent.billing;
   };
   const plan = { plan: 'agent', status: 'active', provider: 'prepaid' };
-  const noEnd = await quoteOf({ ...plan, currentperiodend: null }, { 'int-instagram-post': true });
+  // A plan row with no period end: Wiro counts the period from now, so the whole difference is charged.
+  const noEnd = await quoteOf({ ...plan, currentperiodend: null }, { 'int-instagram-post': true },
+    preview(planChange({ periodEnd: NOW + 30 * 86400, secondsLeft: 30 * 86400, chargeNowUsd: 1, creditsNow: 100, creditsThisPeriod: 4300 })));
   assert.equal(noEnd.estimatedChargeNowUsd, 1);
-  assert.match(noEnd.note, /^About \$1\.00 is taken from your personal wallet now for the rest of this period\./);
+  assert.match(noEnd.note, /^\$1\.00 is taken from your personal wallet now for the rest of this period \(30 days\), and 100 credits come with it\./);
 
+  // The day of grace after the period's end: nothing of it is left to credit.
   const removal = { 'util-chat-markdown-reporting': false };
-  const lower = { result: true, errors: [], totalPriceUsd: 40, totalMonthlyCredits: 4000 };
-  const ended = await quoteOf({ ...plan, currentperiodend: NOW - 3600 }, removal, lower);
+  const ended = await quoteOf({ ...plan, currentperiodend: NOW - 3600 }, removal,
+    preview(planChange({ periodEnd: NOW - 3600, secondsLeft: 0, chargeNowUsd: 0, creditNowUsd: 0, usedCreditsUsd: 0, creditsNow: 0, creditsThisPeriod: 4200, creditsFromRenewal: 4000 }), { totalPriceUsd: 40, totalMonthlyCredits: 4000 }));
   assert.equal(ended.estimatedChargeNowUsd, 0);
-  assert.match(ended.note, /^Nothing is credited now: what is left of this period comes to under a cent\./);
-  assert.doesNotMatch(ended.note, /\$0\.00|credited back|Coupon credit/);
+  assert.equal(ended.creditNowUsd, 0);
+  assert.match(ended.note, /^Nothing comes back to the wallet now\. Its credits for the time left end now, and this period keeps 4,200\./);
+  assert.doesNotMatch(ended.note, /\$0\.00|goes back to the balances|credits already used/);
 });
 
 test('apply_agent_skills reports a code 110 as failed, and never as applied', async () => {
@@ -1012,7 +1081,7 @@ test('apply_agent_skills says when the change counts from today\'s prices', asyn
         agent: { guid: 'tpl-1', custom: false, tiers: { starter: { priceUsd: 11, credits: 1100 }, pro: { priceUsd: 110, credits: 11000 } }, tiermultiplier: 10 },
         ...detailOverrides,
       }),
-      '/UserAgent/PricingPreview': { result: true, errors: [], tier: 'pro', tiermultiplier: 10, totalPriceUsd: 130, totalMonthlyCredits: 13000, tiers: { starter: { priceUsd: 13, credits: 1300 }, pro: { priceUsd: 130, credits: 13000 } }, starterFloorUsd: 4 },
+      '/UserAgent/PricingPreview': { result: true, errors: [], tier: 'pro', tiermultiplier: 10, totalPriceUsd: 130, totalMonthlyCredits: 13000, tiers: { starter: { priceUsd: 13, credits: 1300 }, pro: { priceUsd: 130, credits: 13000 } }, starterFloorUsd: 4, planChange: planChange({ chargeNowUsd: 20, creditsNow: 2000, creditsThisPeriod: 11000, creditsFromRenewal: 13000 }) },
     }));
     let result;
     await withClient(fake, async client => {
@@ -1026,11 +1095,12 @@ test('apply_agent_skills says when the change counts from today\'s prices', asyn
   const lines = text(older).split('\n');
   const price = lines.findIndex(line => line.startsWith('**Monthly price:**'));
   assert.equal(lines[price], '**Monthly price:** $90.00 now, $130.00 after the change (+$40.00)');
-  const note = 'Today\'s Pro price for the skills this plan already has is $110.00 a month with 11000 monthly credits, not its current $90.00 and 9000. A skill change counts from today\'s price, and the new price in this quote already includes that.';
+  const note = 'Today\'s Pro price for the skills this plan already has is $110.00 a month with 11,000 monthly credits, not its current $90.00 and 9,000. A skill change counts from today\'s price, and the new price in this quote already includes that.';
   assert.equal(lines[price + 1], `**Price update:** ${note}`);
   assert.equal(older.structuredContent.pricing.note, note);
   assert.equal(older.structuredContent.pricing.deltaMonthlyUsd, 40);
-  assert.equal(lines[price + 2], '**Monthly credits:** 9000 now, 13000 at each renewal after the change');
+  assert.equal(lines[price + 2], '**Monthly credits:** 9,000 now, 13,000 from the next renewal');
+  assert.equal(lines[price + 3], `**This period:** +2,000 credits now, 11,000 in all until ${new Date((NOW + 15 * 86400) * 1000).toISOString()}`);
 
   // A plan whose credits already match today's names only the price.
   const sameCredits = await quote({ monthlycredits: 11000 });
@@ -1085,53 +1155,93 @@ test('apply_agent_skills adds no price update when the change also moves the pla
   assert.equal('note' in withSkill.structuredContent.pricing, false);
 });
 
-test('apply_agent_skills says once how long a credit for skills turned off lasts', async () => {
-  // Turning the reporting skill off lowers the price from $42 to $40.
+test('apply_agent_skills says what a credit for skills turned off gives back, and how long it lasts', async () => {
+  // Turning the reporting skill off lowers the price from $42 to $40, with half of a 30-day period left.
   const removal = { agent_guid: AGENT, skills: { 'util-chat-markdown-reporting': false } };
+  const periodEnd = NOW + 15 * 86400 + 3600;
   const applied = (overrides = {}) => ({
     result: true,
     errors: [],
-    pricing: { previousPriceUsd: 42, newPriceUsd: 40, deltaUsd: -2, previousMonthlyCredits: 4200, newMonthlyCredits: 4000, deltaCredits: -200 },
+    pricing: { previousPriceUsd: 42, newPriceUsd: 40, deltaUsd: -2, previousMonthlyCredits: 4200, newMonthlyCredits: 4000, deltaCredits: -200, creditsNow: -100, creditsThisPeriod: 4100, creditsFromRenewal: 4000, periodEnd },
     tier: 'starter',
     stripeProrationApplied: false,
+    usedCreditsUsd: 0,
     ...overrides,
   });
-  // An hour past the half, so the seconds a test takes do not round the credit down a cent.
-  const subscription = { plan: 'agent', status: 'active', provider: 'prepaid', currentperiodend: NOW + 15 * 86400 + 3600, daysremaining: 16 };
-  const routes = (detailOverrides, skillsApply) => skillRoutes({
+  const subscription = { plan: 'agent', status: 'active', provider: 'prepaid', currentperiodend: periodEnd, daysremaining: 16 };
+  const drop = (overrides = {}) => preview(planChange({ periodEnd, secondsLeft: periodEnd - NOW, chargeNowUsd: 0, creditNowUsd: 1, usedCreditsUsd: 0, creditsNow: -100, creditsThisPeriod: 4100, creditsFromRenewal: 4000, ...overrides }), { totalPriceUsd: 40, totalMonthlyCredits: 4000 });
+  const routes = (detailOverrides, skillsApply, change = drop()) => skillRoutes({
     '/UserAgent/Detail': (_body, calls) => detail({
       subscription,
       ...detailOverrides,
       ...(calls.some(call => call.path === '/UserAgent/SkillsApply') ? { skills: [], monthlypriceusd: '40.00' } : {}),
     }),
-    '/UserAgent/PricingPreview': { result: true, errors: [], totalPriceUsd: 40, totalMonthlyCredits: 4000 },
+    '/UserAgent/PricingPreview': change,
     '/UserAgent/SkillsApply': skillsApply,
   });
-  const terms = /Coupon credit keeps its coupon's end date, and other credit lasts until this period ends\./g;
+  const ends = 'Its credits for the time left end now, and this period keeps 4,100.';
 
   const personal = fakeClient(routes({}, applied({ prepaidWalletDelta: -1 })));
   await withClient(personal, async client => {
     const quote = await client.callTool({ name: 'apply_agent_skills', arguments: removal });
     assert.equal(quote.structuredContent.status, 'quote', text(quote));
-    assert.match(quote.structuredContent.billing.note, /^Up to about \$1\.00 is credited back to your personal wallet now for the rest of this period \(about 15 days\)\. Coupon credit keeps its coupon's end date, and other credit lasts until this period ends\.( |$)/);
-    assert.equal(text(quote).match(terms)?.length, 1, text(quote));
+    assert.equal(quote.structuredContent.billing.note, `$1.00 goes back to the balances that paid, and each keeps its own end date. ${ends} The plan then renews at $40.00 a month.`);
+    assert.equal(quote.structuredContent.billing.estimatedChargeNowUsd, 0);
+    assert.equal(quote.structuredContent.billing.creditNowUsd, 1);
+    assert.equal(quote.structuredContent.billing.usedCreditsUsd, 0);
+    assert.equal(quote.structuredContent.pricing.creditsNow, -100);
+    assert.match(text(quote), /^\*\*This period:\*\* -100 credits now, 4,100 in all until /m);
+    assert.equal(quote.structuredContent.nextAction.reason, 'Ask the user to confirm this change first.');
 
     const result = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
     assert.notEqual(result.isError, true, text(result));
     assert.equal(result.structuredContent.status, 'applied');
     assert.equal(result.structuredContent.billing.chargedNowUsd, -1);
-    assert.equal(result.structuredContent.billing.note, "$1.00 was credited to your personal wallet. Coupon credit keeps its coupon's end date, and other credit lasts until this period ends.", 'an answer that does not say how it split');
-    assert.equal(text(result).match(terms)?.length, 1, text(result));
+    assert.equal(result.structuredContent.billing.note, '$1.00 was credited to your personal wallet.', 'an answer that does not say how it split');
+    assert.equal(result.structuredContent.pricing.creditsThisPeriod, 4100);
+    assert.match(text(result), /^\*\*This period:\*\* -100 credits, 4,100 in all until \S+; every renewal gives 4,000$/m);
   });
 
   // The agent's team wallet is credited for a team agent.
   const team = fakeClient(routes({ teamguid: 'team-1' }, applied({ prepaidWalletDelta: -1 })));
   await withClient(team, async client => {
     const quote = await client.callTool({ name: 'apply_agent_skills', arguments: removal });
-    assert.match(quote.structuredContent.billing.note, /credited back to the team wallet now/);
     const result = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
-    assert.equal(result.structuredContent.billing.note, "$1.00 was credited to the team wallet. Coupon credit keeps its coupon's end date, and other credit lasts until this period ends.");
+    assert.equal(result.structuredContent.billing.note, '$1.00 was credited to the team wallet.');
     assert.doesNotMatch(JSON.stringify(result), /team-1/);
+  });
+
+  // Credits already used above what the plan keeps come off the credit.
+  const used = fakeClient(routes({}, applied({ prepaidWalletDelta: -0.9, usedCreditsUsd: 0.1 }), drop({ creditNowUsd: 0.9, usedCreditsUsd: 0.1 })));
+  await withClient(used, async client => {
+    const quote = await client.callTool({ name: 'apply_agent_skills', arguments: removal });
+    assert.equal(quote.structuredContent.billing.note, `$0.90 goes back to the balances that paid, and each keeps its own end date. $0.10 came off for credits already used above what the plan keeps. ${ends} The plan then renews at $40.00 a month.`);
+    assert.equal(quote.structuredContent.billing.usedCreditsUsd, 0.1);
+    const result = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
+    assert.equal(result.structuredContent.billing.note, '$0.90 was credited to your personal wallet. $0.10 came off for credits already used above what the plan keeps.');
+    assert.equal(result.structuredContent.billing.usedCreditsUsd, 0.1);
+  });
+
+  // Credits used worth more than the time left: no credit, and the change is applied all the same.
+  const allUsed = fakeClient(routes({}, applied({ prepaidWalletDelta: null, usedCreditsUsd: 1 }), drop({ creditNowUsd: 0, usedCreditsUsd: 1 })));
+  await withClient(allUsed, async client => {
+    const quote = await client.callTool({ name: 'apply_agent_skills', arguments: removal });
+    assert.equal(quote.structuredContent.billing.note, `Nothing comes back: the credits already used are worth more than the time left. ${ends} The plan then renews at $40.00 a month.`);
+    const result = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
+    assert.notEqual(result.isError, true, text(result));
+    assert.equal(result.structuredContent.status, 'applied');
+    assert.equal(result.structuredContent.billing.chargedNowUsd, null);
+    assert.equal(result.structuredContent.billing.usedCreditsUsd, 1);
+    assert.equal(result.structuredContent.billing.note, 'Nothing came back: the credits already used were worth more than the time left.');
+    assert.doesNotMatch(text(result), /failed|not added|support/i);
+  });
+
+  // What comes back is worked out only when the change is applied.
+  const later = fakeClient(routes({}, applied({ prepaidWalletDelta: -1 }), drop({ creditNowUsd: null, usedCreditsUsd: null })));
+  await withClient(later, async client => {
+    const quote = await client.callTool({ name: 'apply_agent_skills', arguments: removal });
+    assert.equal(quote.structuredContent.billing.note, `What comes back is worked out when the change is applied: what the time left is worth, less 1 cent for each credit already used above what the plan keeps. ${ends} The plan then renews at $40.00 a month.`);
+    assert.equal(quote.structuredContent.billing.creditNowUsd, null);
   });
 
   // A credit is reported only when Wiro reports one, and Wiro's own note on the billing is passed on.
@@ -1152,31 +1262,36 @@ test('apply_agent_skills says once how long a credit for skills turned off lasts
     const quote = await client.callTool({ name: 'apply_agent_skills', arguments: { agent_guid: AGENT, skills: { 'int-instagram-post': true } } });
     assert.equal(quote.structuredContent.status, 'quote', text(quote));
     assert.equal(quote.structuredContent.pricing.deltaMonthlyUsd, null);
-    assert.equal(quote.structuredContent.billing.note, 'The difference for the rest of this period is taken from, or credited to, your personal wallet when the change is applied. Coupon credit keeps its coupon\'s end date, and other credit lasts until this period ends. The plan then renews at $43.00 a month.');
-    assert.equal(text(quote).match(terms)?.length, 1, text(quote));
+    assert.equal(quote.structuredContent.billing.note, 'The difference for the rest of this period is taken from, or credited to, your personal wallet when the change is applied. A credit goes back to the balances that paid, and each keeps its own end date. The plan then renews at $43.00 a month.');
   });
 
+  const billing = 'on a prepaid plan the monthly difference for the time left in the period is taken from the wallet at once, and the added credits come for that same time; every renewal gives all of them. When the price drops, what the time left is worth goes back to the balances that paid, less 1 cent for each credit already used above what the plan keeps, and each balance keeps its own end date. A skill that comes off loses its credits for the time left; the ones the time already passed paid for stay until the renewal.';
   await withClient(fakeClient({}), async client => {
     const { tools } = await client.listTools();
     const description = tools.find(tool => tool.name === 'apply_agent_skills').description;
-    assert.match(description, /taken from the wallet at once, or credited back to the balances that paid when the price drops: coupon credit keeps its coupon's end date, and other credit lasts until the period ends; on a card plan nothing is charged at once: the card subscription is updated to the new price, and a plan that renews by card shows the prorated difference on its next invoice\./);
+    assert.ok(description.includes(`Billing: ${billing}`), description);
+    assert.match(description, /On a card plan nothing is charged at once: the card subscription is updated to the new price, a plan that renews by card shows the difference on its next invoice, and the added credits come for the time left\./);
   });
-  assert.match(PLAYBOOKS.agents, /on a wallet plan, the difference for the rest of the period is charged at once, or credited back to the balances that paid \(coupon credit keeps its coupon's end date, and other credit lasts until the period ends\), and `get_account` with `recent_transactions` shows what moved\./);
-  assert.match(PLAYBOOKS.billing, /\| Agent skill change \| The price difference for the rest of the period, charged, or credited back to the balances that paid \| When applied \|/);
-  for (const playbook of Object.values(PLAYBOOKS)) assert.doesNotMatch(playbook, /can be spent until|for use until the period ends/);
+  const sentence = `O${billing.slice(1)}`;
+  assert.ok(PLAYBOOKS.agents.includes(sentence), 'the agents playbook says the same');
+  assert.ok(PLAYBOOKS.billing.includes(sentence), 'the billing playbook says the same');
+  assert.match(PLAYBOOKS.billing, /\| Agent skill change \| The price difference for the rest of the period, charged, or credited back to the balances that paid less the credits already used \| When applied \|/);
+  for (const playbook of Object.values(PLAYBOOKS)) {
+    assert.doesNotMatch(playbook, /can be spent until|for use until the period ends|coupon's end date|other credit lasts|estimate with a maximum/);
+  }
   assert.match(PLAYBOOKS.agents, /and a personal card plan is cancelled there\. A skill change on a card plan charges nothing at once: the card subscription is updated to the new price, and a plan that renews by card shows the prorated difference on its next invoice\. A card plan that is moving to wallet billing pays `upgrade_to_pro` and `buy_credits` from the wallet, renews from it when its period ends, and can be cancelled with `manage_agent_billing` once the wallet bills it\./);
   assert.match(PLAYBOOKS.agents, /A card plan that is moving to wallet billing renews from the wallet when its period ends: cancel it with `manage_agent_billing` after that, then delete the agent\./);
-  assert.match(PLAYBOOKS.billing, /Wiro works it out by the second: a charge rounds up to the cent, a credit down, and a rise costs at least one day\./);
+  assert.match(PLAYBOOKS.billing, /It goes by the second: a charge rounds up to the cent, a credit down, and a rise costs at least one day\./);
   for (const playbook of Object.values(PLAYBOOKS)) assert.doesNotMatch(playbook, /days left|whole days/);
 });
 
 test('apply_agent_skills says how an applied credit split, each part with its own end', async () => {
   const removal = { agent_guid: AGENT, skills: { 'util-chat-markdown-reporting': false } };
-  const noteFor = async (delta, parts) => {
+  const noteFor = async (delta, parts, usedCreditsUsd = 0) => {
     const fake = fakeClient(skillRoutes({
       '/UserAgent/Detail': (_body, calls) => detail({ ...(calls.some(call => call.path === '/UserAgent/SkillsApply') ? { skills: [], monthlypriceusd: '40.00' } : {}) }),
-      '/UserAgent/PricingPreview': { result: true, errors: [], totalPriceUsd: 40, totalMonthlyCredits: 4000 },
-      '/UserAgent/SkillsApply': { result: true, errors: [], pricing: { previousPriceUsd: 42, newPriceUsd: 40, deltaUsd: -2 }, tier: 'starter', stripeProrationApplied: false, prepaidWalletDelta: delta, prepaidCreditParts: parts },
+      '/UserAgent/PricingPreview': preview(planChange({ chargeNowUsd: 0, creditNowUsd: 1, creditsNow: -100, creditsThisPeriod: 4100, creditsFromRenewal: 4000 }), { totalPriceUsd: 40, totalMonthlyCredits: 4000 }),
+      '/UserAgent/SkillsApply': { result: true, errors: [], pricing: { previousPriceUsd: 42, newPriceUsd: 40, deltaUsd: -2 }, tier: 'starter', stripeProrationApplied: false, prepaidWalletDelta: delta, usedCreditsUsd, ...(parts ? { prepaidCreditParts: parts } : {}) },
     }));
     let note;
     await withClient(fake, async client => {
@@ -1187,16 +1302,26 @@ test('apply_agent_skills says how an applied credit split, each part with its ow
     });
     return note;
   };
-  assert.equal(await noteFor(-5, { couponUsd: 5, couponUntilPeriodEndUsd: 0, storeUsd: 0, depositUsd: 0 }), "$5.00 was credited to your personal wallet. It went back as coupon credit and keeps its coupon's end date.");
-  assert.equal(await noteFor(-5, { couponUsd: 0, couponUntilPeriodEndUsd: 0, storeUsd: 1, depositUsd: 4 }), '$5.00 was credited to your personal wallet. It lasts until this period ends.');
-  assert.equal(await noteFor(-5, { couponUsd: 5, couponUntilPeriodEndUsd: 5, storeUsd: 0, depositUsd: 0 }), '$5.00 was credited to your personal wallet. It lasts until this period ends.', 'the coupon that paid has ended');
-  assert.equal(await noteFor(-5, { couponUsd: 3, couponUntilPeriodEndUsd: 1, storeUsd: 0, depositUsd: 2 }), "$5.00 was credited to your personal wallet. $2.00 of it went back as coupon credit and keeps its coupon's end date, and $3.00 lasts until this period ends.");
-  // Parts that come to nothing claim nothing, whatever the amount says.
-  assert.equal(await noteFor(-5, { couponUsd: 0, couponUntilPeriodEndUsd: 0, storeUsd: 0, depositUsd: 0 }), '$5.00 was credited to your personal wallet.');
-  // A coupon balance can carry more digits than cents. The two amounts still add up to the credit.
-  assert.equal(await noteFor(-5, { couponUsd: 5, couponUntilPeriodEndUsd: 1.245, storeUsd: 0, depositUsd: 0 }), "$5.00 was credited to your personal wallet. $3.75 of it went back as coupon credit and keeps its coupon's end date, and $1.25 lasts until this period ends.");
-  assert.equal(await noteFor(-5, { couponUsd: 5, couponUntilPeriodEndUsd: 0.001, storeUsd: 0, depositUsd: 0 }), "$5.00 was credited to your personal wallet. It went back as coupon credit and keeps its coupon's end date.");
-  assert.equal(await noteFor(-5, { couponUsd: '3.00', couponUntilPeriodEndUsd: '1.00', storeUsd: '0', depositUsd: '2.00' }), "$5.00 was credited to your personal wallet. $2.00 of it went back as coupon credit and keeps its coupon's end date, and $3.00 lasts until this period ends.");
+  const parts = overrides => ({ couponUsd: 0, couponUntilPeriodEndUsd: 0, storeUsd: 0, storeUntilPeriodEndUsd: 0, depositUsd: 0, depositUntilPeriodEndUsd: 0, ...overrides });
+  const keeps = 'It went back to the balances that paid and keeps their end dates.';
+  const ended = 'It lasts until this period ends, because the credit that paid it has ended.';
+  // Every balance keeps the end date of what paid it: coupon credit, store revenue and deposits alike.
+  assert.equal(await noteFor(-5, parts({ couponUsd: 5 })), `$5.00 was credited to your personal wallet. ${keeps}`);
+  assert.equal(await noteFor(-5, parts({ storeUsd: 1, depositUsd: 4 })), `$5.00 was credited to your personal wallet. ${keeps}`);
+  // A part whose source has ended since lasts until the period ends, whichever balance it is.
+  assert.equal(await noteFor(-5, parts({ couponUsd: 5, couponUntilPeriodEndUsd: 5 })), `$5.00 was credited to your personal wallet. ${ended}`);
+  assert.equal(await noteFor(-5, parts({ storeUsd: 1, storeUntilPeriodEndUsd: 1, depositUsd: 4, depositUntilPeriodEndUsd: 4 })), `$5.00 was credited to your personal wallet. ${ended}`);
+  assert.equal(await noteFor(-5, parts({ couponUsd: 3, couponUntilPeriodEndUsd: 1, depositUsd: 2 })), '$5.00 was credited to your personal wallet. $4.00 of it went back to the balances that paid and keeps their end dates, and $1.00 lasts until this period ends, because the credit that paid it has ended.');
+  assert.equal(await noteFor(-5, parts({ couponUsd: 1, couponUntilPeriodEndUsd: 0.5, storeUsd: 2, storeUntilPeriodEndUsd: 0.5, depositUsd: 2, depositUntilPeriodEndUsd: 1 })), '$5.00 was credited to your personal wallet. $3.00 of it went back to the balances that paid and keeps their end dates, and $2.00 lasts until this period ends, because the credit that paid it has ended.');
+  // Parts that come to nothing claim nothing, whatever the amount says, and so does an answer without them.
+  assert.equal(await noteFor(-5, parts({})), '$5.00 was credited to your personal wallet.');
+  assert.equal(await noteFor(-5, undefined), '$5.00 was credited to your personal wallet.');
+  // A balance can carry more digits than cents. The two amounts still add up to the credit.
+  assert.equal(await noteFor(-5, parts({ couponUsd: 5, couponUntilPeriodEndUsd: 1.245 })), '$5.00 was credited to your personal wallet. $3.75 of it went back to the balances that paid and keeps their end dates, and $1.25 lasts until this period ends, because the credit that paid it has ended.');
+  assert.equal(await noteFor(-5, parts({ couponUsd: 5, couponUntilPeriodEndUsd: 0.001 })), `$5.00 was credited to your personal wallet. ${keeps}`);
+  assert.equal(await noteFor(-5, parts({ couponUsd: '3.00', couponUntilPeriodEndUsd: '1.00', depositUsd: '2.00', depositUntilPeriodEndUsd: '0' })), '$5.00 was credited to your personal wallet. $4.00 of it went back to the balances that paid and keeps their end dates, and $1.00 lasts until this period ends, because the credit that paid it has ended.');
+  // The credits already used are named after the parts.
+  assert.equal(await noteFor(-4.5, parts({ depositUsd: 4.5 }), 0.5), `$4.50 was credited to your personal wallet. ${keeps} $0.50 came off for credits already used above what the plan keeps.`);
 });
 
 test('apply_agent_skills checks names before anything is priced or written', async () => {
@@ -1276,6 +1401,7 @@ test('apply_agent_skills runs the server\'s dependency check against the whole s
 test('apply_agent_skills tells a card plan that nothing is charged now', async () => {
   const fake = fakeClient(skillRoutes({
     '/UserAgent/Detail': detail({ teamguid: 'team-1', subscription: { status: 'active', provider: 'stripe', currentperiodend: NOW + 86400, daysremaining: 1 } }),
+    '/UserAgent/PricingPreview': preview(cardPlanChange({ periodEnd: NOW + 86400, secondsLeft: 86400, creditsNow: 3, creditsThisPeriod: 4203 })),
   }));
   await withClient(fake, async client => {
     const result = await client.callTool({
@@ -1284,8 +1410,9 @@ test('apply_agent_skills tells a card plan that nothing is charged now', async (
     });
     assert.equal(result.structuredContent.billing.plan, 'card');
     assert.equal(result.structuredContent.billing.wallet, 'team');
-    assert.equal(result.structuredContent.billing.estimatedChargeNowUsd, null);
+    assert.equal(result.structuredContent.billing.estimatedChargeNowUsd, 0);
     assert.match(result.structuredContent.billing.note, /Nothing is charged now.*next invoice/);
+    assert.equal(result.structuredContent.billing.note, 'Nothing is charged now. The card subscription is updated to the new price, and a plan that renews by card shows the prorated difference on its next invoice. 3 credits come now for the rest of this period. The new monthly price is $43.00.');
     // The Detail row carries no card state here, so the note does not say the plan renews.
     assert.match(result.structuredContent.billing.note, /The new monthly price is \$\d/);
     assert.doesNotMatch(result.structuredContent.billing.note, /plan then renews|renews at/);
@@ -1354,31 +1481,36 @@ test('apply_agent_skills points a card plan to its next invoice only while it re
     let result;
     await withClient(fakeClient(skillRoutes({
       '/UserAgent/Detail': detailAfterApply(overrides),
+      '/UserAgent/PricingPreview': preview(cardPlanChange()),
       '/UserAgent/SkillsApply': {
         result: true,
         errors: [],
-        pricing: { previousPriceUsd: 42, newPriceUsd: 43, deltaUsd: 1, previousMonthlyCredits: 4200, newMonthlyCredits: 4300, deltaCredits: 100 },
+        pricing: { previousPriceUsd: 42, newPriceUsd: 43, deltaUsd: 1, previousMonthlyCredits: 4200, newMonthlyCredits: 4300, deltaCredits: 100, creditsNow: 50, creditsThisPeriod: 4250, creditsFromRenewal: 4300, periodEnd: NOW + 15 * 86400 },
         tier: 'starter',
         stripeProrationApplied: true,
         prepaidWalletDelta: null,
+        usedCreditsUsd: 0,
       },
     })), async client => {
       quote = await quoteInstagram(client);
       result = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
       assert.equal(result.structuredContent.status, 'applied', text(result));
       assert.equal(result.structuredContent.billing.chargedNowUsd, null);
+      assert.equal(quote.structuredContent.billing.estimatedChargeNowUsd, 0);
     });
     return [quote.structuredContent.billing.note, result.structuredContent.billing.note];
   };
+  const comes = '50 credits come now for the rest of this period.';
+  const came = '50 credits came now for the rest of this period.';
 
   // A plan that renews by card keeps the invoice sentence. One whose renewal is not known may also end, so the invoice is named only for a plan that renews by card.
   assert.deepEqual(await notes({ subscription: card, stripecancelatperiodend: false }), [
-    'Nothing is charged now. The card subscription is updated and the prorated difference appears on the next invoice. The plan then renews at $43.00 a month.',
-    'The card subscription was updated; any prorated difference appears on the next invoice.',
+    'Nothing is charged now. The prorated difference appears on the next invoice, and 50 credits come now for the rest of this period. The plan then renews at $43.00 a month.',
+    `The card subscription was updated; any prorated difference appears on the next invoice. ${came}`,
   ]);
   assert.deepEqual(await notes({ subscription: card }), [
-    'Nothing is charged now. The card subscription is updated to the new price, and a plan that renews by card shows the prorated difference on its next invoice. The new monthly price is $43.00.',
-    'Nothing was charged now. The card subscription was updated to the new price, and a plan that renews by card shows the prorated difference on its next invoice.',
+    `Nothing is charged now. The card subscription is updated to the new price, and a plan that renews by card shows the prorated difference on its next invoice. ${comes} The new monthly price is $43.00.`,
+    `Nothing was charged now. The card subscription was updated to the new price, and a plan that renews by card shows the prorated difference on its next invoice. ${came}`,
   ]);
 
   // A card plan moving to wallet billing renews from the wallet, also when a row carries the card subscription's end flag.
@@ -1387,22 +1519,44 @@ test('apply_agent_skills points a card plan to its next invoice only while it re
     [{ subscription: { ...card, nextprovider: 'prepaid' }, stripecancelatperiodend: true, teamguid: 'team-1' }, 'the team wallet'],
   ]) {
     assert.deepEqual(await notes(overrides), [
-      `Nothing is charged now. The card subscription is updated to the new price for the rest of this period. When this period ends, the plan moves to wallet billing and renews from ${wallet} at $43.00 a month.`,
-      `Nothing was charged now. The card subscription was updated to the new price for the rest of this period. When this period ends, the plan moves to wallet billing and renews from ${wallet} at $43.00 a month.`,
+      `Nothing is charged now. The card subscription is updated to the new price for the rest of this period. ${comes} When this period ends, the plan moves to wallet billing and renews from ${wallet} at $43.00 a month.`,
+      `Nothing was charged now. The card subscription was updated to the new price for the rest of this period. ${came} When this period ends, the plan moves to wallet billing and renews from ${wallet} at $43.00 a month.`,
     ]);
   }
 
   // A card plan set to end does not renew, so neither answer points to a next invoice.
   const [quoteEnds, appliedEnds] = await notes({ subscription: card, stripecancelatperiodend: true });
-  assert.match(quoteEnds, /^Nothing is charged now\. The card subscription is updated to the new price for the rest of this period\. The plan is set to end after \S+ and does not renew\.$/);
-  assert.match(appliedEnds, /^Nothing was charged now\. The card subscription was updated to the new price for the rest of this period\. The plan is set to end after \S+ and does not renew\.$/);
+  assert.match(quoteEnds, /^Nothing is charged now\. The card subscription is updated to the new price for the rest of this period\. 50 credits come now for the rest of this period\. The plan is set to end after \S+ and does not renew\.$/);
+  assert.match(appliedEnds, /^Nothing was charged now\. The card subscription was updated to the new price for the rest of this period\. 50 credits came now for the rest of this period\. The plan is set to end after \S+ and does not renew\.$/);
 
-  // With the current price unknown, the quote of a card subscription that ends with this period reads the same.
+  // With the current price unknown, the quote of a card subscription that ends with this period says the same without the credits.
   const [pricedSwitch] = await notes({ subscription: { ...card, nextprovider: 'prepaid' } });
   const [unpricedSwitch] = await notes({ subscription: { ...card, nextprovider: 'prepaid' }, monthlypriceusd: null });
-  assert.equal(unpricedSwitch, pricedSwitch);
+  assert.equal(unpricedSwitch, pricedSwitch.replace(` ${comes}`, ''));
   const [unpricedEnds] = await notes({ subscription: card, stripecancelatperiodend: true, monthlypriceusd: null });
-  assert.equal(unpricedEnds, quoteEnds);
+  assert.equal(unpricedEnds, quoteEnds.replace(` ${comes}`, ''));
+});
+
+test('apply_agent_skills tells a card plan what a drop does to the invoice and to this period', async () => {
+  const card = { plan: 'agent', status: 'active', provider: 'stripe', currentperiodend: NOW + 15 * 86400, daysremaining: 15 };
+  const quoteNote = async overrides => {
+    let note;
+    await withClient(fakeClient(skillRoutes({
+      '/UserAgent/Detail': detail(overrides),
+      '/UserAgent/PricingPreview': preview(cardPlanChange({ creditsNow: -100, creditsThisPeriod: 4100, creditsFromRenewal: 4000 }), { totalPriceUsd: 40, totalMonthlyCredits: 4000 }),
+    })), async client => {
+      const quote = await client.callTool({ name: 'apply_agent_skills', arguments: { agent_guid: AGENT, skills: { 'util-chat-markdown-reporting': false } } });
+      assert.equal(quote.structuredContent.status, 'quote', text(quote));
+      assert.equal(quote.structuredContent.billing.estimatedChargeNowUsd, 0);
+      assert.equal('creditNowUsd' in quote.structuredContent.billing, false, 'a card plan moves no wallet money');
+      note = quote.structuredContent.billing.note;
+    });
+    return note;
+  };
+  const ends = 'Its credits for the time left end now, and this period keeps 4,100.';
+  assert.equal(await quoteNote({ subscription: card, stripecancelatperiodend: false }), `The prorated difference comes off the next invoice. ${ends} The plan then renews at $40.00 a month.`);
+  assert.equal(await quoteNote({ subscription: card }), `Nothing is charged now. The card subscription is updated to the new price, and a plan that renews by card shows the prorated difference on its next invoice. ${ends} The new monthly price is $40.00.`);
+  assert.match(await quoteNote({ subscription: card, stripecancelatperiodend: true }), new RegExp(`^Nothing is charged now\\. The card subscription is updated to the new price for the rest of this period\\. ${ends.replace(/[.]/g, '\\.')} The plan is set to end after \\S+ and does not renew\\.$`));
 });
 
 test('apply_agent_skills sends a plan that renew cannot bring back to subscribe', async () => {
@@ -4199,27 +4353,7 @@ test('sign-in return addresses are limited to the agent page and the local machi
   assert.equal(isAllowedRedirectUrl('javascript:alert(1)', AGENT), false);
 });
 
-test('prorated charges, base64 values and picker payloads match the API', () => {
-  const now = Date.UTC(2026, 9, 1);
-  assert.equal(estimateProratedUsd(30, now / 1000 + 10 * 86400, now), 10);
-  assert.equal(estimateProratedUsd(-6, now / 1000 + 15 * 86400, now), -3);
-  assert.equal(estimateProratedUsd(5, null, now), null);
-  // By the second, a charge rounded up to the cent and a credit down.
-  assert.equal(estimateProratedUsd(29, now / 1000 + 14.5 * 86400, now), 14.02);
-  assert.equal(estimateProratedUsd(-29, now / 1000 + 14.5 * 86400, now), -14.01);
-  // A rise pays for at least a day, in a period's last hours and in the day of grace after it.
-  assert.equal(estimateProratedUsd(20, now / 1000 + 11 * 3600, now), 0.67);
-  assert.equal(estimateProratedUsd(20, now / 1000 - 23 * 3600, now), 0.67);
-  assert.equal(estimateProratedUsd(88, now / 1000 + 3600, now), 2.94);
-  // A credit is only for the time left.
-  assert.equal(estimateProratedUsd(-20, now / 1000 + 11 * 3600, now), -0.3);
-  assert.equal(estimateProratedUsd(-20, now / 1000 - 23 * 3600, now), 0);
-  // Whole cents stay whole, whatever floats make of them.
-  for (const usd of [0.07, 1.1, 8.7, 19.99, 24.17]) {
-    assert.equal(estimateProratedUsd(usd, now / 1000 + 30 * 86400, now), usd);
-    assert.equal(estimateProratedUsd(-usd, now / 1000 + 30 * 86400, now), -usd);
-  }
-
+test('base64 values and picker payloads match the API', () => {
   assert.equal(normalizeBase64FileValue('eyJhIjoxfQ=='), 'eyJhIjoxfQ==');
   assert.equal(normalizeBase64FileValue('data:application/json;base64,eyJhIjoxfQ=='), 'eyJhIjoxfQ==');
   assert.equal(normalizeBase64FileValue('{"a":1}'), Buffer.from('{"a":1}').toString('base64'));
@@ -4401,4 +4535,31 @@ test('connect_agent_oauth tells a guid it cannot reach from a project that may n
     const disconnect = await client.callTool({ name: 'disconnect_agent_oauth', arguments: { agent_guid: AGENT, credential: 'meta-ads', confirm: true } });
     assert.ok(text(disconnect).includes('Check the guid with list_my_agents. If the agent is listed, integrations can only be changed with a project'), text(disconnect));
   });
+});
+
+test('apply_agent_skills shows a 104 as a refusal with nothing charged: another payment from the wallet, or another skill change', async () => {
+  const walletBusy = 'Another payment from this wallet is still going through, so this skill change was undone and nothing was charged. Please try again in a minute.';
+  const inProgress = 'A skill update is already in progress for this agent, please retry shortly.';
+  for (const [message, guidance] of [
+    [walletBusy, /^Another payment from the same wallet was going through, so this change was not made and nothing was charged\. It is not a low balance, and no funds need to be added\. Offer to try again in a minute: repeat the call with the same idempotency_key\.$/],
+    [inProgress, /^Another skill change for this agent is still running, and one runs at a time\. Nothing was changed or charged by this call\./],
+  ]) {
+    const fake = fakeClient(skillRoutes({ '/UserAgent/SkillsApply': { result: false, errors: [{ code: 104, message }] } }));
+    await withClient(fake, async client => {
+      const quote = await quoteInstagram(client);
+      const result = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
+      assert.equal(result.isError, true);
+      const out = result.structuredContent;
+      assert.equal(out.status, 'refused');
+      assert.equal(out.error.code, 104);
+      assert.equal(out.error.message, message);
+      assert.match(out.billing.note, guidance);
+      assert.match(text(result), /^## Skill change not applied/);
+      assert.ok(text(result).includes(message));
+      assert.match(text(result), new RegExp(`idempotency_key: \`${quote.structuredContent.idempotencyKey}\``));
+      assert.doesNotMatch(text(result), /may have been charged|funds are added|does not show whether/i);
+      // The answer settles it: the agent is not read again to guess, beyond the read each call starts with.
+      assert.equal(fake.called('/UserAgent/Detail').length, 2);
+    });
+  }
 });

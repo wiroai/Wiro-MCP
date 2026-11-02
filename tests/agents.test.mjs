@@ -112,6 +112,35 @@ function subscription(overrides = {}) {
   };
 }
 
+/**
+ * What PricingPreview with tier pro answers for the default agent: Pro at $120 with
+ * 12000 credits, and the plan change on its wallet plan with 15 of 30 days left.
+ */
+function proPreview(overrides = {}) {
+  return {
+    result: true,
+    errors: [],
+    tier: 'pro',
+    totalPriceUsd: 120,
+    totalMonthlyCredits: 12000,
+    planChange: {
+      provider: 'prepaid',
+      periodEnd: NOW + 15 * 86_400,
+      secondsLeft: 15 * 86_400,
+      creditsNow: 5400,
+      creditsThisPeriod: 6600,
+      creditsFromRenewal: 12000,
+      chargeNowUsd: 54,
+      creditNowUsd: 0,
+      usedCreditsUsd: 0,
+      ...overrides,
+    },
+  };
+}
+
+/** UpgradeTier's answer for the same change. */
+const UPGRADED = { result: true, errors: [], tier: 'pro', previousTier: 'starter', newPriceUsd: 120, newMonthlyCredits: 12000, creditsNow: 5400, creditsThisPeriod: 6600, creditsFromRenewal: 12000, periodEnd: NOW + 15 * 86_400, proratedCharge: 54, stripeProrationApplied: false };
+
 function agentRow(overrides = {}) {
   return {
     guid: 'ua-1',
@@ -2149,7 +2178,38 @@ test('manage_agent_billing reports an action that went through despite an error 
   });
 });
 
-test('manage_agent_billing says what an upgrade or a pack does to the agent at each status', async () => {
+test('manage_agent_billing says what an upgrade does to the agent at each status: it keeps a running agent up', async () => {
+  // UpgradeTier leaves a running or starting agent up, brings back one that was stopping, and moves no other.
+  const cases = [
+    [4, /The agent keeps running: the upgrade does not restart it\./, false],
+    [3, /The agent is starting, and the upgrade does not restart it\./, true],
+    [1, /The agent was stopping, and it starts again\./, true],
+    [2, /The agent is queued to start\./, true],
+    [0, /The agent is stopped; the credits are there when it starts\./, false],
+    [5, /The agent stopped with an error; the credits are there when it starts\./, false],
+    [6, /The agent still needs setup; the credits are there once it starts\./, false],
+  ];
+  for (const [status, note, waits] of cases) {
+    const upgrade = fakeClient({
+      '/UserAgent/Detail': detailResponse(agentRow({ status })),
+      '/UserAgent/PricingPreview': proPreview(),
+      '/UserAgent/UpgradeTier': UPGRADED,
+    });
+    await withClient(upgrade, async client => {
+      const quote = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'upgrade_to_pro' });
+      assert.match(quote.structuredContent.message, note);
+      assert.doesNotMatch(quote.structuredContent.message, /restarts to load|agent restarts/);
+      const done = await call(client, 'manage_agent_billing', quote.structuredContent.nextAction.arguments);
+      assert.equal(done.structuredContent.outcome, 'done');
+      assert.match(done.structuredContent.message, note);
+      assert.doesNotMatch(done.structuredContent.message, /restarts to load|agent restarts/);
+      assert.equal(done.structuredContent.nextAction?.tool, waits ? 'get_my_agent' : undefined, `upgrade at status ${status}`);
+      if (waits) assert.equal(done.structuredContent.nextAction.reason, 'Wait until the agent is running.');
+    });
+  }
+});
+
+test('manage_agent_billing says what a pack does to the agent at each status', async () => {
   const restarting = what => new RegExp(`The agent restarts to load the ${what}, which takes about a minute\\. Follow it with get_my_agent\\.`);
   const cases = [
     [4, restarting, true],
@@ -2161,19 +2221,6 @@ test('manage_agent_billing says what an upgrade or a pack does to the agent at e
     [6, what => new RegExp(`The agent still needs setup; the ${what} takes effect once it starts\\.`), false],
   ];
   for (const [status, note, waits] of cases) {
-    const upgrade = fakeClient({
-      '/UserAgent/Detail': detailResponse(agentRow({ status })),
-      '/UserAgent/UpgradeTier': { result: true, errors: [], tier: 'pro', previousTier: 'starter', newPriceUsd: 120, newMonthlyCredits: 12000, proratedCharge: 54 },
-    });
-    await withClient(upgrade, async client => {
-      const quote = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'upgrade_to_pro' });
-      assert.match(quote.structuredContent.message, note('new plan'));
-      const done = await call(client, 'manage_agent_billing', quote.structuredContent.nextAction.arguments);
-      assert.equal(done.structuredContent.outcome, 'done');
-      assert.match(done.structuredContent.message, note('new plan'));
-      assert.equal(done.structuredContent.nextAction?.tool, waits ? 'get_my_agent' : undefined, `upgrade at status ${status}`);
-      if (!waits) assert.doesNotMatch(done.structuredContent.message, /agent restarts/);
-    });
 
     let bought = false;
     const pack = fakeClient({
@@ -2229,10 +2276,11 @@ test('manage_agent_billing does not wait for a stopped agent when an unclear ans
   });
 });
 
-test('manage_agent_billing refuses packs below Pro and estimates a wallet upgrade', async () => {
+test('manage_agent_billing refuses packs below Pro and quotes a wallet upgrade from Wiro\'s plan change', async () => {
   const fake = fakeClient({
     '/UserAgent/Detail': detailResponse(agentRow()),
-    '/UserAgent/UpgradeTier': { result: true, errors: [], tier: 'pro', previousTier: 'starter', newPriceUsd: 120, newMonthlyCredits: 12000, proratedCharge: 54 },
+    '/UserAgent/PricingPreview': proPreview(),
+    '/UserAgent/UpgradeTier': UPGRADED,
   });
   await withClient(fake, async client => {
     const refused = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'buy_credits', pack: 'small' });
@@ -2241,32 +2289,37 @@ test('manage_agent_billing refuses packs below Pro and estimates a wallet upgrad
 
     const upgrade = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'upgrade_to_pro' });
     const { quote } = upgrade.structuredContent;
-    assert.equal(quote.estimated, true);
-    assert.equal(quote.maxChargeUsd, 108);
+    // The quote reads PricingPreview with tier pro for this agent.
+    assert.deepEqual(fake.called('/UserAgent/PricingPreview').at(-1).body, { useragentguid: 'ua-1', tier: 'pro' });
+    assert.equal(quote.estimated, false);
     assert.equal(quote.chargeNowUsd, 54);
+    assert.equal(quote.maxChargeUsd, 54);
     assert.equal(quote.recurringUsd, 120);
-    // Wiro prorates over the real period length, so the user approves the maximum.
-    assert.equal(upgrade.structuredContent.nextAction.arguments.confirm_charge_usd, 108);
-    assert.match(upgrade.structuredContent.message, /about \$54\.00 now .* never more than \$108\.00, so that is the amount to approve/);
-    assert.match(upgrade.structuredContent.message, /confirm_charge_usd 108, confirm: true/);
-    assert.match(upgrade.structuredContent.message, /The Pro monthly pool is 12,000 credits\. The agent restarts to load the new plan/);
-    assert.doesNotMatch(upgrade.structuredContent.message, /at once|full pool|rises to/);
+    assert.equal(quote.monthlyCredits, 12000, 'what every renewal gives');
+    assert.equal(quote.creditsNow, 5400);
+    assert.equal(upgrade.structuredContent.nextAction.arguments.confirm_charge_usd, 54);
+    assert.match(upgrade.structuredContent.message, /^Upgrade to Pro: \$54\.00 now from the personal wallet for the rest of this period \(15 days\)\. 5,400 credits come now for the rest of this period, and every renewal gives 12,000\. From the next renewal the plan costs \$120\.00 every 30 days\. The agent keeps running: the upgrade does not restart it\./);
+    assert.match(upgrade.structuredContent.message, /confirm_charge_usd 54, confirm: true/);
+    assert.doesNotMatch(upgrade.structuredContent.message, /about|estimate|never more than|30-day|restarts/);
     assert.match(upgrade.structuredContent.message, /To go back to Starter later, cancel, let the plan end, then subscribe to Starter\./);
-    assert.equal(fake.calls.filter(item => item.path !== '/UserAgent/Detail').length, 0);
+    assert.deepEqual([...new Set(fake.calls.map(item => item.path))].sort(), ['/UserAgent/Detail', '/UserAgent/PricingPreview']);
+    assert.equal(fake.called('/UserAgent/UpgradeTier').length, 0);
 
-    // The approved amount is a ceiling for a prorated upgrade, and the estimate alone is below it.
-    for (const approved of [50, 60]) {
+    // The approved amount is a ceiling: less than Wiro's amount is asked again.
+    for (const approved of [50, 53.98]) {
       const tooLow = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'upgrade_to_pro', confirm_charge_usd: approved, confirm: true });
       assert.equal(tooLow.structuredContent.outcome, 'quote');
       assert.equal(tooLow.structuredContent.priceChanged, true);
-      assert.match(tooLow.structuredContent.message, new RegExp(`The most this upgrade can charge changed since the quote: it is now \\$108\\.00, and the user approved at most \\$${approved}\\.00\\. Nothing was charged\\.`));
-      assert.equal(tooLow.structuredContent.nextAction.arguments.confirm_charge_usd, 108);
+      assert.match(tooLow.structuredContent.message, new RegExp(`The most this upgrade can charge changed since the quote: it is now \\$54\\.00, and the user approved at most \\$${approved.toFixed(2).replace('.', '\\.')}\\. Nothing was charged\\.`));
+      assert.equal(tooLow.structuredContent.nextAction.arguments.confirm_charge_usd, 54);
     }
     assert.equal(fake.called('/UserAgent/UpgradeTier').length, 0);
 
     const done = await call(client, 'manage_agent_billing', upgrade.structuredContent.nextAction.arguments);
     assert.equal(done.structuredContent.outcome, 'done');
-    assert.match(done.structuredContent.message, /The Pro monthly pool is 12,000 credits\./);
+    assert.match(done.structuredContent.message, /^Upgraded to Pro and charged \$54\.00 from the personal wallet\. 5,400 credits came with it for the rest of this period, and every renewal gives 12,000\. The plan now costs \$120\.00 every 30 days\. The agent keeps running: the upgrade does not restart it\.$/);
+    assert.deepEqual(done.structuredContent.result, { chargedUsd: 54, monthlyPriceUsd: 120, monthlyCredits: 12000, creditsNow: 5400, tier: 'pro', previousTier: 'starter' });
+    assert.equal(done.structuredContent.nextAction, undefined, 'a running agent is not waited for');
     assert.equal(fake.called('/UserAgent/UpgradeTier').length, 1);
   });
 });
@@ -2332,50 +2385,84 @@ test('an upgrade starts from the plan\'s amount when the agent shows no monthly 
 
 test('an upgrade with more than a day left names no minimum, and a cancelled plan pays for the time left', async () => {
   const upgradeable = { guid: 'ua-1', uuid: 'u1', status: 4, tier: 'starter', tiermultiplier: 10, monthlypriceusd: 12, monthlycredits: 1200, agent: { tiers: { starter: { priceUsd: 12, credits: 1200 }, pro: { priceUsd: 120, credits: 12000 } } }, subscription: { plan: 'agent', status: 'active', provider: 'prepaid', amount: 12, currentperiodend: Math.floor(Date.now() / 1000) + 15 * 86400 + 3600, daysremaining: 16 } };
-  const fake = fakeClient({ '/UserAgent/Detail': { result: true, errors: [], useragents: [upgradeable] } });
+  const fake = fakeClient({
+    '/UserAgent/Detail': { result: true, errors: [], useragents: [upgradeable] },
+    '/UserAgent/PricingPreview': proPreview({ periodEnd: NOW + 15 * 86_400 + 3600, secondsLeft: 15 * 86_400 + 3600, chargeNowUsd: 54.15, creditsNow: 5415, creditsThisPeriod: 6615 }),
+  });
   await withClient(fake, async client => {
     const quote = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'upgrade_to_pro' });
     assert.equal(quote.structuredContent.quote.chargeNowUsd, 54.15, textOf(quote));
-    assert.match(quote.structuredContent.message, /about \$54\.15 now from the personal wallet for the rest of this period\. /);
+    assert.match(quote.structuredContent.message, /^Upgrade to Pro: \$54\.15 now from the personal wallet for the rest of this period \(15 days\)\. /);
     assert.doesNotMatch(quote.structuredContent.message, /minimum/);
   });
 });
 
 test('an upgrade in the last hours of a period quotes the one day it pays for, not nothing', async () => {
   const upgradeable = { guid: 'ua-1', uuid: 'u1', status: 4, tier: 'starter', tiermultiplier: 10, monthlypriceusd: 12, monthlycredits: 1200, agent: { tiers: { starter: { priceUsd: 12, credits: 1200 }, pro: { priceUsd: 120, credits: 12000 } } }, subscription: { plan: 'agent', status: 'active', provider: 'prepaid', amount: 12, currentperiodend: Math.floor(Date.now() / 1000) + 11 * 3600, daysremaining: 1 } };
-  const fake = fakeClient({ '/UserAgent/Detail': { result: true, errors: [], useragents: [upgradeable] } });
+  const fake = fakeClient({
+    '/UserAgent/Detail': { result: true, errors: [], useragents: [upgradeable] },
+    '/UserAgent/PricingPreview': proPreview({ periodEnd: NOW + 11 * 3600, secondsLeft: 11 * 3600, chargeNowUsd: 3.6, creditsNow: 360, creditsThisPeriod: 1560 }),
+  });
   await withClient(fake, async client => {
     const quote = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'upgrade_to_pro' });
     assert.equal(quote.structuredContent.quote.chargeNowUsd, 3.6, textOf(quote));
-    assert.equal(quote.structuredContent.quote.maxChargeUsd, 108);
-    assert.match(quote.structuredContent.message, /about \$3\.60 now .* for the rest of this period, at the one-day minimum\./);
-    assert.match(quote.structuredContent.message, /Wiro works out the exact amount from the real length of the billing period, and it is never more than \$108\.00/);
+    assert.equal(quote.structuredContent.quote.maxChargeUsd, 3.6);
+    assert.equal(quote.structuredContent.quote.creditsNow, 360);
+    assert.match(quote.structuredContent.message, /^Upgrade to Pro: \$3\.60 now from the personal wallet for the rest of this period, at the one-day minimum\. 360 credits come now for the rest of this period, and every renewal gives 12,000\./);
+    assert.doesNotMatch(quote.structuredContent.message, /real length of the billing period|never more than/);
   });
 });
 
-test('manage_agent_billing approves an upgrade on a shorter billing period at its maximum', async () => {
-  // The current period is 28 days long; the charge is prorated over its real length.
+test('manage_agent_billing approves the upgrade of a card plan moving to wallet billing at its maximum', async () => {
+  // The card period is 28 days long. UpgradeTier charges such a plan from the wallet over that
+  // period, while PricingPreview prices the plan as the card plan it still is: no wallet money.
   const start = NOW;
   const end = NOW + 28 * 86_400;
   const fake = fakeClient({
     '/UserAgent/Detail': detailResponse(agentRow({ subscription: subscription({ provider: 'stripe', nextprovider: 'prepaid', currentperiodend: end }) })),
+    '/UserAgent/PricingPreview': proPreview({ provider: 'stripe', periodEnd: end, secondsLeft: end - NOW, chargeNowUsd: 0, creditsNow: 10800, creditsThisPeriod: 12000 }),
     '/UserAgent/UpgradeTier': () => {
       const totalDays = Math.max(1, Math.round((end - start) / 86_400));
       const remainingDays = Math.max(0, Math.round((end - Math.floor(Date.now() / 1000)) / 86_400));
       const proratedCharge = Math.round(((120 - 12) / totalDays) * remainingDays * 100) / 100;
-      return { result: true, errors: [], tier: 'pro', previousTier: 'starter', newPriceUsd: 120, newMonthlyCredits: 12000, proratedCharge };
+      return { ...UPGRADED, proratedCharge, creditsNow: 10800, creditsThisPeriod: 12000 };
     },
   });
   await withClient(fake, async client => {
     const quote = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'upgrade_to_pro' });
-    assert.equal(quote.structuredContent.quote.chargeNowUsd, 100.8);
+    assert.equal(quote.structuredContent.quote.chargeNowUsd, null, 'not a $0.00 charge');
+    assert.equal(quote.structuredContent.quote.estimated, true);
+    assert.equal(quote.structuredContent.quote.maxChargeUsd, 108);
+    assert.equal('creditsNow' in quote.structuredContent.quote, false);
+    assert.match(quote.structuredContent.message, /^Upgrade to Pro: the difference for the rest of this period is taken from the personal wallet now\. Wiro works it out from the time left when the upgrade is applied, and it is never more than \$108\.00, so that is the amount to approve\. The added credits come for the time left in this period, and every renewal gives 12,000\./);
+    assert.doesNotMatch(quote.structuredContent.message, /\$0\.00 now/);
     const approved = quote.structuredContent.nextAction.arguments.confirm_charge_usd;
     assert.equal(approved, 108);
     const done = await call(client, 'manage_agent_billing', quote.structuredContent.nextAction.arguments);
     assert.equal(done.structuredContent.outcome, 'done');
     assert.equal(done.structuredContent.result.chargedUsd, 108);
     assert.ok(done.structuredContent.result.chargedUsd <= approved);
+    assert.equal(done.structuredContent.result.creditsNow, 10800);
   });
+});
+
+test('manage_agent_billing quotes an upgrade at its maximum when Wiro cannot work it out yet', async () => {
+  // A pricing read that fails, or a plan change that is not there, leaves the price the agent shows and the maximum.
+  for (const answer of [{ result: false, errors: [{ code: 0, message: 'Failed to compute pricing' }] }, { ...proPreview(), planChange: null }]) {
+    const fake = fakeClient({
+      '/UserAgent/Detail': detailResponse(agentRow()),
+      '/UserAgent/PricingPreview': answer,
+    });
+    await withClient(fake, async client => {
+      const quote = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'upgrade_to_pro' });
+      assert.equal(quote.structuredContent.outcome, 'quote', textOf(quote));
+      assert.equal(quote.structuredContent.quote.chargeNowUsd, null);
+      assert.equal(quote.structuredContent.quote.maxChargeUsd, 108);
+      assert.equal(quote.structuredContent.quote.monthlyCredits, 12000);
+      assert.equal(quote.structuredContent.nextAction.arguments.confirm_charge_usd, 108);
+      assert.match(quote.structuredContent.message, /never more than \$108\.00, so that is the amount to approve/);
+    });
+  }
 });
 
 test('manage_agent_billing does not promise renewals on a cancelled plan', async () => {
@@ -4339,5 +4426,57 @@ test('get_account keeps the balance when the transactions cannot be read', async
     assert.equal(result.structuredContent.transactions, undefined);
     assert.equal(result.structuredContent.transactionsError, 'Not now');
     assert.match(textOf(result), /The transactions could not be read: Not now/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Code 104: another payment from the same wallet, or another change to the agent's plan
+// ---------------------------------------------------------------------------
+
+const WALLET_BUSY = 'Another payment from this wallet is still going through. Nothing was charged; please try again in a minute.';
+const PLAN_BUSY = 'Another change to this agent\'s plan is going through. Nothing was changed; please try again in a minute.';
+
+test('manage_agent_billing shows a 104 as a refusal with nothing charged, on every paid route', async () => {
+  const prepaid = { provider: 'prepaid', currentperiodend: NOW + 15 * 86_400 };
+  for (const [path, action, row, extra, sentence] of [
+    ['/UserAgent/CreateSubscriptionCheckout', 'subscribe', agentRow({ status: 6, subscription: null }), { confirm_charge_usd: 12 }, WALLET_BUSY],
+    ['/UserAgent/RenewSubscription', 'renew', agentRow({ subscription: subscription({ ...prepaid, status: 'expired' }) }), { confirm_charge_usd: 12 }, WALLET_BUSY],
+    ['/UserAgent/UpgradeTier', 'upgrade_to_pro', agentRow({ subscription: subscription(prepaid) }), { confirm_charge_usd: 54 }, WALLET_BUSY],
+    ['/UserAgent/UpgradeTier', 'upgrade_to_pro', agentRow({ subscription: subscription(prepaid) }), { confirm_charge_usd: 54 }, PLAN_BUSY],
+    ['/UserAgent/CreateExtraCreditCheckout', 'buy_credits', agentRow({ tier: 'pro', subscription: subscription(prepaid) }), { pack: 'small', request_id: 'pack-key-104', confirm_charge_usd: 60 }, WALLET_BUSY],
+  ]) {
+    const fake = fakeClient({
+      '/UserAgent/Detail': detailResponse(row),
+      '/UserAgent/PricingPreview': proPreview(),
+      [path]: { result: false, errors: [{ code: 104, message: sentence }] },
+    });
+    await withClient(fake, async client => {
+      const result = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action, ...extra, confirm: true });
+      assert.equal(fake.called(path).length, 1, `${action}: ${textOf(result)}`);
+      assert.equal(result.isError, true, action);
+      const text = textOf(result);
+      assert.ok(text.includes(sentence), text);
+      assert.match(text, /Nothing was charged or changed, and it is not a low balance\. Offer to try again in a minute\./, action);
+      assert.doesNotMatch(text, /may have (been |taken )|does not show whether|funds are added|deposit\/credit-card|contact Wiro support/i, action);
+      assert.equal(fake.called('/UserAgent/Detail').length, 1, `${action}: no read to see whether it went through`);
+      if (action === 'buy_credits') assert.match(text, /repeat the call with request_id "pack-key-104"; that request id never charges twice\./);
+      else assert.doesNotMatch(text, /request_id/);
+    });
+  }
+});
+
+test('deploy_agent shows a 104 as a refusal with nothing created or charged', async () => {
+  const fake = fakeClient({
+    '/Agent/Detail': { result: true, errors: [], agents: [templateRow()] },
+    '/UserAgent/Deploy': { result: false, errors: [{ code: 104, message: WALLET_BUSY }] },
+  });
+  await withClient(fake, async client => {
+    const result = await call(client, 'deploy_agent', { template: 'instagram-manager', tier: 'starter', confirm_charge_usd: 12, confirm: true });
+    assert.equal(result.isError, true);
+    const text = textOf(result);
+    assert.ok(text.includes(WALLET_BUSY), text);
+    assert.match(text, /Nothing was created or charged, and it is not a low balance\. Offer to try again in a minute by confirming the same quote\./);
+    assert.doesNotMatch(text, /may have been created|list_my_agents|funds are added/i);
+    assert.equal(fake.called('/UserAgent/Deploy').length, 1);
   });
 });

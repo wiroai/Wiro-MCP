@@ -13,7 +13,7 @@ import {
   unixToIso,
   type ApiEnvelope,
 } from '../utils/api.js';
-import { estimateProratedUsd, restartNote, underOneDayLeft, workspaceHint } from '../utils/agent-config.js';
+import { daysLeftText, readPlanChange, restartNote, underOneDayLeft, workspaceHint, type PlanChange } from '../utils/agent-config.js';
 import { DEFAULT_WAIT_SECONDS } from '../utils/poll.js';
 import { isPlainTeamMember, teamAgentBillingRefused } from '../utils/workspace.js';
 import {
@@ -50,6 +50,8 @@ const quoteSchema = z.object({
   maxChargeUsd: z.number().optional(),
   recurringUsd: z.number().nullable().optional(),
   monthlyCredits: z.number().nullable().optional(),
+  creditsNow: z.number().optional()
+    .describe('upgrade_to_pro: the credits that come now for the rest of the period. monthlyCredits is what every renewal gives.'),
   creditsAdded: z.number().optional(),
   paidFrom: z.enum(['personal_wallet', 'team_wallet', 'card']),
   tier: z.enum(['starter', 'pro']).optional(),
@@ -62,6 +64,8 @@ const resultSchema = z.object({
   chargedUsd: z.number().nullable().optional(),
   monthlyPriceUsd: z.number().optional(),
   monthlyCredits: z.number().optional(),
+  creditsNow: z.number().optional()
+    .describe('upgrade_to_pro: the credits that came with it for the rest of the period. monthlyCredits is what every renewal gives.'),
   creditsAdded: z.number().optional(),
   tier: z.string().optional(),
   previousTier: z.string().optional(),
@@ -124,22 +128,83 @@ function waitIfRestarting(agent: Pick<AgentDetail, 'guid' | 'status'>): NextActi
     : undefined;
 }
 
+/**
+ * The wait after a change to the plan that keeps a running agent up: only an
+ * agent on its way, one that was stopping (it starts again) or one queued or
+ * starting, is worth waiting for.
+ */
+function waitIfStarting(agent: Pick<AgentDetail, 'guid' | 'status'>): NextAction | undefined {
+  return isTransitionalStatus(agent.status)
+    ? waitAction(agent.guid, 'Wait until the agent is running.')
+    : undefined;
+}
+
+/** What a change to the plan does to the agent: a running one keeps running, and one that was stopping starts again. */
+function planChangeAgentNote(status: number | null, what: string): string {
+  switch (status) {
+    case 4:
+      return `The agent keeps running: ${what} does not restart it.`;
+    case 3:
+      return `The agent is starting, and ${what} does not restart it.`;
+    case 1:
+      return 'The agent was stopping, and it starts again.';
+    case 2:
+      return 'The agent is queued to start.';
+    case 6:
+      return 'The agent still needs setup; the credits are there once it starts.';
+    case 0:
+      return 'The agent is stopped; the credits are there when it starts.';
+    case 5:
+      return 'The agent stopped with an error; the credits are there when it starts.';
+    default:
+      return 'The credits are there when the agent starts.';
+  }
+}
+
+interface ProPreview {
+  price: { priceUsd: number; monthlyCredits: number } | null;
+  change: PlanChange | null;
+}
+
+/**
+ * The Pro price of this agent and what moving to it does today, as Wiro works it
+ * out on the plan the agent has now. null when it cannot be read: the quote then
+ * falls back to the Pro price the agent shows and to the most the upgrade can charge.
+ */
+async function readProPreview(client: WiroClient, guid: string, signal: AbortSignal): Promise<ProPreview | null> {
+  try {
+    const body = requireApiSuccess(
+      await client.post<BillingEnvelope>('/UserAgent/PricingPreview', { useragentguid: guid, tier: 'pro' }, signal),
+      'The Pro price could not be read.',
+    );
+    const priceUsd = toNumber(body.totalPriceUsd);
+    const monthlyCredits = toNumber(body.totalMonthlyCredits);
+    return {
+      price: priceUsd !== null && monthlyCredits !== null ? { priceUsd, monthlyCredits } : null,
+      change: readPlanChange(body.planChange),
+    };
+  } catch (error) {
+    if (signal.aborted) throw error;
+    return null;
+  }
+}
+
 function tierName(tier: string | undefined): string {
   return tier === 'pro' ? 'Pro' : 'Starter';
 }
 
-/** The amount a confirmed call charges now, or null when it charges nothing. */
+/** The amount a confirmed call charges now, or at most when that is worked out only then; null when it charges nothing. */
 function chargeOf(quote: Quote | undefined): number | null {
-  const amount = quote?.chargeNowUsd ?? null;
+  const amount = quote?.chargeNowUsd ?? quote?.maxChargeUsd ?? null;
   return amount !== null && amount > 0 ? amount : null;
 }
 
 /**
  * The amount the user approves with confirm_charge_usd, or null when the
- * call charges nothing. Wiro prorates an upgrade over the real length of
- * the billing period, which the 30-day estimate does not know, so an upgrade
- * is approved at its maximum: the full price difference, which the prorated
- * charge never exceeds.
+ * call charges nothing. An upgrade is approved at the most it can charge: the
+ * amount Wiro works out for a wallet plan, which only shrinks as the period
+ * runs on, or the full price difference when Wiro works the amount out only
+ * at the upgrade.
  */
 function approvalAmountOf(action: BillingAction, quote: Quote | undefined): number | null {
   if (action !== 'upgrade_to_pro') return chargeOf(quote);
@@ -176,13 +241,14 @@ function changedLead(action: BillingAction, amount: number | null, approved: num
   return `${changed} Nothing was charged. Show the new amount to the user and ask again.`;
 }
 
-function planFor(
+async function planFor(
   client: WiroClient,
   action: BillingAction,
   agent: AgentDetail,
   raw: Record<string, unknown> | null,
   input: { tier?: 'starter' | 'pro'; pack?: string; requestId: string },
-): Plan {
+  signal: AbortSignal,
+): Promise<Plan> {
   const guid = agent.guid;
   const active = raw?.status === 'active';
   const prepaid = raw?.provider === 'prepaid';
@@ -270,7 +336,7 @@ function planFor(
         const amount = agent.monthlyPriceUsd || agent.subscription?.amountUsd;
         return {
           outcome: 'quote',
-          quote: { chargeNowUsd: 0, estimated: false, recurringUsd: amount, monthlyCredits: agent.credits.monthly, paidFrom },
+          quote: { chargeNowUsd: 0, estimated: false, recurringUsd: amount, monthlyCredits: agent.credits.renewal ?? agent.credits.monthly, paidFrom },
           message: `Undo the cancellation: nothing is charged now. The plan then renews from ${wallet} for ${formatUsd(amount)} after ${periodEnd} and every 30 days after that until it is cancelled.`,
           confirmReason: 'Ask the user to confirm first: the plan will charge the wallet again at each renewal.',
           perform: async signal => {
@@ -412,28 +478,41 @@ function planFor(
       if (agent.tier === 'pro') return { outcome: 'not_needed', message: 'The agent is already on Pro.' };
       // No checkout pages are opened for card plans: the user pays them in the dashboard.
       if (route === 'card') return { outcome: 'refused', message: cardPlan('upgrade it to Pro') };
-      const pro = agent.pricing?.pro;
+      const preview = await readProPreview(client, guid, signal);
+      const pro = preview?.price ?? agent.pricing?.pro;
       if (!pro) throw new Error('The Pro price of this agent is not available right now. Try again later.');
       const ending = `The plan is cancelled, so it ends about a day after ${periodEnd} and does not renew at the Pro price; this charge covers only the time left. To keep the plan, undo the cancellation first with action renew.`;
       const current = agent.monthlyPriceUsd || agent.subscription?.amountUsd || 0;
-      const periodEndSeconds = toNumber(raw?.currentperiodend);
-      const maxCharge = roundUsd(Math.max(0, pro.priceUsd - current));
-      const estimate = Math.min(maxCharge, Math.max(0, estimateProratedUsd(pro.priceUsd - current, periodEndSeconds) ?? maxCharge));
+      const fullDifference = roundUsd(Math.max(0, pro.priceUsd - current));
+      // A wallet plan pays the amount Wiro works out on it now. A card plan moving to wallet billing is
+      // charged from the wallet for the time left of its card period, which Wiro works out at the upgrade.
+      const change = preview?.change?.wallet ? preview.change : null;
+      const exact = change?.chargeNowUsd ?? null;
+      const renewalCredits = change?.creditsFromRenewal ?? pro.monthlyCredits;
+      const creditsNow = change?.creditsNow ?? null;
+      const days = daysLeftText(change?.secondsLeft ?? null);
+      const money = exact !== null
+        ? `Upgrade to Pro: ${formatUsd(exact)} now from ${wallet} for the rest of this period`
+          + `${exact > 0 && underOneDayLeft(change?.secondsLeft ?? null) ? ', at the one-day minimum' : days ? ` (${days})` : ''}. `
+        : `Upgrade to Pro: the difference for the rest of this period is taken from ${wallet} now. Wiro works it out from the time left when the upgrade is applied, and it is never more than ${formatUsd(fullDifference)}, so that is the amount to approve. `;
+      const credits = creditsNow !== null
+        ? `${formatCredits(creditsNow)} credits come now for the rest of this period${cancelled ? '' : `, and every renewal gives ${formatCredits(renewalCredits)}`}. `
+        : `The added credits come for the time left in this period${cancelled ? '' : `, and every renewal gives ${formatCredits(renewalCredits)}`}. `;
       return {
         outcome: 'quote',
         quote: {
-          chargeNowUsd: estimate,
-          estimated: true,
-          maxChargeUsd: maxCharge,
+          chargeNowUsd: exact,
+          estimated: exact === null,
+          maxChargeUsd: exact ?? fullDifference,
           recurringUsd: cancelled ? null : pro.priceUsd,
-          monthlyCredits: pro.monthlyCredits,
+          monthlyCredits: renewalCredits,
+          ...(creditsNow !== null ? { creditsNow } : {}),
           paidFrom,
           tier: 'pro',
         },
-        message: `Upgrade to Pro: about ${formatUsd(estimate)} now from ${wallet} for the rest of this period${estimate > 0 && underOneDayLeft(periodEndSeconds) ? ', at the one-day minimum' : ''}. `
-          + `Wiro works out the exact amount from the real length of the billing period, and it is never more than ${formatUsd(maxCharge)}, so that is the amount to approve. `
+        message: money + credits
           + (cancelled ? `${ending} ` : `From the next renewal the plan costs ${formatUsd(pro.priceUsd)} every 30 days. `)
-          + `The Pro monthly pool is ${formatCredits(pro.monthlyCredits)} credits. ${restartNote(agent.status, 'new plan')} To go back to Starter later, cancel, let the plan end, then subscribe to Starter.`,
+          + `${planChangeAgentNote(agent.status, 'the upgrade')} To go back to Starter later, cancel, let the plan end, then subscribe to Starter.`,
         perform: async signal => {
           const body = requireApiSuccess(
             await client.post<BillingEnvelope>('/UserAgent/UpgradeTier', { guid, targetTier: 'pro' }, signal),
@@ -445,23 +524,28 @@ function planFor(
           }
           const charged = toNumber(body.proratedCharge);
           const newPrice = toNumber(body.newPriceUsd) ?? pro.priceUsd;
-          const newCredits = toNumber(body.newMonthlyCredits) ?? pro.monthlyCredits;
+          const fromRenewal = toNumber(body.creditsFromRenewal) ?? toNumber(body.newMonthlyCredits) ?? renewalCredits;
+          const came = toNumber(body.creditsNow);
           const previousTier = asString(body.previousTier);
           return {
             outcome: 'done',
             message: `Upgraded to Pro and charged ${formatUsd(charged ?? 0)} from ${wallet}. `
+              + (came !== null
+                ? `${formatCredits(came)} credits came with it for the rest of this period${cancelled ? '' : `, and every renewal gives ${formatCredits(fromRenewal)}`}. `
+                : '')
               + (cancelled
                 ? `The plan is still cancelled and ends about a day after ${periodEnd}; action renew undoes the cancellation. `
                 : `The plan now costs ${formatUsd(newPrice)} every 30 days. `)
-              + `The Pro monthly pool is ${formatCredits(newCredits)} credits. ${restartNote(agent.status, 'new plan')}`,
+              + planChangeAgentNote(agent.status, 'the upgrade'),
             result: {
               chargedUsd: charged,
               monthlyPriceUsd: newPrice,
-              monthlyCredits: newCredits,
+              monthlyCredits: fromRenewal,
+              ...(came !== null ? { creditsNow: came } : {}),
               tier: 'pro',
               ...(previousTier ? { previousTier } : {}),
             },
-            nextAction: waitIfRestarting(agent),
+            nextAction: waitIfStarting(agent),
           };
         },
       };
@@ -630,7 +714,7 @@ async function observeOpenOutcome(
           row,
           text: `The agent is on Pro now, so the upgrade went through. Do not upgrade again. The prorated charge is not shown, and it is at most ${formatUsd(quote?.maxChargeUsd)}.`,
           result: { chargedUsd: null, tier: 'pro' },
-          nextAction: waitIfRestarting(before),
+          nextAction: waitIfStarting(before),
         };
       }
       const proPrice = before.pricing?.pro.priceUsd;
@@ -679,8 +763,14 @@ async function observeOpenOutcome(
   }
 }
 
-function annotateKnownRefusal(error: ApiResultError): Error {
+// Code 104: another payment from the same wallet, or another change to the agent's plan, was going through.
+const BUSY_NOTE = 'Nothing was charged or changed, and it is not a low balance. Offer to try again in a minute.';
+
+function annotateKnownRefusal(error: ApiResultError, requestId?: string): Error {
   const text = error.message;
+  if (error.codes.some(code => Number(code) === 104)) {
+    return new Error(`${text}\n\n${BUSY_NOTE}${requestId ? ` To try again, repeat the call with request_id "${requestId}"; that request id never charges twice.` : ''}`);
+  }
   if (isWalletNotRead(error)) return new Error(`${text}\n\n${WALLET_NOT_READ_NOTE}`);
   if (/insufficient wallet balance/i.test(text)) {
     return new Error(`${text}\n\nNothing was charged. Funds are added at https://wiro.ai/panel/wallet/deposit/credit-card (for a team project, select that team in the dashboard first); once the user has added them and says yes, try again. get_account shows the balance.`);
@@ -701,9 +791,10 @@ export function registerManageAgentBilling(server: McpServer, client: WiroClient
       description: 'Pay for, renew, upgrade or cancel a deployed agent\'s plan, or buy extra credits. Charges '
         + 'come from the Wiro wallet of the agent\'s workspace (the team wallet for a team agent); the connected '
         + 'project must belong to that same workspace. Every call without confirm: true only returns what will happen '
-        + 'and the amount (for a prorated upgrade, an estimate and its maximum). Show it to the user, get '
+        + 'and the amount (for an upgrade, the prorated amount Wiro works out, or the most it can charge when '
+        + 'that is worked out only at the upgrade). Show it to the user, get '
         + 'their approval, then repeat the call with confirm: true and confirm_charge_usd set to the quoted '
-        + 'amount (for an upgrade, its maximum); if the price changed in between, nothing is charged and a '
+        + 'amount (for an upgrade, quote.maxChargeUsd); if the price changed in between, nothing is charged and a '
         + 'new quote comes back. Never repeat a confirmed charge that failed or timed out without checking '
         + 'get_my_agent first. '
         + 'subscribe starts a plan for an agent without one; renew undoes a cancellation or renews an expired '
@@ -815,7 +906,7 @@ export function registerManageAgentBilling(server: McpServer, client: WiroClient
         before = agent;
         plainMember = await isPlainTeamMember(client, row, extra.signal);
         const raw = isPlainObject(row.subscription) ? row.subscription : null;
-        plan = planFor(client, action, agent, raw, { tier, pack, requestId: requestId ?? '' });
+        plan = await planFor(client, action, agent, raw, { tier, pack, requestId: requestId ?? '' }, extra.signal);
 
         if (plan.outcome !== 'quote' || !plan.perform) {
           return respond({ outcome: plan.outcome, heading: plan.heading, message: plan.message, nextAction: plan.nextAction, agentRow: row });
@@ -952,7 +1043,7 @@ export function registerManageAgentBilling(server: McpServer, client: WiroClient
             : 'Do not repeat the call until this is checked.';
           return errorResult(new Error(`${text}\n\nThe request was sent and the answer does not show whether it went through. ${observed.text} ${retry}`));
         }
-        if (error instanceof ApiResultError) return errorResult(annotateKnownRefusal(error));
+        if (error instanceof ApiResultError) return errorResult(annotateKnownRefusal(error, sentAtMs > 0 ? requestId : undefined));
         return errorResult(error);
       }
     },
