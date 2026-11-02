@@ -378,6 +378,10 @@ export const agentTaskSchema = z.object({
   enabled: z.boolean(),
   notWritten: z.boolean().optional()
     .describe('The starter task whose text was never written. It does not run, even when it shows on, until its text is saved with manage_agent_custom_skill.'),
+  ownerSkills: z.array(z.string()).optional()
+    .describe('The skills that bring this task. It runs only while one of them is on.'),
+  skillOff: z.boolean().optional()
+    .describe('Every skill that brings this task is off, so it does not run, even when it shows on, until one of them is turned on with apply_agent_skills. Its own on/off state, text and schedule stay as they are.'),
   interval: z.string().nullable().optional(),
   source: z.enum(['template', 'skill', 'user']).optional(),
   instructions: z.string().optional(),
@@ -401,11 +405,14 @@ export function summarizeTasks(value: unknown, maxInstructionLength = 300): Agen
     const instructions = asString(task.value) ?? '';
     const shortened = truncate(instructions, maxInstructionLength);
     const source = TASK_SOURCES[asString(task._source) ?? ''];
+    const ownerSkills = toStringArray(task._owner_skills);
     return {
       key: asString(task.key) ?? '',
       ...(description ? { description } : {}),
       enabled: task.enabled !== false,
       ...(asString(task.key) === STARTER_TASK_KEY && task._edited === false ? { notWritten: true } : {}),
+      ...(ownerSkills.length > 0 ? { ownerSkills } : {}),
+      ...(task._skill_off === true ? { skillOff: true } : {}),
       ...(interval !== undefined ? { interval: interval || null } : {}),
       ...(source ? { source } : {}),
       ...(shortened ? { instructions: shortened } : {}),
@@ -758,9 +765,29 @@ function shortenedNote(key: string): string {
   return ` (its text is long; get_my_agent with entry "${key}" shows it in full)`;
 }
 
+/** Names inside a sentence: a, b and c. */
+function nameList(names: readonly string[], word: 'and' | 'or'): string {
+  return names.length > 1 ? `${names.slice(0, -1).join(', ')} ${word} ${names[names.length - 1]}` : names.join('');
+}
+
+/**
+ * Why a task whose skills are all off does not run, as a clause that names the skills to turn on. Its own
+ * on/off state stays as it is: a task that is on runs again once one of them is on, and one that is off
+ * also needs turning on.
+ */
+export function skillOffText(task: Pick<AgentTask, 'enabled' | 'ownerSkills'>): string {
+  const names = task.ownerSkills ?? [];
+  if (!task.enabled) {
+    if (names.length === 1) return `it also needs its skill ${names[0]} turned on to run`;
+    return `it also needs one of ${names.length > 1 ? `its skills ${nameList(names, 'or')}` : 'the skills that bring it'} turned on to run`;
+  }
+  if (names.length === 1) return `its skill ${names[0]} is off, so it does not run until ${names[0]} is turned on`;
+  return `${names.length > 1 ? `its skills ${nameList(names, 'and')}` : 'the skills that bring it'} are off, so it does not run until one of them is turned on`;
+}
+
 /** A scheduled task as a list line: key, on or off, schedule and description, then shortenedNote if its text was cut. */
 export function formatScheduledTaskLine(task: AgentTask, shortenedNote = ''): string {
-  return `- \`${task.key}\` ${task.enabled ? 'on' : 'off'}${task.notWritten ? ' (its text is not written yet, so it does not run)' : ''}${task.interval ? `, ${task.interval}` : ''}${task.description ? `: ${quotedSpan(task.description)}` : ''}${task.instructionsTruncated ? shortenedNote : ''}`;
+  return `- \`${task.key}\` ${task.enabled ? 'on' : 'off'}${task.notWritten ? ' (its text is not written yet, so it does not run)' : ''}${task.skillOff ? ` (${skillOffText(task)})` : ''}${task.interval ? `, ${task.interval}` : ''}${task.description ? `: ${quotedSpan(task.description)}` : ''}${task.instructionsTruncated ? shortenedNote : ''}`;
 }
 
 /** A custom instruction as a list line: key, on or off and description, then shortenedNote if its text was cut. */

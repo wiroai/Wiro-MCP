@@ -1408,6 +1408,86 @@ test('apply_agent_skills checks names before anything is priced or written', asy
   });
 });
 
+// The skills behind the scheduled tasks the next test moves.
+const taskSkillList = {
+  ...connectSkillList,
+  skills: [
+    ...connectSkillList.skills,
+    { name: 'int-appstore-events', title: 'App Store Events', depends_on: [], conflicts_with: [], credential_key: 'apple-appstore', requires_credentials: true, pricing: {} },
+    { name: 'int-googleplay-events', title: 'Google Play Events', depends_on: [], conflicts_with: [], credential_key: 'google-play', requires_credentials: true, pricing: {} },
+  ],
+};
+
+/** A registry task as Detail sends it: the skills that bring it, and whether all of them are off. */
+function ownedTask(key, enabled, owners, skillOff) {
+  return { key, description: key, value: 'Run the check.', interval: '0 9 * * 1', enabled, requires_credentials: [], _source: 'skill-bundle', _editable: true, _owner_skills: owners, _skill_off: skillOff };
+}
+
+const SOCIAL_OWNERS = ['int-facebookpage-post', 'int-instagram-post', 'int-linkedin-post', 'int-reddit-post', 'int-tiktok-post', 'int-twitterx-post'];
+
+test('apply_agent_skills quotes the scheduled tasks a change stops or brings back', async () => {
+  const quote = async (scheduledskills, skills) => {
+    let result;
+    await withClient(fakeClient(skillRoutes({
+      '/Skills/List': taskSkillList,
+      '/UserAgent/Detail': detail({
+        skills: skillsOn('util-chat-markdown-reporting', 'int-metaads-manage', 'int-appstore-events', 'int-googleplay-events'),
+        scheduledskills,
+      }),
+    })), async client => {
+      result = await client.callTool({ name: 'apply_agent_skills', arguments: { agent_guid: AGENT, skills } });
+      assert.equal(result.structuredContent.status, 'quote', text(result));
+    });
+    return result;
+  };
+
+  const change = { 'int-metaads-manage': false, 'int-appstore-events': false, 'int-instagram-post': true };
+  const mixed = await quote([
+    ownedTask('cs-cron-metaads-performance-reporter', true, ['int-metaads-manage'], false),
+    // Off by its own switch: it stays off either way.
+    ownedTask('cs-cron-metaads-audience-scanner', false, ['int-metaads-manage'], false),
+    // Another skill that brings it stays on.
+    ownedTask('cs-cron-app-event-scanner', true, ['int-appstore-events', 'int-googleplay-events'], false),
+    ownedTask('cs-cron-social-content-scanner', true, SOCIAL_OWNERS, true),
+    ownedTask('cs-cron-social-drive-scanner', false, SOCIAL_OWNERS, true),
+    // The change turns none of its skills on.
+    ownedTask('cs-cron-review-scanner', true, ['int-appstore-reviews', 'int-googleplay-reviews'], true),
+    { key: 'cs-cron-my-task', description: 'My task', value: 'Do my task.', interval: '0 8 * * *', enabled: true, requires_credentials: [], _source: 'user-created', _editable: true, _user_created: true },
+  ], change);
+  assert.deepEqual(mixed.structuredContent.scheduledTasks, {
+    stop: ['cs-cron-metaads-performance-reporter'],
+    resume: ['cs-cron-social-content-scanner'],
+  });
+  const lines = text(mixed).split('\n');
+  assert.ok(lines.includes('**Scheduled tasks that stop:** `cs-cron-metaads-performance-reporter`. The change turns off every skill that brings it. It keeps its text, schedule and on/off state, and runs again once one of those skills is on.'), text(mixed));
+  assert.ok(lines.includes('**Scheduled tasks that run again:** `cs-cron-social-content-scanner`. The change turns on a skill that brings it, and it runs while the services it needs are connected.'), text(mixed));
+  // They follow the restart line, before the credentials the new skills need.
+  const at = prefix => lines.findIndex(line => line.startsWith(prefix));
+  assert.ok(at('**Restart:**') < at('**Scheduled tasks that stop:**'));
+  assert.ok(at('**Scheduled tasks that run again:**') < at('**Credentials the new skills need:**'));
+
+  const many = await quote([
+    ownedTask('cs-cron-metaads-performance-reporter', true, ['int-metaads-manage'], false),
+    ownedTask('cs-cron-metaads-holiday-planner', true, ['int-metaads-manage'], false),
+    ownedTask('cs-cron-social-content-scanner', true, SOCIAL_OWNERS, true),
+    ownedTask('cs-cron-social-drive-scanner', true, SOCIAL_OWNERS, true),
+  ], change);
+  assert.deepEqual(many.structuredContent.scheduledTasks, {
+    stop: ['cs-cron-metaads-performance-reporter', 'cs-cron-metaads-holiday-planner'],
+    resume: ['cs-cron-social-content-scanner', 'cs-cron-social-drive-scanner'],
+  });
+  assert.match(text(many), /\*\*Scheduled tasks that stop:\*\* `cs-cron-metaads-performance-reporter`, `cs-cron-metaads-holiday-planner`\. The change turns off every skill that brings them\. They keep their text, schedule and on\/off state, and run again once one of those skills is on\./);
+  assert.match(text(many), /\*\*Scheduled tasks that run again:\*\* `cs-cron-social-content-scanner`, `cs-cron-social-drive-scanner`\. The change turns on a skill that brings them, and they run while the services they need are connected\./);
+
+  // A change that turns no task's skills on or off names no task.
+  const none = await quote([
+    ownedTask('cs-cron-metaads-performance-reporter', true, ['int-metaads-manage'], false),
+    ownedTask('cs-cron-review-scanner', true, ['int-appstore-reviews', 'int-googleplay-reviews'], true),
+  ], { 'int-serper-search': true });
+  assert.equal('scheduledTasks' in none.structuredContent, false);
+  assert.doesNotMatch(text(none), /Scheduled tasks/);
+});
+
 test('apply_agent_skills reports a no-op, a dependency turned off and a tier downgrade', async () => {
   const fake = fakeClient(skillRoutes());
   await withClient(fake, async client => {

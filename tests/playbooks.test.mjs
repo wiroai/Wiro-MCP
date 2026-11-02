@@ -557,6 +557,10 @@ test('the playbooks keep a wallet that could not be read apart from a low balanc
   assert.match(agents, /An answer that the balance could not be read also creates and charges nothing, and needs no funds: confirm the same quote again in a moment\./);
 });
 
+test('the agents playbook says that a skill\'s scheduled task does not run while its skills are off', () => {
+  assert.match(PLAYBOOKS.agents, /They also run only while a skill that brings them is on: with all of those skills off a task does not run, even where it shows on, and turning one of them on with `apply_agent_skills` brings it back with its text, schedule and on\/off state kept\./);
+});
+
 test('the agents playbook says when pack credits end', () => {
   assert.match(PLAYBOOKS.agents, /Pack credits are added at once, are used after the monthly pool, do not reset each month and end 6 months \(180 days\) after purchase;/);
 });

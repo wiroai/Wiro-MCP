@@ -33,6 +33,7 @@ import {
   type CustomSkillKind,
 } from '../utils/agent-config.js';
 import { textBlock } from '../utils/quoted-text.js';
+import { skillOffText } from '../utils/user-agent.js';
 import { nextActionSchema, strictInput } from './schemas.js';
 
 const MAX_VALUE_ECHO = 1_500;
@@ -50,6 +51,10 @@ const entrySchema = z.object({
   origin: z.enum(['agent', 'user']),
   notWritten: z.boolean().optional()
     .describe('The starter task whose text was never written. It does not run, even when it shows on, until its text is saved.'),
+  ownerSkills: z.array(z.string()).optional()
+    .describe('The skills that bring this scheduled task. It runs only while one of them is on.'),
+  skillOff: z.boolean().optional()
+    .describe('Every skill that brings this scheduled task is off, so it does not run, even when it shows on, until one of them is turned on with apply_agent_skills. Its own on/off state, text and schedule stay as they are.'),
 });
 
 const outputSchema = {
@@ -135,7 +140,15 @@ function toEntry(entry: CustomSkillEntry, full = false) {
     enabled: entry.enabled,
     origin: entry.userCreated ? 'user' as const : 'agent' as const,
     ...(entry.notWritten ? { notWritten: true } : {}),
+    ...(entry.ownerSkills && entry.ownerSkills.length > 0 ? { ownerSkills: entry.ownerSkills } : {}),
+    ...(entry.skillOff ? { skillOff: true } : {}),
   };
+}
+
+/** Why a scheduled task whose skills are all off does not run, as a sentence of its own. */
+function skillOffSentence(entry: CustomSkillEntry): string {
+  const text = skillOffText(entry);
+  return `${text.charAt(0).toUpperCase()}${text.slice(1)}.`;
 }
 
 function kindLabel(kind: CustomSkillKind): string {
@@ -201,12 +214,13 @@ function upsertRestartNote(status: number | null, functional: boolean, textOnly:
     : 'The change is saved, but the agent was not restarted, so a running agent keeps its old settings until it restarts. control_agent with action restart loads them, and get_my_agent shows its status.';
 }
 
-function scheduleInfo(row: Row, interval: string, isDefault: boolean, entry: { enabled: boolean; requiresCredentials: string[] }) {
+function scheduleInfo(row: Row, interval: string, isDefault: boolean, entry: CustomSkillEntry) {
   const timeZone = asString(row.timezone)?.trim() || 'UTC';
   const parts = [
     `Runs on the cron schedule "${interval}"${isDefault ? ' (the default: Mondays at 10:00)' : ''} in the agent's time zone, ${timeZone}. The time zone can be changed with update_agent.`,
     'Every run spends the agent\'s credits.',
     entry.enabled ? '' : 'It is turned off, so it does not run.',
+    entry.skillOff ? skillOffSentence(entry) : '',
     entry.requiresCredentials.length > 0 ? `It only runs while ${entry.requiresCredentials.join(', ')} is connected.` : '',
   ].filter(Boolean);
   return { interval, timeZone, note: parts.join(' ') };
@@ -308,6 +322,8 @@ async function upsert(client: WiroClient, input: Input, signal: AbortSignal) {
     source: existing?.source ?? 'user-created',
     userCreated: existing ? existing.userCreated : true,
     requiresCredentials: existing?.requiresCredentials ?? [],
+    ownerSkills: existing?.ownerSkills,
+    skillOff: existing?.skillOff,
   };
   const warnings: string[] = [];
   if (input.key.trim() !== key) warnings.push(`Saved under the key ${key}.`);
@@ -496,6 +512,7 @@ async function history(client: WiroClient, input: Input, signal: AbortSignal) {
   const message = [
     current ? `Current: ${current.enabled ? 'on' : 'off'}${current.interval ? `, schedule "${current.interval}"` : ''}.` : 'This key has no live entry on the agent.',
     current?.notWritten ? 'Its text is not written yet, so it does not run until its text is saved.' : '',
+    current?.skillOff ? skillOffSentence(current) : '',
     `${data.entries.length} saved version${data.entries.length === 1 ? '' : 's'}${versions.length < data.entries.length ? `, showing the newest ${versions.length}` : ''}.`,
     presetDefault ? 'It has a template default (revert with source preset).' : 'It has no template default.',
     templates.length > 0 ? `${templates.length} ready-made template${templates.length === 1 ? '' : 's'} can be used as its text.` : '',
@@ -594,6 +611,8 @@ async function revert(client: WiroClient, input: Input, signal: AbortSignal) {
       source: current?.source ?? '',
       userCreated: current?.userCreated ?? false,
       requiresCredentials: current?.requiresCredentials ?? [],
+      ownerSkills: current?.ownerSkills,
+      skillOff: current?.skillOff,
     });
   const messages: Record<string, string> = {
     'no-op': `${key} already matches that version; nothing changed.`,

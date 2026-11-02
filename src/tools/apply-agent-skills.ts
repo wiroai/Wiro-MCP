@@ -16,6 +16,7 @@ import {
   agentStatusOf,
   checkSkillSet,
   credentialsNeededFor,
+  customSkillEntries,
   daysLeftText,
   describeSkillsApplyError,
   diffSkills,
@@ -36,6 +37,7 @@ import {
   workspaceHint,
   type PlanBilling,
   type PlanChange,
+  type SkillDiff,
 } from '../utils/agent-config.js';
 import { asTier, bindProjectStep, formatCredits, outcomeUnknown, toTierPricing, WIRO_PROJECT_CREDENTIAL } from '../utils/user-agent.js';
 import { DEFAULT_WAIT_SECONDS } from '../utils/poll.js';
@@ -96,6 +98,13 @@ const outputSchema = {
     skill: z.string(),
     credentials: z.array(z.string()),
   })),
+  scheduledTasks: z.object({
+    stop: z.array(z.string())
+      .describe('Scheduled tasks that stop running because the change turns off every skill that brings them. Their text, schedule and on/off state stay, and they run again once one of those skills is on.'),
+    resume: z.array(z.string())
+      .describe('Scheduled tasks that run again because the change turns on a skill that brings them, while the services they need are connected.'),
+  }).optional()
+    .describe('Quote: the scheduled tasks that are on and that the change stops or brings back.'),
   agentStatus: z.string(),
   restart: z.string(),
   error: z.object({
@@ -436,6 +445,44 @@ function listLine(label: string, names: string[]): string | null {
   return names.length > 0 ? `**${label}:** ${names.join(', ')}` : null;
 }
 
+/**
+ * The scheduled tasks a change stops, because it turns off every skill that brings them, and the ones it
+ * brings back by turning on one of those skills. Wiro names the skills that bring each task and whether all
+ * of them are off. Only tasks that are on count: one that is off stays off either way.
+ */
+function tasksMoved(row: Row, enabledNow: string[], diff: SkillDiff): { stop: string[]; resume: string[] } {
+  const after = new Set(enabledNow);
+  for (const name of diff.disable) after.delete(name);
+  for (const name of diff.enable) after.add(name);
+  const stop: string[] = [];
+  const resume: string[] = [];
+  for (const task of customSkillEntries(row)) {
+    const owners = task.ownerSkills ?? [];
+    if (task.kind !== 'scheduled_task' || !task.enabled || owners.length === 0) continue;
+    if (task.skillOff) {
+      if (owners.some(name => diff.enable.includes(name))) resume.push(task.key);
+    } else if (owners.some(name => diff.disable.includes(name)) && !owners.some(name => after.has(name))) {
+      stop.push(task.key);
+    }
+  }
+  return { stop, resume };
+}
+
+/** The quote's lines for the scheduled tasks the change stops or brings back. */
+function movedTaskLines(moved: { stop: string[]; resume: string[] }): string[] {
+  const keys = (list: string[]) => list.map(key => `\`${key}\``).join(', ');
+  const lines: string[] = [];
+  if (moved.stop.length > 0) {
+    const one = moved.stop.length === 1;
+    lines.push(`**Scheduled tasks that stop:** ${keys(moved.stop)}. The change turns off every skill that brings ${one ? 'it' : 'them'}. ${one ? 'It keeps its' : 'They keep their'} text, schedule and on/off state, and ${one ? 'runs' : 'run'} again once one of those skills is on.`);
+  }
+  if (moved.resume.length > 0) {
+    const one = moved.resume.length === 1;
+    lines.push(`**Scheduled tasks that run again:** ${keys(moved.resume)}. The change turns on a skill that brings ${one ? 'it, and it runs while the services it needs are' : 'them, and they run while the services they need are'} connected.`);
+  }
+  return lines;
+}
+
 /** Whether the agent's live skills and tier are what this change asked for; null when that cannot be read. */
 async function changeHolds(
   client: WiroClient,
@@ -630,6 +677,7 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
             const priceChanged = confirm && givenKey !== null;
             const blocked = billing.plan !== 'none' && billing.status !== 'active';
             const restart = skillsMove ? restartNote(status, 'skill change') : TIER_ONLY_RESTART;
+            const moved = tasksMoved(row, enabledNow, diff);
             const priceNote = todayPriceNote(row, billing, currentPrice, currentCredits, tierChange);
             const pricing = {
               currentMonthlyUsd: currentPrice,
@@ -686,6 +734,7 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
                 : null,
               `**Billing:** ${note}`,
               `**Restart:** ${restart}`,
+              ...movedTaskLines(moved),
               credentialsNeeded.length > 0
                 ? `**Credentials the new skills need:** ${credentialsNeeded.map(entry => `${entry.skill} (${entry.credentials.join(', ')})`).join('; ')}.${bindProjectNote(credentialsNeeded)}`
                 : null,
@@ -709,6 +758,7 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
                   note,
                 },
                 ...(Array.isArray(preview.enabledSkills) ? { enabledSkills: preview.enabledSkills.map(String) } : {}),
+                ...(moved.stop.length > 0 || moved.resume.length > 0 ? { scheduledTasks: moved } : {}),
                 restart,
                 nextAction,
               },

@@ -1428,6 +1428,114 @@ test('the starter task shows that it does not run until its text is written', as
   }
 });
 
+/**
+ * A scheduled task as Detail sends it. A task the skills registry defines names the skills that bring it
+ * (_owner_skills, a shared util replaced by the skills that depend on it) and whether all of them are off
+ * (_skill_off); a user's own task has neither.
+ */
+function skillTask(key, enabled, owners, skillOff) {
+  return {
+    key,
+    description: key,
+    value: 'Run the check.',
+    interval: '0 9 * * *',
+    enabled,
+    requires_credentials: [],
+    _source: owners ? 'skill-bundle' : 'user-created',
+    _editable: true,
+    _edited: false,
+    ...(owners ? { _owner_skills: owners, _skill_off: skillOff } : { _user_created: true }),
+  };
+}
+
+const SKILL_OFF_ROW = {
+  skills: [
+    { name: 'int-googleplay-events', enabled: true, _edited: false, _user_created: false },
+    { name: 'util-chat-markdown-reporting', enabled: true, _edited: false, _user_created: false },
+  ],
+  scheduledskills: [
+    skillTask('cs-cron-blog-gmail-checker', true, ['int-gmail-check'], true),
+    skillTask('cs-cron-review-scanner', true, ['int-appstore-reviews', 'int-googleplay-reviews'], true),
+    skillTask('cs-cron-social-content-scanner', true, ['int-facebookpage-post', 'int-instagram-post', 'int-linkedin-post'], true),
+    skillTask('cs-cron-metaads-performance-reporter', false, ['int-metaads-manage'], true),
+    skillTask('cs-cron-app-event-scanner', true, ['int-appstore-events', 'int-googleplay-events'], false),
+    skillTask('cs-cron-my-task', true, null, null),
+  ],
+};
+
+test('a scheduled task whose skills are all off says it does not run and names the skill to turn on', async () => {
+  const fake = fakeClient({
+    '/UserAgent/Detail': detailResponse(agentRow(SKILL_OFF_ROW)),
+    '/UserAgent/CustomSkillHistory': { result: true, errors: [], entries: [], preset_default: null },
+    '/UserAgent/CustomSkillAlternatives': { result: true, alternatives: [] },
+  });
+  await withClient(fake, async client => {
+    const read = await call(client, 'get_my_agent', { agent_guid: 'ua-1' });
+    assert.notEqual(read.isError, true, textOf(read));
+    const tasks = Object.fromEntries(read.structuredContent.agent.scheduledTasks.map(task => [task.key, task]));
+    // The task's own on/off state stays as it is.
+    assert.equal(tasks['cs-cron-blog-gmail-checker'].enabled, true);
+    assert.equal(tasks['cs-cron-blog-gmail-checker'].skillOff, true);
+    assert.deepEqual(tasks['cs-cron-blog-gmail-checker'].ownerSkills, ['int-gmail-check']);
+    assert.equal(tasks['cs-cron-metaads-performance-reporter'].enabled, false);
+    assert.equal(tasks['cs-cron-metaads-performance-reporter'].skillOff, true);
+    assert.deepEqual(tasks['cs-cron-app-event-scanner'].ownerSkills, ['int-appstore-events', 'int-googleplay-events']);
+    assert.equal(tasks['cs-cron-app-event-scanner'].skillOff, undefined);
+    assert.equal('ownerSkills' in tasks['cs-cron-my-task'], false);
+    assert.equal('skillOff' in tasks['cs-cron-my-task'], false);
+
+    const line = key => textOf(read).split('\n').find(entry => entry.startsWith(`- \`${key}\``));
+    assert.match(line('cs-cron-blog-gmail-checker'), /^- `cs-cron-blog-gmail-checker` on \(its skill int-gmail-check is off, so it does not run until int-gmail-check is turned on\), 0 9 \* \* \*/);
+    assert.match(line('cs-cron-review-scanner'), /^- `cs-cron-review-scanner` on \(its skills int-appstore-reviews and int-googleplay-reviews are off, so it does not run until one of them is turned on\), 0 9/);
+    assert.match(line('cs-cron-social-content-scanner'), /\(its skills int-facebookpage-post, int-instagram-post and int-linkedin-post are off, so it does not run until one of them is turned on\)/);
+    assert.match(line('cs-cron-metaads-performance-reporter'), /^- `cs-cron-metaads-performance-reporter` off \(it also needs its skill int-metaads-manage turned on to run\), 0 9/);
+    assert.match(line('cs-cron-app-event-scanner'), /^- `cs-cron-app-event-scanner` on, 0 9 \* \* \*/);
+    assert.match(line('cs-cron-my-task'), /^- `cs-cron-my-task` on, 0 9 \* \* \*/);
+
+    const history = async key => {
+      const result = await call(client, 'manage_agent_custom_skill', { action: 'history', agent_guid: 'ua-1', key });
+      assert.notEqual(result.isError, true, textOf(result));
+      return result;
+    };
+    const gmail = await history('cs-cron-blog-gmail-checker');
+    assert.match(gmail.structuredContent.message, /^Current: on, schedule "0 9 \* \* \*"\. Its skill int-gmail-check is off, so it does not run until int-gmail-check is turned on\. /);
+    assert.equal(gmail.structuredContent.entry.enabled, true);
+    assert.equal(gmail.structuredContent.entry.skillOff, true);
+    assert.deepEqual(gmail.structuredContent.entry.ownerSkills, ['int-gmail-check']);
+    const reviews = await history('cs-cron-review-scanner');
+    assert.match(textOf(reviews), /Its skills int-appstore-reviews and int-googleplay-reviews are off, so it does not run until one of them is turned on\./);
+    const metaads = await history('cs-cron-metaads-performance-reporter');
+    assert.match(metaads.structuredContent.message, /^Current: off, schedule "0 9 \* \* \*"\. It also needs its skill int-metaads-manage turned on to run\. /);
+    const events = await history('cs-cron-app-event-scanner');
+    assert.doesNotMatch(textOf(events), /does not run|needs its skill/);
+    assert.equal(events.structuredContent.entry.skillOff, undefined);
+    assert.deepEqual(events.structuredContent.entry.ownerSkills, ['int-appstore-events', 'int-googleplay-events']);
+    const own = await history('cs-cron-my-task');
+    assert.equal('ownerSkills' in own.structuredContent.entry, false);
+  });
+});
+
+test('turning on a scheduled task whose skills are all off says it does not run until one of them is on', async () => {
+  const fake = fakeClient({
+    '/UserAgent/Detail': detailResponse(agentRow(SKILL_OFF_ROW)),
+    '/UserAgent/CustomSkillUpsert': { result: true, errors: [], restarting: true },
+  });
+  await withClient(fake, async client => {
+    const result = await call(client, 'manage_agent_custom_skill', { action: 'upsert', agent_guid: 'ua-1', key: 'cs-cron-metaads-performance-reporter', enabled: true });
+    assert.notEqual(result.isError, true, textOf(result));
+    const out = result.structuredContent;
+    assert.equal(out.entry.enabled, true);
+    assert.equal(out.entry.skillOff, true);
+    assert.match(out.schedule.note, /Every run spends the agent's credits\. Its skill int-metaads-manage is off, so it does not run until int-metaads-manage is turned on\./);
+    assert.doesNotMatch(out.schedule.note, /It is turned off/);
+    assert.match(textOf(result), /\*\*Schedule:\*\* .*Its skill int-metaads-manage is off, so it does not run until int-metaads-manage is turned on\./);
+
+    const events = await call(client, 'manage_agent_custom_skill', { action: 'upsert', agent_guid: 'ua-1', key: 'cs-cron-app-event-scanner', interval: '0 8 * * *' });
+    assert.notEqual(events.isError, true, textOf(events));
+    assert.doesNotMatch(events.structuredContent.schedule.note, /does not run until/);
+  });
+});
+
 test('get_my_agent names the time zone that is set', async () => {
   const fake = fakeClient({ '/UserAgent/Detail': detailResponse(agentRow({ timezone: 'Europe/Istanbul' })) });
   await withClient(fake, async client => {
