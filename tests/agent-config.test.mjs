@@ -850,7 +850,8 @@ test('apply_agent_skills checks the live agent when Wiro answers with an error o
     assert.equal(result.structuredContent.status, 'applied');
     assert.match(result.structuredContent.billing.note, /^The agent's skills now match the request, so the change is in place\. Do not repeat it\./);
     assert.match(text(result), /^## Skills updated$/m);
-    assert.match(result.structuredContent.billing.note, /probably taken from, or credited to, your personal wallet; a credit goes back to the balances that paid\. get_agent_activity with kind usage and get_account with recent_transactions show it\.$/);
+    // The ledger shows the credits a change moved, and the wallet's rows the money.
+    assert.match(result.structuredContent.billing.note, /probably taken from, or credited to, your personal wallet; a credit goes back to the balances that paid\. get_account with recent_transactions shows the amount, and get_agent_activity with kind usage the credits it moved\.$/);
     assert.doesNotMatch(text(result), /Nothing changed/);
 
     // The repeat goes out with no skills and its answer is lost too: the amount is on the wallet's rows.

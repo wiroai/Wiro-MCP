@@ -83,7 +83,7 @@ const outputSchema = {
     subscriptionStatus: z.string().nullable(),
     wallet: z.enum(['team', 'personal']),
     estimatedChargeNowUsd: z.number().nullable().optional()
-      .describe('What a wallet plan pays now, as Wiro works it out; 0 on a card plan, whose difference goes to the card subscription.'),
+      .describe('What a wallet plan pays now at list price, as Wiro works it out, before any discount on the wallet; 0 on a card plan, whose difference goes to the card subscription.'),
     creditNowUsd: z.number().nullable().optional()
       .describe('For a drop on a wallet plan, what goes back to the balances that paid; null when it is worked out when the change is applied.'),
     usedCreditsUsd: z.number().nullable().optional()
@@ -758,7 +758,7 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
           // before anything is reported.
           const holds = await changeHolds(client, agent_guid, plan.requested, tierChange, extra.signal);
           if (holds === true) {
-            const note = `The agent's skills now match the request, so the change is in place. Do not repeat it. ${billing.plan === 'prepaid' && billing.status === 'active' ? `The difference for the rest of this period was probably taken from, or credited to, ${walletName(billing)}; a credit goes back to the balances that paid. get_agent_activity with kind usage and get_account with recent_transactions show it.` : 'Any price difference follows the plan\'s usual billing.'}`;
+            const note = `The agent's skills now match the request, so the change is in place. Do not repeat it. ${billing.plan === 'prepaid' && billing.status === 'active' ? `The difference for the rest of this period was probably taken from, or credited to, ${walletName(billing)}; a credit goes back to the balances that paid. get_account with recent_transactions shows the amount, and get_agent_activity with kind usage the credits it moved.` : 'Any price difference follows the plan\'s usual billing.'}`;
             return {
               content: [{ type: 'text' as const, text: [
                 '## Skills updated',
