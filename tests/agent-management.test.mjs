@@ -469,6 +469,19 @@ test('the deploy_agent quote names a custom build\'s skills by their titles', as
   });
 });
 
+test('deploy_agent names a retired skill and its replacement by title', async () => {
+  const routes = customBuild([]);
+  routes['/Skills/List'] = { result: true, errors: [], skills: [
+    { name: 'int-hubspot-classic', title: 'HubSpot Classic', deprecated: true, replacement: 'int-hubspot-crm', requires_credentials: false },
+  ] };
+  await withClient(fakeClient(routes), async client => {
+    const refused = await call(client, 'deploy_agent', { ...DEPLOY, skills: ['int-hubspot-classic'] });
+    assert.equal(refused.isError, true);
+    // The replacement's title is not in what was read, so words from its name stand in.
+    assert.match(textOf(refused), /Deprecated skill: HubSpot Classic \(`int-hubspot-classic`\) \(use Hubspot Crm \(`int-hubspot-crm`\)\)\./);
+  });
+});
+
 test('deploy_agent and the playbook no longer promise a starter task on Mondays', async () => {
   const description = await toolDescription('deploy_agent');
   assert.doesNotMatch(description, /Mondays|10:00/);

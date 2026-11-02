@@ -923,7 +923,7 @@ test('deploy_agent checks custom skills and prices them with a draft preview', a
 
     const retired = await call(client, 'deploy_agent', { custom: true, title: 'Inbox', tier: 'starter', skills: ['int-retired'] });
     assert.equal(retired.isError, true);
-    assert.match(textOf(retired), /int-retired \(use int-gmail-check\)/);
+    assert.match(textOf(retired), /Gmail Check \(`int-retired`\) \(use Gmail Check \(`int-gmail-check`\)\)/);
     assert.equal(fake.called('/UserAgent/PricingPreview').length, 0);
 
     const quote = await call(client, 'deploy_agent', { custom: true, title: 'Inbox', tier: 'starter', skills: ['int-gmail-check'] });

@@ -465,9 +465,10 @@ export function registerDeployAgent(server: McpServer, client: WiroClient): void
             }
             const deprecated = skillNames.filter(name => found.get(name)?.deprecated);
             if (deprecated.length > 0) {
+              const titles = new Map([...found.values()].filter(skill => skill.title && skill.title !== skill.name).map(skill => [skill.name, skill.title]));
               throw new Error(`Deprecated skill${deprecated.length > 1 ? 's' : ''}: ${deprecated.map(name => {
                 const replacement = found.get(name)?.replacement;
-                return replacement ? `${name} (use ${replacement})` : name;
+                return replacement ? `${skillLabel(name, titles)} (use ${skillLabel(replacement, titles)})` : skillLabel(name, titles);
               }).join(', ')}.`);
             }
           }

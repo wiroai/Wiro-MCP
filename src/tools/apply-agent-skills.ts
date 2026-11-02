@@ -107,8 +107,8 @@ const outputSchema = {
       .describe('Scheduled tasks that run now and stop with this change. They keep their text, schedule and on/off state, and get_my_agent then shows what each waits for.'),
     resume: z.array(z.string())
       .describe('Scheduled tasks that do not run now and start running once this change is applied.'),
-  }).optional()
-    .describe('Quote: the scheduled tasks this change stops or starts, as Wiro works it out.'),
+  }).nullable().optional()
+    .describe('Quote: the scheduled tasks this change stops or starts, as Wiro works it out; null when Wiro could not tell.'),
   pausedTasks: z.array(z.string()).optional()
     .describe('After an applied change: the scheduled tasks it paused, which wait for skills that are off. get_my_agent names those skills.'),
   agentStatus: z.string(),
@@ -458,16 +458,23 @@ function neededText(needed: Array<{ skill: string; credentials: string[] }>, row
   return needed.map(entry => `${skillLabel(entry.skill, titles)}: ${entry.credentials.map(key => credentialLabel(row, key)).join(', ')}`).join('; ');
 }
 
-/** The scheduled tasks a change stops or starts, as Wiro works them out with its own gates; null when there are none. */
-function scheduledTasksOf(value: unknown): { stop: string[]; resume: string[] } | null {
-  if (!isPlainObject(value)) return null;
+/**
+ * The scheduled tasks a change stops or starts, as Wiro works them out with its own gates: null when Wiro
+ * could not tell, undefined when there are none.
+ */
+function scheduledTasksOf(value: unknown): { stop: string[]; resume: string[] } | null | undefined {
+  if (value === null) return null;
+  if (!isPlainObject(value)) return undefined;
   const stop = toStringArray(value.stop);
   const resume = toStringArray(value.resume);
-  return stop.length > 0 || resume.length > 0 ? { stop, resume } : null;
+  return stop.length > 0 || resume.length > 0 ? { stop, resume } : undefined;
 }
 
-/** The quote's lines for the scheduled tasks the change stops or starts. */
-function movedTaskLines(moved: { stop: string[]; resume: string[] } | null): string[] {
+/** The quote's lines for the scheduled tasks the change stops or starts, or that Wiro could not tell. */
+function movedTaskLines(moved: { stop: string[]; resume: string[] } | null | undefined): string[] {
+  if (moved === null) {
+    return ['**Scheduled tasks:** Wiro could not tell which scheduled tasks this change stops or starts. Once it is applied, the result names the tasks it paused.'];
+  }
   if (!moved) return [];
   const keys = (list: string[]) => list.map(key => quotedSpan(key)).join(', ');
   const lines: string[] = [];
@@ -596,10 +603,13 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
         const check = checkSkillSet(enabledNow, diff.changes, registry);
         if (check.deps.length > 0 || check.conflicts.length > 0) {
           const problems = [
-            ...check.deps.map(dep => (diff.disable.includes(dep.requires)
-              ? `${dep.skill} needs ${dep.requires}. Keep ${dep.requires} on, or also turn off ${dep.skill}.`
-              : `${dep.skill} needs ${dep.requires}, which is off. Turn ${dep.requires} on in the same change.`)),
-            ...check.conflicts.map(pair => `${pair.a} and ${pair.b} cannot be on together. Keep only one.`),
+            ...check.deps.map(dep => {
+              const [skill, requires] = [skillLabel(dep.skill, titles), skillLabel(dep.requires, titles)];
+              return diff.disable.includes(dep.requires)
+                ? `${skill} needs ${requires}. Keep ${requires} on, or also turn off ${skill}.`
+                : `${skill} needs ${requires}, which is off. Turn ${requires} on in the same change.`;
+            }),
+            ...check.conflicts.map(pair => `${skillLabel(pair.a, titles)} and ${skillLabel(pair.b, titles)} cannot be on together. Keep only one.`),
           ];
           return errorResult(new Error(`The change was not sent:\n\n- ${[...new Set(problems)].join('\n- ')}`));
         }
@@ -773,7 +783,7 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
                   note,
                 },
                 ...(Array.isArray(preview.enabledSkills) ? { enabledSkills: preview.enabledSkills.map(String) } : {}),
-                ...(moved ? { scheduledTasks: moved } : {}),
+                ...(moved !== undefined ? { scheduledTasks: moved } : {}),
                 restart,
                 nextAction,
               },
@@ -796,7 +806,7 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
         } catch (error) {
           if (extra.signal.aborted) throw error;
           if (!outcomeUnknown(error)) {
-            const failure = describeSkillsApplyError(error, billing.plan);
+            const failure = describeSkillsApplyError(error, billing.plan, titles);
             // Code 110 is the whole outcome: the next step reads the agent, and the call is not repeated.
             const failedChange = failure.code === 110;
             const nextAction = failedChange

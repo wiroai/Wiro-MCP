@@ -331,6 +331,8 @@ export function planSkillChanges(
 ): SkillPlan {
   const errors = new Set<string>();
   const requested: Record<string, boolean> = {};
+  const titles = registryTitles(registry);
+  const label = (name: string) => skillLabel(name, titles);
   for (const [rawName, enabled] of Object.entries(input)) {
     const name = rawName.trim();
     if (!name) {
@@ -349,11 +351,11 @@ export function planSkillChanges(
     const skill = registry.skills.get(name);
     if (!skill) {
       const suggestions = suggestSkills(name, registry);
-      errors.add(`Unknown skill "${name}".${suggestions.length ? ` Did you mean ${suggestions.join(', ')}?` : ''} Use list_agent_skills for the full list.`);
+      errors.add(`Unknown skill "${name}".${suggestions.length ? ` Did you mean ${suggestions.map(label).join(', ')}?` : ''} Use list_agent_skills for the full list.`);
       continue;
     }
     if (enabled && skill.deprecated) {
-      errors.add(`${name} is retired and cannot be turned on${skill.replacement ? `. Use ${skill.replacement} instead` : ''}.`);
+      errors.add(`${label(name)} is retired and cannot be turned on${skill.replacement ? `. Use ${label(skill.replacement)} instead` : ''}.`);
       continue;
     }
     requested[name] = enabled;
@@ -366,7 +368,7 @@ export function planSkillChanges(
       const name = queue.shift() as string;
       for (const dependency of registry.skills.get(name)?.dependsOn ?? []) {
         if (requested[dependency] === false) {
-          errors.add(`${name} needs ${dependency}, which this change turns off. Keep ${dependency} on, or leave ${name} off.`);
+          errors.add(`${label(name)} needs ${label(dependency)}, which this change turns off. Keep ${label(dependency)} on, or leave ${label(name)} off.`);
           continue;
         }
         if (requested[dependency] === true || !registry.skills.has(dependency)) continue;
@@ -700,7 +702,7 @@ function skillPaymentGuidance(plan?: PlanBilling['plan']): string {
  * Turns a refused SkillsApply into an explanation and the step that fixes it.
  * With the agent's plan, a payment failure names only the fix for that plan.
  */
-export function describeSkillsApplyError(error: unknown, plan?: PlanBilling['plan']): SkillsApplyFailure {
+export function describeSkillsApplyError(error: unknown, plan?: PlanBilling['plan'], titles?: ReadonlyMap<string, string>): SkillsApplyFailure {
   const message = error instanceof Error ? error.message : String(error);
   const body = error instanceof ApiResultError ? error.body : {};
   const codes = error instanceof ApiResultError ? error.codes.map(code => toNumber(code)) : [];
@@ -714,7 +716,7 @@ export function describeSkillsApplyError(error: unknown, plan?: PlanBilling['pla
       return {
         ...base,
         deps,
-        guidance: `Some skills need others that would be off: ${deps.map(dep => `${dep.skill} needs ${dep.requires}`).join('; ')}. Turn the needed skills on in the same change (add_dependencies does this for skills you turn on), or keep them on when you turn other skills off.`,
+        guidance: `Some skills need others that would be off: ${deps.map(dep => `${skillLabel(dep.skill, titles)} needs ${skillLabel(dep.requires, titles)}`).join('; ')}. Turn the needed skills on in the same change (add_dependencies does this for skills you turn on), or keep them on when you turn other skills off.`,
       };
     }
     case 102: {
@@ -724,7 +726,7 @@ export function describeSkillsApplyError(error: unknown, plan?: PlanBilling['pla
       return {
         ...base,
         conflicts,
-        guidance: `These skills cannot be on together: ${conflicts.map(pair => `${pair.a} and ${pair.b}`).join('; ')}. Keep only one of each pair.`,
+        guidance: `These skills cannot be on together: ${conflicts.map(pair => `${skillLabel(pair.a, titles)} and ${skillLabel(pair.b, titles)}`).join('; ')}. Keep only one of each pair.`,
       };
     }
     case 103: {
@@ -2366,17 +2368,26 @@ export function customSkillEntries(row: Row): CustomSkillEntry[] {
 }
 
 /**
- * What connecting a credential does to the entries that are off and need it. For a skill's scheduled task
- * Wiro says what it would still wait for once that credential is connected: with nothing left it turns on,
- * otherwise it turns on and stays paused for those skills. Any other entry that requires it turns on.
+ * What connecting a credential does to the entries that need it. For a skill's scheduled task Wiro says what
+ * it would still wait for once that credential is connected: one that is off turns on, and stays paused while
+ * those skills are off (paused); one that is on already stays paused while they are (waiting). Any other
+ * entry that is off and requires the credential turns on.
  */
-export function entriesTurnedOnBy(row: Row, credential: string): { on: CustomSkillEntry[]; paused: Array<{ key: string; groups: string[][] }> } {
+export function entriesTurnedOnBy(row: Row, credential: string): {
+  on: CustomSkillEntry[];
+  paused: Array<{ key: string; groups: string[][] }>;
+  waiting: Array<{ key: string; groups: string[][] }>;
+} {
   const on: CustomSkillEntry[] = [];
   const paused: Array<{ key: string; groups: string[][] }> = [];
+  const waiting: Array<{ key: string; groups: string[][] }> = [];
   for (const entry of customSkillEntries(row)) {
-    if (entry.enabled) continue;
+    const groups = entry.ifConnected?.[credential];
+    if (entry.enabled) {
+      if (groups && groups.length > 0) waiting.push({ key: entry.key, groups });
+      continue;
+    }
     if (entry.ifConnected) {
-      const groups = entry.ifConnected[credential];
       if (groups === undefined) continue;
       if (groups.length === 0) on.push(entry);
       else paused.push({ key: entry.key, groups });
@@ -2384,7 +2395,7 @@ export function entriesTurnedOnBy(row: Row, credential: string): { on: CustomSki
       on.push(entry);
     }
   }
-  return { on, paused };
+  return { on, paused, waiting };
 }
 
 /**

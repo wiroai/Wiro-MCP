@@ -227,12 +227,14 @@ function unusedCredentialRefusal(
  * credential off until the credential arrives. Saving keys or a token turns
  * these on earlier and says so, so an entry that reads as on is left out. A
  * skill's task that would still wait for skills once this credential is
- * connected turns on and stays paused, and is named with them by their titles.
+ * connected turns on and stays paused, and one already on stays paused: each is
+ * named with those skills by their titles.
  */
-function turnsOnNote({ on, paused }: ReturnType<typeof entriesTurnedOnBy>, { meta }: Context, titles: ReadonlyMap<string, string>): string {
-  if (on.length === 0 && paused.length === 0) return '';
+function turnsOnNote({ on, paused, waiting }: ReturnType<typeof entriesTurnedOnBy>, { meta }: Context, titles: ReadonlyMap<string, string>): string {
+  if (on.length === 0 && paused.length === 0 && waiting.length === 0) return '';
   const sentence = (on.length > 0 ? ` ${on.map(entry => quotedSpan(entry.key)).join(', ')} ${on.length > 1 ? 'turn' : 'turns'} on once ${meta.title} is connected.` : '')
-    + paused.map(task => waitingTaskSentence(task.key, task.groups, titles, 'turns on but stays paused')).join('');
+    + paused.map(task => waitingTaskSentence(task.key, task.groups, titles, 'turns on but stays paused')).join('')
+    + waiting.map(task => waitingTaskSentence(task.key, task.groups, titles, 'stays paused')).join('');
   return on.some(entry => entry.kind === 'scheduled_task') || paused.length > 0
     ? `${sentence} Every run of a scheduled task uses credits; turn off any you do not want with manage_agent_custom_skill.`
     : sentence;
@@ -409,7 +411,7 @@ async function connect(
     ? `After approving, the browser returns to the agent's page in the Wiro dashboard${oauth.picker ? ', which asks which accounts the agent should use' : ''}. Use a browser where the user is signed in to wiro.ai as the agent's owner.`
     : `After approving, the browser goes to ${redirectUrl}.`;
   const turnsOn = entriesTurnedOnBy(row, credential);
-  const titles = await skillTitles(client, turnsOn.paused.flatMap(task => task.groups.flat()), signal);
+  const titles = await skillTitles(client, [...turnsOn.paused, ...turnsOn.waiting].flatMap(task => task.groups.flat()), signal);
   return result('connect', context, 'authorize_in_browser',
     `The user must open this link in their own browser and approve access. It works for ${OAUTH_LINK_TTL_SECONDS / 60} minutes. ${after}${turnsOnNote(turnsOn, context, titles)} Give the link to the user and check the status once they say they are done.`,
     {

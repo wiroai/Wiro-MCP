@@ -1424,8 +1424,8 @@ test('apply_agent_skills checks names before anything is priced or written', asy
     const message = text(result);
     assert.match(message, /manage_agent_custom_skill/);
     assert.match(message, /channel, not a skill/);
-    assert.match(message, /Unknown skill "int-instagram-postt"\. Did you mean int-instagram-post/);
-    assert.match(message, /retired.*int-instagram-post instead/);
+    assert.match(message, /Unknown skill "int-instagram-postt"\. Did you mean Instagram \(`int-instagram-post`\)/);
+    assert.match(message, /Old \(`int-old-poster`\) is retired and cannot be turned on\. Use Instagram \(`int-instagram-post`\) instead\./);
     assert.deepEqual(fake.paths(), ['/Skills/List']);
   });
 });
@@ -1460,6 +1460,11 @@ test('apply_agent_skills quotes the scheduled tasks Wiro says the change stops o
   assert.match(text(swapped), /\*\*Scheduled tasks that stop:\*\* `cs-cron-lead-reply-handler`\. It runs now and stops with this change\. It keeps its text, schedule and on\/off state, and get_my_agent then shows what it waits for\./);
   assert.match(text(swapped), /\*\*Scheduled tasks that start running:\*\* `cs-cron-newsletter-sender`, `cs-cron-newsletter-subscriber-scanner`\. They do not run now and run once this change is applied\./);
 
+  // Wiro could not tell: the quote says so, and the result of the change names the tasks it paused.
+  const unknown = await quote(null);
+  assert.equal(unknown.structuredContent.scheduledTasks, null);
+  assert.ok(text(unknown).split('\n').includes('**Scheduled tasks:** Wiro could not tell which scheduled tasks this change stops or starts. Once it is applied, the result names the tasks it paused.'), text(unknown));
+
   // Nothing to say when Wiro names no task.
   for (const scheduledTasks of [{ stop: [], resume: [] }, undefined]) {
     const none = await quote(scheduledTasks);
@@ -1492,6 +1497,15 @@ test('apply_agent_skills names the scheduled tasks a confirmed change paused', a
   });
 });
 
+test('a skill change Wiro refuses for a dependency or a conflict names the skills by title', () => {
+  const titles = new Map([['int-instagram-post', 'Instagram Post'], ['util-social-posting-common', 'Social Posting Common Rules']]);
+  const deps = describeSkillsApplyError(new ApiResultError('Missing dependencies', [101], { deps: [{ skill: 'int-instagram-post', requires: 'util-social-posting-common' }] }), 'prepaid', titles);
+  assert.match(deps.guidance, /Some skills need others that would be off: Instagram Post \(`int-instagram-post`\) needs Social Posting Common Rules \(`util-social-posting-common`\)\./);
+  assert.deepEqual(deps.deps, [{ skill: 'int-instagram-post', requires: 'util-social-posting-common' }]);
+  const conflicts = describeSkillsApplyError(new ApiResultError('Conflicting skills', [102], { conflicts: [{ a: 'int-instagram-post', b: 'int-old-poster' }] }), 'prepaid', titles);
+  assert.match(conflicts.guidance, /These skills cannot be on together: Instagram Post \(`int-instagram-post`\) and Old Poster \(`int-old-poster`\)\./);
+});
+
 test('apply_agent_skills reports a no-op, a dependency turned off and a tier downgrade', async () => {
   const fake = fakeClient(skillRoutes());
   await withClient(fake, async client => {
@@ -1506,7 +1520,7 @@ test('apply_agent_skills reports a no-op, a dependency turned off and a tier dow
       arguments: { agent_guid: AGENT, skills: { 'int-instagram-post': true, 'util-social-posting-common': false } },
     });
     assert.equal(conflict.isError, true);
-    assert.match(text(conflict), /int-instagram-post needs util-social-posting-common/);
+    assert.match(text(conflict), /Instagram \(`int-instagram-post`\) needs Social Posting Common \(`util-social-posting-common`\), which this change turns off/);
     assert.equal(fake.paths().includes('/UserAgent/PricingPreview'), false);
   });
 
@@ -1534,14 +1548,14 @@ test('apply_agent_skills runs the server\'s dependency check against the whole s
       arguments: { agent_guid: AGENT, skills: { 'util-anti-ai-human-copy': false } },
     });
     assert.equal(removing.isError, true);
-    assert.match(text(removing), /int-instagram-post needs util-anti-ai-human-copy\. Keep util-anti-ai-human-copy on, or also turn off int-instagram-post/);
+    assert.match(text(removing), /Instagram \(`int-instagram-post`\) needs Anti Ai Human Copy \(`util-anti-ai-human-copy`\)\. Keep Anti Ai Human Copy \(`util-anti-ai-human-copy`\) on, or also turn off Instagram \(`int-instagram-post`\)/);
 
     const withoutDependencies = await client.callTool({
       name: 'apply_agent_skills',
       arguments: { agent_guid: AGENT, skills: { 'util-video-creator': true }, add_dependencies: false },
     });
     assert.equal(withoutDependencies.isError, true);
-    assert.match(text(withoutDependencies), /util-video-creator needs util-motion-effects, which is off/);
+    assert.match(text(withoutDependencies), /Video Creator \(`util-video-creator`\) needs Motion Effects \(`util-motion-effects`\), which is off\. Turn Motion Effects \(`util-motion-effects`\) on in the same change\./);
     assert.equal(fake.paths().includes('/UserAgent/PricingPreview'), false);
   });
 });
@@ -3637,6 +3651,10 @@ test('connect_agent_oauth says which entries a sign-in turns on and which stay p
           task('cs-cron-lead-reply-handler', ['apollo', 'lemlist', 'hubspot'], ['int-lemlist-outreach'],
             { apollo: [['int-lemlist-outreach'], ['int-apollo-sales']], lemlist: [['int-lemlist-outreach']], hubspot: [['int-lemlist-outreach']] },
             { _skill_off: true, _off_skills: [['int-lemlist-outreach']], _usable_credentials: ['hubspot'] }),
+          // On already, but Google Ads Manager, which brings it, is off: it stays paused.
+          task('cs-cron-googleads-audience-refresher', ['google-ads', 'google-drive', 'apollo', 'lemlist', 'hubspot'], ['int-googleads-manage'],
+            { 'google-ads': [['int-googleads-manage']], hubspot: [['int-googleads-manage']] },
+            { enabled: true, _skill_off: true, _off_skills: [['int-googleads-manage']], _usable_credentials: ['hubspot'] }),
           // Needs another service, and one that is on already: neither is named.
           task('cs-cron-blog-gmail-checker', ['gmail'], ['int-gmail-check'], { gmail: [] }),
           task('cs-cron-crm-digest', ['hubspot'], ['int-hubspot-crm'], { hubspot: [] }, { enabled: true, _usable_credentials: ['hubspot'] }),
@@ -3649,7 +3667,7 @@ test('connect_agent_oauth says which entries a sign-in turns on and which stay p
   await withClient(stub, async client => {
     const result = await client.callTool({ name: 'connect_agent_oauth', arguments: { agent_guid: AGENT, credential: 'hubspot' } });
     assert.equal(result.structuredContent.state, 'authorize_in_browser', text(result));
-    assert.match(result.structuredContent.message, /`cs-crm-rules`, `cs-cron-newsletter-sender` turn on once HubSpot is connected\. `cs-cron-lead-reply-handler` turns on but stays paused until Lemlist \(`int-lemlist-outreach`\) is on\. Every run of a scheduled task uses credits/);
+    assert.match(result.structuredContent.message, /`cs-crm-rules`, `cs-cron-newsletter-sender` turn on once HubSpot is connected\. `cs-cron-lead-reply-handler` turns on but stays paused until Lemlist \(`int-lemlist-outreach`\) is on\. `cs-cron-googleads-audience-refresher` stays paused until Google Ads \(`int-googleads-manage`\) is on\. Every run of a scheduled task uses credits/);
     assert.doesNotMatch(result.structuredContent.message, /blog-gmail-checker|crm-digest/);
   });
 });
