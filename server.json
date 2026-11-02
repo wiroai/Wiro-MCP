@@ -3,7 +3,7 @@
   "name": "ai.wiro/mcp",
   "title": "Wiro AI",
   "description": "Run Wiro AI models, build and run workflows, and talk to Studio and your Wiro agents.",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "websiteUrl": "https://wiro.ai/docs/wiro-mcp-server",
   "repository": {
     "url": "https://github.com/wiroai/Wiro-MCP",
@@ -20,7 +20,7 @@
     {
       "registryType": "npm",
       "identifier": "@wiro-ai/wiro-mcp",
-      "version": "1.5.0",
+      "version": "1.5.1",
       "transport": {
         "type": "stdio"
       },
