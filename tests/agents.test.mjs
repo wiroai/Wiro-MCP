@@ -1953,8 +1953,8 @@ test('manage_agent_billing does not report a charge when a pack shows but the re
     assert.match(textOf(result), /^## buy_credits: Pack in place/);
     assert.match(out.message, /^The small pack is in place: 6,000 credits for \$60\.00 from the personal wallet\. This request id is charged only once\./);
     assert.match(out.message, /if the id had already completed in an earlier call, nothing new was bought or charged now/);
-    assert.match(out.message, /nothing new was bought or charged now\. The agent restarts to load the credit pack, which takes about a minute\. Follow it with get_my_agent\. For another pack, get a new quote without request_id\.$/);
-    assert.equal(out.nextAction.tool, 'get_my_agent');
+    assert.match(out.message, /nothing new was bought or charged now\. The agent keeps running: a credit pack does not restart it\. For another pack, get a new quote without request_id\.$/);
+    assert.equal(out.nextAction, undefined, 'a running agent is not waited for');
     assert.doesNotMatch(textOf(result), /Bought|older pack/);
   });
 });
@@ -1974,7 +1974,7 @@ test('manage_agent_billing says a stopped agent loads a pack that is in place wh
     assert.notEqual(result.isError, true, textOf(result));
     const out = result.structuredContent;
     assert.match(textOf(result), /^## buy_credits: Pack in place/);
-    assert.match(out.message, /nothing new was bought or charged now\. The agent is stopped, so the credit pack takes effect the next time it starts\. For another pack, get a new quote without request_id\.$/);
+    assert.match(out.message, /nothing new was bought or charged now\. The agent is stopped; the credits are there when it starts\. For another pack, get a new quote without request_id\.$/);
     assert.doesNotMatch(out.message, /restarts/);
     assert.equal(out.nextAction, undefined);
   });
@@ -2209,16 +2209,16 @@ test('manage_agent_billing says what an upgrade does to the agent at each status
   }
 });
 
-test('manage_agent_billing says what a pack does to the agent at each status', async () => {
-  const restarting = what => new RegExp(`The agent restarts to load the ${what}, which takes about a minute\\. Follow it with get_my_agent\\.`);
+test('manage_agent_billing says what a pack does to the agent at each status: it keeps a running agent up', async () => {
+  // A pack leaves a running or starting agent up, brings back one that was stopping, and moves no other.
   const cases = [
-    [4, restarting, true],
-    [3, restarting, true],
-    [1, what => new RegExp(`already stopping or restarting; it loads the ${what} when it starts again\\.`), true],
-    [2, what => new RegExp(`queued to start and loads the ${what} when it does\\.`), true],
-    [0, what => new RegExp(`The agent is stopped, so the ${what} takes effect the next time it starts\\.`), false],
-    [5, what => new RegExp(`The agent stopped with an error, so the ${what} takes effect the next time it starts\\.`), false],
-    [6, what => new RegExp(`The agent still needs setup; the ${what} takes effect once it starts\\.`), false],
+    [4, () => /The agent keeps running: a credit pack does not restart it\./, false],
+    [3, () => /The agent is starting, and a credit pack does not restart it\./, true],
+    [1, () => /The agent was stopping, and it starts again\./, true],
+    [2, () => /The agent is queued to start\./, true],
+    [0, () => /The agent is stopped; the credits are there when it starts\./, false],
+    [5, () => /The agent stopped with an error; the credits are there when it starts\./, false],
+    [6, () => /The agent still needs setup; the credits are there once it starts\./, false],
   ];
   for (const [status, note, waits] of cases) {
 
@@ -2237,7 +2237,7 @@ test('manage_agent_billing says what a pack does to the agent at each status', a
       assert.equal(done.structuredContent.outcome, 'done');
       assert.match(done.structuredContent.message, note('credit pack'));
       assert.equal(done.structuredContent.nextAction?.tool, waits ? 'get_my_agent' : undefined, `pack at status ${status}`);
-      if (!waits) assert.doesNotMatch(done.structuredContent.message, /agent restarts/);
+      assert.doesNotMatch(`${quote.structuredContent.message} ${done.structuredContent.message}`, /restarts to load|agent restarts/);
     });
   }
 });
@@ -4479,4 +4479,60 @@ test('deploy_agent shows a 104 as a refusal with nothing created or charged', as
     assert.doesNotMatch(text, /may have been created|list_my_agents|funds are added/i);
     assert.equal(fake.called('/UserAgent/Deploy').length, 1);
   });
+});
+
+test('manage_agent_billing waits after a renewal only for an agent the renewal starts', async () => {
+  for (const [status, reason] of [
+    [0, 'Wait until the agent is running again.'],
+    [5, 'Wait until the agent is running again.'],
+    [1, 'Wait until the agent is running.'],
+    [2, 'Wait until the agent is running.'],
+    [4, undefined],
+    [6, undefined],
+  ]) {
+    const expired = agentRow({ status, subscription: subscription({ status: 'expired', currentperiodend: NOW - 86_400 }) });
+    const fake = fakeClient({
+      '/UserAgent/Detail': detailResponse(expired),
+      '/UserAgent/RenewSubscription': { result: true, errors: [], action: 'renewed', plan: 'agent', amount: 12, monthlycredits: 1200 },
+    });
+    await withClient(fake, async client => {
+      const done = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'renew', confirm_charge_usd: 12, confirm: true });
+      assert.equal(done.structuredContent.outcome, 'done', textOf(done));
+      assert.equal(done.structuredContent.nextAction?.reason, reason, `status ${status}`);
+    });
+  }
+});
+
+test('manage_agent_billing says that renewals, upgrades and packs leave a running agent running', async () => {
+  await withClient(fakeClient({}), async client => {
+    const { tools } = await client.listTools();
+    const description = tools.find(tool => tool.name === 'manage_agent_billing').description;
+    assert.match(description, /Plans renew every 30 days until cancelled\. Renewals, upgrades and packs leave a running agent running\./);
+  });
+});
+
+test('manage_agent_billing subscribe keeps a running agent up and queues a stopped one', async () => {
+  for (const [status, quoteNote, doneNote, waits] of [
+    [0, 'The agent is queued to start right after the payment.', 'The agent is starting.', true],
+    [5, 'The agent is queued to start right after the payment.', 'The agent is starting.', true],
+    [6, 'The agent is queued to start right after the payment.', 'The agent is starting.', true],
+    // An agent with no plan runs on its extra credits; a new plan does not restart it.
+    [4, 'The agent keeps running: a new plan does not restart it.', 'The agent keeps running: a new plan does not restart it.', false],
+    [3, 'The agent is starting, and a new plan does not restart it.', 'The agent is starting.', true],
+    [1, 'The agent is stopping, and it starts again right after the payment.', 'The agent is starting.', true],
+  ]) {
+    const fake = fakeClient({
+      '/UserAgent/Detail': detailResponse(agentRow({ status, subscription: null, extracredits: 500, credentials: {} })),
+      '/UserAgent/CreateSubscriptionCheckout': { result: true, errors: [], subscriptionId: 42, monthlypriceusd: 12, monthlycredits: 1200 },
+    });
+    await withClient(fake, async client => {
+      const quote = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'subscribe' });
+      assert.equal(quote.structuredContent.outcome, 'quote', textOf(quote));
+      assert.ok(quote.structuredContent.message.includes(quoteNote), `status ${status}: ${quote.structuredContent.message}`);
+      const done = await call(client, 'manage_agent_billing', quote.structuredContent.nextAction.arguments);
+      assert.equal(done.structuredContent.outcome, 'done', textOf(done));
+      assert.ok(done.structuredContent.message.endsWith(doneNote), `status ${status}: ${done.structuredContent.message}`);
+      assert.equal(done.structuredContent.nextAction?.reason, waits ? 'Wait until the agent is running.' : undefined, `status ${status}`);
+    });
+  }
 });

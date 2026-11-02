@@ -541,7 +541,7 @@ Example, "link our HubSpot account to the agent": \`list_my_agents\`, \`get_my_a
 
 - \`control_agent\` takes start, stop or restart. Start works from stopped (0) or error (5). Restart reloads a running agent.
 - Stopping does not pause the plan: unless it is cancelled, it still renews from the wallet, and the renewal starts the agent again. Cancel the plan to stop paying. A cancelled plan ends with its period, and nothing starts the agent again by itself.
-- Many changes restart a running agent by themselves: \`update_agent\` with a new title or any setting (time zone, session sharing, models, commands), \`set_agent_credentials\`, \`bind_agent_project\`, \`apply_agent_skills\`, connected account changes, custom skill changes, credit packs and upgrades. A new description, cover or categories with \`update_agent\` leaves it running. Group changes where you can.
+- Some changes restart a running agent by themselves: \`update_agent\` with a new title or a setting that changes (time zone, session sharing, models, commands), \`set_agent_credentials\` and \`bind_agent_project\` when they change what is saved, \`apply_agent_skills\` when a skill turns on or off, connected account changes, and with \`manage_agent_custom_skill\` a new entry, a schedule change, turning one on or off, a rename, a delete or a revert. These leave it running: a new description, cover or categories with \`update_agent\`, a change of the tier alone, a new plan, upgrades, credit packs and renewals, and a save that changes nothing. A text or description edit of a custom skill or scheduled task usually reaches a running agent without a restart, though an edit of \`cs-approval-policy\` restarts it; the result says which happened. Group changes where you can.
 
 ## When an agent does not answer
 
@@ -566,7 +566,7 @@ Then offer the one fix that matches, with its price.
 
 \`manage_agent_billing\` handles the plan. Without \`confirm: true\` every action only says what would happen and what it costs; an action that charges is confirmed with \`confirm_charge_usd\`, the quoted amount.
 
-- \`subscribe\` starts a plan for an agent without an active one, and queues the agent to start.
+- \`subscribe\` starts a plan for an agent without an active one, and queues a stopped agent to start; one that still runs on extra credits keeps running.
 - \`upgrade_to_pro\` charges the difference for the rest of the period now, and the added Pro credits come for that same time; renewals charge the Pro price and refill the Pro credit pool. The quote gives the amount Wiro works out (for a card plan moving to wallet billing, the most it can charge), and \`confirm_charge_usd\` is the most the user agreed to pay. To move to Starter, cancel, let the plan end, then subscribe to Starter.
 - \`buy_credits\` is for Pro plans; without a pack it lists them, and \`get_my_agent\` lists them only on an active Pro plan. A small, medium or large pack adds 5, 10 or 20 times the monthly credits, at 5, 10 or 20 times the monthly price. Pack credits are added at once, are used after the monthly pool, do not reset each month and end 6 months (180 days) after purchase; the pool refills at each renewal. On Starter, \`upgrade_to_pro\` is the way to more credits now.
 - \`cancel\` stops the next renewal, with no refund. The agent keeps working until the paid period ends, then stops, unless extra credits are left: it keeps running on those while they last. It keeps its skills, settings and connected accounts. If a sign-in later shows as expired, connect it again with \`connect_agent_oauth\`.

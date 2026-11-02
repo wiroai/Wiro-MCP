@@ -18,6 +18,7 @@ import {
   customSkillErrorMessage,
   customSkillKindOf,
   humanizeCustomSkillKey,
+  isAgentRunning,
   isCustomBuild,
   looksLikeCron,
   normalizeCustomSkillKey,
@@ -88,6 +89,8 @@ const outputSchema = {
     interval: z.string().optional(),
   })).optional(),
   restart: z.string().optional(),
+  restarting: z.boolean().optional()
+    .describe('upsert: whether this save restarts the agent, as Wiro answers it. false also covers a text edit that reaches a running agent without a restart.'),
   warnings: z.array(z.string()),
   message: z.string(),
   nextAction: nextActionSchema.optional(),
@@ -173,6 +176,28 @@ function reply(
   };
 }
 
+const UNCHANGED_UPSERT = 'Its text, schedule and on/off state are unchanged, so the agent does not restart.';
+
+/**
+ * What an upsert did to the agent. Wiro answers restarting: true when the save
+ * restarts a running agent. A text or description edit reaches a running agent
+ * without one when it can, and restarting false does not say that it did, so
+ * that answer says what is known and how to make sure.
+ */
+function upsertRestartNote(status: number | null, functional: boolean, textOnly: boolean, restarting: boolean | undefined): string {
+  if (restarting === true) return restartNote(status, 'change');
+  if (restarting === undefined) return functional ? restartNote(status, 'change') : UNCHANGED_UPSERT;
+  if (!functional && !textOnly) return UNCHANGED_UPSERT;
+  if (!isAgentRunning(status)) return restartNote(status, 'change');
+  // With textOnly, functional is true only when the text moved: a false one is a description edit.
+  if (textOnly && !functional) {
+    return 'The new description is saved, and the agent was not restarted. A running agent usually takes a description edit without a restart; control_agent with action restart loads it for certain.';
+  }
+  return textOnly
+    ? 'The new text is saved, and the agent was not restarted. A running agent usually takes a text or description edit without a restart; if its replies still follow the old text, control_agent with action restart loads the new one.'
+    : 'The change is saved, but the agent was not restarted, so a running agent keeps its old settings until it restarts. control_agent with action restart loads them, and get_my_agent shows its status.';
+}
+
 function scheduleInfo(row: Row, interval: string, isDefault: boolean, entry: { enabled: boolean; requiresCredentials: string[] }) {
   const timeZone = asString(row.timezone)?.trim() || 'UTC';
   const parts = [
@@ -253,15 +278,23 @@ async function upsert(client: WiroClient, input: Input, signal: AbortSignal) {
   if (interval !== undefined) body.interval = interval;
   if (input.enabled !== undefined) body.enabled = input.enabled;
   if (input.description !== undefined) body.description = input.description;
-  requireApiSuccess(
-    await client.post<ApiEnvelope>('/UserAgent/CustomSkillUpsert', body, signal),
+  const saved = requireApiSuccess(
+    await client.post<ApiEnvelope & { restarting?: unknown }>('/UserAgent/CustomSkillUpsert', body, signal),
     `Could not save ${key}.`,
   );
+  const restarting = typeof saved.restarting === 'boolean' ? saved.restarting : undefined;
 
   const functional = !existing
     || (input.value !== undefined && input.value !== existing.value)
     || (interval !== undefined && interval !== (existing.interval ?? ''))
     || (input.enabled !== undefined && input.enabled !== existing.enabled);
+  // Only the text or the description moves. The approval policy's text also turns its gate on or off at the
+  // agent's start, so that edit restarts it.
+  const textOnly = existing !== null && key !== APPROVAL_POLICY_KEY
+    && (interval === undefined || interval === (existing.interval ?? ''))
+    && (input.enabled === undefined || input.enabled === existing.enabled)
+    && ((input.value !== undefined && input.value !== existing.value)
+      || (input.description !== undefined && input.description.trim() !== existing.description.trim()));
   const after = {
     key,
     kind,
@@ -278,9 +311,7 @@ async function upsert(client: WiroClient, input: Input, signal: AbortSignal) {
   const schedule = kind === 'scheduled_task' && after.interval
     ? scheduleInfo(row, after.interval, !existing && interval === undefined, after)
     : undefined;
-  const restart = functional
-    ? restartNote(agentStatusOf(row), 'change')
-    : 'Its text, schedule and on/off state are unchanged, so the agent does not restart.';
+  const restart = upsertRestartNote(agentStatusOf(row), functional, textOnly, restarting);
   return reply(input, key, 'saved',
     existing ? `Updated the ${kindLabel(kind)} ${key}.` : `Created the ${kindLabel(kind)} ${key}.`,
     {
@@ -288,6 +319,7 @@ async function upsert(client: WiroClient, input: Input, signal: AbortSignal) {
       entry: toEntry(after),
       ...(schedule ? { schedule } : {}),
       restart,
+      ...(restarting !== undefined ? { restarting } : {}),
       warnings,
     },
     schedule ? ['', `**Schedule:** ${schedule.note}`] : []);
@@ -599,8 +631,9 @@ export function registerManageAgentCustomSkill(server: McpServer, client: WiroCl
         + 'Entries from the agent\'s template, cs-approval-policy and the scheduled tasks its skills '
         + 'brought cannot be deleted or renamed: set enabled false instead. Turning off cs-approval-policy '
         + 'or changing its text also needs confirm: true: off, or a text that allows it, lets the agent act '
-        + 'on outside services by itself without waiting for the user\'s yes. The agent '
-        + 'restarts when the text, schedule or on/off state changes. get_my_agent lists the '
+        + 'on outside services by itself without waiting for the user\'s yes. A running agent restarts for a '
+        + 'new entry, a schedule change, turning one on or off, a rename, a delete or a revert; a text or '
+        + 'description edit usually reaches it without a restart, and the result says which happened. get_my_agent lists the '
         + 'current entries. Registry skills are switched with apply_agent_skills instead. On a team agent '
         + 'this needs a team admin or the person who deployed it; other team members read each entry in full '
         + 'with get_my_agent (entry). The agents playbook (get_playbook) covers custom skills and schedules.',

@@ -42,8 +42,8 @@ export function registerUpdateAgent(server: McpServer, client: WiroClient): void
       description: 'Change a deployed agent\'s name, description, cover or categories, and its settings: '
         + 'timezone (used by scheduled tasks), team session mode, the models used for chat, scheduled tasks '
         + 'and voice calls, and which slash commands are available. Only the fields you pass change. On a '
-        + 'running or starting agent, a new name or any of the settings restarts it to apply the change; a new '
-        + 'description, cover or categories leaves it running, and the result says which happened. Calling it with '
+        + 'running or starting agent, a new name or a setting that changes restarts it to apply the change; a new '
+        + 'description, cover or categories, or a setting it already has, leaves it running, and the result says which happened. Calling it with '
         + 'only agent_guid refreshes the setup status of an agent waiting for setup, after its credentials were set. Skills, credentials and '
         + 'custom instructions have their own tools (apply_agent_skills, set_agent_credentials, '
         + 'manage_agent_custom_skill). On a team agent this needs a team admin or the person who deployed it; '
@@ -174,7 +174,14 @@ export function registerUpdateAgent(server: McpServer, client: WiroClient): void
           // The change was saved; only the follow-up read failed.
           readFailed = true;
         }
-        const restarted = profileRestarts || (sendSettings && running);
+        // UpdateSettings restarts a running agent only when a setting moves, and sets it stopping before it
+        // answers: read back still starting or running, nothing moved. Without the read it is not known.
+        const afterStatus = readFailed ? null : readAgentStatus(after);
+        const settingsRestart: boolean | null = !(sendSettings && running)
+          ? false
+          : afterStatus === null ? null : afterStatus !== 3 && afterStatus !== 4;
+        const restarted = profileRestarts || settingsRestart === true;
+        const mayRestart = !restarted && settingsRestart === null;
         // Without the read-back the row is from before the change: the saved fields
         // go over it, a changed model is left out, and a restart leaves the status unknown.
         const agent = toAgentDetail(readFailed
@@ -184,13 +191,15 @@ export function registerUpdateAgent(server: McpServer, client: WiroClient): void
             ...settings,
             ...(settings.enabledcommands !== undefined ? { enabledCommands: settings.enabledcommands } : {}),
             ...(settingNames.some(name => name in MODEL_FIELDS) ? { agentModel: undefined } : {}),
-            ...(restarted ? { status: null } : {}),
+            ...(restarted || mayRestart ? { status: null } : {}),
           }
           : after);
         const setupFinished = previous === 6 && agent.status !== 6;
         const message = [
           changed.length > 0 ? `Saved: ${changed.join(', ')}.` : 'Setup status refreshed.',
-          restarted ? 'The agent restarts to apply the change.' : running ? 'The agent keeps running.' : '',
+          restarted
+            ? 'The agent restarts to apply the change.'
+            : mayRestart ? 'If a setting changed, the agent restarts to apply it.' : running ? 'The agent keeps running.' : '',
           setupFinished
             ? `Setup is complete; the agent ${startNeedsPlan(agent) ? 'needs an active plan before it can start' : 'can be started'}.`
             : '',
@@ -199,11 +208,11 @@ export function registerUpdateAgent(server: McpServer, client: WiroClient): void
             : '',
           readFailed ? 'The updated agent could not be read back; get_my_agent shows the new state.' : '',
         ].filter(Boolean).join(' ');
-        const nextAction = restarted
+        const nextAction = restarted || mayRestart
           ? {
             tool: 'get_my_agent',
             arguments: { agent_guid: guid, wait_seconds: DEFAULT_WAIT_SECONDS },
-            reason: 'Wait until the agent is running again.',
+            reason: restarted ? 'Wait until the agent is running again.' : 'See whether the agent restarted, and wait until it is running.',
           }
           : nextStepForAgent(agent, DEFAULT_WAIT_SECONDS);
 

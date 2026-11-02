@@ -127,10 +127,13 @@ type SkillsApplyBody = ApiEnvelope & {
   prepaidWalletDelta?: unknown;
   prepaidCreditParts?: unknown;
   usedCreditsUsd?: unknown;
+  restartTriggered?: unknown;
   warnings?: unknown;
 };
 
 const UNCHANGED_RESTART = 'Nothing changed, so the agent does not restart.';
+// The tier and the price live with Wiro, and the agent reads neither: only a skill that turns on or off restarts it.
+const TIER_ONLY_RESTART = 'No skill turns on or off, so a change of the tier alone does not restart the agent.';
 
 function roundCents(usd: number): number {
   return Math.round(usd * 100) / 100;
@@ -443,8 +446,8 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
         + 'credits for the time left; the ones the time already passed paid for stay until the renewal. '
         + 'On a card plan nothing is charged at once: the card subscription is updated to the new price, '
         + 'a plan that renews by card shows the difference on its next invoice, and the added credits come '
-        + 'for the time left. A running agent '
-        + 'restarts once to load the skills. Newly enabled skills may still need credentials '
+        + 'for the time left. A running agent restarts once when a skill turns on or off; a change of the '
+        + 'tier alone leaves it running. Newly enabled skills may still need credentials '
         + '(set_agent_credentials, connect_agent_oauth, bind_agent_project for a Wiro project) and do not create scheduled tasks '
         + '(manage_agent_custom_skill does). Find skill names with list_agent_skills and the '
         + 'agent\'s current skills with get_my_agent. The agents playbook (get_playbook) has the '
@@ -515,7 +518,9 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
           alreadySet: diff.alreadySet.filter(name => !plan.addedDependencies.includes(name)),
         };
         const credentialsNeeded = credentialsNeededFor(diff.enable, registry, row);
-        const nothingToDo = Object.keys(diff.changes).length === 0 && !tierChange;
+        // A running agent restarts only for a skill that turns on or off.
+        const skillsMove = Object.keys(diff.changes).length > 0;
+        const nothingToDo = !skillsMove && !tierChange;
         const base = {
           agentGuid: agent_guid,
           changes,
@@ -592,7 +597,7 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
             const quoteKey = givenKey?.priceTag === priceTag ? key : newSkillChangeKey(digest, priceTag);
             const priceChanged = confirm && givenKey !== null;
             const blocked = billing.plan !== 'none' && billing.status !== 'active';
-            const restart = restartNote(status, 'skill change');
+            const restart = skillsMove ? restartNote(status, 'skill change') : TIER_ONLY_RESTART;
             const priceNote = todayPriceNote(row, billing, currentPrice, currentCredits, tierChange);
             const pricing = {
               currentMonthlyUsd: currentPrice,
@@ -762,14 +767,14 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
                 listLine('Turned on', changes.enable),
                 listLine('Turned off', changes.disable),
                 `**Billing:** ${note}`,
-                `**Restart:** ${restartNote(status, 'skill change')}`,
+                `**Restart:** ${skillsMove ? restartNote(status, 'skill change') : TIER_ONLY_RESTART}`,
               ].filter((line): line is string => line !== null).join('\n') }],
               structuredContent: {
                 ...base,
                 status: 'applied' as const,
                 idempotencyKey: key,
                 billing: { ...billingBase, chargedNowUsd: null, note },
-                restart: restartNote(status, 'skill change'),
+                restart: skillsMove ? restartNote(status, 'skill change') : TIER_ONLY_RESTART,
               },
             };
           }
@@ -784,7 +789,7 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
               status: 'refused' as const,
               idempotencyKey: key,
               billing: { ...billingBase, note },
-              restart: unverified ? 'The agent restarts if the change was saved.' : UNCHANGED_RESTART,
+              restart: !unverified ? UNCHANGED_RESTART : skillsMove ? 'The agent restarts if the change was saved.' : TIER_ONLY_RESTART,
               error: { code: null, message },
             },
             isError: true,
@@ -842,9 +847,11 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
         const billingNote = replayed
           ? `This change was already applied by an earlier call with this idempotency_key, and nothing new was charged now. That call's billing: ${charge.note}`
           : charge.note;
+        // Wiro says whether this change restarts a running agent; an answer without it goes by the skills that move.
+        const restarts = typeof applied.restartTriggered === 'boolean' ? applied.restartTriggered : skillsMove;
         const restart = applied.noOp || replayed
           ? UNCHANGED_RESTART
-          : restartNote(status, 'skill change');
+          : restarts ? restartNote(status, 'skill change') : TIER_ONLY_RESTART;
         const firstCredential = credentialsNeeded[0]?.credentials[0];
         const nextAction = applied.noOp || replayed
           ? undefined
@@ -856,7 +863,7 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
                 arguments: { agent_guid, credential: firstCredential },
                 reason: `See what ${firstCredential} needs before asking the user for it.`,
               }
-              : running
+              : running && restarts
                 ? {
                   tool: 'get_my_agent',
                   arguments: { agent_guid, wait_seconds: DEFAULT_WAIT_SECONDS },

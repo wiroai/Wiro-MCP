@@ -164,17 +164,43 @@ test('update_agent: a stopped agent does not restart and is not said to keep run
   assert.equal(output.nextAction.tool, 'control_agent', 'the usual next step for a stopped agent');
 });
 
-test('update_agent: a setting restarts a running agent, with or without a profile field', async () => {
-  const settingsOnly = await updateAgent({ timezone: 'Europe/Istanbul' });
+test('update_agent: a setting that changes restarts a running agent, with or without a profile field', async () => {
+  // UpdateSettings sets a running agent stopping, to start again, before it answers.
+  const stopping = detail({ status: 1 });
+  const settingsOnly = await updateAgent({ timezone: 'Europe/Istanbul' }, { afterRead: stopping });
   assert.equal(settingsOnly.fake.called('/UserAgent/Update').length, 0);
   assert.equal(settingsOnly.result.structuredContent.restarted, true);
+  assert.match(settingsOnly.result.structuredContent.message, /The agent restarts to apply the change\./);
   assert.equal(settingsOnly.result.structuredContent.nextAction.tool, 'get_my_agent');
 
   const both = await updateAgent(
     { description: 'New text', timezone: 'Europe/Istanbul' },
-    { update: { result: true, errors: [], restarting: false, useragents: [] } },
+    { update: { result: true, errors: [], restarting: false, useragents: [] }, afterRead: stopping },
   );
   assert.equal(both.result.structuredContent.restarted, true);
+});
+
+test('update_agent: a setting the agent already has leaves it running, and an unread outcome is not claimed', async () => {
+  // Read back still running: the setting did not move, so nothing restarted.
+  const same = await updateAgent({ timezone: 'Europe/Istanbul' }, { row: { timezone: 'Europe/Istanbul' } });
+  assert.notEqual(same.result.isError, true, textOf(same.result));
+  assert.equal(same.result.structuredContent.restarted, false);
+  assert.match(same.result.structuredContent.message, /^Saved: timezone\. The agent keeps running\./);
+  assert.doesNotMatch(same.result.structuredContent.message, /restarts/);
+  assert.notEqual(same.result.structuredContent.nextAction?.reason, 'Wait until the agent is running again.');
+
+  // Without the read back, whether it restarted is not known.
+  const unread = await updateAgent({ timezone: 'Europe/Istanbul' }, { afterRead: refused('Read failed') });
+  assert.notEqual(unread.result.isError, true, textOf(unread.result));
+  assert.equal(unread.result.structuredContent.restarted, false);
+  assert.match(unread.result.structuredContent.message, /If a setting changed, the agent restarts to apply it\./);
+  assert.equal(unread.result.structuredContent.agent.status, null);
+  assert.deepEqual(unread.result.structuredContent.nextAction, { tool: 'get_my_agent', arguments: { agent_guid: GUID, wait_seconds: 45 }, reason: 'See whether the agent restarted, and wait until it is running.' });
+
+  // A stopped agent restarts for nothing.
+  const stopped = await updateAgent({ timezone: 'Europe/Istanbul' }, { row: { status: 0 } });
+  assert.equal(stopped.result.structuredContent.restarted, false);
+  assert.doesNotMatch(stopped.result.structuredContent.message, /restart|keeps running/i);
 });
 
 test('update_agent: an error answer that carries the restart says the change was saved', async () => {
@@ -266,12 +292,15 @@ test('update_agent: a partial save says whether the saved part restarts the agen
 test('update_agent and the playbook say which changes restart a running agent', async () => {
   const description = await toolDescription('update_agent');
   assert.doesNotMatch(description, /A running or starting agent restarts to apply the change/);
-  assert.match(description, /a new name or any of the settings restarts it/);
-  assert.match(description, /a new description, cover or categories leaves it running/);
+  assert.match(description, /a new name or a setting that changes restarts it/);
+  assert.match(description, /a new description, cover or categories, or a setting it already has, leaves it running/);
 
-  const line = PLAYBOOKS.agents.split('\n').find(item => item.startsWith('- Many changes restart'));
-  assert.match(line, /`update_agent` with a new title or any setting/);
-  assert.match(line, /A new description, cover or categories with `update_agent` leaves it running/);
+  const line = PLAYBOOKS.agents.split('\n').find(item => item.startsWith('- Some changes restart'));
+  assert.match(line, /`update_agent` with a new title or a setting that changes/);
+  assert.match(line, /These leave it running: a new description, cover or categories with `update_agent`, a change of the tier alone, a new plan, upgrades, credit packs and renewals, and a save that changes nothing\./);
+  assert.match(line, /`apply_agent_skills` when a skill turns on or off/);
+  assert.match(line, /A text or description edit of a custom skill or scheduled task usually reaches a running agent without a restart, though an edit of `cs-approval-policy` restarts it; the result says which happened\./);
+  assert.doesNotMatch(PLAYBOOKS.agents, /Many changes restart|credit packs and upgrades\./);
 });
 
 // ---------------------------------------------------------------------------

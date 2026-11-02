@@ -1917,11 +1917,13 @@ test('set_agent_credentials names the credentials the setup still waits for afte
     '/UserAgent/CredentialUpsert': { result: true, errors: [], applied: 1 },
     '/UserAgent/Detail': detail({ credentials: { firebase, wiro: wiro(false) }, communicationChannels: [], scheduledskills: [], ...overrides }),
   });
-  const restartNote = 'The agent restarts shortly to load the new values.';
+  // A save that changes a value sets a running agent stopping, to start again, before Wiro answers.
+  const restartNote = 'The agent restarts to load the new values, which takes about a minute.';
+  const keptNote = 'The agent kept running: a save that matches what is stored does not restart it. If it should load new values now, control_agent with action restart does it.';
   const missingNote = 'Setup is not finished: still missing Wiro AI Models. Connect it with bind_agent_project, then check with get_my_agent.';
 
   // A running agent whose setup still waits for another credential.
-  await withClient(afterWrite({ status: 4, setuprequired: true }), async client => {
+  await withClient(afterWrite({ status: 1, setuprequired: true }), async client => {
     const result = await client.callTool({ name: 'set_agent_credentials', arguments: write });
     assert.notEqual(result.isError, true, text(result));
     assert.deepEqual(result.structuredContent.notes, [restartNote, missingNote]);
@@ -1938,12 +1940,20 @@ test('set_agent_credentials names the credentials the setup still waits for afte
   });
 
   // Once nothing is missing, the result says nothing about setup.
-  await withClient(afterWrite({ status: 4, setuprequired: false, credentials: { firebase, wiro: wiro(true) } }), async client => {
+  await withClient(afterWrite({ status: 1, setuprequired: false, credentials: { firebase, wiro: wiro(true) } }), async client => {
     const result = await client.callTool({ name: 'set_agent_credentials', arguments: write });
     assert.notEqual(result.isError, true, text(result));
     assert.deepEqual(result.structuredContent.notes, [restartNote]);
     assert.doesNotMatch(text(result), /Setup is not finished/);
     assert.doesNotMatch(JSON.stringify(result), /service_account|wiro-project-key-value/);
+  });
+
+  // An agent read back still running was not restarted: the save matched what was stored.
+  await withClient(afterWrite({ status: 4, setuprequired: false, credentials: { firebase, wiro: wiro(true) } }), async client => {
+    const result = await client.callTool({ name: 'set_agent_credentials', arguments: write });
+    assert.notEqual(result.isError, true, text(result));
+    assert.deepEqual(result.structuredContent.notes, [keptNote]);
+    assert.doesNotMatch(text(result), /restarts (shortly|to load)/);
   });
 
   // A stopped agent, and one that stopped with an error, use the values when they start.
@@ -4542,7 +4552,7 @@ test('apply_agent_skills shows a 104 as a refusal with nothing charged: another 
   const inProgress = 'A skill update is already in progress for this agent, please retry shortly.';
   for (const [message, guidance] of [
     [walletBusy, /^Another payment from the same wallet was going through, so this change was not made and nothing was charged\. It is not a low balance, and no funds need to be added\. Offer to try again in a minute: repeat the call with the same idempotency_key\.$/],
-    [inProgress, /^Another skill change for this agent is still running, and one runs at a time\. Nothing was changed or charged by this call\./],
+    [inProgress, /^Another change to this agent's skills or plan, such as an upgrade or a renewal, is still going through, and one runs at a time\. Nothing was changed or charged by this call\./],
   ]) {
     const fake = fakeClient(skillRoutes({ '/UserAgent/SkillsApply': { result: false, errors: [{ code: 104, message }] } }));
     await withClient(fake, async client => {
@@ -4560,6 +4570,164 @@ test('apply_agent_skills shows a 104 as a refusal with nothing charged: another 
       assert.doesNotMatch(text(result), /may have been charged|funds are added|does not show whether/i);
       // The answer settles it: the agent is not read again to guess, beyond the read each call starts with.
       assert.equal(fake.called('/UserAgent/Detail').length, 2);
+    });
+  }
+});
+
+test('apply_agent_skills says a change of the tier alone does not restart the agent', async () => {
+  const tierOnly = 'No skill turns on or off, so a change of the tier alone does not restart the agent.';
+  const fake = fakeClient(skillRoutes({
+    '/UserAgent/Detail': (_body, calls) => detail(calls.some(call => call.path === '/UserAgent/SkillsApply') ? { tier: 'pro' } : {}),
+    '/UserAgent/PricingPreview': preview(planChange({ chargeNowUsd: 189, creditsNow: 18900, creditsThisPeriod: 23100, creditsFromRenewal: 42000 }), { tier: 'pro', totalPriceUsd: 420, totalMonthlyCredits: 42000 }),
+    '/UserAgent/SkillsApply': {
+      result: true,
+      errors: [],
+      pricing: { previousPriceUsd: 42, newPriceUsd: 420, deltaUsd: 378, previousMonthlyCredits: 4200, newMonthlyCredits: 42000, deltaCredits: 37800, creditsNow: 18900, creditsThisPeriod: 23100, creditsFromRenewal: 42000, periodEnd: NOW + 15 * 86400 },
+      tier: 'pro',
+      stripeProrationApplied: false,
+      prepaidWalletDelta: 189,
+      usedCreditsUsd: 0,
+      restartTriggered: false,
+      restartedAt: null,
+    },
+  }));
+  await withClient(fake, async client => {
+    const quote = await client.callTool({ name: 'apply_agent_skills', arguments: { agent_guid: AGENT, skills: {}, tier: 'pro' } });
+    assert.equal(quote.structuredContent.status, 'quote', text(quote));
+    assert.equal(quote.structuredContent.restart, tierOnly);
+    const result = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
+    assert.notEqual(result.isError, true, text(result));
+    assert.equal(result.structuredContent.status, 'applied');
+    assert.equal(result.structuredContent.restart, tierOnly);
+    assert.ok(text(result).includes(`**Restart:** ${tierOnly}`));
+    assert.equal(result.structuredContent.nextAction, undefined, 'no restart to wait for');
+    assert.match(result.structuredContent.billing.note, /^\$189\.00 was taken from your personal wallet for the rest of this period, and 18,900 credits came with it\./);
+  });
+
+  // A skill that turns on restarts it, and Wiro says so.
+  const withSkill = fakeClient(skillRoutes({
+    '/UserAgent/Detail': detailAfterApply(),
+    '/UserAgent/SkillsApply': { result: true, errors: [], pricing: { previousPriceUsd: 42, newPriceUsd: 43, deltaUsd: 1 }, tier: 'starter', prepaidWalletDelta: 0.5, restartTriggered: true, restartedAt: NOW },
+  }));
+  await withClient(withSkill, async client => {
+    const quote = await quoteInstagram(client);
+    assert.match(quote.structuredContent.restart, /^The agent restarts to load the skill change/);
+    const result = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
+    assert.match(result.structuredContent.restart, /^The agent restarts to load the skill change/);
+  });
+
+  await withClient(fakeClient({}), async client => {
+    const { tools } = await client.listTools();
+    const description = tools.find(tool => tool.name === 'apply_agent_skills').description;
+    assert.match(description, /A running agent restarts once when a skill turns on or off; a change of the tier alone leaves it running\./);
+    assert.doesNotMatch(description, /restarts once to load the skills/);
+  });
+});
+
+test('set_agent_credentials counts a field the template fills as set', async () => {
+  // Twilio's account id comes from the template and is not shown, and the card reads filled.
+  const fake = fakeClient({
+    '/Credentials/Detail': credentialDetail,
+    '/UserAgent/Detail': detail({ status: 0, credentials: { 'twilio-voice': { accountsid: '', holdstrategy: 'none', optional: false, _connected: false, _filled: true, _required_missing: false, _schema: { title: 'Twilio Voice' } } } }),
+  });
+  await withClient(fake, async client => {
+    const result = await client.callTool({ name: 'set_agent_credentials', arguments: { agent_guid: AGENT, credential: 'twilio-voice' } });
+    assert.notEqual(result.isError, true, text(result));
+    const state = result.structuredContent.credential.status;
+    assert.equal(state.filled, true);
+    assert.deepEqual(state.missingFields, []);
+    assert.match(text(result), /^\*\*On this agent:\*\* set$/m);
+    assert.doesNotMatch(text(result), /missing Account SID/);
+  });
+});
+
+test('manage_agent_custom_skill says from Wiro\'s answer whether a save restarts the agent', async () => {
+  const restarts = /^The agent restarts to load the change, which takes about a minute\./;
+  const saved = 'The new text is saved, and the agent was not restarted. A running agent usually takes a text or description edit without a restart; if its replies still follow the old text, control_agent with action restart loads the new one.';
+  const notRestarted = 'The change is saved, but the agent was not restarted, so a running agent keeps its old settings until it restarts. control_agent with action restart loads them, and get_my_agent shows its status.';
+  const descriptionSaved = 'The new description is saved, and the agent was not restarted. A running agent usually takes a description edit without a restart; control_agent with action restart loads it for certain.';
+  const cases = [
+    // A text edit Wiro sent to the running agent: no restart, and no promise that it landed.
+    ['a text edit, not restarted', { key: 'cs-cron-my-task', value: 'Do it at nine.' }, false, 4, saved],
+    ['a text and description edit, not restarted', { key: 'cs-cron-my-task', value: 'Do it at nine.', description: 'My nine o\'clock task' }, false, 4, saved],
+    // Only the description moved: no new text to speak of.
+    ['a description edit, not restarted', { key: 'cs-cron-my-task', description: 'My nine o\'clock task' }, false, 4, descriptionSaved],
+    ['a description edit with the same text sent back', { key: 'cs-cron-my-task', value: 'Do my task.', description: 'My nine o\'clock task' }, false, 4, descriptionSaved],
+    // A text edit Wiro could not send there restarts the agent.
+    ['a text edit, restarted', { key: 'cs-cron-my-task', value: 'Do it at nine.' }, true, 4, restarts],
+    ['a schedule change', { key: 'cs-cron-my-task', interval: '0 9 * * *' }, true, 4, restarts],
+    ['a schedule change that did not restart', { key: 'cs-cron-my-task', interval: '0 9 * * *' }, false, 4, notRestarted],
+    ['a new entry', { key: 'weekly-report', kind: 'scheduled_task', value: 'Summarize last week.' }, true, 4, restarts],
+    ['a text edit of a stopped agent', { key: 'cs-cron-my-task', value: 'Do it at nine.' }, false, 0, /^The agent is stopped, so the change takes effect the next time it starts\.$/],
+  ];
+  for (const [name, args, restarting, status, note] of cases) {
+    const fake = fakeClient({
+      '/UserAgent/Detail': detail({ status }),
+      '/UserAgent/CustomSkillUpsert': { result: true, errors: [], restarting },
+    });
+    await withClient(fake, async client => {
+      const result = await client.callTool({ name: 'manage_agent_custom_skill', arguments: { action: 'upsert', agent_guid: AGENT, ...args } });
+      assert.notEqual(result.isError, true, `${name}: ${text(result)}`);
+      const out = result.structuredContent;
+      assert.equal(out.restarting, restarting, name);
+      if (typeof note === 'string') assert.equal(out.restart, note, name);
+      else assert.match(out.restart, note, name);
+      assert.ok(text(result).includes(`**Restart:** ${out.restart}`), name);
+      if (!restarting) assert.doesNotMatch(out.restart, /restarts to load/, name);
+    });
+  }
+
+  // The approval policy's text turns its gate on or off when the agent starts, so its edit restarts the agent.
+  const policy = fakeClient({
+    '/UserAgent/Detail': detail(),
+    '/UserAgent/CustomSkillUpsert': { result: true, errors: [], restarting: true },
+  });
+  await withClient(policy, async client => {
+    const result = await client.callTool({ name: 'manage_agent_custom_skill', arguments: { action: 'upsert', agent_guid: AGENT, key: 'cs-approval-policy', value: 'Ask before any post.', confirm: true } });
+    assert.notEqual(result.isError, true, text(result));
+    assert.match(result.structuredContent.restart, restarts);
+    assert.equal(result.structuredContent.restarting, true);
+  });
+
+  // An answer without the field goes by what the save changed.
+  const older = fakeClient({
+    '/UserAgent/Detail': detail(),
+    '/UserAgent/CustomSkillUpsert': { result: true, errors: [] },
+  });
+  await withClient(older, async client => {
+    const result = await client.callTool({ name: 'manage_agent_custom_skill', arguments: { action: 'upsert', agent_guid: AGENT, key: 'cs-cron-my-task', value: 'Do it at nine.' } });
+    assert.match(result.structuredContent.restart, restarts);
+    assert.equal(result.structuredContent.restarting, undefined);
+  });
+
+  await withClient(fakeClient({}), async client => {
+    const { tools } = await client.listTools();
+    const description = tools.find(tool => tool.name === 'manage_agent_custom_skill').description;
+    assert.match(description, /A running agent restarts for a new entry, a schedule change, turning one on or off, a rename, a delete or a revert; a text or description edit usually reaches it without a restart, and the result says which happened\./);
+    assert.doesNotMatch(description, /restarts when the text, schedule or on\/off state changes/);
+  });
+  const line = PLAYBOOKS.agents.split('\n').find(item => item.startsWith('- Some changes restart'));
+  assert.match(line, /with `manage_agent_custom_skill` a new entry, a schedule change, turning one on or off, a rename, a delete or a revert/);
+});
+
+test('set_agent_credentials does not count a list row that holds only a select as filled', async () => {
+  // A template's blank Firebase row with only the platform picked: Wiro reads the card as not filled.
+  const blankRows = { accounts: [{ appname: '', serviceaccountjson: '', apps: [{ platform: 'ios', id: '' }, { platform: 'android', id: '' }] }], optional: false, _connected: false, _filled: false, _required_missing: true, _schema: { title: 'Firebase' } };
+  const entered = { ...blankRows, accounts: [{ appname: 'Push App', serviceaccountjson: '', apps: [{ platform: 'ios', id: '' }] }], _filled: true, _required_missing: false };
+  for (const [group, line, filled] of [
+    [blankRows, /^\*\*On this agent:\*\* not complete; missing Firebase Accounts$/m, false],
+    // A row with an app name is an entry, so Wiro reads the card as filled.
+    [entered, /^\*\*On this agent:\*\* set$/m, true],
+  ]) {
+    const fake = fakeClient({
+      '/Credentials/Detail': credentialDetail,
+      '/UserAgent/Detail': detail({ status: 0, credentials: { firebase: group } }),
+    });
+    await withClient(fake, async client => {
+      const result = await client.callTool({ name: 'set_agent_credentials', arguments: { agent_guid: AGENT, credential: 'firebase' } });
+      assert.notEqual(result.isError, true, text(result));
+      assert.match(text(result), line);
+      assert.equal(result.structuredContent.credential.status.filled, filled);
     });
   }
 });

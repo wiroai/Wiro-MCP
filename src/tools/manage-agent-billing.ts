@@ -13,7 +13,7 @@ import {
   unixToIso,
   type ApiEnvelope,
 } from '../utils/api.js';
-import { daysLeftText, readPlanChange, restartNote, underOneDayLeft, workspaceHint, type PlanChange } from '../utils/agent-config.js';
+import { daysLeftText, readPlanChange, underOneDayLeft, workspaceHint, type PlanChange } from '../utils/agent-config.js';
 import { DEFAULT_WAIT_SECONDS } from '../utils/poll.js';
 import { isPlainTeamMember, teamAgentBillingRefused } from '../utils/workspace.js';
 import {
@@ -118,25 +118,48 @@ function waitAction(guid: string, reason: string): NextAction {
 }
 
 /**
- * The wait after an upgrade or a pack. Wiro restarts a running or starting agent
- * and one already stopping, and a queued one starts anyway. A stopped or failed
- * agent, or one waiting for setup, stays as it is, so there is nothing to wait for.
- */
-function waitIfRestarting(agent: Pick<AgentDetail, 'guid' | 'status'>): NextAction | undefined {
-  return agent.status === 4 || isTransitionalStatus(agent.status)
-    ? waitAction(agent.guid, 'Wait until the agent is running again.')
-    : undefined;
-}
-
-/**
- * The wait after a change to the plan that keeps a running agent up: only an
- * agent on its way, one that was stopping (it starts again) or one queued or
- * starting, is worth waiting for.
+ * The wait after an upgrade, a pack or a renewal, which keep a running agent up:
+ * only an agent on its way, one that was stopping (it starts again) or one queued
+ * or starting, is worth waiting for.
  */
 function waitIfStarting(agent: Pick<AgentDetail, 'guid' | 'status'>): NextAction | undefined {
   return isTransitionalStatus(agent.status)
     ? waitAction(agent.guid, 'Wait until the agent is running.')
     : undefined;
+}
+
+/** After a renewal, Wiro queues a stopped or failed agent; a running one keeps running. */
+function renewWait(agent: Pick<AgentDetail, 'guid' | 'status'>): NextAction | undefined {
+  if (agent.status === 0 || agent.status === 5) return waitAction(agent.guid, 'Wait until the agent is running again.');
+  return waitIfStarting(agent);
+}
+
+/**
+ * A new plan queues a stopped or failed agent, and one waiting for setup; a
+ * running one keeps running, and one that was stopping starts again. An agent
+ * without a plan runs only while extra credits last.
+ */
+function subscribeStarts(status: number | null): boolean {
+  return status !== 4;
+}
+
+function subscribeQuoteNote(status: number | null): string {
+  switch (status) {
+    case 4:
+      return 'The agent keeps running: a new plan does not restart it.';
+    case 3:
+      return 'The agent is starting, and a new plan does not restart it.';
+    case 1:
+      return 'The agent is stopping, and it starts again right after the payment.';
+    case 2:
+      return 'The agent is already queued to start.';
+    default:
+      return 'The agent is queued to start right after the payment.';
+  }
+}
+
+function subscribeWait(agent: Pick<AgentDetail, 'guid' | 'status'>): NextAction | undefined {
+  return subscribeStarts(agent.status) ? waitAction(agent.guid, 'Wait until the agent is running.') : undefined;
 }
 
 /** What a change to the plan does to the agent: a running one keeps running, and one that was stopping starts again. */
@@ -282,7 +305,7 @@ async function planFor(
           tier,
         },
         message: `Subscribe on ${tierName(tier)}: ${formatUsd(price.priceUsd)} now from ${wallet}, then every 30 days until the plan is cancelled, with ${formatCredits(price.monthlyCredits)} credits per month. `
-          + 'The agent is queued to start right after the payment.'
+          + subscribeQuoteNote(agent.status)
           + (missing.length > 0
             ? ` Missing credentials (${missing.map(item => item.title).join(', ')}) can be added afterwards; until then the skills that need them fail.`
             : ''),
@@ -299,9 +322,10 @@ async function planFor(
           const credits = toNumber(body.monthlycredits) ?? price.monthlyCredits;
           return {
             outcome: 'done',
-            message: `Subscribed on ${tierName(tier)} and charged ${formatUsd(charged)} from ${wallet}. The plan renews every 30 days until it is cancelled. The agent is starting.`,
+            message: `Subscribed on ${tierName(tier)} and charged ${formatUsd(charged)} from ${wallet}. The plan renews every 30 days until it is cancelled. `
+              + (subscribeStarts(agent.status) ? 'The agent is starting.' : 'The agent keeps running: a new plan does not restart it.'),
             result: { chargedUsd: charged, monthlyPriceUsd: charged, monthlyCredits: credits, tier },
-            nextAction: waitAction(guid, 'Wait until the agent is running.'),
+            nextAction: subscribeWait(agent),
           };
         },
       };
@@ -402,7 +426,7 @@ async function planFor(
               ...(credits !== null ? { monthlyCredits: credits } : {}),
               renewal: 'renewed',
             },
-            nextAction: waitAction(guid, 'Wait until the agent is running again.'),
+            nextAction: renewWait(agent),
           };
         },
       };
@@ -583,7 +607,7 @@ async function planFor(
       return {
         outcome: 'quote',
         quote: { chargeNowUsd: chosen.priceUsd, estimated: false, creditsAdded: chosen.credits, paidFrom, pack: chosen.pack },
-        message: `Buy the ${chosen.pack} pack: ${formatUsd(chosen.priceUsd)} now from ${wallet} for ${formatCredits(chosen.credits)} extra credits, added at once. Extra credits are used after the monthly credits, do not reset each month and end 6 months (180 days) after purchase. ${restartNote(agent.status, 'credit pack')} This is a one-time charge.`,
+        message: `Buy the ${chosen.pack} pack: ${formatUsd(chosen.priceUsd)} now from ${wallet} for ${formatCredits(chosen.credits)} extra credits, added at once. Extra credits are used after the monthly credits, do not reset each month and end 6 months (180 days) after purchase. ${planChangeAgentNote(agent.status, 'a credit pack')} This is a one-time charge.`,
         perform: async signal => {
           const body = requireApiSuccess(
             await client.post<BillingEnvelope>('/UserAgent/CreateExtraCreditCheckout', {
@@ -596,9 +620,9 @@ async function planFor(
           if (asString(body.url)) return { outcome: 'refused', message: cardPlan('buy the pack') };
           return {
             outcome: 'done',
-            message: `Bought the ${chosen.pack} pack: ${formatCredits(chosen.credits)} credits for ${formatUsd(chosen.priceUsd)} from ${wallet}. The credits are added. ${restartNote(agent.status, 'credit pack')}`,
+            message: `Bought the ${chosen.pack} pack: ${formatCredits(chosen.credits)} credits for ${formatUsd(chosen.priceUsd)} from ${wallet}. The credits are added. ${planChangeAgentNote(agent.status, 'a credit pack')}`,
             result: { chargedUsd: chosen.priceUsd, creditsAdded: chosen.credits },
-            nextAction: waitIfRestarting(agent),
+            nextAction: waitIfStarting(agent),
           };
         },
       };
@@ -685,7 +709,6 @@ async function observeOpenOutcome(
   }
   const after = toAgentDetail(row);
   const charged = chargeOf(quote);
-  const restart = waitAction(before.guid, 'Wait until the agent is running again.');
   switch (action) {
     case 'subscribe':
       return after.subscription?.status === 'active'
@@ -694,7 +717,7 @@ async function observeOpenOutcome(
           row,
           text: 'The agent now has an active plan, so the payment went through. Do not subscribe again.',
           result: { chargedUsd: charged, ...(quote?.tier ? { tier: quote.tier } : {}) },
-          nextAction: waitAction(before.guid, 'Wait until the agent is running.'),
+          nextAction: subscribeWait(before),
         }
         : { happened: false, text: 'The agent shows no active plan yet. Check get_my_agent again in a minute and the wallet balance with get_account before trying again; if the plan is still not active but the balance changed, contact Wiro support.' };
     case 'renew':
@@ -704,7 +727,7 @@ async function observeOpenOutcome(
           row,
           text: 'The plan is active again, so the renewal went through. Do not renew it again.',
           result: { chargedUsd: charged, renewal: 'renewed' },
-          nextAction: restart,
+          nextAction: renewWait(before),
         }
         : { happened: false, text: 'The plan still shows as expired. Check get_my_agent again in a minute and the wallet balance with get_account before renewing again; if the plan is still expired but the balance changed, contact Wiro support.' };
     case 'upgrade_to_pro': {
@@ -737,7 +760,7 @@ async function observeOpenOutcome(
           row,
           text: `The agent's extra credits rose by ${formatCredits(rose)}, so the purchase went through. Do not buy it again.`,
           result: bought,
-          nextAction: waitIfRestarting(before),
+          nextAction: waitIfStarting(before),
         };
       }
       const fresh = await freshPackShows(client, before.guid, credits, sentAtMs, signal);
@@ -799,7 +822,8 @@ export function registerManageAgentBilling(server: McpServer, client: WiroClient
         + 'get_my_agent first. '
         + 'subscribe starts a plan for an agent without one; renew undoes a cancellation or renews an expired '
         + 'wallet plan; upgrade_to_pro charges the prorated difference now; buy_credits adds a credit pack '
-        + '(Pro only); cancel stops renewals with no refund. Plans renew every 30 days until cancelled. An '
+        + '(Pro only); cancel stops renewals with no refund. Plans renew every 30 days until cancelled. Renewals, '
+        + 'upgrades and packs leave a running agent running. An '
         + 'agent whose plan is billed by card is upgraded and topped up in the Wiro dashboard, and a personal '
         + 'card plan is cancelled there; the tool returns the link and charges nothing. A card plan that is moving to '
         + 'wallet billing pays upgrade_to_pro and buy_credits from the wallet, and cancel works once the wallet bills it. '
@@ -986,7 +1010,7 @@ export function registerManageAgentBilling(server: McpServer, client: WiroClient
             return respond({
               outcome: 'done',
               heading: 'Pack in place',
-              message: `The ${plan.quote?.pack} pack is in place: ${formatCredits(credits)} credits for ${formatUsd(plan.quote?.chargeNowUsd)} from ${agent.workspace === 'team' ? 'the team wallet' : 'the personal wallet'}. This request id is charged only once. The agent's extra credits did not grow in this call, so if the id had already completed in an earlier call, nothing new was bought or charged now. ${restartNote(agent.status, 'credit pack')} For another pack, get a new quote without request_id.`,
+              message: `The ${plan.quote?.pack} pack is in place: ${formatCredits(credits)} credits for ${formatUsd(plan.quote?.chargeNowUsd)} from ${agent.workspace === 'team' ? 'the team wallet' : 'the personal wallet'}. This request id is charged only once. The agent's extra credits did not grow in this call, so if the id had already completed in an earlier call, nothing new was bought or charged now. ${planChangeAgentNote(agent.status, 'a credit pack')} For another pack, get a new quote without request_id.`,
               quote: plan.quote,
               result: { chargedUsd: null },
               nextAction: performed.nextAction,

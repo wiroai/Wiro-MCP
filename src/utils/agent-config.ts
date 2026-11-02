@@ -100,7 +100,8 @@ function afterWriteNote(status: number | null): string {
     case 3:
       return 'The agent is starting and loads the new values.';
     case 4:
-      return 'The agent restarts shortly to load the new values.';
+      // A save that changes a value sets a running agent stopping before Wiro answers.
+      return 'The agent kept running: a save that matches what is stored does not restart it. If it should load new values now, control_agent with action restart does it.';
     case 6:
       return 'The agent still needs setup before it can start; get_my_agent shows what is missing.';
     case 5:
@@ -694,13 +695,14 @@ export function describeSkillsApplyError(error: unknown, plan?: PlanBilling['pla
       };
     }
     case 104:
-      // Two refusals share the code: another skill change of the agent, or another payment from its wallet.
+      // Two refusals share the code: another change to the agent's plan, or another payment from its wallet.
+      // Skill changes, an upgrade to Pro and a wallet plan's renewal take turns on an agent.
       return {
         ...base,
         retrySameKey: true,
         guidance: /wallet/i.test(message)
           ? 'Another payment from the same wallet was going through, so this change was not made and nothing was charged. It is not a low balance, and no funds need to be added. Offer to try again in a minute: repeat the call with the same idempotency_key.'
-          : 'Another skill change for this agent is still running, and one runs at a time. Nothing was changed or charged by this call. Wait a few seconds, then repeat the call with the same idempotency_key. If it keeps saying so, it clears within 15 minutes.',
+          : 'Another change to this agent\'s skills or plan, such as an upgrade or a renewal, is still going through, and one runs at a time. Nothing was changed or charged by this call. Wait a few seconds, then repeat the call with the same idempotency_key. If it keeps saying so, it clears within 15 minutes.',
       };
     case 105:
       return {
@@ -1552,6 +1554,34 @@ export function isFilledValue(value: unknown): boolean {
   return true;
 }
 
+/**
+ * Whether a field of a saved credential holds what someone entered, counted the
+ * way Wiro counts it for a card's filled state: a list of options counts only an
+ * option that is selected, and a row of a list does not count for its selects
+ * and switches, which come with a default.
+ */
+export function isCredentialFieldFilled(field: CredentialField, value: unknown): boolean {
+  if (field.itemSchema.length === 0 || !Array.isArray(value)) return isCredentialValueFilled(value);
+  return value.some(row => {
+    if (!isPlainObject(row)) return isCredentialValueFilled(row);
+    return Object.entries(row).some(([key, item]) => {
+      const inner = field.itemSchema.find(entry => entry.key === key);
+      if (!inner) return isCredentialValueFilled(item);
+      if (inner.type === 'select' || inner.type === 'boolean') return false;
+      return isCredentialFieldFilled(inner, item);
+    });
+  });
+}
+
+function isCredentialValueFilled(value: unknown): boolean {
+  if (Array.isArray(value) && value.length > 0 && value.every(option => isPlainObject(option) && 'selected' in option)) {
+    return value.some(option => isPlainObject(option) && option.selected === true);
+  }
+  if (Array.isArray(value)) return value.some(isCredentialValueFilled);
+  if (isPlainObject(value)) return Object.values(value).some(isCredentialValueFilled);
+  return isFilledValue(value);
+}
+
 export function credentialGroup(row: Row, key: string): Row | null {
   const groups = isPlainObject(row.credentials) ? row.credentials : null;
   const group = groups ? groups[key] : undefined;
@@ -1573,11 +1603,12 @@ export function credentialStatus(row: Row, key: string, meta?: CredentialMeta | 
   if (!group) return null;
   const schema = isPlainObject(group._schema) ? group._schema : {};
   const connected = group._connected === true;
-  // A sign-in credential's required fields depend on its mode; connected is the signal there.
-  const missingFields = connected || !meta || meta.oauth
+  // A sign-in credential's required fields depend on its mode; connected is the signal there. Filled says every
+  // required field holds a value, a template's own value that is not shown included.
+  const missingFields = connected || !meta || meta.oauth || group._filled === true
     ? []
     : meta.fields
-      .filter(field => field.required && isWritableField(field) && !isFilledValue(group[field.key]))
+      .filter(field => field.required && isWritableField(field) && !isCredentialFieldFilled(field, group[field.key]))
       .map(field => field.label);
   return {
     key,
