@@ -55,9 +55,9 @@ const entrySchema = z.object({
   ownerSkills: z.array(z.string()).optional()
     .describe('The skills that bring this scheduled task.'),
   skillOff: z.boolean().optional()
-    .describe('The skills this scheduled task needs are off, so it does not run, even when it shows on, until one of the skills in offSkills is turned on with apply_agent_skills. Its own on/off state, text and schedule stay as they are.'),
-  offSkills: z.array(z.string()).optional()
-    .describe('While skillOff is true, the skills to turn on: any one of them lets the task run again, while the services it needs are connected.'),
+    .describe('The scheduled task is paused because the skills it needs are off: it does not run, even when it shows on, until one skill from each list in offSkills is turned on with apply_agent_skills. Its own on/off state, text and schedule stay as they are.'),
+  offSkills: z.array(z.array(z.string())).optional()
+    .describe('While skillOff is true, the skills that end the pause, as lists: turn on one skill from each list. The task then runs while the services it needs are connected.'),
 });
 
 const outputSchema = {

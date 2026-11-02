@@ -798,7 +798,7 @@ test('bind_agent_project names the skill a task it turns on still waits for', as
   // Detail names the skills that bring a registry task, that the skills it needs are off, and the ones to turn on; a user's own task has none of them.
   const task = (key, owners) => ({
     key, description: 'Images', value: 'Make the images.', interval: '0 9 * * 1', enabled: false, requires_credentials: ['wiro'], _source: owners ? 'skill-bundle' : 'user-created', _editable: true,
-    ...(owners ? { _owner_skills: owners, _skill_off: true, _off_skills: owners } : { _user_created: true }),
+    ...(owners ? { _owner_skills: owners, _skill_off: true, _off_skills: [owners] } : { _user_created: true }),
   });
   const row = detail({ ...NO_WIRO_SKILL, credentials: {}, customskills: [], scheduledskills: [task('cs-cron-weekly-images', ['int-wiro-aimodels']), task('cs-cron-monthly-images', null)] });
   await withTools(routes({ '/UserAgent/Detail': row }), async ({ call }) => {

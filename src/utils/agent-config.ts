@@ -14,7 +14,7 @@ import {
   type ApiEnvelope,
 } from './api.js';
 import { oneLine, quotedSpan } from './quoted-text.js';
-import { credentialKeysSetupWaitsFor, isWalletNotRead, planEndsWithPeriod, STARTER_TASK_KEY, WALLET_NOT_READ_NOTE, WIRO_PROJECT_CREDENTIAL } from './user-agent.js';
+import { credentialKeysSetupWaitsFor, isWalletNotRead, planEndsWithPeriod, STARTER_TASK_KEY, toSkillGroups, WALLET_NOT_READ_NOTE, WIRO_PROJECT_CREDENTIAL } from './user-agent.js';
 
 // Helpers for configuring a deployed agent: its registry skills, credentials,
 // sign-in connections and custom skills. The pure functions mirror the server
@@ -259,11 +259,11 @@ export async function loadSkillRegistry(client: WiroClient, signal?: AbortSignal
  */
 export async function pausedSkillTitles(
   client: WiroClient,
-  tasks: ReadonlyArray<{ skillOff?: boolean; offSkills?: string[] }>,
+  tasks: ReadonlyArray<{ skillOff?: boolean; offSkills?: string[][] }>,
   signal?: AbortSignal,
 ): Promise<Map<string, string>> {
   const titles = new Map<string, string>();
-  const names = new Set(tasks.filter(task => task.skillOff).flatMap(task => task.offSkills ?? []));
+  const names = new Set(tasks.filter(task => task.skillOff).flatMap(task => (task.offSkills ?? []).flat()));
   if (names.size === 0) return titles;
   const registry = await loadSkillRegistry(client, signal).catch(() => null);
   for (const name of names) {
@@ -2296,10 +2296,10 @@ export interface CustomSkillEntry {
   notWritten?: boolean;
   /** The skills that bring a scheduled task. */
   ownerSkills?: string[];
-  /** The skills the scheduled task needs are off, so it does not run until one of offSkills is on. */
+  /** The skills the scheduled task needs are off, so it is paused until one skill from each list in offSkills is on. */
   skillOff?: boolean;
-  /** While skillOff, the skills to turn on: any one of them lets the task run. */
-  offSkills?: string[];
+  /** While skillOff, the skills that end the pause, as lists: one skill from each list. */
+  offSkills?: string[][];
 }
 
 export function customSkillEntries(row: Row): CustomSkillEntry[] {
@@ -2323,7 +2323,7 @@ export function customSkillEntries(row: Row): CustomSkillEntry[] {
       notWritten: key === STARTER_TASK_KEY && entry._edited === false,
       ownerSkills: stringList(entry._owner_skills),
       skillOff: entry._skill_off === true,
-      offSkills: stringList(entry._off_skills),
+      offSkills: toSkillGroups(entry._off_skills),
     };
   }).filter(entry => entry.key);
 }

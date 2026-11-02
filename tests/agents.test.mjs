@@ -1466,6 +1466,9 @@ const TITLED_SKILLS = {
     ['int-mailchimp-email', 'Mailchimp Email'],
     ['int-sendgrid-email', 'SendGrid Email'],
     ['int-metaads-manage', 'Meta Ads Manager'],
+    ['util-newsletter-compose', 'Newsletter Compose Rules'],
+    ['int-googleads-manage', 'Google Ads Manager'],
+    ['int-google-drive', 'Google Drive'],
   ].map(([name, title]) => ({ name, title, depends_on: [], conflicts_with: [], requires_credentials: true, pricing: {} })),
 };
 
@@ -1476,11 +1479,11 @@ const SKILL_OFF_ROW = {
     { name: 'util-chat-markdown-reporting', enabled: true, _edited: false, _user_created: false },
   ],
   scheduledskills: [
-    skillTask('cs-cron-blog-gmail-checker', true, ['int-gmail-check'], ['int-gmail-check']),
-    skillTask('cs-cron-review-scanner', true, ['int-appstore-reviews', 'int-googleplay-reviews'], ['int-appstore-reviews', 'int-googleplay-reviews']),
+    skillTask('cs-cron-blog-gmail-checker', true, ['int-gmail-check'], [['int-gmail-check']]),
+    skillTask('cs-cron-review-scanner', true, ['int-appstore-reviews', 'int-googleplay-reviews'], [['int-appstore-reviews', 'int-googleplay-reviews']]),
     // The util that brings it is on, but every skill that holds one of its integrations is off.
-    skillTask('cs-cron-newsletter-sender', true, ['util-newsletter-compose'], NEWSLETTER_PROVIDERS),
-    skillTask('cs-cron-metaads-performance-reporter', false, ['int-metaads-manage'], ['int-metaads-manage']),
+    skillTask('cs-cron-newsletter-sender', true, ['util-newsletter-compose'], [NEWSLETTER_PROVIDERS]),
+    skillTask('cs-cron-metaads-performance-reporter', false, ['int-metaads-manage'], [['int-metaads-manage']]),
     skillTask('cs-cron-app-event-scanner', true, ['int-appstore-events', 'int-googleplay-events'], null),
     // Waiting with no skills to turn on named: nothing is named, not even the skill that brings it.
     { ...skillTask('cs-cron-push-scanner', true, ['int-firebase-push'], null), _skill_off: true },
@@ -1503,9 +1506,9 @@ test('a scheduled task that waits for its skills says it is paused and names the
     assert.equal(tasks['cs-cron-blog-gmail-checker'].enabled, true);
     assert.equal(tasks['cs-cron-blog-gmail-checker'].skillOff, true);
     assert.deepEqual(tasks['cs-cron-blog-gmail-checker'].ownerSkills, ['int-gmail-check']);
-    assert.deepEqual(tasks['cs-cron-blog-gmail-checker'].offSkills, ['int-gmail-check']);
+    assert.deepEqual(tasks['cs-cron-blog-gmail-checker'].offSkills, [['int-gmail-check']]);
     assert.deepEqual(tasks['cs-cron-newsletter-sender'].ownerSkills, ['util-newsletter-compose']);
-    assert.deepEqual(tasks['cs-cron-newsletter-sender'].offSkills, NEWSLETTER_PROVIDERS);
+    assert.deepEqual(tasks['cs-cron-newsletter-sender'].offSkills, [NEWSLETTER_PROVIDERS]);
     assert.equal(tasks['cs-cron-metaads-performance-reporter'].enabled, false);
     assert.equal(tasks['cs-cron-metaads-performance-reporter'].skillOff, true);
     assert.deepEqual(tasks['cs-cron-app-event-scanner'].ownerSkills, ['int-appstore-events', 'int-googleplay-events']);
@@ -1536,11 +1539,11 @@ test('a scheduled task that waits for its skills says it is paused and names the
     assert.equal(gmail.structuredContent.entry.enabled, true);
     assert.equal(gmail.structuredContent.entry.skillOff, true);
     assert.deepEqual(gmail.structuredContent.entry.ownerSkills, ['int-gmail-check']);
-    assert.deepEqual(gmail.structuredContent.entry.offSkills, ['int-gmail-check']);
+    assert.deepEqual(gmail.structuredContent.entry.offSkills, [['int-gmail-check']]);
     const newsletter = await history('cs-cron-newsletter-sender');
     assert.match(newsletter.structuredContent.message, /It is paused until Brevo Email \(`int-brevo-email`\), HubSpot CRM \(`int-hubspot-crm`\), Mailchimp Email \(`int-mailchimp-email`\) or SendGrid Email \(`int-sendgrid-email`\) is on\./);
     assert.doesNotMatch(newsletter.structuredContent.message, /util-newsletter-compose/);
-    assert.deepEqual(newsletter.structuredContent.entry.offSkills, NEWSLETTER_PROVIDERS);
+    assert.deepEqual(newsletter.structuredContent.entry.offSkills, [NEWSLETTER_PROVIDERS]);
     const metaads = await history('cs-cron-metaads-performance-reporter');
     assert.match(metaads.structuredContent.message, /^Current: off, schedule "0 9 \* \* \*"\. It also needs Meta Ads Manager \(`int-metaads-manage`\) turned on to run\. /);
     const events = await history('cs-cron-app-event-scanner');
@@ -1568,6 +1571,32 @@ test('a scheduled task that waits for its skills says it is paused and names the
     assert.notEqual(read.isError, true, textOf(read));
     assert.match(textOf(read), /- `cs-cron-blog-gmail-checker` on \(it is paused until `int-gmail-check` is on\)/);
   });
+
+  // With every skill that brings it off, a task can wait for one skill from each of two lists: the util that
+  // brings the newsletter and one of its email providers, or Google Ads Manager and Google Drive.
+  const paired = fakeClient({
+    '/UserAgent/Detail': detailResponse(agentRow({
+      skills: [{ name: 'util-chat-markdown-reporting', enabled: true, _edited: false, _user_created: false }],
+      scheduledskills: [
+        skillTask('cs-cron-newsletter-sender', true, ['util-newsletter-compose'], [['util-newsletter-compose'], NEWSLETTER_PROVIDERS]),
+        skillTask('cs-cron-googleads-drive-scanner', false, ['int-googleads-manage'], [['int-googleads-manage'], ['int-google-drive']]),
+      ],
+    })),
+    '/Skills/List': TITLED_SKILLS,
+    '/UserAgent/CustomSkillHistory': { result: true, errors: [], entries: [], preset_default: null },
+    '/UserAgent/CustomSkillAlternatives': { result: true, alternatives: [] },
+  });
+  await withClient(paired, async client => {
+    const read = await call(client, 'get_my_agent', { agent_guid: 'ua-1' });
+    assert.notEqual(read.isError, true, textOf(read));
+    const newsletter = read.structuredContent.agent.scheduledTasks.find(item => item.key === 'cs-cron-newsletter-sender');
+    assert.deepEqual(newsletter.offSkills, [['util-newsletter-compose'], NEWSLETTER_PROVIDERS]);
+    assert.match(textOf(read), /- `cs-cron-newsletter-sender` on \(it is paused until Newsletter Compose Rules \(`util-newsletter-compose`\) and one of Brevo Email \(`int-brevo-email`\), HubSpot CRM \(`int-hubspot-crm`\), Mailchimp Email \(`int-mailchimp-email`\) or SendGrid Email \(`int-sendgrid-email`\) are on\), 0 9/);
+    assert.match(textOf(read), /- `cs-cron-googleads-drive-scanner` off \(it also needs Google Ads Manager \(`int-googleads-manage`\) and Google Drive \(`int-google-drive`\) turned on to run\), 0 9/);
+    const history = await call(client, 'manage_agent_custom_skill', { action: 'history', agent_guid: 'ua-1', key: 'cs-cron-newsletter-sender' });
+    assert.match(history.structuredContent.message, /It is paused until Newsletter Compose Rules \(`util-newsletter-compose`\) and one of Brevo Email \(`int-brevo-email`\), HubSpot CRM \(`int-hubspot-crm`\), Mailchimp Email \(`int-mailchimp-email`\) or SendGrid Email \(`int-sendgrid-email`\) are on\./);
+    assert.deepEqual(history.structuredContent.entry.offSkills, [['util-newsletter-compose'], NEWSLETTER_PROVIDERS]);
+  });
 });
 
 test('turning on a scheduled task that waits for its skills says it is paused until one of them is on', async () => {
@@ -1582,7 +1611,7 @@ test('turning on a scheduled task that waits for its skills says it is paused un
     const out = result.structuredContent;
     assert.equal(out.entry.enabled, true);
     assert.equal(out.entry.skillOff, true);
-    assert.deepEqual(out.entry.offSkills, ['int-metaads-manage']);
+    assert.deepEqual(out.entry.offSkills, [['int-metaads-manage']]);
     assert.match(out.schedule.note, /Every run spends the agent's credits\. It is paused until Meta Ads Manager \(`int-metaads-manage`\) is on\./);
     assert.doesNotMatch(out.schedule.note, /It is turned off/);
     assert.match(textOf(result), /\*\*Schedule:\*\* .*It is paused until Meta Ads Manager \(`int-metaads-manage`\) is on\./);

@@ -102,7 +102,7 @@ const outputSchema = {
     stop: z.array(z.string())
       .describe('Scheduled tasks that stop running because the change turns off every skill that brings them. Their text, schedule and on/off state stay while they wait, and get_my_agent names the skills to turn on to run them again.'),
     resume: z.array(z.string())
-      .describe('Scheduled tasks that run again because the change turns on a skill they wait for, while the services they need are connected.'),
+      .describe('Scheduled tasks that run again because the change turns on the skills they wait for, one from each list in their offSkills, while the services they need are connected.'),
   }).optional()
     .describe('Quote: the scheduled tasks that are on and that the change stops or brings back.'),
   agentStatus: z.string(),
@@ -447,9 +447,9 @@ function listLine(label: string, names: string[]): string | null {
 
 /**
  * The scheduled tasks a change stops, because it turns off every skill that brings them, and the ones it
- * brings back by turning on a skill they wait for. Wiro names the skills that bring each task and, while one
- * waits, the skills to turn on, any one of which lets it run while a skill that brings it is on. Only tasks
- * that are on count: one that is off stays off either way.
+ * brings back by turning on the skills they wait for. Wiro names the skills that bring each task and, while
+ * one is paused, the skills that end the pause as lists: one skill from each list, while a skill that brings
+ * it is on. Only tasks that are on count: one that is off stays off either way.
  */
 function tasksMoved(row: Row, enabledNow: string[], diff: SkillDiff): { stop: string[]; resume: string[] } {
   const after = new Set(enabledNow);
@@ -462,7 +462,9 @@ function tasksMoved(row: Row, enabledNow: string[], diff: SkillDiff): { stop: st
     if (task.kind !== 'scheduled_task' || !task.enabled || owners.length === 0) continue;
     const ownerOn = owners.some(name => after.has(name));
     if (task.skillOff) {
-      if (ownerOn && (task.offSkills ?? []).some(name => diff.enable.includes(name))) resume.push(task.key);
+      const groups = task.offSkills ?? [];
+      const ends = groups.length > 0 && groups.every(group => group.some(name => after.has(name)));
+      if (ownerOn && ends && groups.some(group => group.some(name => diff.enable.includes(name)))) resume.push(task.key);
     } else if (!ownerOn && owners.some(name => diff.disable.includes(name))) {
       stop.push(task.key);
     }
@@ -480,7 +482,7 @@ function movedTaskLines(moved: { stop: string[]; resume: string[] }): string[] {
   }
   if (moved.resume.length > 0) {
     const one = moved.resume.length === 1;
-    lines.push(`**Scheduled tasks that run again:** ${keys(moved.resume)}. The change turns on a skill ${one ? 'it waits for, and it runs while the services it needs are' : 'they wait for, and they run while the services they need are'} connected.`);
+    lines.push(`**Scheduled tasks that run again:** ${keys(moved.resume)}. The change turns on the skills ${one ? 'it waits for, and it runs while the services it needs are' : 'they wait for, and they run while the services they need are'} connected.`);
   }
   return lines;
 }

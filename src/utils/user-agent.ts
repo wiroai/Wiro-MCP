@@ -369,6 +369,15 @@ export function summarizeChannels(value: unknown): ChannelStatus[] {
   });
 }
 
+/** Lists of skill names, such as the skills a paused task waits for: [["a"], ["b", "c"]]. Empty lists and non-names are dropped. */
+export function toSkillGroups(value: unknown): string[][] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter(Array.isArray)
+    .map(group => group.map(name => asString(name)).filter((name): name is string => !!name))
+    .filter(group => group.length > 0);
+}
+
 /** The scheduled task a custom build starts with. It runs only once its text has been written. */
 export const STARTER_TASK_KEY = 'cs-cron-my-scheduled-task';
 
@@ -381,9 +390,9 @@ export const agentTaskSchema = z.object({
   ownerSkills: z.array(z.string()).optional()
     .describe('The skills that bring this task.'),
   skillOff: z.boolean().optional()
-    .describe('The skills this task needs are off, so it does not run, even when it shows on, until one of the skills in offSkills is turned on with apply_agent_skills. Its own on/off state, text and schedule stay as they are.'),
-  offSkills: z.array(z.string()).optional()
-    .describe('While skillOff is true, the skills to turn on: any one of them lets the task run again, while the services it needs are connected.'),
+    .describe('The task is paused because the skills it needs are off: it does not run, even when it shows on, until one skill from each list in offSkills is turned on with apply_agent_skills. Its own on/off state, text and schedule stay as they are.'),
+  offSkills: z.array(z.array(z.string())).optional()
+    .describe('While skillOff is true, the skills that end the pause, as lists: turn on one skill from each list. The task then runs while the services it needs are connected.'),
   interval: z.string().nullable().optional(),
   source: z.enum(['template', 'skill', 'user']).optional(),
   instructions: z.string().optional(),
@@ -408,7 +417,7 @@ export function summarizeTasks(value: unknown, maxInstructionLength = 300): Agen
     const shortened = truncate(instructions, maxInstructionLength);
     const source = TASK_SOURCES[asString(task._source) ?? ''];
     const ownerSkills = toStringArray(task._owner_skills);
-    const offSkills = toStringArray(task._off_skills);
+    const offSkills = toSkillGroups(task._off_skills);
     return {
       key: asString(task.key) ?? '',
       ...(description ? { description } : {}),
@@ -781,28 +790,39 @@ export function skillLabel(name: string, titles?: ReadonlyMap<string, string>): 
 }
 
 /**
- * Why a paused task does not run, as a clause that names the skills to turn on (offSkills), by their titles
- * where titles has them: any one of them ends the pause. Its own on/off state stays as it is: a task that is
- * on runs again once one of them is on, and one that is off also needs turning on.
+ * The skills a paused task waits for, one from each list, by their titles where titles has them: "A",
+ * "A or B", or "A and one of B or C". several is true when more than one skill has to come on.
+ */
+function waitedSkills(groups: readonly (readonly string[])[], titles?: ReadonlyMap<string, string>): { text: string; several: boolean } {
+  const lists = groups.map(group => group.map(name => skillLabel(name, titles))).filter(list => list.length > 0);
+  if (lists.length === 0) return { text: 'a skill it needs', several: false };
+  if (lists.length === 1) return { text: nameList(lists[0], 'or'), several: false };
+  return { text: nameList(lists.map(list => (list.length === 1 ? list[0] : `one of ${nameList(list, 'or')}`)), 'and'), several: true };
+}
+
+/**
+ * Why a paused task does not run, as a clause that names the skills to turn on (offSkills, one from each
+ * list). Its own on/off state stays as it is: a task that is on runs again once they are on, and one that is
+ * off also needs turning on.
  */
 export function skillOffText(task: Pick<AgentTask, 'enabled' | 'offSkills'>, titles?: ReadonlyMap<string, string>): string {
-  const names = (task.offSkills ?? []).map(name => skillLabel(name, titles));
+  const waited = waitedSkills(task.offSkills ?? [], titles);
   return task.enabled
-    ? `it is paused until ${names.length > 0 ? nameList(names, 'or') : 'a skill it needs'} is on`
-    : `it also needs ${names.length > 0 ? nameList(names, 'or') : 'a skill it needs'} turned on to run`;
+    ? `it is paused until ${waited.text} ${waited.several ? 'are' : 'is'} on`
+    : `it also needs ${waited.text} turned on to run`;
 }
 
 /**
  * The paused tasks among these, each as a sentence that names the skills to turn on, with a space before it.
- * A saved credential turns such a task on, but it stays paused until one of them is on.
+ * A saved credential turns such a task on, but it stays paused until they are on.
  */
 export function skillOffTasksNote(
-  tasks: ReadonlyArray<{ key: string; offSkills?: string[]; skillOff?: boolean }>,
+  tasks: ReadonlyArray<{ key: string; offSkills?: string[][]; skillOff?: boolean }>,
   titles?: ReadonlyMap<string, string>,
 ): string {
   return tasks.filter(task => task.skillOff).map(task => {
-    const names = (task.offSkills ?? []).map(name => skillLabel(name, titles));
-    return ` ${quotedSpan(task.key)} stays paused until ${names.length > 0 ? nameList(names, 'or') : 'a skill it needs'} is on.`;
+    const waited = waitedSkills(task.offSkills ?? [], titles);
+    return ` ${quotedSpan(task.key)} stays paused until ${waited.text} ${waited.several ? 'are' : 'is'} on.`;
   }).join('');
 }
 

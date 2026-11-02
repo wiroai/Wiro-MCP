@@ -558,7 +558,7 @@ test('the playbooks keep a wallet that could not be read apart from a low balanc
 });
 
 test('the agents playbook says that a skill\'s scheduled task does not run while the skills it needs are off', () => {
-  assert.match(PLAYBOOKS.agents, /They also wait while the skills they need are off: such a task does not run, even where it shows on, and turning on one of the skills `get_my_agent` names for it, with `apply_agent_skills`, brings it back with its text, schedule and on\/off state kept\./);
+  assert.match(PLAYBOOKS.agents, /They also wait while the skills they need are off: such a task does not run, even where it shows on, and turning on the skills `get_my_agent` names for it, with `apply_agent_skills`, brings it back with its text, schedule and on\/off state kept\./);
 });
 
 test('the agents playbook says when pack credits end', () => {
