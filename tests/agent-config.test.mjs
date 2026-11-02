@@ -478,6 +478,51 @@ test('apply_agent_skills reads the plan\'s monthly credits from what each renewa
   });
 });
 
+test('apply_agent_skills names what renewals give after a change only for renewals the plan will have', async () => {
+  const end = NOW + 15 * 86400;
+  const wallet = { plan: 'agent', status: 'active', provider: 'prepaid', currentperiodend: end, daysremaining: 15 };
+  const card = { plan: 'agent', status: 'active', provider: 'stripe', currentperiodend: end, daysremaining: 15 };
+  const answer = (plan, credits = {}) => ({
+    result: true,
+    errors: [],
+    tier: 'starter',
+    pricing: { previousPriceUsd: 42, newPriceUsd: 43, deltaUsd: 1, previousMonthlyCredits: 4200, newMonthlyCredits: 4300, deltaCredits: 100, creditsNow: 50, creditsThisPeriod: 4250, creditsFromRenewal: 4300, periodEnd: end, ...credits },
+    stripeProrationApplied: plan === 'card',
+    prepaidWalletDelta: plan === 'wallet' ? 0.5 : null,
+    usedCreditsUsd: 0,
+    restartTriggered: true,
+  });
+  const apply = async (overrides, change, body) => {
+    let result;
+    const fake = fakeClient(skillRoutes({ '/UserAgent/Detail': detailAfterApply(overrides), '/UserAgent/PricingPreview': preview(change), '/UserAgent/SkillsApply': body }));
+    await withClient(fake, async client => {
+      const quote = await quoteInstagram(client);
+      result = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
+    });
+    assert.equal(result.structuredContent.status, 'applied', text(result));
+    return result;
+  };
+  const thisPeriod = result => text(result).split('\n').find(entry => entry.startsWith('**This period:**'));
+  const line = renewal => `**This period:** +50 credits, 4,250 in all until ${new Date(end * 1000).toISOString()}; ${renewal}`;
+
+  assert.equal(thisPeriod(await apply({ subscription: wallet }, planChange(), answer('wallet'))), line('every renewal gives 4,300'));
+  // A cancelled plan renews only if the cancellation is undone, as its quote and Billing line say.
+  assert.equal(thisPeriod(await apply({ subscription: { ...wallet, pendingdowngrade: 'cancel' } }, planChange(), answer('wallet'))), line('4,300 from the next renewal, if the plan is kept'));
+  assert.equal(thisPeriod(await apply({ subscription: card, stripecancelatperiodend: true }, cardPlanChange(), answer('card'))), line('4,300 from the next renewal, if the plan is kept'));
+  // A card plan whose renewal is not known names the renewal as a condition.
+  assert.equal(thisPeriod(await apply({ subscription: card }, cardPlanChange(), answer('card'))), line('4,300 from the next renewal, if the plan renews'));
+  // A card plan moving to wallet billing renews from the wallet.
+  assert.equal(thisPeriod(await apply({ subscription: { ...card, nextprovider: 'prepaid' }, stripecancelatperiodend: true }, cardPlanChange(), answer('card'))), line('every renewal gives 4,300'));
+
+  // An agent with no plan has no period and no renewal: Wiro still answers the credit fields, with periodEnd null.
+  const none = await apply({ subscription: null }, null, answer('none', { creditsNow: 100, creditsThisPeriod: 4300, periodEnd: null }));
+  assert.equal(thisPeriod(none), undefined, text(none));
+  assert.doesNotMatch(text(none), /renewal/);
+  for (const field of ['creditsNow', 'creditsThisPeriod', 'creditsFromRenewal', 'periodEnd']) {
+    assert.equal(field in none.structuredContent.pricing, false, field);
+  }
+});
+
 async function quoteInstagram(client) {
   const quote = await client.callTool({
     name: 'apply_agent_skills',
@@ -1011,7 +1056,7 @@ test('apply_agent_skills quotes Wiro\'s amount for a plan with no period end, an
     preview(planChange({ periodEnd: NOW - 3600, secondsLeft: 0, chargeNowUsd: 0, creditNowUsd: 0, usedCreditsUsd: 0, creditsNow: 0, creditsThisPeriod: 4200, creditsFromRenewal: 4000 }), { totalPriceUsd: 40, totalMonthlyCredits: 4000 }));
   assert.equal(ended.estimatedChargeNowUsd, 0);
   assert.equal(ended.creditNowUsd, 0);
-  assert.match(ended.note, /^Nothing comes back to the wallet now\. Its credits for the time left end now, and this period keeps 4,200\./);
+  assert.match(ended.note, /^Nothing comes back to the wallet now\. This period keeps its 4,200 credits\./);
   assert.doesNotMatch(ended.note, /\$0\.00|goes back to the balances|credits already used/);
 });
 
@@ -1216,7 +1261,7 @@ test('apply_agent_skills says what a credit for skills turned off gives back, an
   const used = fakeClient(routes({}, applied({ prepaidWalletDelta: -0.9, usedCreditsUsd: 0.1 }), drop({ creditNowUsd: 0.9, usedCreditsUsd: 0.1 })));
   await withClient(used, async client => {
     const quote = await client.callTool({ name: 'apply_agent_skills', arguments: removal });
-    assert.equal(quote.structuredContent.billing.note, `$0.90 goes back to the balances that paid, and each keeps its own end date. $0.10 came off for credits already used above what the plan keeps. ${ends} The plan then renews at $40.00 a month.`);
+    assert.equal(quote.structuredContent.billing.note, `$0.90 goes back to the balances that paid, and each keeps its own end date. $0.10 comes off for credits already used above what the plan keeps. ${ends} The plan then renews at $40.00 a month.`);
     assert.equal(quote.structuredContent.billing.usedCreditsUsd, 0.1);
     const result = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
     assert.equal(result.structuredContent.billing.note, '$0.90 was credited to your personal wallet. $0.10 came off for credits already used above what the plan keeps.');
@@ -1235,6 +1280,21 @@ test('apply_agent_skills says what a credit for skills turned off gives back, an
     assert.equal(result.structuredContent.billing.usedCreditsUsd, 1);
     assert.equal(result.structuredContent.billing.note, 'Nothing came back: the credits already used were worth more than the time left.');
     assert.doesNotMatch(text(result), /failed|not added|support/i);
+  });
+
+  // Part of the credit went on credits already used and Wiro could not add the rest: its warning
+  // follows, and nothing says the credits used took it all.
+  const notAddedWarning = 'The $0.40 credit for the rest of this period was not added to the wallet. The skill change is saved and the lower monthly price applies from the next renewal. Contact support about the credit.';
+  const notAdded = fakeClient(routes({}, applied({ prepaidWalletDelta: null, usedCreditsUsd: 0.6, prepaidCreditFailedUsd: 0.4, warnings: [notAddedWarning] }), drop({ creditNowUsd: 0, usedCreditsUsd: 0.6 })));
+  await withClient(notAdded, async client => {
+    const quote = await client.callTool({ name: 'apply_agent_skills', arguments: removal });
+    const result = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
+    assert.notEqual(result.isError, true, text(result));
+    assert.equal(result.structuredContent.status, 'applied');
+    assert.equal(result.structuredContent.billing.chargedNowUsd, null);
+    assert.equal(result.structuredContent.billing.usedCreditsUsd, 0.6);
+    assert.equal(result.structuredContent.billing.note, `Nothing came back now. $0.60 came off for credits already used above what the plan keeps. ${notAddedWarning}`);
+    assert.doesNotMatch(text(result), /worth more than the time left/);
   });
 
   // What comes back is worked out only when the change is applied.
@@ -1275,8 +1335,11 @@ test('apply_agent_skills says what a credit for skills turned off gives back, an
   });
   const sentence = `O${billing.slice(1)}`;
   assert.ok(PLAYBOOKS.agents.includes(sentence), 'the agents playbook says the same');
-  assert.ok(PLAYBOOKS.billing.includes(sentence), 'the billing playbook says the same');
-  assert.match(PLAYBOOKS.billing, /\| Agent skill change \| The price difference for the rest of the period, charged, or credited back to the balances that paid less the credits already used \| When applied \|/);
+  assert.ok(PLAYBOOKS.billing.includes(`Skill changes: ${billing}`), 'the billing playbook says the same');
+  const card = 'On a card plan the difference goes on the next invoice if the plan renews by card, and the added credits come for the time left.';
+  assert.ok(PLAYBOOKS.agents.includes(card), 'the agents playbook names the next invoice only for a plan that renews by card');
+  assert.ok(PLAYBOOKS.billing.includes(card), 'the billing playbook says the same');
+  assert.match(PLAYBOOKS.billing, /\| Agent skill change \| The price difference for the rest of the period, charged, or credited back to the balances that paid, less 1 cent for each credit already used above what the plan keeps \| When applied \|/);
   for (const playbook of Object.values(PLAYBOOKS)) {
     assert.doesNotMatch(playbook, /can be spent until|for use until the period ends|coupon's end date|other credit lasts|estimate with a maximum/);
   }
@@ -4730,5 +4793,73 @@ test('set_agent_credentials does not count a list row that holds only a select a
       assert.match(text(result), line);
       assert.equal(result.structuredContent.credential.status.filled, filled);
     });
+  }
+});
+
+test('apply_agent_skills words a change whose credits move against its price', async () => {
+  // A plan priced again at today's rates can keep credits that are not what its price buys today,
+  // so its credits can fall while the price rises, or stay or rise while the price drops.
+  const periodEnd = NOW + 15 * 86400;
+  const wallet = { plan: 'agent', status: 'active', provider: 'prepaid', currentperiodend: periodEnd, daysremaining: 15 };
+  const card = { plan: 'agent', status: 'active', provider: 'stripe', currentperiodend: periodEnd, daysremaining: 15 };
+  const today = { totalPriceUsd: 150, totalMonthlyCredits: 15000 };
+  const answer = (pricing, overrides = {}) => ({
+    result: true,
+    errors: [],
+    pricing: { newPriceUsd: 150, newMonthlyCredits: 15000, creditsFromRenewal: 15000, periodEnd, ...pricing },
+    tier: 'starter',
+    stripeProrationApplied: false,
+    usedCreditsUsd: 0,
+    ...overrides,
+  });
+  const run = async (row, change, applied) => {
+    const fake = fakeClient(skillRoutes({
+      '/UserAgent/Detail': (_body, calls) => detail({
+        ...row,
+        ...(calls.some(call => call.path === '/UserAgent/SkillsApply') ? { skills: INSTAGRAM_SET.map(name => ({ name, enabled: true })) } : {}),
+      }),
+      '/UserAgent/PricingPreview': preview(planChange({ periodEnd, secondsLeft: 15 * 86400, ...change }), today),
+      ...(applied ? { '/UserAgent/SkillsApply': applied } : {}),
+    }));
+    let quote;
+    let result;
+    await withClient(fake, async client => {
+      quote = await quoteInstagram(client);
+      if (applied) result = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
+    });
+    if (result) assert.notEqual(result.isError, true, text(result));
+    return { quote: quote.structuredContent.billing.note, applied: result?.structuredContent.billing.note };
+  };
+
+  // The price rises and the credits fall: no credits come with the charge.
+  const rise = await run({ subscription: wallet, monthlypriceusd: '140.00', monthlycredits: 25000 },
+    { chargeNowUsd: 5, creditsNow: -5000, creditsThisPeriod: 20000, creditsFromRenewal: 15000 },
+    answer({ previousPriceUsd: 140, deltaUsd: 10, previousMonthlyCredits: 25000, deltaCredits: -10000, creditsNow: -5000, creditsThisPeriod: 20000 }, { prepaidWalletDelta: 5 }));
+  assert.equal(rise.quote, '$5.00 is taken from your personal wallet now for the rest of this period (15 days). The credits the change takes away end now for the time left, and this period keeps 20,000. The plan then renews at $150.00 a month.');
+  assert.equal(rise.applied, '$5.00 was taken from your personal wallet for the rest of this period.');
+
+  // The price drops and the credits rise: a change that takes no credits away gives nothing back, and nothing was used.
+  const gain = await run({ subscription: wallet, monthlypriceusd: '190.00', monthlycredits: 10000 },
+    { chargeNowUsd: 0, creditNowUsd: 0, usedCreditsUsd: 20, creditsNow: 2500, creditsThisPeriod: 12500, creditsFromRenewal: 15000 },
+    answer({ previousPriceUsd: 190, deltaUsd: -40, previousMonthlyCredits: 10000, deltaCredits: 5000, creditsNow: 2500, creditsThisPeriod: 12500 }, { prepaidWalletDelta: null, usedCreditsUsd: 20 }));
+  assert.equal(gain.quote, 'Nothing comes back: the change takes no credits away. This period gains 2,500 credits for the time left, 12,500 in all. The plan then renews at $150.00 a month.');
+  assert.equal(gain.applied, 'Nothing came back: the change took no credits away.');
+
+  // The price drops and the credits stay.
+  const same = await run({ subscription: wallet, monthlypriceusd: '190.00', monthlycredits: 15000 },
+    { chargeNowUsd: 0, creditNowUsd: 0, usedCreditsUsd: 20, creditsNow: 0, creditsThisPeriod: 15000, creditsFromRenewal: 15000 },
+    answer({ previousPriceUsd: 190, deltaUsd: -40, previousMonthlyCredits: 15000, deltaCredits: 0, creditsNow: 0, creditsThisPeriod: 15000 }, { prepaidWalletDelta: null, usedCreditsUsd: 20 }));
+  assert.equal(same.quote, 'Nothing comes back: the change takes no credits away. This period keeps its 15,000 credits. The plan then renews at $150.00 a month.');
+  assert.equal(same.applied, 'Nothing came back: the change took no credits away.');
+
+  // A card plan, both ways.
+  const cardRise = await run({ subscription: card, stripecancelatperiodend: false, monthlypriceusd: '140.00', monthlycredits: 25000 },
+    { provider: 'stripe', chargeNowUsd: 0, creditsNow: -5000, creditsThisPeriod: 20000, creditsFromRenewal: 15000 });
+  assert.equal(cardRise.quote, 'Nothing is charged now. The prorated difference appears on the next invoice. The credits the change takes away end now for the time left, and this period keeps 20,000. The plan then renews at $150.00 a month.');
+  const cardGain = await run({ subscription: card, stripecancelatperiodend: false, monthlypriceusd: '190.00', monthlycredits: 10000 },
+    { provider: 'stripe', chargeNowUsd: 0, creditNowUsd: 0, usedCreditsUsd: 0, creditsNow: 2500, creditsThisPeriod: 12500, creditsFromRenewal: 15000 });
+  assert.equal(cardGain.quote, 'The prorated difference comes off the next invoice. This period gains 2,500 credits for the time left, 12,500 in all. The plan then renews at $150.00 a month.');
+  for (const note of [rise.quote, rise.applied, gain.quote, gain.applied, same.quote, same.applied, cardRise.quote, cardGain.quote]) {
+    assert.doesNotMatch(note, /-[\d,]+ credits|credits already used/);
   }
 });

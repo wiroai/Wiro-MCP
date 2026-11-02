@@ -51,7 +51,7 @@ const quoteSchema = z.object({
   recurringUsd: z.number().nullable().optional(),
   monthlyCredits: z.number().nullable().optional(),
   creditsNow: z.number().optional()
-    .describe('upgrade_to_pro: the credits that come now for the rest of the period. monthlyCredits is what every renewal gives.'),
+    .describe('upgrade_to_pro: the credits this period gains now, below 0 when it loses them. monthlyCredits is what every renewal gives.'),
   creditsAdded: z.number().optional(),
   paidFrom: z.enum(['personal_wallet', 'team_wallet', 'card']),
   tier: z.enum(['starter', 'pro']).optional(),
@@ -65,7 +65,7 @@ const resultSchema = z.object({
   monthlyPriceUsd: z.number().optional(),
   monthlyCredits: z.number().optional(),
   creditsNow: z.number().optional()
-    .describe('upgrade_to_pro: the credits that came with it for the rest of the period. monthlyCredits is what every renewal gives.'),
+    .describe('upgrade_to_pro: the credits this period gained with it, below 0 when it lost them. monthlyCredits is what every renewal gives.'),
   creditsAdded: z.number().optional(),
   tier: z.string().optional(),
   previousTier: z.string().optional(),
@@ -162,15 +162,26 @@ function subscribeWait(agent: Pick<AgentDetail, 'guid' | 'status'>): NextAction 
   return subscribeStarts(agent.status) ? waitAction(agent.guid, 'Wait until the agent is running.') : undefined;
 }
 
+/** What an upgrade does to this period's credits. An allowance above Pro's is cut to Pro's for the time left. */
+function upgradeCreditsText(creditsNow: number, renewal: string, done: boolean): string {
+  if (creditsNow > 0) {
+    return `${formatCredits(creditsNow)} credits ${done ? 'came with it' : 'come now'} for the rest of this period${renewal}. `;
+  }
+  if (creditsNow < 0) return `This period ${done ? 'lost' : 'loses'} ${formatCredits(-creditsNow)} credits for the time left${renewal}. `;
+  return `This period ${done ? 'kept' : 'keeps'} the credits it ${done ? 'had' : 'has'}${renewal}. `;
+}
+
 /** What a change to the plan does to the agent: a running one keeps running, and one that was stopping starts again. */
-function planChangeAgentNote(status: number | null, what: string): string {
+function planChangeAgentNote(status: number | null, what: string, quote = false): string {
   switch (status) {
     case 4:
       return `The agent keeps running: ${what} does not restart it.`;
     case 3:
       return `The agent is starting, and ${what} does not restart it.`;
     case 1:
-      return 'The agent was stopping, and it starts again.';
+      return quote
+        ? 'The agent is stopping; if it is still stopping when the payment goes through, it starts again.'
+        : 'The agent was stopping, and it starts again.';
     case 2:
       return 'The agent is queued to start.';
     case 6:
@@ -520,7 +531,7 @@ async function planFor(
           + `${exact > 0 && underOneDayLeft(change?.secondsLeft ?? null) ? ', at the one-day minimum' : days ? ` (${days})` : ''}. `
         : `Upgrade to Pro: the difference for the rest of this period is taken from ${wallet} now. Wiro works it out from the time left when the upgrade is applied, and it is never more than ${formatUsd(fullDifference)}, so that is the amount to approve. `;
       const credits = creditsNow !== null
-        ? `${formatCredits(creditsNow)} credits come now for the rest of this period${cancelled ? '' : `, and every renewal gives ${formatCredits(renewalCredits)}`}. `
+        ? upgradeCreditsText(creditsNow, cancelled ? '' : `, and every renewal gives ${formatCredits(renewalCredits)}`, false)
         : `The added credits come for the time left in this period${cancelled ? '' : `, and every renewal gives ${formatCredits(renewalCredits)}`}. `;
       return {
         outcome: 'quote',
@@ -536,7 +547,7 @@ async function planFor(
         },
         message: money + credits
           + (cancelled ? `${ending} ` : `From the next renewal the plan costs ${formatUsd(pro.priceUsd)} every 30 days. `)
-          + `${planChangeAgentNote(agent.status, 'the upgrade')} To go back to Starter later, cancel, let the plan end, then subscribe to Starter.`,
+          + `${planChangeAgentNote(agent.status, 'the upgrade', true)} To go back to Starter later, cancel, let the plan end, then subscribe to Starter.`,
         perform: async signal => {
           const body = requireApiSuccess(
             await client.post<BillingEnvelope>('/UserAgent/UpgradeTier', { guid, targetTier: 'pro' }, signal),
@@ -555,7 +566,7 @@ async function planFor(
             outcome: 'done',
             message: `Upgraded to Pro and charged ${formatUsd(charged ?? 0)} from ${wallet}. `
               + (came !== null
-                ? `${formatCredits(came)} credits came with it for the rest of this period${cancelled ? '' : `, and every renewal gives ${formatCredits(fromRenewal)}`}. `
+                ? upgradeCreditsText(came, cancelled ? '' : `, and every renewal gives ${formatCredits(fromRenewal)}`, true)
                 : '')
               + (cancelled
                 ? `The plan is still cancelled and ends about a day after ${periodEnd}; action renew undoes the cancellation. `
@@ -607,7 +618,7 @@ async function planFor(
       return {
         outcome: 'quote',
         quote: { chargeNowUsd: chosen.priceUsd, estimated: false, creditsAdded: chosen.credits, paidFrom, pack: chosen.pack },
-        message: `Buy the ${chosen.pack} pack: ${formatUsd(chosen.priceUsd)} now from ${wallet} for ${formatCredits(chosen.credits)} extra credits, added at once. Extra credits are used after the monthly credits, do not reset each month and end 6 months (180 days) after purchase. ${planChangeAgentNote(agent.status, 'a credit pack')} This is a one-time charge.`,
+        message: `Buy the ${chosen.pack} pack: ${formatUsd(chosen.priceUsd)} now from ${wallet} for ${formatCredits(chosen.credits)} extra credits, added at once. Extra credits are used after the monthly credits, do not reset each month and end 6 months (180 days) after purchase. ${planChangeAgentNote(agent.status, 'a credit pack', true)} This is a one-time charge.`,
         perform: async signal => {
           const body = requireApiSuccess(
             await client.post<BillingEnvelope>('/UserAgent/CreateExtraCreditCheckout', {

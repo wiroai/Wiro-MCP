@@ -127,6 +127,7 @@ type SkillsApplyBody = ApiEnvelope & {
   prepaidWalletDelta?: unknown;
   prepaidCreditParts?: unknown;
   usedCreditsUsd?: unknown;
+  prepaidCreditFailedUsd?: unknown;
   restartTriggered?: unknown;
   warnings?: unknown;
 };
@@ -175,8 +176,18 @@ function periodFields(change: PlanChange | null) {
   };
 }
 
-/** What a price drop does to this period's credits: those of the time left end, and the period keeps the rest. */
-function creditsEndNote(skillsOff: number, creditsThisPeriod: number | null): string {
+/**
+ * What a change does to this period's credits when none come with it: those it takes away end for the
+ * time left, and the period keeps the rest. A plan priced again at today's rates can also keep its
+ * credits, or gain some, while its price drops.
+ */
+function creditsEndNote(skillsOff: number, creditsNow: number | null, creditsThisPeriod: number | null): string {
+  if (creditsNow !== null && creditsNow > 0) {
+    return `This period gains ${formatCredits(creditsNow)} credits for the time left${creditsThisPeriod !== null ? `, ${formatCredits(creditsThisPeriod)} in all` : ''}.`;
+  }
+  if (creditsNow === 0) {
+    return creditsThisPeriod !== null ? `This period keeps its ${formatCredits(creditsThisPeriod)} credits.` : 'This period keeps its credits.';
+  }
   const keeps = creditsThisPeriod !== null ? `, and this period keeps ${formatCredits(creditsThisPeriod)}` : '';
   if (skillsOff === 0) return `The credits the change takes away end now for the time left${keeps}.`;
   return `${skillsOff === 1 ? 'Its' : 'Their'} credits for the time left end now${keeps}.`;
@@ -231,6 +242,11 @@ function renewalWhen(billing: PlanBilling): string {
   return billing.cancelAtPeriodEnd === null ? 'from the next renewal, if the plan renews' : 'from the next renewal';
 }
 
+/** What renewals give after an applied change: a plan that may not renew names it as a condition, as its quote did. */
+function renewalGives(billing: PlanBilling, credits: number): string {
+  return billing.cancelAtPeriodEnd === false ? `every renewal gives ${formatCredits(credits)}` : `${formatCredits(credits)} ${renewalWhen(billing)}`;
+}
+
 /** For a cancelled plan, a skill change only covers the time left: nothing renews at the new price. */
 function cancelledNote(billing: PlanBilling): string {
   const end = billing.periodEnd !== null ? unixToIso(billing.periodEnd) : undefined;
@@ -262,12 +278,16 @@ function renewsBack(billing: PlanBilling): boolean {
 /** What a price drop on a wallet plan gives back now, from Wiro's own plan change. */
 function walletCreditNote(change: PlanChange): string {
   const used = change.usedCreditsUsd ?? 0;
+  // A credit is at most 1 cent for each credit the change takes away unused, so one that takes none away gives nothing back.
+  if (change.creditNowUsd === 0 && used > 0 && change.creditsNow !== null && change.creditsNow >= 0) {
+    return 'Nothing comes back: the change takes no credits away.';
+  }
   if (change.creditNowUsd === null) {
     return 'What comes back is worked out when the change is applied: what the time left is worth, less 1 cent for each credit already used above what the plan keeps.';
   }
   if (change.creditNowUsd > 0) {
     return `${formatUsd(change.creditNowUsd)} goes back to the balances that paid, and each keeps its own end date.`
-      + (used > 0 ? ` ${formatUsd(used)} came off for credits already used above what the plan keeps.` : '');
+      + (used > 0 ? ` ${formatUsd(used)} comes off for credits already used above what the plan keeps.` : '');
   }
   return used > 0
     ? 'Nothing comes back: the credits already used are worth more than the time left.'
@@ -308,15 +328,19 @@ function quoteBillingNote(billing: PlanBilling, delta: number | null, change: Pl
           ? `${CARD_UNKNOWN_QUOTE}${after}`
           : `Any prorated difference appears on the next invoice.${after}`;
   }
-  const ends = creditsEndNote(skillsOff, change.creditsThisPeriod);
+  const ends = creditsEndNote(skillsOff, change.creditsNow, change.creditsThisPeriod);
+  // Credits come with a rise when this period gains them. A plan priced again at today's rates can also
+  // lose credits, or keep them, while its price rises.
+  const gained = change.creditsNow !== null && change.creditsNow > 0 ? change.creditsNow : null;
+  const notGained = change.creditsNow !== null && change.creditsNow <= 0 ? ` ${ends}` : '';
   if (!change.wallet) {
     if (delta > 0) {
-      const added = change.creditsNow !== null ? `${formatCredits(change.creditsNow)} credits come now for the rest of this period.` : '';
-      if (cardEndsWithPeriod(billing)) return `${CARD_ENDS_QUOTE}${added ? ` ${added}` : ''}${after}`;
-      if (billing.cancelAtPeriodEnd === null) return `${CARD_UNKNOWN_QUOTE}${added ? ` ${added}` : ''}${after}`;
-      return change.creditsNow !== null
-        ? `Nothing is charged now. The prorated difference appears on the next invoice, and ${formatCredits(change.creditsNow)} credits come now for the rest of this period.${after}`
-        : `Nothing is charged now. The prorated difference appears on the next invoice.${after}`;
+      const added = gained !== null ? ` ${formatCredits(gained)} credits come now for the rest of this period.` : notGained;
+      if (cardEndsWithPeriod(billing)) return `${CARD_ENDS_QUOTE}${added}${after}`;
+      if (billing.cancelAtPeriodEnd === null) return `${CARD_UNKNOWN_QUOTE}${added}${after}`;
+      return gained !== null
+        ? `Nothing is charged now. The prorated difference appears on the next invoice, and ${formatCredits(gained)} credits come now for the rest of this period.${after}`
+        : `Nothing is charged now. The prorated difference appears on the next invoice.${notGained}${after}`;
     }
     if (cardEndsWithPeriod(billing)) return `${CARD_ENDS_QUOTE} ${ends}${after}`;
     if (billing.cancelAtPeriodEnd === null) return `${CARD_UNKNOWN_QUOTE} ${ends}${after}`;
@@ -324,11 +348,11 @@ function quoteBillingNote(billing: PlanBilling, delta: number | null, change: Pl
   }
   if (delta > 0) {
     const charge = formatUsd(change.chargeNowUsd ?? 0);
-    const credits = change.creditsNow !== null ? `, and ${formatCredits(change.creditsNow)} credits come with it` : '';
+    const credits = gained !== null ? `, and ${formatCredits(gained)} credits come with it` : '';
     const days = daysLeftText(change.secondsLeft);
     return underOneDayLeft(change.secondsLeft)
-      ? `${charge} is taken from ${walletName(billing)} now at the one-day minimum${credits}.${after}`
-      : `${charge} is taken from ${walletName(billing)} now for the rest of this period${days ? ` (${days})` : ''}${credits}.${after}`;
+      ? `${charge} is taken from ${walletName(billing)} now at the one-day minimum${credits}.${notGained}${after}`
+      : `${charge} is taken from ${walletName(billing)} now for the rest of this period${days ? ` (${days})` : ''}${credits}.${notGained}${after}`;
   }
   return `${walletCreditNote(change)} ${ends}${after}`;
 }
@@ -347,9 +371,17 @@ function chargeNote(billing: PlanBilling, body: SkillsApplyBody): { note: string
     const usedNote = used > 0 ? ` ${formatUsd(used)} came off for credits already used above what the plan keeps.` : '';
     return { charged, note: `${formatUsd(Math.abs(charged))} was credited to ${walletName(billing)}.${terms ? ` ${terms}` : ''}${usedNote}${cancelled}` };
   }
+  // A change that took no credits away had nothing to credit, and nothing failed.
+  if (billing.plan === 'prepaid' && used > 0 && creditsNow !== null && creditsNow >= 0) {
+    return { charged: null, note: `Nothing came back: the change took no credits away.${cancelled}` };
+  }
   // The credits already used came to more than the time left was worth: no credit, and nothing failed.
+  // A part Wiro could not add (prepaidCreditFailedUsd) was due all the same: its warning follows, and the
+  // credits used took only what Wiro names.
   if (billing.plan === 'prepaid' && used > 0) {
-    return { charged: null, note: `Nothing came back: the credits already used were worth more than the time left.${cancelled}` };
+    return (toNumber(body.prepaidCreditFailedUsd) ?? 0) > 0
+      ? { charged: null, note: `Nothing came back now. ${formatUsd(used)} came off for credits already used above what the plan keeps.${cancelled}` }
+      : { charged: null, note: `Nothing came back: the credits already used were worth more than the time left.${cancelled}` };
   }
   if (body.stripeProrationApplied === true) {
     const moved = isPlainObject(body.pricing) ? toNumber(body.pricing.deltaUsd) : null;
@@ -825,7 +857,8 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
         // result of the earlier call with this key, not a new charge.
         const replayed = sentEmpty && !applied.noOp;
         const serverPricing = applied.pricing ?? {};
-        const appliedChange = readPlanChange({
+        // An agent with no plan has no period and no renewal yet, as its quote says.
+        const appliedChange = billing.plan === 'none' ? null : readPlanChange({
           creditsNow: serverPricing.creditsNow,
           creditsThisPeriod: serverPricing.creditsThisPeriod,
           creditsFromRenewal: serverPricing.creditsFromRenewal,
@@ -882,7 +915,7 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
             ? `**Monthly price:** ${formatUsd(pricing.newMonthlyUsd)}${pricing.currentMonthlyUsd !== null ? ` (was ${formatUsd(pricing.currentMonthlyUsd)})` : ''}`
             : null,
           pricing && appliedChange?.creditsNow !== null && appliedChange?.creditsNow !== undefined && appliedChange.creditsThisPeriod !== null
-            ? `**This period:** ${signedCredits(appliedChange.creditsNow)} credits, ${formatCredits(appliedChange.creditsThisPeriod)} in all until ${unixToIso(appliedChange.periodEnd) ?? 'the period ends'}${appliedChange.creditsFromRenewal !== null ? `; every renewal gives ${formatCredits(appliedChange.creditsFromRenewal)}` : ''}`
+            ? `**This period:** ${signedCredits(appliedChange.creditsNow)} credits, ${formatCredits(appliedChange.creditsThisPeriod)} in all until ${unixToIso(appliedChange.periodEnd) ?? 'the period ends'}${appliedChange.creditsFromRenewal !== null ? `; ${renewalGives(billing, appliedChange.creditsFromRenewal)}` : ''}`
             : null,
           `**Billing:** ${billingNote}`,
           `**Restart:** ${restart}`,

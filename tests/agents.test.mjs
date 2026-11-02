@@ -2183,13 +2183,13 @@ test('manage_agent_billing says what an upgrade does to the agent at each status
   const cases = [
     [4, /The agent keeps running: the upgrade does not restart it\./, false],
     [3, /The agent is starting, and the upgrade does not restart it\./, true],
-    [1, /The agent was stopping, and it starts again\./, true],
+    [1, /The agent was stopping, and it starts again\./, true, /The agent is stopping; if it is still stopping when the payment goes through, it starts again\./],
     [2, /The agent is queued to start\./, true],
     [0, /The agent is stopped; the credits are there when it starts\./, false],
     [5, /The agent stopped with an error; the credits are there when it starts\./, false],
     [6, /The agent still needs setup; the credits are there once it starts\./, false],
   ];
-  for (const [status, note, waits] of cases) {
+  for (const [status, note, waits, quoteNote = note] of cases) {
     const upgrade = fakeClient({
       '/UserAgent/Detail': detailResponse(agentRow({ status })),
       '/UserAgent/PricingPreview': proPreview(),
@@ -2197,7 +2197,7 @@ test('manage_agent_billing says what an upgrade does to the agent at each status
     });
     await withClient(upgrade, async client => {
       const quote = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'upgrade_to_pro' });
-      assert.match(quote.structuredContent.message, note);
+      assert.match(quote.structuredContent.message, quoteNote);
       assert.doesNotMatch(quote.structuredContent.message, /restarts to load|agent restarts/);
       const done = await call(client, 'manage_agent_billing', quote.structuredContent.nextAction.arguments);
       assert.equal(done.structuredContent.outcome, 'done');
@@ -2214,13 +2214,13 @@ test('manage_agent_billing says what a pack does to the agent at each status: it
   const cases = [
     [4, () => /The agent keeps running: a credit pack does not restart it\./, false],
     [3, () => /The agent is starting, and a credit pack does not restart it\./, true],
-    [1, () => /The agent was stopping, and it starts again\./, true],
+    [1, () => /The agent was stopping, and it starts again\./, true, () => /The agent is stopping; if it is still stopping when the payment goes through, it starts again\./],
     [2, () => /The agent is queued to start\./, true],
     [0, () => /The agent is stopped; the credits are there when it starts\./, false],
     [5, () => /The agent stopped with an error; the credits are there when it starts\./, false],
     [6, () => /The agent still needs setup; the credits are there once it starts\./, false],
   ];
-  for (const [status, note, waits] of cases) {
+  for (const [status, note, waits, quoteNote = note] of cases) {
 
     let bought = false;
     const pack = fakeClient({
@@ -2232,7 +2232,7 @@ test('manage_agent_billing says what a pack does to the agent at each status: it
     });
     await withClient(pack, async client => {
       const quote = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'buy_credits', pack: 'small' });
-      assert.match(quote.structuredContent.message, note('credit pack'));
+      assert.match(quote.structuredContent.message, quoteNote('credit pack'));
       const done = await call(client, 'manage_agent_billing', quote.structuredContent.nextAction.arguments);
       assert.equal(done.structuredContent.outcome, 'done');
       assert.match(done.structuredContent.message, note('credit pack'));
@@ -4535,4 +4535,23 @@ test('manage_agent_billing subscribe keeps a running agent up and queues a stopp
       assert.equal(done.structuredContent.nextAction?.reason, waits ? 'Wait until the agent is running.' : undefined, `status ${status}`);
     });
   }
+});
+
+test('manage_agent_billing says an upgrade that leaves this period fewer credits loses them', async () => {
+  // A Starter allowance above Pro's: the upgrade brings this period's credits down to Pro's for the time left.
+  const fake = fakeClient({
+    '/UserAgent/Detail': detailResponse(agentRow({ monthlycredits: 30000 })),
+    '/UserAgent/PricingPreview': proPreview({ creditsNow: -9000, creditsThisPeriod: 21000 }),
+    '/UserAgent/UpgradeTier': { ...UPGRADED, creditsNow: -9000, creditsThisPeriod: 21000 },
+  });
+  await withClient(fake, async client => {
+    const upgrade = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'upgrade_to_pro' });
+    assert.equal(upgrade.structuredContent.quote.creditsNow, -9000);
+    assert.match(upgrade.structuredContent.message, /^Upgrade to Pro: \$54\.00 now from the personal wallet for the rest of this period \(15 days\)\. This period loses 9,000 credits for the time left, and every renewal gives 12,000\. From the next renewal/);
+    const done = await call(client, 'manage_agent_billing', upgrade.structuredContent.nextAction.arguments);
+    assert.equal(done.structuredContent.outcome, 'done');
+    assert.equal(done.structuredContent.result.creditsNow, -9000);
+    assert.match(done.structuredContent.message, /^Upgraded to Pro and charged \$54\.00 from the personal wallet\. This period lost 9,000 credits for the time left, and every renewal gives 12,000\. The plan now costs/);
+    assert.doesNotMatch(`${upgrade.structuredContent.message} ${done.structuredContent.message}`, /-[\d,]+ credits/);
+  });
 });
