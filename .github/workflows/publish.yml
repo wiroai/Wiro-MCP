@@ -1,4 +1,4 @@
-name: Publish to npm
+name: Publish to npm and the MCP Registry
 
 on:
   release:
@@ -12,6 +12,10 @@ jobs:
       contents: read
       id-token: write
 
+    env:
+      # Pinned on purpose, and its Sigstore bundle is checked below. Upgrade it deliberately.
+      MCP_PUBLISHER_VERSION: v1.8.6
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -21,6 +25,25 @@ jobs:
         with:
           node-version: '22'
           registry-url: 'https://registry.npmjs.org'
+
+      # npm and the MCP Registry must get the same version: the release tag, package.json,
+      # and both versions in server.json.
+      - name: Check the versions match the release
+        run: |
+          node -e '
+            const tag = process.env.GITHUB_REF_NAME.replace(/^v/, "");
+            const server = require("./server.json");
+            const versions = {
+              "release tag": tag,
+              "package.json": require("./package.json").version,
+              "server.json": server.version,
+            };
+            for (const pkg of server.packages || []) versions[`server.json ${pkg.identifier}`] = pkg.version;
+            if (new Set(Object.values(versions)).size !== 1) {
+              console.error(`::error::The versions differ: ${JSON.stringify(versions)}`);
+              process.exit(1);
+            }
+          '
 
       - name: Install latest npm
         run: npm install -g npm@latest
@@ -39,3 +62,35 @@ jobs:
 
       - name: Publish with provenance
         run: npm publish --provenance --access public
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Download and verify mcp-publisher
+        run: |
+          set -euo pipefail
+          archive="mcp-publisher_linux_amd64.tar.gz"
+          base_url="https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_VERSION}"
+          curl --fail --location --silent --show-error --output "$archive" "$base_url/$archive"
+          curl --fail --location --silent --show-error --output "$archive.sigstore.json" "$base_url/$archive.sigstore.json"
+          cosign verify-blob \
+            --bundle "$archive.sigstore.json" \
+            --certificate-identity "https://github.com/modelcontextprotocol/registry/.github/workflows/release.yml@refs/tags/${MCP_PUBLISHER_VERSION}" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            "$archive"
+          tar xzf "$archive" mcp-publisher
+          rm -f "$archive" "$archive.sigstore.json"
+
+      # ai.wiro/mcp is a DNS namespace: the registry checks the Ed25519 key against the
+      # TXT record on wiro.ai. The secret holds that key's private part, in hex.
+      - name: Publish to the MCP Registry
+        env:
+          MCP_REGISTRY_PRIVATE_KEY: ${{ secrets.MCP_REGISTRY_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "$MCP_REGISTRY_PRIVATE_KEY" ]; then
+            echo "::error::The MCP_REGISTRY_PRIVATE_KEY secret is not set, so npm has this version and the MCP Registry does not."
+            exit 1
+          fi
+          ./mcp-publisher login dns --domain wiro.ai --private-key "$MCP_REGISTRY_PRIVATE_KEY"
+          ./mcp-publisher publish
