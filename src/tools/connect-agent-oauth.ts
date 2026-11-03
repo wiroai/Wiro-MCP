@@ -42,6 +42,7 @@ import {
   unusedCredentialNote,
   writeOnlyModesNote,
   type AccountRef,
+  type CustomSkillEntry,
   type ConnectionState,
   type CredentialMeta,
   type DiscoveredGroup,
@@ -57,7 +58,7 @@ import {
   reportProgress,
 } from '../utils/poll.js';
 import { jsonSpan, quotedSpan } from '../utils/quoted-text.js';
-import { readStatusAdvice, skillOffTasksNote, startNeedsPlan, toAgentDetail, waitingTaskSentence, WIRO_PROJECT_CREDENTIAL } from '../utils/user-agent.js';
+import { readStatusAdvice, skillOffTasksNote, startNeedsPlan, taskLabel, taskNamedByWiro, toAgentDetail, waitingTaskSentence, WIRO_PROJECT_CREDENTIAL } from '../utils/user-agent.js';
 import { nextActionSchema, strictInput } from './schemas.js';
 
 const accountSchema = z.object({ id: z.string(), name: z.string() });
@@ -223,19 +224,18 @@ function unusedCredentialRefusal(
 }
 
 /**
- * What a finished sign-in also turns on: Wiro keeps an entry that requires a
- * credential off until the credential arrives. Saving keys or a token turns
- * these on earlier and says so, so an entry that reads as on is left out. A
- * skill's task that would still wait for skills once this credential is
- * connected turns on and stays paused, and one already on stays paused: each is
- * named with those skills by their titles.
+ * What a finished sign-in does to the entries that need the service (entriesTurnedOnBy): the ones it turns on,
+ * the ones it turns on that stay paused for skills that are off, the tasks already on that start running, and
+ * those that still wait for skills. Each task is named as people see it, and each skill by its title.
  */
-function turnsOnNote({ on, paused, waiting }: ReturnType<typeof entriesTurnedOnBy>, { meta }: Context, titles: ReadonlyMap<string, string>): string {
-  if (on.length === 0 && paused.length === 0 && waiting.length === 0) return '';
-  const sentence = (on.length > 0 ? ` ${on.map(entry => quotedSpan(entry.key)).join(', ')} ${on.length > 1 ? 'turn' : 'turns'} on once ${meta.title} is connected.` : '')
+function turnsOnNote({ on, paused, starts, waiting }: ReturnType<typeof entriesTurnedOnBy>, { meta }: Context, titles: ReadonlyMap<string, string>): string {
+  if (on.length === 0 && paused.length === 0 && starts.length === 0 && waiting.length === 0) return '';
+  const names = (entries: CustomSkillEntry[]) => entries.map(entry => taskLabel(entry.key, taskNamedByWiro(entry))).join(', ');
+  const sentence = (on.length > 0 ? ` ${names(on)} ${on.length > 1 ? 'turn' : 'turns'} on once ${meta.title} is connected.` : '')
     + paused.map(task => waitingTaskSentence(task.key, task.groups, titles, 'turns on but stays paused')).join('')
+    + (starts.length > 0 ? ` ${names(starts)} ${starts.length > 1 ? 'start' : 'starts'} running once ${meta.title} is connected.` : '')
     + waiting.map(task => waitingTaskSentence(task.key, task.groups, titles, 'stays paused')).join('');
-  return on.some(entry => entry.kind === 'scheduled_task') || paused.length > 0
+  return [...on, ...starts].some(entry => entry.kind === 'scheduled_task') || paused.length > 0
     ? `${sentence} Every run of a scheduled task uses credits; turn off any you do not want with manage_agent_custom_skill.`
     : sentence;
 }

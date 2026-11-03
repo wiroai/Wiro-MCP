@@ -792,10 +792,76 @@ export function nameList(names: readonly string[], word: 'and' | 'or'): string {
   return names.length > 1 ? `${names.slice(0, -1).join(', ')} ${word} ${names[names.length - 1]}` : names.join('');
 }
 
-/** Words from a skill or credential key, for when its title cannot be read: int-brevo-email reads Brevo Email. */
-export function wordsFromKey(key: string): string {
-  return key.replace(/^(int|util)-/, '').split('-').filter(Boolean)
-    .map(word => `${word.charAt(0).toUpperCase()}${word.slice(1)}`).join(' ');
+// The words of skill, task and credential keys that a capital first letter gets wrong, written as the
+// catalog titles write them, and the acronyms written in capitals. The dashboard makes the names it builds
+// from keys with the same list. Only whole words match: roasit stays Roasit.
+const KEY_WORDS: Readonly<Record<string, string>> = {
+  api: 'API',
+  cpc: 'CPC',
+  cpm: 'CPM',
+  crm: 'CRM',
+  csv: 'CSV',
+  ctr: 'CTR',
+  ga4: 'GA4',
+  kpi: 'KPI',
+  pdf: 'PDF',
+  roas: 'ROAS',
+  roi: 'ROI',
+  rss: 'RSS',
+  seo: 'SEO',
+  sms: 'SMS',
+  ugc: 'UGC',
+  url: 'URL',
+  aimodels: 'AI Models',
+  appstore: 'App Store',
+  facebookpage: 'Facebook Page',
+  googleads: 'Google Ads',
+  googleplay: 'Google Play',
+  hubspot: 'HubSpot',
+  linkedin: 'LinkedIn',
+  metaads: 'Meta Ads',
+  sendgrid: 'SendGrid',
+  tiktok: 'TikTok',
+  tiktokads: 'TikTok Ads',
+  twitterx: 'Twitter / X',
+  whatsapp: 'WhatsApp',
+  woocommerce: 'WooCommerce',
+  wordpress: 'WordPress',
+  youtube: 'YouTube',
+  ad: 'Ad',
+};
+
+// English words of two letters that keep a capital first letter only; any other word of one or two
+// letters is an abbreviation and is written in capitals.
+const TITLE_CASE_2L = new Set(['my', 'us', 'we', 'me', 'he', 'an', 'at', 'in', 'on', 'of', 'to', 'by', 'do', 'go', 'if', 'is', 'it', 'no', 'or', 'so', 'up', 'am', 'as', 'be', 'oh', 'ok']);
+
+/**
+ * A name made from a key, as the dashboard makes it, for when there is no title: int-brevo-email reads
+ * Brevo Email and ga4-attribution-auditor GA4 Attribution Auditor. known: false leaves the list of brands
+ * and acronyms out, for a name the customer typed.
+ */
+export function wordsFromKey(key: string, { known = true }: { known?: boolean } = {}): string {
+  return key.replace(/^(int|util)-/, '').replace(/-/g, ' ').replace(/\b\w+\b/g, word => {
+    const lower = word.toLowerCase();
+    if (known && Object.prototype.hasOwnProperty.call(KEY_WORDS, lower)) return KEY_WORDS[lower];
+    if (word.length <= 2 && !TITLE_CASE_2L.has(lower)) return word.toUpperCase();
+    return `${word.charAt(0).toUpperCase()}${word.slice(1)}`;
+  });
+}
+
+/**
+ * A custom skill or scheduled task as people see it, by the name the dashboard makes from its key, with the
+ * key the tools take: GA4 Attribution Auditor (`cs-cron-ga4-attribution-auditor`). known is false for a task
+ * the customer named. A key that is not plain words shows alone.
+ */
+export function taskLabel(key: string, known = true): string {
+  const words = key.replace(/^cs-(cron-)?/, '');
+  return /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(words) ? `${wordsFromKey(words, { known })} (${quotedSpan(key)})` : quotedSpan(key);
+}
+
+/** Whether a task's name comes from Wiro's words: one the customer created and named reads as typed. */
+export function taskNamedByWiro(task: { source?: string; userCreated?: boolean; ownerSkills?: string[] }): boolean {
+  return !(task.source === 'user' || task.source === 'user-created' || task.userCreated === true) || (task.ownerSkills?.length ?? 0) > 0;
 }
 
 /**
@@ -837,7 +903,7 @@ export function waitingTaskSentence(
   verb = 'stays paused',
 ): string {
   const waited = waitedSkills(groups, titles);
-  return ` ${quotedSpan(key)} ${verb} until ${waited.text} ${waited.several ? 'are' : 'is'} on.`;
+  return ` ${taskLabel(key)} ${verb} until ${waited.text} ${waited.several ? 'are' : 'is'} on.`;
 }
 
 /**
@@ -854,16 +920,16 @@ export function skillOffTasksNote(
 }
 
 /**
- * A scheduled task as a list line: key, on or off, schedule and description, then shortenedNote if its text
+ * A scheduled task as a list line: name and key, on or off, schedule and description, then shortenedNote if its text
  * was cut. titles names the skills a paused task waits for as people see them.
  */
 export function formatScheduledTaskLine(task: AgentTask, shortenedNote = '', titles?: ReadonlyMap<string, string>): string {
-  return `- \`${task.key}\` ${task.enabled ? 'on' : 'off'}${task.notWritten ? ' (its text is not written yet, so it does not run)' : ''}${task.skillOff ? ` (${skillOffText(task, titles)})` : ''}${task.interval ? `, ${task.interval}` : ''}${task.description ? `: ${quotedSpan(task.description)}` : ''}${task.instructionsTruncated ? shortenedNote : ''}`;
+  return `- ${taskLabel(task.key, taskNamedByWiro(task))} ${task.enabled ? 'on' : 'off'}${task.notWritten ? ' (its text is not written yet, so it does not run)' : ''}${task.skillOff ? ` (${skillOffText(task, titles)})` : ''}${task.interval ? `, ${task.interval}` : ''}${task.description ? `: ${quotedSpan(task.description)}` : ''}${task.instructionsTruncated ? shortenedNote : ''}`;
 }
 
-/** A custom instruction as a list line: key, on or off and description, then shortenedNote if its text was cut. */
+/** A custom instruction as a list line: name and key, on or off and description, then shortenedNote if its text was cut. */
 export function formatCustomInstructionLine(task: AgentTask, shortenedNote = ''): string {
-  return `- \`${task.key}\` ${task.enabled ? 'on' : 'off'}${task.description ? `: ${quotedSpan(task.description)}` : ''}${task.instructionsTruncated ? shortenedNote : ''}`;
+  return `- ${taskLabel(task.key, taskNamedByWiro(task))} ${task.enabled ? 'on' : 'off'}${task.description ? `: ${quotedSpan(task.description)}` : ''}${task.instructionsTruncated ? shortenedNote : ''}`;
 }
 
 function formatRate(credits: number): string {

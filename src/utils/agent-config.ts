@@ -440,15 +440,7 @@ export function credentialsNeededFor(
   registry: SkillRegistry,
   row?: Row,
 ): Array<{ skill: string; credentials: string[] }> {
-  const groups = row && isPlainObject(row.credentials) ? row.credentials : {};
-  // An OAuth credential is ready only once connected: a saved shop domain or
-  // own-app key alone does not let the agent sign in.
-  const ready = (key: string): boolean => {
-    const group = groups[key];
-    if (!isPlainObject(group)) return false;
-    const oauth = isPlainObject(group._schema) && isPlainObject(group._schema.oauth_provider);
-    return group._connected === true || (!oauth && group._filled === true);
-  };
+  const ready = (key: string): boolean => (row ? credentialReady(row, key) : false);
   return skills
     .map(skill => ({
       skill,
@@ -498,7 +490,7 @@ export function unusedCredential(row: Row, credential: string, registry: SkillRe
     services: [...used].flatMap(key => {
       const schema = credentialGroup(row, key)?._schema;
       return isPlainObject(schema) && isPlainObject(schema.oauth_provider)
-        ? [`${asString(schema.title) ?? key} (${key})`]
+        ? [`${asString(schema.title) ?? wordsFromKey(key)} (\`${key}\`)`]
         : [];
     }),
     skills: [...registry.skills.values()]
@@ -1633,6 +1625,17 @@ export function credentialGroup(row: Row, key: string): Row | null {
   return isPlainObject(group) ? group : null;
 }
 
+/**
+ * Whether the agent can use a credential now. An OAuth credential is ready only once connected: a saved shop
+ * domain or own-app key alone does not let the agent sign in.
+ */
+export function credentialReady(row: Row, key: string): boolean {
+  const group = credentialGroup(row, key);
+  if (!group) return false;
+  const oauth = isPlainObject(group._schema) && isPlainObject(group._schema.oauth_provider);
+  return group._connected === true || (!oauth && group._filled === true);
+}
+
 export interface CredentialStatus {
   key: string;
   title: string;
@@ -2368,34 +2371,50 @@ export function customSkillEntries(row: Row): CustomSkillEntry[] {
 }
 
 /**
- * What connecting a credential does to the entries that need it. For a skill's scheduled task Wiro says what
- * it would still wait for once that credential is connected: one that is off turns on, and stays paused while
- * those skills are off (paused); one that is on already stays paused while they are (waiting). Any other
- * entry that is off and requires the credential turns on.
+ * What connecting a credential does to the entries that need it. Saving it turns on an entry that is off only
+ * when the entry's own list names it. For a skill's scheduled task Wiro says what it would still wait for once
+ * that credential is connected: such a task turns on and runs (on), or turns on and stays paused while those
+ * skills are off (paused). A scheduled task that is on already starts running when only this connection held
+ * it back (starts), or stays paused while those skills are off (waiting).
  */
 export function entriesTurnedOnBy(row: Row, credential: string): {
   on: CustomSkillEntry[];
   paused: Array<{ key: string; groups: string[][] }>;
+  starts: CustomSkillEntry[];
   waiting: Array<{ key: string; groups: string[][] }>;
 } {
   const on: CustomSkillEntry[] = [];
   const paused: Array<{ key: string; groups: string[][] }> = [];
+  const starts: CustomSkillEntry[] = [];
   const waiting: Array<{ key: string; groups: string[][] }> = [];
   for (const entry of customSkillEntries(row)) {
     const groups = entry.ifConnected?.[credential];
     if (entry.enabled) {
       if (groups && groups.length > 0) waiting.push({ key: entry.key, groups });
+      else if (startsOnConnect(row, entry, credential)) starts.push(entry);
       continue;
     }
-    if (entry.ifConnected) {
-      if (groups === undefined) continue;
-      if (groups.length === 0) on.push(entry);
-      else paused.push({ key: entry.key, groups });
-    } else if (entry.requiresCredentials.includes(credential)) {
-      on.push(entry);
-    }
+    if (!entry.requiresCredentials.includes(credential)) continue;
+    if (!entry.ifConnected || (groups !== undefined && groups.length === 0)) on.push(entry);
+    else if (groups !== undefined) paused.push({ key: entry.key, groups });
   }
-  return { on, paused, waiting };
+  return { on, paused, starts, waiting };
+}
+
+/**
+ * Whether a scheduled task that is on runs once this credential is connected, and not before. A skill's task
+ * runs then when Wiro says it needs nothing more ([]), and does not run now while it is paused for skills or
+ * none of the connections it can use is ready. A task with no skill gate runs while any credential its list
+ * names is ready. The starter task does not run until its text is written.
+ */
+function startsOnConnect(row: Row, entry: CustomSkillEntry, credential: string): boolean {
+  if (entry.kind !== 'scheduled_task' || entry.notWritten) return false;
+  if (entry.ifConnected) {
+    const usable = entry.usableCredentials ?? [];
+    return entry.ifConnected[credential]?.length === 0
+      && (entry.skillOff === true || (usable.length > 0 && !usable.some(key => credentialReady(row, key))));
+  }
+  return entry.requiresCredentials.includes(credential) && !entry.requiresCredentials.some(key => credentialReady(row, key));
 }
 
 /**
@@ -2409,11 +2428,24 @@ export function connectionNeededText(row: Row, entry: Pick<CustomSkillEntry, 'us
   return `It only runs while ${labels.length > 1 ? 'one of ' : ''}${nameList(labels, 'or')} is connected.`;
 }
 
-/** A credential as people see it, by the title of the agent's card for it, with its key: Google Ads (`google-ads`). */
-export function credentialLabel(row: Row, key: string): string {
+/**
+ * A credential as people see it, with its key: Google Ads (`google-ads`). Its title comes from the agent's card
+ * for it, or from titles (the credential catalog), or is made from the key.
+ */
+export function credentialLabel(row: Row, key: string, titles?: ReadonlyMap<string, string>): string {
   const schema = credentialGroup(row, key)?._schema;
   const title = isPlainObject(schema) ? asString(schema.title) : undefined;
-  return `${title ?? wordsFromKey(key)} (\`${key}\`)`;
+  return `${title ?? titles?.get(key) ?? wordsFromKey(key)} (\`${key}\`)`;
+}
+
+/** The catalog titles of these credentials, read through the cached credential details; a key it cannot read is left out. */
+export async function credentialTitles(client: WiroClient, keys: Iterable<string>, signal?: AbortSignal): Promise<Map<string, string>> {
+  const unique = [...new Set(keys)];
+  const metas = await Promise.all(unique.map(key => loadCredentialMeta(client, key, signal).catch(() => null)));
+  return new Map(unique.flatMap((key, index) => {
+    const title = metas[index]?.title;
+    return title && title !== key ? [[key, title] as [string, string]] : [];
+  }));
 }
 
 /** Readable text for the API's custom skill error codes. */

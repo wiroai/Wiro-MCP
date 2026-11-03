@@ -425,7 +425,7 @@ test('deploy_agent: a task a skill brought that is on is still flagged, and one 
   await withClient(fake, async client => {
     const result = await call(client, 'deploy_agent', { ...DEPLOY, confirm_charge_usd: 4, confirm: true });
     assert.deepEqual(result.structuredContent.defaultScheduledTasks, [{ key: 'cs-cron-inbox-check', interval: '*/30 * * * *' }]);
-    assert.match(textOf(result), /Scheduled tasks on by default: `cs-cron-inbox-check` \(runs on "\*\/30 \* \* \* \*"\)/);
+    assert.match(textOf(result), /Scheduled tasks on by default: Inbox Check \(`cs-cron-inbox-check`\) \(runs on "\*\/30 \* \* \* \*"\)/);
     assert.doesNotMatch(textOf(result), /cs-cron-weekly-digest/);
   });
 });
@@ -450,22 +450,23 @@ test('deploy_agent lists a task a skill brought that is paused apart from those 
       { key: 'cs-cron-lead-outreach-reporter', offSkills: [['int-apollo-sales']] },
       { key: 'cs-cron-lead-reply-handler', offSkills: [['int-apollo-sales']] },
     ]);
-    assert.match(textOf(result), /- Scheduled tasks on by default: `cs-cron-inbox-check` \(runs on "\*\/30 \* \* \* \*"\)\./);
-    assert.match(textOf(result), /- Scheduled tasks that came with this build but are paused: `cs-cron-lead-outreach-reporter` is paused until Apollo Sales \(`int-apollo-sales`\) is on\. `cs-cron-lead-reply-handler` is paused until Apollo Sales \(`int-apollo-sales`\) is on\./);
-    assert.match(result.structuredContent.message, /Paused until skills they need are on: cs-cron-lead-outreach-reporter, cs-cron-lead-reply-handler\./);
+    assert.match(textOf(result), /- Scheduled tasks on by default: Inbox Check \(`cs-cron-inbox-check`\) \(runs on "\*\/30 \* \* \* \*"\)\./);
+    assert.match(textOf(result), /- Scheduled tasks that came with this build but are paused: Lead Outreach Reporter \(`cs-cron-lead-outreach-reporter`\) is paused until Apollo Sales \(`int-apollo-sales`\) is on\. Lead Reply Handler \(`cs-cron-lead-reply-handler`\) is paused until Apollo Sales \(`int-apollo-sales`\) is on\./);
+    assert.match(result.structuredContent.message, /Paused until skills they need are on: Lead Outreach Reporter \(`cs-cron-lead-outreach-reporter`\), Lead Reply Handler \(`cs-cron-lead-reply-handler`\)\./);
     assert.doesNotMatch(textOf(result).split('\n').find(line => line.includes('on by default')), /lead-/);
   });
 });
 
 test('the deploy_agent quote names a custom build\'s skills by their titles', async () => {
   const routes = customBuild([]);
-  routes['/Skills/List'] = { result: true, errors: [], skills: [{ name: 'int-hubspot-crm', title: 'HubSpot CRM', requires_credentials: false }] };
-  routes['/UserAgent/PricingPreview'] = { ...routes['/UserAgent/PricingPreview'], enabledSkills: ['int-hubspot-crm'] };
+  routes['/Skills/List'] = { result: true, errors: [], skills: [{ name: 'int-metaads-manage', title: 'Meta Ads Manager', requires_credentials: false }] };
+  routes['/UserAgent/PricingPreview'] = { ...routes['/UserAgent/PricingPreview'], enabledSkills: ['int-metaads-manage'] };
   await withClient(fakeClient(routes), async client => {
-    const quote = await call(client, 'deploy_agent', { ...DEPLOY, title: 'CRM', skills: ['int-hubspot-crm'] });
+    const quote = await call(client, 'deploy_agent', { ...DEPLOY, title: 'Ads', skills: ['int-metaads-manage'] });
     assert.notEqual(quote.isError, true, textOf(quote));
-    assert.match(textOf(quote), /- Agent: CRM, a custom build with HubSpot CRM \(`int-hubspot-crm`\)$/m);
-    assert.deepEqual(quote.structuredContent.quote.skills, ['int-hubspot-crm']);
+    // The catalog's title, not the words made from the name (Meta Ads Manage).
+    assert.match(textOf(quote), /- Agent: Ads, a custom build with Meta Ads Manager \(`int-metaads-manage`\)$/m);
+    assert.deepEqual(quote.structuredContent.quote.skills, ['int-metaads-manage']);
   });
 });
 
@@ -478,7 +479,7 @@ test('deploy_agent names a retired skill and its replacement by title', async ()
     const refused = await call(client, 'deploy_agent', { ...DEPLOY, skills: ['int-hubspot-classic'] });
     assert.equal(refused.isError, true);
     // The replacement's title is not in what was read, so words from its name stand in.
-    assert.match(textOf(refused), /Deprecated skill: HubSpot Classic \(`int-hubspot-classic`\) \(use Hubspot Crm \(`int-hubspot-crm`\)\)\./);
+    assert.match(textOf(refused), /Deprecated skill: HubSpot Classic \(`int-hubspot-classic`\) \(use HubSpot CRM \(`int-hubspot-crm`\)\)\./);
   });
 });
 

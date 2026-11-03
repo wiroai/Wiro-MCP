@@ -21,10 +21,12 @@ import {
 } from '../utils/agent-catalog.js';
 import {
   connectionModeRequirements,
+  loadSkillRegistry,
   parseCredentialMeta,
+  registryTitles,
   type ModeRequirement,
 } from '../utils/agent-config.js';
-import { formatUsd, toStringArray } from '../utils/user-agent.js';
+import { formatUsd, skillLabel, toStringArray } from '../utils/user-agent.js';
 import { nextActionSchema, strictInput } from './schemas.js';
 
 const PRICING_NOTE = 'A custom build costs the sum of its skills\' monthly prices, including the skills they '
@@ -220,7 +222,10 @@ export function registerListAgentSkills(server: McpServer, client: WiroClient): 
 
           const lines: string[] = [];
           for (const skill of skills) lines.push(`## Skill`, '', skillLine(skill));
-          if (skills[0]?.dependsOn.length) lines.push('', `Also enables: ${skills[0].dependsOn.join(', ')}`);
+          if (skills[0]?.dependsOn.length) {
+            const titles = await loadSkillRegistry(client, extra.signal).then(registryTitles).catch(() => new Map<string, string>());
+            lines.push('', `Also enables: ${skills[0].dependsOn.map(name => skillLabel(name, titles)).join(', ')}`);
+          }
           if (skills[0] && !skills[0].requiresCredentials) lines.push('', 'This skill needs no credentials.');
           for (const credential of credentials) lines.push('', ...setupLines(credential));
           lines.push('', PRICING_NOTE);

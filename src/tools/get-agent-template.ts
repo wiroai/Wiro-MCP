@@ -15,6 +15,7 @@ import {
   formatModelRates,
   formatScheduledTaskLine,
   formatUsd,
+  skillLabel,
   WIRO_PROJECT_CREDENTIAL,
 } from '../utils/user-agent.js';
 import { nextActionSchema, strictInput } from './schemas.js';
@@ -44,7 +45,8 @@ function formatTemplate(template: TemplateDetail): string {
     lines.push('**Pricing:** unavailable right now. Do not deploy this template until it can be priced.');
   }
   if (template.skills.length > 0) {
-    lines.push('', `**Skills:** ${template.skills.map(skill => skill.title ?? skill.name).join(', ')}`);
+    const titles = new Map(template.skills.flatMap(skill => (skill.title && skill.title !== skill.name ? [[skill.name, skill.title] as [string, string]] : [])));
+    lines.push('', `**Skills:** ${template.skills.map(skill => skillLabel(skill.name, titles)).join(', ')}`);
   }
   lines.push('', '### Credentials the user must provide', '');
   if (template.requiredCredentials.length === 0) lines.push('None are required to finish setup.');

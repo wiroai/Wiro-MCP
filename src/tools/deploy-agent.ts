@@ -25,6 +25,7 @@ import {
   sameAmount,
   skillLabel,
   skillOffTasksNote,
+  taskLabel,
   tierPricingSchema,
   toAgentDetail,
   toDeployedAgent,
@@ -146,7 +147,7 @@ function customSkillLine(skill: { key: string; kind: string; interval?: string |
     skill.enabled === false ? 'turned off' : null,
     fromTemplate ? 'replaces the template\'s entry' : null,
   ].filter(Boolean).join(', ');
-  return `\`${skill.key}\` (${details})`;
+  return `${taskLabel(skill.key, fromTemplate === true)} (${details})`;
 }
 
 /** What custom_skills does to the approval policy, for the quote. A policy that is off is not read, so only one that is on shows its text. */
@@ -305,7 +306,7 @@ function deployedText(
   }
   if (startsCollaborative(agent)) lines.push(`- Chats: ${TEAM_CHATS_NOTE}`);
   if (defaultTasks.length > 0) {
-    lines.push(`- Scheduled tasks on by default: ${defaultTasks.map(task => `\`${task.key}\` (runs on "${task.interval}")`).join(', ')}. ${DEFAULT_TASKS_NOTE}`);
+    lines.push(`- Scheduled tasks on by default: ${defaultTasks.map(task => `${taskLabel(task.key)} (runs on "${task.interval}")`).join(', ')}. ${DEFAULT_TASKS_NOTE}`);
   }
   if (pausedTasks.length > 0) {
     lines.push(`- Scheduled tasks that came with this build but are paused:${skillOffTasksNote(pausedTasks.map(task => ({ ...task, skillOff: true })), titles, 'is paused')}`);
@@ -692,10 +693,10 @@ export function registerDeployAgent(server: McpServer, client: WiroClient): void
             message: `Deployed and charged ${formatUsd(chargedUsd)}. The plan renews every 30 days until it is cancelled.`
               + (startsCollaborative(agent) ? ` ${TEAM_CHATS_NOTE}` : '')
               + (defaultTasks.length > 0
-                ? ` Scheduled tasks on by default: ${defaultTasks.map(task => task.key).join(', ')}. ${DEFAULT_TASKS_NOTE}`
+                ? ` Scheduled tasks on by default: ${defaultTasks.map(task => taskLabel(task.key)).join(', ')}. ${DEFAULT_TASKS_NOTE}`
                 : '')
               + (pausedTasks.length > 0
-                ? ` Paused until skills they need are on: ${pausedTasks.map(task => task.key).join(', ')}.`
+                ? ` Paused until skills they need are on: ${pausedTasks.map(task => taskLabel(task.key)).join(', ')}.`
                 : ''),
             ...(nextStep ? { nextAction: nextStep } : {}),
           },

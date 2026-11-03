@@ -575,6 +575,7 @@ test('apply_agent_skills quotes first, adds dependencies and returns a reusable 
     assert.deepEqual(preview.body, {
       useragentguid: AGENT,
       skillOverrides: { 'int-instagram-post': true, 'util-social-posting-common': true, 'util-anti-ai-human-copy': true },
+      withScheduledTasks: true,
     });
     for (const value of Object.values(preview.body.skillOverrides)) assert.equal(typeof value, 'boolean');
     assert.equal(fake.paths().includes('/UserAgent/SkillsApply'), false);
@@ -632,17 +633,44 @@ test('apply_agent_skills names each skill by its title, with the name it takes, 
     const quote = await quoteInstagram(client);
     const lines = text(quote).split('\n');
     // A skill the catalog gives no title reads as words made from its name.
-    assert.ok(lines.includes('**Turn on:** Instagram (`int-instagram-post`), Social Posting Common (`util-social-posting-common`), Anti Ai Human Copy (`util-anti-ai-human-copy`)'), text(quote));
-    assert.ok(lines.includes('**Added because other skills need them:** Social Posting Common (`util-social-posting-common`), Anti Ai Human Copy (`util-anti-ai-human-copy`)'), text(quote));
+    assert.ok(lines.includes('**Turn on:** Instagram (`int-instagram-post`), Social Posting Common (`util-social-posting-common`), Anti AI Human Copy (`util-anti-ai-human-copy`)'), text(quote));
+    assert.ok(lines.includes('**Added because other skills need them:** Social Posting Common (`util-social-posting-common`), Anti AI Human Copy (`util-anti-ai-human-copy`)'), text(quote));
     assert.ok(lines.some(line => line.startsWith('**Credentials the new skills need:** Instagram (`int-instagram-post`): Instagram (`instagram`).')), text(quote));
 
     const applied = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
     const after = text(applied).split('\n');
-    assert.ok(after.includes('**Turned on:** Instagram (`int-instagram-post`), Social Posting Common (`util-social-posting-common`), Anti Ai Human Copy (`util-anti-ai-human-copy`)'), text(applied));
+    assert.ok(after.includes('**Turned on:** Instagram (`int-instagram-post`), Social Posting Common (`util-social-posting-common`), Anti AI Human Copy (`util-anti-ai-human-copy`)'), text(applied));
     assert.ok(after.includes('**Still needed:** credentials for Instagram (`int-instagram-post`): Instagram (`instagram`). Set them with set_agent_credentials or connect_agent_oauth.'), text(applied));
     // The structured lists keep the names the tools take.
     assert.deepEqual(applied.structuredContent.changes.enable, ['int-instagram-post', 'util-social-posting-common', 'util-anti-ai-human-copy']);
   });
+});
+
+test('apply_agent_skills names a credential by the title of its card, or of the catalog when the agent has no card', async () => {
+  const reviews = { name: 'int-appstore-reviews', title: 'App Store Reviews', depends_on: [], conflicts_with: [], credential_key: 'apple-appstore', requires_credentials: true, pricing: { monthly_price_weight_usd: 1, monthly_credits_weight: 100 } };
+  const card = { optional: false, _connected: false, _filled: false, _required_missing: true, _schema: { title: 'App Store Connect', oauth_provider: null } };
+  for (const [source, credentials, catalog] of [
+    ['catalog', detailRow().credentials, credentialDetail],
+    ['card', { ...detailRow().credentials, 'apple-appstore': card }, { result: false, errors: [{ code: 0, message: 'Busy' }], credential: null }],
+  ]) {
+    const fake = fakeClient(skillRoutes({
+      '/Skills/List': { ...skillList, skills: [...skillList.skills, reviews] },
+      '/Credentials/Detail': catalog,
+      '/UserAgent/Detail': (_body, calls) => detail(calls.some(call => call.path === '/UserAgent/SkillsApply')
+        ? { credentials, skills: [...detailRow().skills, { name: 'int-appstore-reviews', enabled: true }] }
+        : { credentials }),
+      '/UserAgent/PricingPreview': { result: true, errors: [], tier: 'starter', totalPriceUsd: 43, totalMonthlyCredits: 4300, enabledSkills: ['int-appstore-reviews', 'util-chat-markdown-reporting'], planChange: planChange() },
+      '/UserAgent/SkillsApply': { result: true, errors: [], pricing: { previousPriceUsd: 42, newPriceUsd: 43, deltaUsd: 1 }, tier: 'starter', stripeProrationApplied: false, prepaidWalletDelta: 0.5, restartTriggered: true },
+    }));
+    await withClient(fake, async client => {
+      const quote = await client.callTool({ name: 'apply_agent_skills', arguments: { agent_guid: AGENT, skills: { 'int-appstore-reviews': true } } });
+      assert.equal(quote.structuredContent.status, 'quote', `${source}: ${text(quote)}`);
+      // The title, not the words made from the key (Apple App Store).
+      assert.ok(text(quote).split('\n').some(line => line.startsWith('**Credentials the new skills need:** App Store Reviews (`int-appstore-reviews`): App Store Connect (`apple-appstore`).')), `${source}: ${text(quote)}`);
+      const applied = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
+      assert.ok(text(applied).split('\n').includes('**Still needed:** credentials for App Store Reviews (`int-appstore-reviews`): App Store Connect (`apple-appstore`). Set them with set_agent_credentials or connect_agent_oauth.'), `${source}: ${text(applied)}`);
+    });
+  }
 });
 
 test('apply_agent_skills says when the skill change takes effect on an agent that is not running', async () => {
@@ -1449,28 +1477,43 @@ test('apply_agent_skills quotes the scheduled tasks Wiro says the change stops o
     resume: ['cs-cron-social-content-scanner'],
   });
   const lines = text(both).split('\n');
-  assert.ok(lines.includes('**Scheduled tasks that stop:** `cs-cron-metaads-performance-reporter`, `cs-cron-ads-recommendation-cleanup`. They run now and stop with this change. They keep their text, schedule and on/off state, and get_my_agent then shows what each waits for.'), text(both));
-  assert.ok(lines.includes('**Scheduled tasks that start running:** `cs-cron-social-content-scanner`. It does not run now and runs once this change is applied.'), text(both));
+  assert.ok(lines.includes('**Scheduled tasks that stop:** Meta Ads Performance Reporter (`cs-cron-metaads-performance-reporter`), Ads Recommendation Cleanup (`cs-cron-ads-recommendation-cleanup`). They run now and stop with this change. They keep their text, schedule and on/off state, and get_my_agent then shows what each waits for.'), text(both));
+  assert.ok(lines.includes('**Scheduled tasks that start running:** Social Content Scanner (`cs-cron-social-content-scanner`). It does not run now and runs once this change is applied.'), text(both));
   // They follow the restart line, before the credentials the new skills need.
   const at = prefix => lines.findIndex(line => line.startsWith(prefix));
   assert.ok(at('**Restart:**') < at('**Scheduled tasks that stop:**'));
   assert.ok(at('**Scheduled tasks that start running:**') < at('**Credentials the new skills need:**'));
 
   const swapped = await quote({ stop: ['cs-cron-lead-reply-handler'], resume: ['cs-cron-newsletter-sender', 'cs-cron-newsletter-subscriber-scanner'] });
-  assert.match(text(swapped), /\*\*Scheduled tasks that stop:\*\* `cs-cron-lead-reply-handler`\. It runs now and stops with this change\. It keeps its text, schedule and on\/off state, and get_my_agent then shows what it waits for\./);
-  assert.match(text(swapped), /\*\*Scheduled tasks that start running:\*\* `cs-cron-newsletter-sender`, `cs-cron-newsletter-subscriber-scanner`\. They do not run now and run once this change is applied\./);
+  assert.match(text(swapped), /\*\*Scheduled tasks that stop:\*\* Lead Reply Handler \(`cs-cron-lead-reply-handler`\)\. It runs now and stops with this change\. It keeps its text, schedule and on\/off state, and get_my_agent then shows what it waits for\./);
+  assert.match(text(swapped), /\*\*Scheduled tasks that start running:\*\* Newsletter Sender \(`cs-cron-newsletter-sender`\), Newsletter Subscriber Scanner \(`cs-cron-newsletter-subscriber-scanner`\)\. They do not run now and run once this change is applied\./);
 
-  // Wiro could not tell: the quote says so, and the result of the change names the tasks it paused.
-  const unknown = await quote(null);
-  assert.equal(unknown.structuredContent.scheduledTasks, null);
-  assert.ok(text(unknown).split('\n').includes('**Scheduled tasks:** Wiro could not tell which scheduled tasks this change stops or starts. Once it is applied, the result names the tasks it paused.'), text(unknown));
+  // Wiro could not tell, by null or by sending nothing: the quote says so, and the result of the change names
+  // the tasks it paused.
+  for (const scheduledTasks of [null, undefined]) {
+    const unknown = await quote(scheduledTasks);
+    assert.equal(unknown.structuredContent.scheduledTasks, null);
+    assert.ok(text(unknown).split('\n').includes('**Scheduled tasks:** Wiro could not tell which scheduled tasks this change stops or starts. Once it is applied, the result names the tasks it paused.'), text(unknown));
+  }
 
   // Nothing to say when Wiro names no task.
-  for (const scheduledTasks of [{ stop: [], resume: [] }, undefined]) {
-    const none = await quote(scheduledTasks);
-    assert.equal('scheduledTasks' in none.structuredContent, false, JSON.stringify(scheduledTasks));
-    assert.doesNotMatch(text(none), /Scheduled tasks/);
-  }
+  const none = await quote({ stop: [], resume: [] });
+  assert.equal('scheduledTasks' in none.structuredContent, false);
+  assert.doesNotMatch(text(none), /Scheduled tasks/);
+
+  // On an agent that is not running, a task Wiro counts as running would run once the agent starts.
+  const stopped = async scheduledTasks => {
+    let result;
+    await withClient(fakeClient(skillRoutes({
+      '/UserAgent/Detail': detail({ status: 0 }),
+      '/UserAgent/PricingPreview': preview(planChange(), { scheduledTasks }),
+    })), async client => {
+      result = await quoteInstagram(client);
+    });
+    return text(result);
+  };
+  assert.match(await stopped({ stop: ['cs-cron-lead-reply-handler'], resume: [] }), /\*\*Scheduled tasks that stop:\*\* Lead Reply Handler \(`cs-cron-lead-reply-handler`\)\. It would run once the agent starts, and this change stops it\./);
+  assert.match(await stopped({ stop: [], resume: ['cs-cron-newsletter-sender', 'cs-cron-newsletter-subscriber-scanner'] }), /They do not run now and run once this change is applied and the agent starts\./);
 });
 
 test('apply_agent_skills names the scheduled tasks a confirmed change paused', async () => {
@@ -1492,9 +1535,27 @@ test('apply_agent_skills names the scheduled tasks a confirmed change paused', a
     const result = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
     assert.equal(result.structuredContent.status, 'applied', text(result));
     assert.deepEqual(result.structuredContent.pausedTasks, ['cs-cron-metaads-performance-reporter']);
-    assert.match(text(result), /\*\*Paused by this change:\*\* `cs-cron-metaads-performance-reporter` is paused until Meta Ads \(`int-metaads-manage`\) is on\./);
+    assert.match(text(result), /\*\*Paused by this change:\*\* Meta Ads Performance Reporter \(`cs-cron-metaads-performance-reporter`\) is paused until Meta Ads \(`int-metaads-manage`\) is on\./);
     assert.doesNotMatch(text(result), /holiday-planner/);
   });
+
+  // When Wiro said which tasks the change stops, a task paused after it that Wiro did not name, such as one
+  // that was not running, is not called paused by it.
+  for (const [stop, named] of [[[], false], [['cs-cron-metaads-performance-reporter'], true]]) {
+    const told = fakeClient(skillRoutes({
+      '/Skills/List': connectSkillList,
+      '/UserAgent/Detail': (_body, calls) => structuredClone(calls.some(call => call.path === '/UserAgent/SkillsApply') ? after : before),
+      '/UserAgent/PricingPreview': preview(planChange(), { scheduledTasks: { stop, resume: [] } }),
+      '/UserAgent/SkillsApply': { result: true, errors: [], pricing: { previousPriceUsd: 42, newPriceUsd: 43, deltaUsd: 1 }, tier: 'starter', stripeProrationApplied: false, prepaidWalletDelta: 0.5, restartTriggered: true },
+    }));
+    await withClient(told, async client => {
+      const quote = await client.callTool({ name: 'apply_agent_skills', arguments: { agent_guid: AGENT, skills: { 'int-metaads-manage': false } } });
+      const result = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
+      assert.equal(result.structuredContent.status, 'applied', text(result));
+      assert.equal(/Paused by this change/.test(text(result)), named, JSON.stringify(stop));
+      assert.equal('pausedTasks' in result.structuredContent, named);
+    });
+  }
 });
 
 test('a skill change Wiro refuses for a dependency or a conflict names the skills by title', () => {
@@ -1548,7 +1609,7 @@ test('apply_agent_skills runs the server\'s dependency check against the whole s
       arguments: { agent_guid: AGENT, skills: { 'util-anti-ai-human-copy': false } },
     });
     assert.equal(removing.isError, true);
-    assert.match(text(removing), /Instagram \(`int-instagram-post`\) needs Anti Ai Human Copy \(`util-anti-ai-human-copy`\)\. Keep Anti Ai Human Copy \(`util-anti-ai-human-copy`\) on, or also turn off Instagram \(`int-instagram-post`\)/);
+    assert.match(text(removing), /Instagram \(`int-instagram-post`\) needs Anti AI Human Copy \(`util-anti-ai-human-copy`\)\. Keep Anti AI Human Copy \(`util-anti-ai-human-copy`\) on, or also turn off Instagram \(`int-instagram-post`\)/);
 
     const withoutDependencies = await client.callTool({
       name: 'apply_agent_skills',
@@ -3452,7 +3513,7 @@ test('connect_agent_oauth refuses a service none of the active skills use, befor
     assert.equal(result.isError, true);
     assert.equal(
       text(result),
-      '## Error\n\nHubSpot is not used by any of this agent\'s active skills, custom skills or scheduled tasks, so nothing was started. Services its skills connect with this tool: Mailchimp (mailchimp). To use HubSpot, first turn on HubSpot CRM (`int-hubspot-crm`) with apply_agent_skills; list_agent_skills with name "hubspot" shows how it connects.',
+      '## Error\n\nHubSpot is not used by any of this agent\'s active skills, custom skills or scheduled tasks, so nothing was started. Services its skills connect with this tool: Mailchimp (`mailchimp`). To use HubSpot, first turn on HubSpot CRM (`int-hubspot-crm`) with apply_agent_skills; list_agent_skills with name "hubspot" shows how it connects.',
     );
     // Nothing else is read or written once it is refused, whatever the call asks for.
     assert.deepEqual(fake.paths(), ['/Credentials/Detail', '/UserAgent/Detail', '/Skills/List']);
@@ -3495,7 +3556,7 @@ test('connect_agent_oauth refuses a service whose skill was turned off, and poin
     const connected = await client.callTool({ name: 'connect_agent_oauth', arguments: { agent_guid: AGENT, credential: 'hubspot', confirm: true } });
     assert.equal(connected.isError, true);
     assert.match(text(connected), /HubSpot is not used by any of this agent's active skills/);
-    assert.match(text(connected), /Services its skills connect with this tool: Mailchimp \(mailchimp\)\./);
+    assert.match(text(connected), /Services its skills connect with this tool: Mailchimp \(`mailchimp`\)\./);
     assert.match(text(connected), /HubSpot is still connected from before; disconnect_agent_oauth removes that connection\./);
 
     // A saved token is neither switched to nor checked.
@@ -3576,7 +3637,7 @@ test('connect_agent_oauth counts a credential a custom skill or scheduled task r
     const refused = await connect(client, 'meta-ads');
     assert.equal(refused.isError, true);
     assert.match(text(refused), /Meta Ads is not used by any of this agent's active skills, custom skills or scheduled tasks/);
-    assert.match(text(refused), /Services its skills connect with this tool: Mailchimp \(mailchimp\), HubSpot \(hubspot\)\./);
+    assert.match(text(refused), /Services its skills connect with this tool: Mailchimp \(`mailchimp`\), HubSpot \(`hubspot`\)\./);
     assert.equal(other.paths().includes('/UserAgentOAuth/OAuthConnect'), false);
   });
 });
@@ -3601,25 +3662,32 @@ test('connect_agent_oauth says which entries a finished sign-in turns on', async
 
   const task = await connect({ scheduledskills: [entry('cs-cron-crm-report', false, ['hubspot'])], customskills: [] });
   assert.equal(task.structuredContent.state, 'authorize_in_browser');
-  assert.match(task.structuredContent.message, /`cs-cron-crm-report` turns on once HubSpot is connected\./);
+  assert.match(task.structuredContent.message, /CRM Report \(`cs-cron-crm-report`\) turns on once HubSpot is connected\./);
   assert.match(task.structuredContent.message, credits);
-  assert.match(text(task), /`cs-cron-crm-report` turns on once HubSpot is connected\./);
+  assert.match(text(task), /CRM Report \(`cs-cron-crm-report`\) turns on once HubSpot is connected\./);
 
   const two = await connect({ scheduledskills: [entry('cs-cron-crm-report', false, ['hubspot'])], customskills: [entry('cs-crm-rules', false, ['salesforce', 'hubspot'])] });
-  assert.match(two.structuredContent.message, /`cs-crm-rules`, `cs-cron-crm-report` turn on once HubSpot is connected\./);
+  assert.match(two.structuredContent.message, /CRM Rules \(`cs-crm-rules`\), CRM Report \(`cs-cron-crm-report`\) turn on once HubSpot is connected\./);
 
   const rules = await connect({ scheduledskills: [], customskills: [entry('cs-crm-rules', false, ['hubspot'])] });
-  assert.match(rules.structuredContent.message, /`cs-crm-rules` turns on once HubSpot is connected\./);
+  assert.match(rules.structuredContent.message, /CRM Rules \(`cs-crm-rules`\) turns on once HubSpot is connected\./);
   assert.doesNotMatch(rules.structuredContent.message, credits);
 
-  // Nothing waits for it: already on, or waiting for another service.
+  // Already on, and HubSpot is the only service it runs with: it starts running once HubSpot is connected.
+  const starts = await connect({ scheduledskills: [entry('cs-cron-crm-report', true, ['hubspot']), entry('cs-cron-ads-report', false, ['meta-ads'])], customskills: [] });
+  assert.match(starts.structuredContent.message, /CRM Report \(`cs-cron-crm-report`\) starts running once HubSpot is connected\./);
+  assert.match(starts.structuredContent.message, credits);
+  assert.doesNotMatch(starts.structuredContent.message, /turns? on once|ads-report/);
+
+  // Nothing waits for it: on and running through Serper, which is set, or waiting for another service.
+  const serperSet = { serper: { apikey: 'x', optional: false, _connected: false, _filled: true, _required_missing: false, _schema: { title: 'Serper Web Search', oauth_provider: null } } };
   for (const overrides of [
-    { scheduledskills: [entry('cs-cron-crm-report', true, ['hubspot'])], customskills: [] },
-    { scheduledskills: [entry('cs-cron-crm-report', true, ['hubspot']), entry('cs-cron-ads-report', false, ['meta-ads'])], customskills: [] },
+    { scheduledskills: [entry('cs-cron-crm-report', true, ['serper', 'hubspot'])], customskills: [], credentials: serperSet },
+    { scheduledskills: [entry('cs-cron-crm-report', true, ['serper', 'hubspot']), entry('cs-cron-ads-report', false, ['meta-ads'])], customskills: [], credentials: serperSet },
   ]) {
     const quiet = await connect(overrides);
     assert.equal(quiet.structuredContent.state, 'authorize_in_browser');
-    assert.doesNotMatch(quiet.structuredContent.message, /turns? on once|uses credits/);
+    assert.doesNotMatch(quiet.structuredContent.message, /turns? on once|starts? running|uses credits/);
   }
 
   // A key that tries to read as this server's own words stays inside its code span.
@@ -3643,7 +3711,11 @@ test('connect_agent_oauth says which entries a sign-in turns on and which stay p
       useragents: [customBuildRow({
         skills: skillsOn('util-newsletter-compose', 'int-hubspot-crm', 'util-chat-markdown-reporting'),
         // A custom skill of the user's own: the credential its row lists is enough.
-        customskills: [{ key: 'cs-crm-rules', description: 'CRM rules', value: 'Log every lead.', interval: null, enabled: false, requires_credentials: ['hubspot'], _source: 'user-created', _editable: true, _user_created: true }],
+        customskills: [
+          { key: 'cs-crm-rules', description: 'CRM rules', value: 'Log every lead.', interval: null, enabled: false, requires_credentials: ['hubspot'], _source: 'user-created', _editable: true, _user_created: true },
+          // Instructions that are on do not start running.
+          { key: 'cs-crm-notes', description: 'CRM notes', value: 'Note every call.', interval: null, enabled: true, requires_credentials: ['hubspot'], _source: 'user-created', _editable: true, _user_created: true },
+        ],
         scheduledskills: [
           task('cs-cron-newsletter-sender', ['brevo', 'mailchimp', 'sendgrid', 'hubspot'], ['util-newsletter-compose'],
             { brevo: [['int-brevo-email']], mailchimp: [['int-mailchimp-email']], sendgrid: [['int-sendgrid-email']], hubspot: [] }, { _usable_credentials: ['hubspot'] }),
@@ -3658,7 +3730,19 @@ test('connect_agent_oauth says which entries a sign-in turns on and which stay p
           // Needs another service, and one that is on already: neither is named.
           task('cs-cron-blog-gmail-checker', ['gmail'], ['int-gmail-check'], { gmail: [] }),
           task('cs-cron-crm-digest', ['hubspot'], ['int-hubspot-crm'], { hubspot: [] }, { enabled: true, _usable_credentials: ['hubspot'] }),
+          // Off, and its own list does not name HubSpot: a save switches on only the entries whose list does.
+          task('cs-cron-deal-sync', ['salesforce'], ['int-hubspot-crm'], { hubspot: [] }, { _usable_credentials: ['hubspot'] }),
+          // On and paused for Google Drive, which it can use; HubSpot gives it a way to run.
+          task('cs-cron-deal-alerts', ['google-drive', 'hubspot'], ['int-hubspot-crm'], { hubspot: [] }, { enabled: true, _skill_off: true, _off_skills: [['int-google-drive']], _usable_credentials: [] }),
+          // Runs already through Serper, which is set.
+          task('cs-cron-search-digest', ['serper', 'hubspot'], ['int-hubspot-crm'], { hubspot: [] }, { enabled: true, _usable_credentials: ['serper', 'hubspot'] }),
+          // The customer's own tasks: one waits for HubSpot, one runs through Serper.
+          { key: 'cs-cron-lead-log', description: 'Lead log', value: 'Log every new lead.', interval: '0 8 * * *', enabled: true, requires_credentials: ['hubspot'], _source: 'user-created', _editable: true, _user_created: true },
+          { key: 'cs-cron-search-log', description: 'Search log', value: 'Log the searches.', interval: '0 8 * * *', enabled: true, requires_credentials: ['serper', 'hubspot'], _source: 'user-created', _editable: true, _user_created: true },
+          // The starter task does not run until its text is written.
+          { key: 'cs-cron-my-scheduled-task', description: 'Starter', value: 'Describe the task.', interval: '0 9 * * 1', enabled: true, requires_credentials: ['hubspot'], _editable: true, _edited: false },
         ],
+        credentials: { serper: { apikey: 'x', optional: false, _connected: false, _filled: true, _required_missing: false, _schema: { title: 'Serper Web Search', oauth_provider: null } } },
       })],
     },
     '/UserAgentOAuth/OAuthStatus': { result: true, connected: false, accounts: [], connectedat: '', tokenexpiresat: '' },
@@ -3667,8 +3751,9 @@ test('connect_agent_oauth says which entries a sign-in turns on and which stay p
   await withClient(stub, async client => {
     const result = await client.callTool({ name: 'connect_agent_oauth', arguments: { agent_guid: AGENT, credential: 'hubspot' } });
     assert.equal(result.structuredContent.state, 'authorize_in_browser', text(result));
-    assert.match(result.structuredContent.message, /`cs-crm-rules`, `cs-cron-newsletter-sender` turn on once HubSpot is connected\. `cs-cron-lead-reply-handler` turns on but stays paused until Lemlist \(`int-lemlist-outreach`\) is on\. `cs-cron-googleads-audience-refresher` stays paused until Google Ads \(`int-googleads-manage`\) is on\. Every run of a scheduled task uses credits/);
-    assert.doesNotMatch(result.structuredContent.message, /blog-gmail-checker|crm-digest/);
+    // A task the customer named reads as typed: Crm Rules.
+    assert.match(result.structuredContent.message, /Crm Rules \(`cs-crm-rules`\), Newsletter Sender \(`cs-cron-newsletter-sender`\) turn on once HubSpot is connected\. Lead Reply Handler \(`cs-cron-lead-reply-handler`\) turns on but stays paused until Lemlist \(`int-lemlist-outreach`\) is on\. CRM Digest \(`cs-cron-crm-digest`\), Deal Alerts \(`cs-cron-deal-alerts`\), Lead Log \(`cs-cron-lead-log`\) start running once HubSpot is connected\. Google Ads Audience Refresher \(`cs-cron-googleads-audience-refresher`\) stays paused until Google Ads \(`int-googleads-manage`\) is on\. Every run of a scheduled task uses credits/);
+    assert.doesNotMatch(result.structuredContent.message, /blog-gmail-checker|deal-sync|crm-notes|search-digest|search-log|my-scheduled-task/);
   });
 });
 
@@ -3719,7 +3804,7 @@ test('connect_agent_oauth status names the tasks that stay paused once a service
   await withClient(fake, async client => {
     const result = await client.callTool({ name: 'connect_agent_oauth', arguments: { action: 'status', agent_guid: AGENT, credential: 'hubspot' } });
     assert.equal(result.structuredContent.state, 'connected', text(result));
-    assert.match(result.structuredContent.message, /HubSpot is connected for `Acme` \(`1`\)\. `cs-cron-lead-reply-handler` stays paused until Lemlist \(`int-lemlist-outreach`\) is on\.$/);
+    assert.match(result.structuredContent.message, /HubSpot is connected for `Acme` \(`1`\)\. Lead Reply Handler \(`cs-cron-lead-reply-handler`\) stays paused until Lemlist \(`int-lemlist-outreach`\) is on\.$/);
     assert.doesNotMatch(result.structuredContent.message, /crm-digest|metaads/);
   });
 });
@@ -3760,8 +3845,8 @@ test('set_agent_credentials names the skills a task the save turns on still wait
   const base = 'Saving these credentials turns on the scheduled tasks that need them; turn off any you do not want.';
 
   const waiting = await save([reviews, events, ads]);
-  assert.ok(waiting.structuredContent.notes.includes(`${base} \`cs-cron-review-scanner\` stays paused until App Store Reviews (\`int-appstore-reviews\`) or Google Play Reviews (\`int-googleplay-reviews\`) is on.`), JSON.stringify(waiting.structuredContent.notes));
-  assert.doesNotMatch(text(waiting), /`cs-cron-(app-event-scanner|metaads-performance-reporter)` stays paused/);
+  assert.ok(waiting.structuredContent.notes.includes(`${base} Review Scanner (\`cs-cron-review-scanner\`) stays paused until App Store Reviews (\`int-appstore-reviews\`) or Google Play Reviews (\`int-googleplay-reviews\`) is on.`), JSON.stringify(waiting.structuredContent.notes));
+  assert.doesNotMatch(text(waiting), /`cs-cron-(app-event-scanner|metaads-performance-reporter)`\) stays paused/);
 
   const running = await save([events]);
   assert.ok(running.structuredContent.notes.includes(base), JSON.stringify(running.structuredContent.notes));

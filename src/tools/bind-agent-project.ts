@@ -33,6 +33,8 @@ import {
   agentTitleSpan,
   nextStepForAgent,
   skillOffTasksNote,
+  taskLabel,
+  taskNamedByWiro,
   toAgentDetail,
   WIRO_PROJECT_CREDENTIAL,
   type AgentDetail,
@@ -200,7 +202,7 @@ function turnsOnNote(plan: BindPlan, when: 'once' | 'now that'): string | null {
   const entries = customSkillEntries(plan.row).filter(entry => entry.requiresCredentials.includes(WIRO_PROJECT_CREDENTIAL)
     && (!replacing || !entry.enabled));
   if (entries.length === 0) return null;
-  const sentence = `${keyList(entries.map(entry => quotedSpan(entry.key)))} ${entries.length > 1 ? 'turn' : 'turns'} on ${when} the project is connected.${skillOffTasksNote(entries, plan.titles)}`;
+  const sentence = `${keyList(entries.map(entry => taskLabel(entry.key, taskNamedByWiro(entry))))} ${entries.length > 1 ? 'turn' : 'turns'} on ${when} the project is connected.${skillOffTasksNote(entries, plan.titles)}`;
   return entries.some(entry => entry.kind === 'scheduled_task')
     ? `${sentence} Every run of a scheduled task uses credits; turn off any you do not want with manage_agent_custom_skill.`
     : sentence;

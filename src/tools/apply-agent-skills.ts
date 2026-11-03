@@ -16,6 +16,7 @@ import {
   agentStatusOf,
   checkSkillSet,
   credentialLabel,
+  credentialTitles,
   credentialsNeededFor,
   customSkillEntries,
   daysLeftText,
@@ -42,7 +43,7 @@ import {
   type PlanChange,
   type CustomSkillEntry,
 } from '../utils/agent-config.js';
-import { asTier, bindProjectStep, formatCredits, outcomeUnknown, skillLabel, skillOffTasksNote, toStringArray, toTierPricing, WIRO_PROJECT_CREDENTIAL } from '../utils/user-agent.js';
+import { asTier, bindProjectStep, formatCredits, outcomeUnknown, skillLabel, skillOffTasksNote, taskLabel, taskNamedByWiro, toStringArray, toTierPricing, WIRO_PROJECT_CREDENTIAL } from '../utils/user-agent.js';
 import { DEFAULT_WAIT_SECONDS } from '../utils/poll.js';
 import { quotedSpan } from '../utils/quoted-text.js';
 import { isPlainTeamMember, teamAgentBillingRefused } from '../utils/workspace.js';
@@ -104,9 +105,9 @@ const outputSchema = {
   })),
   scheduledTasks: z.object({
     stop: z.array(z.string())
-      .describe('Scheduled tasks that run now and stop with this change. They keep their text, schedule and on/off state, and get_my_agent then shows what each waits for.'),
+      .describe('Scheduled tasks this change stops: they run now, or would once an agent that is not running starts. They keep their text, schedule and on/off state, and get_my_agent then shows what each waits for.'),
     resume: z.array(z.string())
-      .describe('Scheduled tasks that do not run now and start running once this change is applied.'),
+      .describe('Scheduled tasks that do not run now and start running once this change is applied, and the agent is running.'),
   }).nullable().optional()
     .describe('Quote: the scheduled tasks this change stops or starts, as Wiro works it out; null when Wiro could not tell.'),
   pausedTasks: z.array(z.string()).optional()
@@ -454,46 +455,66 @@ function listLine(label: string, names: string[], titles: ReadonlyMap<string, st
 }
 
 /** Each new skill with the credentials it still needs, by title: Instagram Post (`int-instagram-post`): Instagram (`instagram`). */
-function neededText(needed: Array<{ skill: string; credentials: string[] }>, row: Row, titles: ReadonlyMap<string, string>): string {
-  return needed.map(entry => `${skillLabel(entry.skill, titles)}: ${entry.credentials.map(key => credentialLabel(row, key)).join(', ')}`).join('; ');
+function neededText(
+  needed: Array<{ skill: string; credentials: string[] }>,
+  row: Row,
+  titles: ReadonlyMap<string, string>,
+  serviceTitles: ReadonlyMap<string, string>,
+): string {
+  return needed.map(entry => `${skillLabel(entry.skill, titles)}: ${entry.credentials.map(key => credentialLabel(row, key, serviceTitles)).join(', ')}`).join('; ');
 }
 
 /**
  * The scheduled tasks a change stops or starts, as Wiro works them out with its own gates: null when Wiro
- * could not tell, undefined when there are none.
+ * could not tell (it sends null or nothing), undefined when there are none.
  */
 function scheduledTasksOf(value: unknown): { stop: string[]; resume: string[] } | null | undefined {
-  if (value === null) return null;
-  if (!isPlainObject(value)) return undefined;
+  if (!isPlainObject(value)) return null;
   const stop = toStringArray(value.stop);
   const resume = toStringArray(value.resume);
   return stop.length > 0 || resume.length > 0 ? { stop, resume } : undefined;
 }
 
-/** The quote's lines for the scheduled tasks the change stops or starts, or that Wiro could not tell. */
-function movedTaskLines(moved: { stop: string[]; resume: string[] } | null | undefined): string[] {
+/**
+ * The quote's lines for the scheduled tasks the change stops or starts, or that Wiro could not tell. Wiro
+ * counts a task as running by its gates, so on an agent that is not running it is a task that would run once
+ * the agent starts. Each task is named as people see it.
+ */
+function movedTaskLines(moved: { stop: string[]; resume: string[] } | null | undefined, row: Row, running: boolean): string[] {
   if (moved === null) {
     return ['**Scheduled tasks:** Wiro could not tell which scheduled tasks this change stops or starts. Once it is applied, the result names the tasks it paused.'];
   }
   if (!moved) return [];
-  const keys = (list: string[]) => list.map(key => quotedSpan(key)).join(', ');
+  const entries = new Map(customSkillEntries(row).map(entry => [entry.key, entry]));
+  const names = (list: string[]) => list.map(key => {
+    const entry = entries.get(key);
+    return taskLabel(key, entry ? taskNamedByWiro(entry) : true);
+  }).join(', ');
   const lines: string[] = [];
   if (moved.stop.length > 0) {
     const one = moved.stop.length === 1;
-    lines.push(`**Scheduled tasks that stop:** ${keys(moved.stop)}. ${one ? 'It runs now and stops with this change. It keeps its' : 'They run now and stop with this change. They keep their'} text, schedule and on/off state, and get_my_agent then shows what ${one ? 'it waits' : 'each waits'} for.`);
+    const now = running
+      ? (one ? 'It runs now and stops with this change.' : 'They run now and stop with this change.')
+      : (one ? 'It would run once the agent starts, and this change stops it.' : 'They would run once the agent starts, and this change stops them.');
+    lines.push(`**Scheduled tasks that stop:** ${names(moved.stop)}. ${now} ${one ? 'It keeps its' : 'They keep their'} text, schedule and on/off state, and get_my_agent then shows what ${one ? 'it waits' : 'each waits'} for.`);
   }
   if (moved.resume.length > 0) {
     const one = moved.resume.length === 1;
-    lines.push(`**Scheduled tasks that start running:** ${keys(moved.resume)}. ${one ? 'It does not run now and runs' : 'They do not run now and run'} once this change is applied.`);
+    const after = running ? 'once this change is applied' : 'once this change is applied and the agent starts';
+    lines.push(`**Scheduled tasks that start running:** ${names(moved.resume)}. ${one ? 'It does not run now and runs' : 'They do not run now and run'} ${after}.`);
   }
   return lines;
 }
 
-/** The scheduled tasks that are on and paused in the agent read after a change, and were not paused before it. */
-function newlyPaused(before: Row, after: Row | null): CustomSkillEntry[] {
+/**
+ * The scheduled tasks the change paused: on and paused in the agent read after it, not paused before it, and
+ * among those Wiro said the change stops (stops), when it could tell.
+ */
+function newlyPaused(before: Row, after: Row | null, stops: string[] | null): CustomSkillEntry[] {
   if (!after) return [];
   const pausedBefore = new Set(customSkillEntries(before).filter(entry => entry.skillOff).map(entry => entry.key));
-  return customSkillEntries(after).filter(entry => entry.kind === 'scheduled_task' && entry.enabled && entry.skillOff && !pausedBefore.has(entry.key));
+  return customSkillEntries(after).filter(entry => entry.kind === 'scheduled_task' && entry.enabled && entry.skillOff
+    && !pausedBefore.has(entry.key) && (stops === null || stops.includes(entry.key)));
 }
 
 /**
@@ -622,6 +643,7 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
           alreadySet: diff.alreadySet.filter(name => !plan.addedDependencies.includes(name)),
         };
         const credentialsNeeded = credentialsNeededFor(diff.enable, registry, row);
+        const serviceTitles = await credentialTitles(client, credentialsNeeded.flatMap(entry => entry.credentials), extra.signal);
         // A running agent restarts only for a skill that turns on or off.
         const skillsMove = Object.keys(diff.changes).length > 0;
         const nothingToDo = !skillsMove && !tierChange;
@@ -676,15 +698,20 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
           };
         }
 
+        // The tasks Wiro says this change stops: null until it says, and when it could not tell.
+        let stops: string[] | null = null;
         if (!nothingToDo) {
           const preview = requireApiSuccess(
             await client.post<PricingPreviewBody>('/UserAgent/PricingPreview', {
               useragentguid: agent_guid,
               skillOverrides: diff.changes,
               ...(tierChange ? { tier: tierChange } : {}),
+              withScheduledTasks: true,
             }, extra.signal),
             'Could not price this change.',
           );
+          const moved = scheduledTasksOf(preview.scheduledTasks);
+          stops = moved === null ? null : moved?.stop ?? [];
           const newPrice = toNumber(preview.totalPriceUsd);
           if (newPrice === null) {
             throw new Error('Wiro did not return the new monthly price of this change, so it cannot be quoted. Try again later.');
@@ -702,7 +729,6 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
             const priceChanged = confirm && givenKey !== null;
             const blocked = billing.plan !== 'none' && billing.status !== 'active';
             const restart = skillsMove ? restartNote(status, 'skill change') : TIER_ONLY_RESTART;
-            const moved = scheduledTasksOf(preview.scheduledTasks);
             const priceNote = todayPriceNote(row, billing, currentPrice, currentCredits, tierChange);
             const pricing = {
               currentMonthlyUsd: currentPrice,
@@ -759,9 +785,9 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
                 : null,
               `**Billing:** ${note}`,
               `**Restart:** ${restart}`,
-              ...movedTaskLines(moved),
+              ...movedTaskLines(moved, row, running),
               credentialsNeeded.length > 0
-                ? `**Credentials the new skills need:** ${neededText(credentialsNeeded, row, titles)}.${bindProjectNote(credentialsNeeded)}`
+                ? `**Credentials the new skills need:** ${neededText(credentialsNeeded, row, titles, serviceTitles)}.${bindProjectNote(credentialsNeeded)}`
                 : null,
               '',
               blocked
@@ -865,7 +891,7 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
           // before anything is reported.
           const { holds, live } = await readAfterChange(client, agent_guid, plan.requested, tierChange, extra.signal);
           if (holds === true) {
-            const paused = newlyPaused(row, live);
+            const paused = newlyPaused(row, live, stops);
             const note = `The agent's skills now match the request, so the change is in place. Do not repeat it. ${billing.plan === 'prepaid' && billing.status === 'active' ? `The difference for the rest of this period was probably taken from, or credited to, ${walletName(billing)}; a credit goes back to the balances that paid. get_account with recent_transactions shows the amount, and get_agent_activity with kind usage the credits it moved.` : 'Any price difference follows the plan\'s usual billing.'}`;
             return {
               content: [{ type: 'text' as const, text: [
@@ -982,7 +1008,7 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
                 }
                 : undefined;
         // Read from the agent after the change: the tasks it paused, which the quote named among those that stop.
-        const paused = applied.noOp || replayed ? [] : newlyPaused(row, live);
+        const paused = applied.noOp || replayed ? [] : newlyPaused(row, live, stops);
         const lines = [
           applied.noOp ? '## No change needed' : replayed ? '## Already applied' : '## Skills updated',
           '',
@@ -1002,7 +1028,7 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
           holds === null ? 'The agent could not be read afterwards to confirm the new skills; get_my_agent shows them.' : null,
           await pausedLine(client, paused, extra.signal),
           credentialsNeeded.length > 0
-            ? `**Still needed:** credentials for ${neededText(credentialsNeeded, row, titles)}. ${stillNeededSteps(credentialsNeeded)}`
+            ? `**Still needed:** credentials for ${neededText(credentialsNeeded, row, titles, serviceTitles)}. ${stillNeededSteps(credentialsNeeded)}`
             : null,
         ].filter((line): line is string => line !== null);
         return {

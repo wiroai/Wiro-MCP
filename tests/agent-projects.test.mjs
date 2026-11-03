@@ -741,7 +741,7 @@ test('a custom skill gated on the project: the summary says it turns on, confirm
     assert.equal(preview.structuredContent.state, 'preview');
     // Instead of the warning, it says what connecting does.
     assert.deepEqual(preview.structuredContent.warnings, []);
-    const note = '`cs-image-rules` and `cs-cron-weekly-images` turn on once the project is connected. Every run of a scheduled task uses credits; turn off any you do not want with manage_agent_custom_skill.';
+    const note = 'Image Rules (`cs-image-rules`) and Weekly Images (`cs-cron-weekly-images`) turn on once the project is connected. Every run of a scheduled task uses credits; turn off any you do not want with manage_agent_custom_skill.';
     assert.doesNotMatch(text(preview), /No active skill/);
     assert.ok(preview.structuredContent.notes.includes(note));
     assert.ok(text(preview).includes(note));
@@ -751,7 +751,7 @@ test('a custom skill gated on the project: the summary says it turns on, confirm
     assert.notEqual(done.isError, true, text(done));
     assert.equal(done.structuredContent.state, 'bound');
     assert.deepEqual(done.structuredContent.warnings, []);
-    assert.ok(done.structuredContent.notes.some(entry => /^`cs-image-rules` and `cs-cron-weekly-images` turn on now that the project is connected\./.test(entry)));
+    assert.ok(done.structuredContent.notes.some(entry => /^Image Rules \(`cs-image-rules`\) and Weekly Images \(`cs-cron-weekly-images`\) turn on now that the project is connected\./.test(entry)));
 
     const read = await call('get_my_agent', { agent_guid: AGENT });
     assert.equal(read.structuredContent.agent.scheduledTasks[0].key, 'cs-cron-weekly-images');
@@ -772,9 +772,9 @@ test('bind_agent_project names what turns on: all on a first bind, what is off o
   const off = { ...gated, enabled: false };
   await withTools(routes({ '/UserAgent/Detail': detail({ ...NO_WIRO_SKILL, scheduledskills: [off], credentials: { wiro: wiroGroup(OTHER_KEY) } }) }), async ({ call }) => {
     const preview = await call('bind_agent_project', { agent_guid: AGENT });
-    assert.ok(preview.structuredContent.notes.includes('`cs-cron-weekly-images` turns on once the project is connected. Every run of a scheduled task uses credits; turn off any you do not want with manage_agent_custom_skill.'));
+    assert.ok(preview.structuredContent.notes.includes('Weekly Images (`cs-cron-weekly-images`) turns on once the project is connected. Every run of a scheduled task uses credits; turn off any you do not want with manage_agent_custom_skill.'));
     const done = await call('bind_agent_project', preview.structuredContent.nextAction.arguments);
-    assert.ok(done.structuredContent.notes.some(entry => /^`cs-cron-weekly-images` turns on now that the project is connected\./.test(entry)));
+    assert.ok(done.structuredContent.notes.some(entry => /^Weekly Images \(`cs-cron-weekly-images`\) turns on now that the project is connected\./.test(entry)));
   });
   await withTools(routes({ '/UserAgent/Detail': detail({ ...NO_WIRO_SKILL, scheduledskills: [off], credentials: { wiro: wiroGroup(OWN_KEY) } }) }), async ({ call }) => {
     const result = await call('bind_agent_project', { agent_guid: AGENT });
@@ -785,12 +785,12 @@ test('bind_agent_project names what turns on: all on a first bind, what is off o
   const rules = { key: 'cs-image-rules', description: 'Rules', value: 'Use square images.', interval: null, enabled: false, requires_credentials: ['wiro'], _source: 'user-created', _editable: true };
   await withTools(routes({ '/UserAgent/Detail': detail({ ...NO_WIRO_SKILL, customskills: [rules] }) }), async ({ call }) => {
     const result = await call('bind_agent_project', { agent_guid: AGENT });
-    assert.ok(result.structuredContent.notes.includes('`cs-image-rules` turns on once the project is connected.'));
+    assert.ok(result.structuredContent.notes.includes('Image Rules (`cs-image-rules`) turns on once the project is connected.'));
   });
   // With an active skill too, the first bind still says it.
   await withTools(routes({ '/UserAgent/Detail': detail({ scheduledskills: [gated] }) }), async ({ call }) => {
     const result = await call('bind_agent_project', { agent_guid: AGENT });
-    assert.ok(result.structuredContent.notes.some(entry => /^`cs-cron-weekly-images` turns on once the project is connected\./.test(entry)));
+    assert.ok(result.structuredContent.notes.some(entry => /^Weekly Images \(`cs-cron-weekly-images`\) turns on once the project is connected\./.test(entry)));
   });
 });
 
@@ -805,7 +805,7 @@ test('bind_agent_project names the skill a task it turns on still waits for', as
     const preview = await call('bind_agent_project', { agent_guid: AGENT });
     assert.notEqual(preview.isError, true, text(preview));
     assert.equal(preview.structuredContent.state, 'preview');
-    const note = '`cs-cron-weekly-images` and `cs-cron-monthly-images` turn on once the project is connected. `cs-cron-weekly-images` stays paused until Wiro AI Models (`int-wiro-aimodels`) is on. Every run of a scheduled task uses credits; turn off any you do not want with manage_agent_custom_skill.';
+    const note = 'Weekly Images (`cs-cron-weekly-images`) and Monthly Images (`cs-cron-monthly-images`) turn on once the project is connected. Weekly Images (`cs-cron-weekly-images`) stays paused until Wiro AI Models (`int-wiro-aimodels`) is on. Every run of a scheduled task uses credits; turn off any you do not want with manage_agent_custom_skill.';
     assert.ok(preview.structuredContent.notes.includes(note), JSON.stringify(preview.structuredContent.notes));
     assert.ok(text(preview).includes(note));
   });
@@ -819,7 +819,7 @@ test('replacing a project names what is off and turns on again, and nothing else
   });
   await withTools(routes({ '/UserAgent/Detail': row }), async ({ call }) => {
     const summary = await call('bind_agent_project', { agent_guid: AGENT });
-    const before = '`cs-cron-weekly-images` turns on once the project is connected. Every run of a scheduled task uses credits; turn off any you do not want with manage_agent_custom_skill.';
+    const before = 'Weekly Images (`cs-cron-weekly-images`) turns on once the project is connected. Every run of a scheduled task uses credits; turn off any you do not want with manage_agent_custom_skill.';
     assert.equal(summary.structuredContent.state, 'preview');
     assert.ok(summary.structuredContent.replaces);
     assert.ok(summary.structuredContent.notes.includes(before));
@@ -1310,13 +1310,13 @@ test('apply_agent_skills and connect_agent_oauth point a Wiro project to bind_ag
   }), async ({ call }) => {
     const quote = await call('apply_agent_skills', { agent_guid: AGENT, skills: { 'int-wiro-aimodels': true } });
     assert.notEqual(quote.isError, true, text(quote));
-    assert.match(text(quote), /\*\*Credentials the new skills need:\*\* Wiro AI Models \(`int-wiro-aimodels`\): Wiro \(`wiro`\)\. bind_agent_project connects a Wiro project, with no key to paste\./);
+    assert.match(text(quote), /\*\*Credentials the new skills need:\*\* Wiro AI Models \(`int-wiro-aimodels`\): Wiro AI Models \(`wiro`\)\. bind_agent_project connects a Wiro project, with no key to paste\./);
 
     const applied = await call('apply_agent_skills', quote.structuredContent.nextAction.arguments);
     assert.notEqual(applied.isError, true, text(applied));
     assert.equal(applied.structuredContent.nextAction.tool, 'bind_agent_project');
     assert.deepEqual(applied.structuredContent.nextAction.arguments, { agent_guid: AGENT });
-    assert.ok(text(applied).includes('**Still needed:** credentials for Wiro AI Models (`int-wiro-aimodels`): Wiro (`wiro`). Connect the Wiro project with bind_agent_project, with no key to paste.'), text(applied));
+    assert.ok(text(applied).includes('**Still needed:** credentials for Wiro AI Models (`int-wiro-aimodels`): Wiro AI Models (`wiro`). Connect the Wiro project with bind_agent_project, with no key to paste.'), text(applied));
     assert.doesNotMatch(text(applied), /set_agent_credentials|connect_agent_oauth/);
 
     const signIn = await call('connect_agent_oauth', { agent_guid: AGENT, credential: 'wiro' });
