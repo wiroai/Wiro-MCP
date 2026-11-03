@@ -26,6 +26,7 @@ import {
   skillLabel,
   skillOffTasksNote,
   taskLabel,
+  taskNamedByWiro,
   tierPricingSchema,
   toAgentDetail,
   toDeployedAgent,
@@ -140,14 +141,15 @@ const pausedScheduledTaskSchema = z.object({
 
 type DeployEnvelope = ApiEnvelope & { useragents?: unknown; existingUserAgentGuid?: unknown };
 
-function customSkillLine(skill: { key: string; kind: string; interval?: string | null; enabled?: boolean }, fromTemplate?: boolean): string {
+/** A requested custom skill with what it is. known is false for an entry the customer named (taskLabel). */
+function customSkillLine(skill: { key: string; kind: string; interval?: string | null; enabled?: boolean }, fromTemplate?: boolean, known = true): string {
   const details = [
     skill.kind === 'scheduled_task' ? 'scheduled task' : 'custom skill',
     skill.interval ? `runs on "${skill.interval}"` : null,
     skill.enabled === false ? 'turned off' : null,
     fromTemplate ? 'replaces the template\'s entry' : null,
   ].filter(Boolean).join(', ');
-  return `${taskLabel(skill.key, fromTemplate === true)} (${details})`;
+  return `${taskLabel(skill.key, known)} (${details})`;
 }
 
 /** What custom_skills does to the approval policy, for the quote. A policy that is off is not read, so only one that is on shows its text. */
@@ -300,7 +302,11 @@ function deployedText(
   ];
   const saved = customSkills.filter(skill => skill.onAgent);
   const missing = customSkills.filter(skill => !skill.onAgent);
-  if (saved.length > 0) lines.push(`- Custom skills saved: ${saved.map(skill => customSkillLine(skill)).join('; ')}`);
+  // Each saved entry is named from the new agent's own row, as get_my_agent names it.
+  const onAgent = new Map([...agent.scheduledTasks, ...agent.customInstructions].map(task => [task.key, task]));
+  if (saved.length > 0) {
+    lines.push(`- Custom skills saved: ${saved.map(skill => customSkillLine(skill, false, taskNamedByWiro(onAgent.get(skill.key) ?? {}))).join('; ')}`);
+  }
   if (missing.length > 0) {
     lines.push(`- Not found on the new agent: ${missing.map(skill => `\`${skill.key}\``).join(', ')}. get_my_agent shows its custom skills; manage_agent_custom_skill adds them.`);
   }

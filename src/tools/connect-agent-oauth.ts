@@ -226,14 +226,23 @@ function unusedCredentialRefusal(
 /**
  * What a finished sign-in does to the entries that need the service (entriesTurnedOnBy): the ones it turns on,
  * the ones it turns on that stay paused for skills that are off, the tasks already on that start running, and
- * those that still wait for skills. Each task is named as people see it, and each skill by its title.
+ * those that still wait for skills. Each task is named as people see it, and each skill by its title. A task
+ * that is on runs only while the agent runs, so on an agent that is not running it would run once it starts.
  */
-function turnsOnNote({ on, paused, starts, waiting }: ReturnType<typeof entriesTurnedOnBy>, { meta }: Context, titles: ReadonlyMap<string, string>): string {
+function turnsOnNote(
+  { on, paused, starts, waiting }: ReturnType<typeof entriesTurnedOnBy>,
+  { meta }: Context,
+  titles: ReadonlyMap<string, string>,
+  running: boolean,
+): string {
   if (on.length === 0 && paused.length === 0 && starts.length === 0 && waiting.length === 0) return '';
   const names = (entries: CustomSkillEntry[]) => entries.map(entry => taskLabel(entry.key, taskNamedByWiro(entry))).join(', ');
+  const startRunning = running
+    ? `${starts.length > 1 ? 'start' : 'starts'} running once ${meta.title} is connected`
+    : `would run once ${meta.title} is connected and the agent starts`;
   const sentence = (on.length > 0 ? ` ${names(on)} ${on.length > 1 ? 'turn' : 'turns'} on once ${meta.title} is connected.` : '')
     + paused.map(task => waitingTaskSentence(task.key, task.groups, titles, 'turns on but stays paused')).join('')
-    + (starts.length > 0 ? ` ${names(starts)} ${starts.length > 1 ? 'start' : 'starts'} running once ${meta.title} is connected.` : '')
+    + (starts.length > 0 ? ` ${names(starts)} ${startRunning}.` : '')
     + waiting.map(task => waitingTaskSentence(task.key, task.groups, titles, 'stays paused')).join('');
   return [...on, ...starts].some(entry => entry.kind === 'scheduled_task') || paused.length > 0
     ? `${sentence} Every run of a scheduled task uses credits; turn off any you do not want with manage_agent_custom_skill.`
@@ -413,7 +422,7 @@ async function connect(
   const turnsOn = entriesTurnedOnBy(row, credential);
   const titles = await skillTitles(client, [...turnsOn.paused, ...turnsOn.waiting].flatMap(task => task.groups.flat()), signal);
   return result('connect', context, 'authorize_in_browser',
-    `The user must open this link in their own browser and approve access. It works for ${OAUTH_LINK_TTL_SECONDS / 60} minutes. ${after}${turnsOnNote(turnsOn, context, titles)} Give the link to the user and check the status once they say they are done.`,
+    `The user must open this link in their own browser and approve access. It works for ${OAUTH_LINK_TTL_SECONDS / 60} minutes. ${after}${turnsOnNote(turnsOn, context, titles, isAgentRunning(agentStatusOf(row)))} Give the link to the user and check the status once they say they are done.`,
     {
       mode,
       authorizeUrl,

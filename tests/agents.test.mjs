@@ -1101,6 +1101,49 @@ test('deploy_agent with confirm pays from the wallet and returns a sanitized age
   });
 });
 
+test('deploy_agent names Wiro\'s own tasks in the words get_my_agent uses, and the customer\'s as typed', async () => {
+  const template = templateRow({
+    customskills: [],
+    scheduledskills: [
+      { key: 'cs-cron-ga4-attribution-auditor', value: 'Audit the tracking.', interval: '0 11 * * 1', enabled: false },
+      { key: 'cs-cron-metaads-performance-reporter', value: 'Report the ads.', interval: '0 9 * * 1', enabled: true },
+    ],
+  });
+  const deployed = agentRow({
+    status: 2,
+    guid: 'ua-new',
+    scheduledskills: [
+      { key: 'cs-cron-ga4-attribution-auditor', description: 'Audit', value: 'Audit the tracking.', interval: '0 7 * * 1', enabled: true, _source: 'preset-strategy' },
+      { key: 'cs-cron-metaads-performance-reporter', description: 'Report', value: 'Report the ads.', interval: '0 8 * * *', enabled: true, _source: 'skill-bundle', _owner_skills: ['int-metaads-manage'] },
+      { key: 'cs-cron-crm-notes', description: 'Notes', value: 'Write the notes.', interval: '0 9 * * 1', enabled: true, _source: 'user-created' },
+    ],
+  });
+  const fake = fakeClient({
+    '/Agent/Detail': { result: true, errors: [], agents: [template] },
+    '/UserAgent/Deploy': { result: true, errors: [], useragents: [{ ...deployed, subscription: undefined }] },
+    '/UserAgent/Detail': detailResponse(deployed),
+  });
+  await withClient(fake, async client => {
+    const quote = await call(client, 'deploy_agent', {
+      template: 'instagram-manager',
+      tier: 'starter',
+      custom_skills: [
+        { key: 'ga4-attribution-auditor', interval: '0 7 * * 1', enabled: true },
+        { key: 'metaads-performance-reporter', interval: '0 8 * * *' },
+        { key: 'crm-notes', value: 'Write the notes.', interval: '0 9 * * 1' },
+      ],
+    });
+    assert.notEqual(quote.isError, true, textOf(quote));
+    // Names made from the key write GA4 and Meta Ads as the dashboard does.
+    assert.match(textOf(quote), /GA4 Attribution Auditor \(`cs-cron-ga4-attribution-auditor`\) \(scheduled task, runs on "0 7 \* \* 1", replaces the template's entry\); Meta Ads Performance Reporter \(`cs-cron-metaads-performance-reporter`\) \(scheduled task, runs on "0 8 \* \* \*", replaces the template's entry\)/);
+
+    const result = await call(client, 'deploy_agent', quote.structuredContent.nextAction.arguments);
+    assert.notEqual(result.isError, true, textOf(result));
+    // Named from the new agent's rows, as get_my_agent names them: Wiro's tasks in those words, the customer's as typed.
+    assert.match(textOf(result), /Custom skills saved: GA4 Attribution Auditor \(`cs-cron-ga4-attribution-auditor`\) \(scheduled task, runs on "0 7 \* \* 1"\); Meta Ads Performance Reporter \(`cs-cron-metaads-performance-reporter`\) \(scheduled task, runs on "0 8 \* \* \*"\); Crm Notes \(`cs-cron-crm-notes`\) \(scheduled task, runs on "0 9 \* \* 1"\)$/m);
+  });
+});
+
 test('deploy_agent charges only the price the user approved', async () => {
   let price = 12;
   const fake = fakeClient({

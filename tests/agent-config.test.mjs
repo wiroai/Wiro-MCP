@@ -3679,6 +3679,12 @@ test('connect_agent_oauth says which entries a finished sign-in turns on', async
   assert.match(starts.structuredContent.message, credits);
   assert.doesNotMatch(starts.structuredContent.message, /turns? on once|ads-report/);
 
+  // A task that is on runs only while the agent runs: on a stopped agent it would run once the agent starts.
+  const stopped = await connect({ status: 0, scheduledskills: [entry('cs-cron-crm-report', true, ['hubspot'])], customskills: [] });
+  assert.match(stopped.structuredContent.message, /CRM Report \(`cs-cron-crm-report`\) would run once HubSpot is connected and the agent starts\./);
+  assert.match(stopped.structuredContent.message, credits);
+  assert.doesNotMatch(stopped.structuredContent.message, /starts? running/);
+
   // Nothing waits for it: on and running through Serper, which is set, or waiting for another service.
   const serperSet = { serper: { apikey: 'x', optional: false, _connected: false, _filled: true, _required_missing: false, _schema: { title: 'Serper Web Search', oauth_provider: null } } };
   for (const overrides of [
