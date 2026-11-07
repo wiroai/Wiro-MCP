@@ -57,7 +57,7 @@ export function registerUpdateAgent(server: McpServer, client: WiroClient): void
           .describe('New name.'),
         description: z.string().max(5_000).nullable().optional()
           .describe('New description; null clears it.'),
-        cover: z.string().url().max(2_048).nullable().optional()
+        cover: z.url().max(2_048).nullable().optional()
           .describe('New https cover image URL; null goes back to the template cover.'),
         categories: z.array(z.string().min(1).max(100)).min(1).max(20).optional()
           .describe('New category list (at least one).'),
