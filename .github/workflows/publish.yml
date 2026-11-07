@@ -81,6 +81,22 @@ jobs:
           tar xzf "$archive" mcp-publisher
           rm -f "$archive" "$archive.sigstore.json"
 
+      # The registry looks the version up on npm, and npm can take a minute to
+      # serve a version it has just accepted. Until then the registry answers 400.
+      - name: Wait for npm to serve this version
+        run: |
+          set -euo pipefail
+          version=$(node -p 'require("./package.json").version')
+          for check in $(seq 1 40); do
+            if [ "$(npm view "@wiro-ai/wiro-mcp@$version" version --prefer-online 2>/dev/null)" = "$version" ]; then
+              echo "npm serves @wiro-ai/wiro-mcp@$version (check $check)."
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "::error::npm has not served @wiro-ai/wiro-mcp@$version for 10 minutes, so the MCP Registry was not updated."
+          exit 1
+
       # ai.wiro/mcp is a DNS namespace: the registry checks the Ed25519 key against the
       # TXT record on wiro.ai. The secret holds that key's private part, in hex.
       - name: Publish to the MCP Registry
