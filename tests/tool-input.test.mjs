@@ -54,6 +54,6 @@ test('maxToolInputElements: Infinity turns the check off', async () => {
   await withClient({}, async client => {
     const result = await client.callTool({ name: 'list_workflows', arguments: { tags: manyTags } });
     assert.equal(result.isError, true);
-    assert.match(result.content[0].text, /Array must contain at most 20 element\(s\) at tags/);
+    assert.match(result.content[0].text, /Too big: expected array to have <=20 items at tags/);
   }, { maxToolInputElements: Infinity });
 });

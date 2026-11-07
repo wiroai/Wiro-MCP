@@ -85,7 +85,7 @@ export function registerSendAgentMessage(server: McpServer, client: WiroClient):
           + 'turn. Leave it out for the default; an unknown key is refused with the list of keys you can use. If '
           + 'you set one, pass the same model on every later turn of the session; switching models reduces the '
           + 'agent\'s memory of the session to a summary.'),
-        attachment_urls: z.array(z.string().url()).min(1).max(MAX_ATTACHMENTS).optional()
+        attachment_urls: z.array(z.url()).min(1).max(MAX_ATTACHMENTS).optional()
           .describe('Up to 8 public http(s) file URLs (images, video, audio or documents) to attach. Each file is '
             + 'downloaded and uploaded with the message: at most 100 MB each (50 MB for the Workflow Agent) and '
             + '200 MB in total.'),

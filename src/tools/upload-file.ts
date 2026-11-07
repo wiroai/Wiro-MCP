@@ -16,7 +16,7 @@ export function registerUploadFile(server: McpServer, client: WiroClient): void 
         + 'archives. A file that is only attached in the chat has no URL: ask the user for '
         + 'a public link.',
       inputSchema: strictInput({
-        url: z.string().url().describe('URL of the file to upload (image, audio, video, or document).'),
+        url: z.url().describe('URL of the file to upload (image, audio, video, or document).'),
         file_name: z.string().optional().describe('Optional filename. Defaults to the URL filename.'),
       }),
       outputSchema: uploadedFileOutputSchema,

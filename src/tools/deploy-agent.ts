@@ -360,7 +360,7 @@ export function registerDeployAgent(server: McpServer, client: WiroClient): void
           .describe('Plan tier. Pro has a larger monthly credit pool and is the only tier that can buy extra credit packs.'),
         description: z.string().max(5_000).optional()
           .describe('Optional description of the agent.'),
-        cover: z.string().url().max(2_048).optional()
+        cover: z.url().max(2_048).optional()
           .describe('Optional https image URL for the agent cover. A template deploy shows the template cover when it is left out.'),
         credentials: z.record(z.string(), z.record(z.string(), z.unknown())).optional()
           .describe('Optional credential values stored at deployment, keyed by credential key and then field key, for example {"telegram": {"bottoken": "...", "allowedusers": ["123456789"]}}. A chat channel group must contain every required field. Values are never shown back. Other credentials are better set after deployment with set_agent_credentials, which reports field errors.'),

@@ -1332,7 +1332,7 @@ test('the task tools still report a wrong value and a missing identifier in thei
   try {
     const wrongType = await client.callTool({ name: 'get_task', arguments: { taskid: 5405407 } });
     assert.equal(wrongType.isError, true);
-    assert.match(wrongType.content[0].text, /Expected string, received number at taskid/);
+    assert.match(wrongType.content[0].text, /Invalid input: expected string, received number at taskid/);
     const none = await client.callTool({ name: 'get_task', arguments: {} });
     assert.equal(none.isError, true);
     assert.match(none.content[0].text, /Either `tasktoken` or `taskid` is required/);

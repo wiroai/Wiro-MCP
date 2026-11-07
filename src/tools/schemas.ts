@@ -48,26 +48,25 @@ function unknownArgumentsText(names: string[], known: string[], hint: string): s
  * says additionalProperties false.
  */
 export function strictInput<T extends z.ZodRawShape>(shape: T, hint = '') {
-  const schema = z.object(shape, {
-    errorMap: (issue, context) => ({
-      message: issue.code === 'unrecognized_keys'
-        ? unknownArgumentsText(issue.keys, Object.keys(shape), hint)
-        : context.defaultError,
-    }),
-  }).strict();
+  const schema = z.strictObject(shape, {
+    // Any other issue keeps Zod's own message.
+    error: issue => issue.code === 'unrecognized_keys'
+      ? unknownArgumentsText(issue.keys, Object.keys(shape), hint)
+      : undefined,
+  });
   // A client that adds toolCallId to the arguments also adds other keys of its
   // own, and the assistant cannot take them out, so only the known ones are read.
-  const parse = schema._parse.bind(schema);
-  schema._parse = input => {
-    const { data } = input;
+  const run = schema._zod.run;
+  schema._zod.run = (payload, context) => {
+    const data = payload.value;
     if (!data || typeof data !== 'object' || Array.isArray(data)
       || !Object.hasOwn(data, 'toolCallId') || Object.hasOwn(shape, 'toolCallId')) {
-      return parse(input);
+      return run(payload, context);
     }
-    return parse({
-      ...input,
-      data: Object.fromEntries(Object.entries(data).filter(([key]) => Object.hasOwn(shape, key))),
-    });
+    return run({
+      ...payload,
+      value: Object.fromEntries(Object.entries(data).filter(([key]) => Object.hasOwn(shape, key))),
+    }, context);
   };
   return schema;
 }
@@ -324,5 +323,5 @@ export const docsSearchOutputSchema = {
     title: z.string(),
     text: z.string(),
   })),
-  docsUrl: z.string().url(),
+  docsUrl: z.url(),
 };
