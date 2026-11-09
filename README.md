@@ -14,7 +14,7 @@ Official MCP server for Wiro AI: run image, video, audio and LLM models, build a
 
 </div>
 
-`@wiro-ai/wiro-mcp` is a TypeScript [Model Context Protocol](https://modelcontextprotocol.io/) server that runs locally over stdio with `npx`. Its tools are grouped in three sets:
+`@wiro-ai/wiro-mcp` is a TypeScript [Model Context Protocol](https://modelcontextprotocol.io/) server that runs locally over stdio, with `npx` or [Docker](#docker). Its tools are grouped in three sets:
 
 - **Models**: search the Wiro AI model catalog, read a model's parameters and price, run it and wait for the result, upload input files and browse past tasks.
 - **Workflows**: build multi-step workflows that chain models, run them, resume failed runs, browse the public gallery, and design workflows together with the Workflow Agent.
@@ -25,7 +25,8 @@ Playbooks explain each job step by step, so the assistant knows the order of cal
 ## Quick Start
 
 Local `npx` and library usage require Node.js 20 or later. The hosted MCP
-endpoint does not require a local Node.js installation.
+endpoint and the [Docker image](#docker) do not require a local Node.js
+installation.
 
 ### 1. Get API Keys
 
@@ -158,6 +159,54 @@ Ask your AI assistant:
 - *"Which agent templates can manage Instagram? What does each plan cost?"*
 - *"Deploy the Instagram manager agent on the Starter plan and tell me what it still needs"*
 - *"Tell my support agent to summarise today's tickets"*
+
+## Docker
+
+Every release is also published on Docker Hub as
+[`wiroai/wiro-mcp`](https://hub.docker.com/r/wiroai/wiro-mcp), for
+`linux/amd64` and `linux/arm64`. The image runs the same stdio server, so you
+need Docker but not Node.js:
+
+```bash
+docker run -i --rm -e WIRO_API_KEY wiroai/wiro-mcp
+```
+
+`-e WIRO_API_KEY` hands the variable from your environment to the container.
+For a project with signature-based auth, add `-e WIRO_API_SECRET` as well.
+`WIRO_TOOLSETS` passes through the same way. Keep `-i`, since the server reads
+its requests from stdin, and leave out `-t`.
+
+In a client config, `docker` is the command and the credentials go in `env`.
+This works in Cursor, Claude Desktop and Windsurf:
+
+```json
+{
+  "mcpServers": {
+    "wiro": {
+      "command": "docker",
+      "args": ["run", "-i", "--rm", "-e", "WIRO_API_KEY", "-e", "WIRO_API_SECRET", "wiroai/wiro-mcp"],
+      "env": {
+        "WIRO_API_KEY": "your-api-key",
+        "WIRO_API_SECRET": "your-api-secret"
+      }
+    }
+  }
+}
+```
+
+**Claude Code:**
+
+```bash
+claude mcp add wiro -e WIRO_API_KEY=your-api-key -e WIRO_API_SECRET=your-api-secret -- docker run -i --rm -e WIRO_API_KEY -e WIRO_API_SECRET wiroai/wiro-mcp
+```
+
+For an API Key Only project, leave out the `WIRO_API_SECRET` value. Docker only
+passes variables that are set, so the `-e WIRO_API_SECRET` argument can stay.
+
+Image tags follow the npm versions: `wiroai/wiro-mcp:<version>` pins a release
+and `latest` is the newest one. A client does not fetch a newer `latest` by
+itself, so run `docker pull wiroai/wiro-mcp` to update. Pulling once before the
+first start also means the client does not wait for the download.
 
 ## Authentication
 

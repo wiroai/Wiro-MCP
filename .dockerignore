@@ -1,0 +1,8 @@
+# The image build needs only these files. Everything else, .env files and
+# node_modules included, stays out of the build context.
+*
+!package.json
+!package-lock.json
+!tsconfig.json
+!src
+!LICENSE
