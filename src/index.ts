@@ -31,5 +31,11 @@ const client = new WiroClient(apiKey, apiSecret, baseUrl, {
 const server = createMcpServer(client, { toolsets });
 const transport = new StdioServerTransport();
 
+// In a container the server is PID 1, which ignores SIGINT and SIGTERM unless
+// it handles them, so `docker stop` would wait out its timeout.
+for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+  process.on(signal, () => process.exit(0));
+}
+
 await server.connect(transport);
 console.error(`Wiro MCP server running on stdio (auth: ${client.authType}, tools: ${(toolsets ?? ['all']).join(', ')})`);
