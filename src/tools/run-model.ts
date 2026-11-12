@@ -18,6 +18,8 @@ import {
   runKey,
   runLedger,
   submittedTask,
+  type RunLedger,
+  type RunOutcome,
   type RunRecord,
   type RunReuseTiming,
   type RunSubmission,
@@ -46,7 +48,9 @@ export interface RunModelTiming extends RunReuseTiming {
  * continues the earlier call's task instead of starting a new one when it comes
  * within 10 minutes of that call ending without its answer reaching the client
  * (cancelled, connection lost, or no task confirmed yet), or while that call is
- * still waiting and at least 10 seconds after it started.
+ * still waiting and at least 10 seconds after it started. Wiro applies the same
+ * rule to the run request's key, so this holds whichever server process or host
+ * the repeat reaches.
  */
 export const RUN_MODEL_TIMING: Readonly<RunModelTiming> = Object.freeze({
   maxWaitMs: MAX_WAIT_SECONDS * 1000,
@@ -62,6 +66,36 @@ interface ToolResult {
 }
 
 const TIMED_OUT = Symbol('timed out');
+
+/** How long a call waits for Wiro to end a failed run's record before it starts the replacement. */
+const RELEASE_WAIT_MS = 5_000;
+
+/**
+ * Tells Wiro how the last call serving a keyed run ended, so its record ends or
+ * stays for a repeat. Best effort: the record also runs out on its own.
+ */
+async function releaseShared(
+  client: WiroClient,
+  key: string | undefined,
+  record: RunRecord,
+  outcome: RunOutcome | undefined,
+): Promise<void> {
+  const taskid = submittedTask(record.settled)?.taskid;
+  if (!key || !outcome || !taskid || typeof client.releaseRun !== 'function') return;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      client.releaseRun(key, taskid, outcome),
+      new Promise(resolve => {
+        timer = setTimeout(resolve, RELEASE_WAIT_MS);
+      }),
+    ]);
+  } catch {
+    // Wiro's record runs out by itself; a lost release never fails a call.
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 function abortError(): Error {
   const error = new Error('Task wait aborted by client');
@@ -106,6 +140,11 @@ function errorResult(text: string): ToolResult {
 
 /** What a call answers when Wiro created no task it can follow. */
 function runFailure(settled: RunSubmission, model: string, project: string): ToolResult {
+  if (settled.ok && !settled.result.result && settled.result.runkeybusy) {
+    return errorResult('An identical run_model call is still starting its task on Wiro, so this call started nothing '
+      + 'and nothing was charged for it. Do not run the model again now: in a minute, call list_tasks with model '
+      + `"${project}" and look for a task of ${model} that started in the last few minutes, then follow it with wait_for_task.`);
+  }
   if (!settled.ok) {
     const { error } = settled;
     // The request was sent, and no clear answer says whether Wiro created a task.
@@ -260,6 +299,7 @@ export function registerRunModel(
   server: McpServer,
   client: WiroClient,
   timing: RunModelTiming = RUN_MODEL_TIMING,
+  ledger: RunLedger = runLedger,
 ): void {
   server.registerTool(
     'run_model',
@@ -310,15 +350,19 @@ export function registerRunModel(
       // A client without an identity, such as a stand-in in a test, gets a key
       // no other call shares.
       const identity = typeof client.identity === 'string' ? client.identity : undefined;
-      const key = identity ? runKey(identity, model, params) : `call:${crypto.randomUUID()}`;
+      // The same key goes to Wiro with the run request, so the run is
+      // remembered where every server process reads it.
+      const sharedKey = identity ? runKey(identity, model, params) : undefined;
+      const key = sharedKey ?? `call:${crypto.randomUUID()}`;
 
-      let match = identity ? runLedger.find(key, timing, startedAt) : undefined;
+      let match = sharedKey ? ledger.find(key, timing, startedAt) : undefined;
       let record: RunRecord | undefined;
-      let outcome: 'answered' | 'unanswered' | 'failed' = 'failed';
+      let outcome: RunOutcome = 'failed';
+      let replaced = false;
       // A cancel or a closed connection means this call's answer will never
       // arrive, so an identical call right after it continues its task.
       const onAbort = (): void => {
-        if (record) runLedger.markUnanswered(record);
+        if (record) ledger.markUnanswered(record);
       };
       extra.signal.addEventListener('abort', onAbort);
 
@@ -328,11 +372,13 @@ export function registerRunModel(
         for (;;) {
           const reused = match;
           match = undefined;
-          record = reused ?? runLedger.start(key, () => client.runModel(model, params));
-          runLedger.attach(record);
-          const finish = (result: ToolResult): ToolResult => (reused
-            ? withReuseNote(result, startedAt - reused.startedAt)
-            : result);
+          record = reused ?? ledger.start(key, () => client.runModel(
+            model,
+            params,
+            undefined,
+            sharedKey ? { runKey: sharedKey } : undefined,
+          ));
+          ledger.attach(record);
 
           // The run request is not tied to this call's signal: once it is sent,
           // Wiro may create the task whether or not this call is still waiting,
@@ -345,14 +391,26 @@ export function registerRunModel(
 
           const task = submittedTask(settled);
           if (!task) {
-            if (reused) {
-              runLedger.release(record, 'failed');
+            if (reused && !replaced) {
+              replaced = true;
+              ledger.release(record, 'failed');
               record = undefined;
               continue;
             }
             outcome = 'failed';
             return runFailure(settled, model, project);
           }
+
+          // Wiro answered with the task of an identical request another server
+          // process sent: a repeat that reached this process first.
+          const continuedAgeMs = reused
+            ? startedAt - reused.startedAt
+            : settled.ok && settled.result.runkeyreused === true
+              ? Math.max(0, Number(settled.result.runkeyage) || 0) * 1000
+              : undefined;
+          const finish = (result: ToolResult): ToolResult => (continuedAgeMs === undefined
+            ? result
+            : withReuseNote(result, continuedAgeMs));
 
           if (!wait) {
             outcome = 'answered';
@@ -363,8 +421,11 @@ export function registerRunModel(
           }
 
           const followed = await followTask(client, task.tasktoken, deadline, startedAt, extra);
-          if (reused && followed.kind === 'done' && ['failed', 'cancelled'].includes(getTaskState(followed.task))) {
-            runLedger.release(record, 'failed');
+          if (continuedAgeMs !== undefined && !replaced && followed.kind === 'done'
+            && ['failed', 'cancelled'].includes(getTaskState(followed.task))) {
+            replaced = true;
+            // Wiro's record ends first, so the new run request starts a task.
+            await releaseShared(client, sharedKey, record, ledger.release(record, 'failed'));
             record = undefined;
             continue;
           }
@@ -376,7 +437,10 @@ export function registerRunModel(
         return errorResult(error instanceof Error ? error.message : String(error));
       } finally {
         extra.signal.removeEventListener('abort', onAbort);
-        if (record) runLedger.release(record, extra.signal.aborted ? 'unanswered' : outcome);
+        if (record) {
+          const shared = ledger.release(record, extra.signal.aborted ? 'unanswered' : outcome);
+          void releaseShared(client, sharedKey, record, shared);
+        }
       }
     },
   );

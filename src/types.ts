@@ -24,6 +24,12 @@ export interface RunModelResult {
   errors: Array<{ message: string }>;
   taskid: string;
   socketaccesstoken: string;
+  /** With a run key: the task of an earlier identical request, nothing new started. */
+  runkeyreused?: boolean;
+  /** With `runkeyreused`: seconds since that earlier request. */
+  runkeyage?: number;
+  /** With a run key: the same request is still creating its task, so this one started nothing. */
+  runkeybusy?: boolean;
 }
 
 export type TaskFinishReason =
