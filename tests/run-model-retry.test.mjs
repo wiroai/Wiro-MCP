@@ -33,10 +33,16 @@ function abortError() {
  */
 function fakeApi({ runDelayMs = 0, taskMs = 60_000, exitCode = '0' } = {}) {
   const tasks = new Map();
-  const api = { runs: [], runSignals: [] };
+  const api = { runs: [], runSignals: [], releases: [] };
   api.fetch = async (url, init = {}) => {
     const path = new URL(String(url)).pathname;
     const body = JSON.parse(init.body ?? '{}');
+    // How a run's last call ended; this stand-in keeps no record, so a repeat
+    // is continued only by the process that made the first call.
+    if (path === '/v1/Run/Release') {
+      api.releases.push(body);
+      return json({ result: true, errors: [], released: false });
+    }
     if (path.startsWith('/v1/Run/')) {
       const n = api.runs.length + 1;
       api.runs.push({ path, body });

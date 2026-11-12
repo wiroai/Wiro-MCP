@@ -211,7 +211,25 @@ export function isTaskNotFound(detail?: TaskDetailResponse): boolean {
 }
 
 // WiroClient sets these itself, so a requestHeaders hook may not.
-const CLIENT_HEADERS = new Set(['x-api-key', 'x-signature', 'x-nonce', 'content-type']);
+const CLIENT_HEADERS = new Set(['x-api-key', 'x-signature', 'x-nonce', 'content-type', 'x-wiro-run-key']);
+
+/** The header a run request carries its run key in (see `RunModelOptions.runKey`). */
+export const RUN_KEY_HEADER = 'x-wiro-run-key';
+
+/** How the last call serving a keyed run ended, for `releaseRun`. */
+export type RunReleaseOutcome = 'answered' | 'unanswered' | 'failed';
+
+export interface RunModelOptions {
+  /**
+   * 64 hex characters naming this run request: the same caller, model and
+   * parameters give the same key. Wiro then answers a repeat of the request
+   * that comes as a retry (10 seconds or more after it, or after its call
+   * ended unanswered) with the first request's task, flagged `runkeyreused`,
+   * instead of starting and billing a new one, whichever server process sends
+   * it. Call `releaseRun` once the last call serving the run has ended.
+   */
+  runKey?: string;
+}
 
 /** Checks what a requestHeaders hook returned and copies it. */
 function checkRequestHeaders(headers: unknown): Record<string, string> {
@@ -316,9 +334,10 @@ export class WiroClient {
     path: string,
     body: Record<string, unknown>,
     signal?: AbortSignal,
+    extraHeaders?: Record<string, string>,
   ): Promise<T> {
     const url = `${this.baseUrl}${path}`;
-    const headers = this.getAuthHeaders(new URL(url).pathname);
+    const headers = { ...this.getAuthHeaders(new URL(url).pathname), ...extraHeaders };
 
     const response = await fetch(url, {
       method: 'POST',
@@ -421,17 +440,38 @@ export class WiroClient {
     model: string,
     params: Record<string, unknown>,
     signal?: AbortSignal,
+    options: RunModelOptions = {},
   ): Promise<RunModelResult> {
     const [cleanslugowner, ...rest] = model.split('/');
     const cleanslugproject = rest.join('/');
     if (!cleanslugowner || !cleanslugproject) {
       throw new Error('Model must be in "owner/model" format, e.g. "google/veo3-1"');
     }
+    const { runKey } = options;
+    if (runKey !== undefined && !/^[0-9a-f]{64}$/.test(runKey)) {
+      throw new Error('runKey must be 64 lowercase hex characters');
+    }
     return this.request<RunModelResult>(
       `/Run/${cleanslugowner}/${cleanslugproject}`,
       params,
       signal,
+      runKey ? { [RUN_KEY_HEADER]: runKey } : undefined,
     );
+  }
+
+  /**
+   * Tells Wiro the last call serving a keyed run ended: `answered` (its answer
+   * reached the client, so the same request is a new run from now on),
+   * `failed` (its task is not worth continuing) or `unanswered` (the client
+   * left first, so a repeat in the next 10 minutes continues the task).
+   */
+  async releaseRun(
+    runKey: string,
+    taskid: string,
+    outcome: RunReleaseOutcome,
+    signal?: AbortSignal,
+  ): Promise<{ result: boolean; errors?: Array<{ message: string }>; released?: boolean }> {
+    return this.request('/Run/Release', { runkey: runKey, taskid, outcome }, signal);
   }
 
   async getTask(opts: TaskReference, signal?: AbortSignal): Promise<TaskDetailResponse> {

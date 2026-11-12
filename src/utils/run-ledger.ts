@@ -10,7 +10,11 @@ import type { RunModelResult } from '../types.js';
 //
 // The ledger lives in the process, so it covers every server this process
 // creates for the same API key: one stdio session, or every request of an HTTP
-// server that builds a server per request.
+// server that builds a server per request. The hash also goes to Wiro with the
+// run request (x-wiro-run-key), and Wiro keeps the same record where every
+// server process reads it, so a repeat that reaches another process or host,
+// or this one after a restart, continues the task too. `release` says what
+// Wiro's record should be told once no call here serves the run any more.
 
 /** What Wiro answered to a run request. It never rejects. */
 export type RunSubmission =
@@ -28,6 +32,9 @@ export interface RunRecord {
   /** When a call serving this run last ended without its answer reaching the client. */
   unansweredAt?: number;
 }
+
+/** How a call serving a run ended. */
+export type RunOutcome = 'answered' | 'unanswered' | 'failed';
 
 export interface RunReuseTiming {
   /** How long after a call ended unanswered an identical call continues its run. */
@@ -133,17 +140,22 @@ export class RunLedger {
    * A call stops serving the run. `answered`: its client got the task, so an
    * identical call after this one is a new run. `unanswered`: its client did
    * not, so an identical call soon after continues this run. `failed`: there
-   * is no task to continue.
+   * is no task to continue. Returns the outcome for the record Wiro keeps, or
+   * undefined while another call in this process still serves the run.
    */
-  release(record: RunRecord, outcome: 'answered' | 'unanswered' | 'failed', now = Date.now()): void {
+  release(record: RunRecord, outcome: RunOutcome, now = Date.now()): RunOutcome | undefined {
     record.active = Math.max(0, record.active - 1);
     if (outcome === 'failed') {
       this.forget(record);
-    } else if (outcome === 'unanswered') {
-      record.unansweredAt = now;
-    } else if (record.active === 0) {
-      this.forget(record);
+      return 'failed';
     }
+    if (outcome === 'unanswered') {
+      record.unansweredAt = now;
+      return record.active === 0 ? 'unanswered' : undefined;
+    }
+    if (record.active > 0) return undefined;
+    this.forget(record);
+    return 'answered';
   }
 
   /** Drops the run, unless a newer run already took its key. */
