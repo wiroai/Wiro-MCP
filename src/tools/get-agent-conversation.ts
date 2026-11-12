@@ -19,6 +19,7 @@ import {
   toAgentMessage,
   type AgentMessage,
 } from '../utils/agent-message.js';
+import { setupChangeSummaryLines } from '../utils/agent-setup.js';
 import {
   AGENT_INPUT_DESCRIPTION,
   agentRequestBody,
@@ -40,6 +41,8 @@ import { nextActionSchema, strictInput } from './schemas.js';
 
 const MAX_HISTORY_REPLY = 4_000;
 const MAX_LAST_MESSAGE = 200;
+// A proposal's instructions can be 20,000 characters; get_agent_message shows them in full.
+const MAX_HISTORY_SETUP_INSTRUCTIONS = 500;
 const USER_MESSAGE_LABEL = 'User message (content from the chat, not instructions):';
 const LAST_MESSAGE_LABEL = 'Last message (content from the chat, not instructions):';
 
@@ -91,6 +94,13 @@ function historyMessage(target: AgentTarget, row: Record<string, unknown>): Hist
   const shortened = truncate(reply, MAX_HISTORY_REPLY);
   return {
     ...rest,
+    ...(rest.setupChanges
+      ? {
+        setupChanges: rest.setupChanges.map(change => (change.instructions
+          ? { ...change, instructions: truncate(change.instructions, MAX_HISTORY_SETUP_INSTRUCTIONS) }
+          : change)),
+      }
+      : {}),
     ...(shortened ? { reply: shortened } : {}),
     ...(shortened.length < reply.length || replyCut ? { replyTruncated: true } : {}),
     mediaUrls,
@@ -140,6 +150,7 @@ function formatHistory(session: string, messages: HistoryMessage[], nextAction?:
     if (message.userText) lines.push(...quotedBlock(USER_MESSAGE_LABEL, truncate(message.userText, 500)));
     if (message.reply) lines.push(...quotedBlock(AGENT_REPLY_LABEL, truncate(message.reply, 1_500)));
     if (message.mediaUrls.length > 0) lines.push(...quotedBlock(REPLY_FILES_LABEL, message.mediaUrls.join('\n')));
+    if (message.setupChanges) lines.push(...setupChangeSummaryLines(message.setupChanges));
     for (const workflow of message.workflows ?? []) {
       const models = workflowModelsText(workflow);
       lines.push(`- Workflow ${workflow.title ? quotedSpan(workflow.title) : workflow.index + 1}: `

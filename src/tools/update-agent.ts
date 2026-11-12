@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { WiroClient } from '../client.js';
 import { ApiResultError, errorResult, errorText, requireApiSuccess, type ApiEnvelope } from '../utils/api.js';
 import { pausedSkillTitles } from '../utils/agent-config.js';
+import { CHAT_SETUP_DESCRIPTION, CHAT_SETUP_MODES } from '../utils/agent-setup.js';
 import { DEFAULT_WAIT_SECONDS } from '../utils/poll.js';
 import {
   activeSkillTitles,
@@ -43,7 +44,7 @@ export function registerUpdateAgent(server: McpServer, client: WiroClient): void
       title: 'Update a Wiro agent',
       description: 'Change a deployed agent\'s name, description, cover or categories, and its settings: '
         + 'timezone (used by scheduled tasks), team session mode, the models used for chat, scheduled tasks '
-        + 'and voice calls, and which slash commands are available. Only the fields you pass change. On a '
+        + 'and voice calls, which slash commands are available, and setup from chat (chat_setup). Only the fields you pass change. On a '
         + 'running or starting agent, a new name or a setting that changes restarts it to apply the change; a new '
         + 'description, cover or categories, or a setting it already has, leaves it running, and the result says which happened. Calling it with '
         + 'only agent_guid refreshes the setup status of an agent waiting for setup, after its credentials were set. Skills, credentials and '
@@ -75,6 +76,8 @@ export function registerUpdateAgent(server: McpServer, client: WiroClient): void
           .describe('Model that summarizes voice calls; same rules as chat_model.'),
         enabled_commands: z.array(z.string().min(1).max(100)).max(50).optional()
           .describe(`Slash commands the agent offers; [] hides all of them. Commands today: ${COMMANDS.join(', ')}.`),
+        chat_setup: z.enum(CHAT_SETUP_MODES).nullable().optional()
+          .describe(`${CHAT_SETUP_DESCRIPTION} null goes back to the default, "all".`),
       }),
       outputSchema: {
         agent: agentDetailSchema,
@@ -115,6 +118,10 @@ export function registerUpdateAgent(server: McpServer, client: WiroClient): void
         if (args.enabled_commands !== undefined) {
           settings.enabledcommands = [...new Set(args.enabled_commands)];
           settingNames.push('enabled_commands');
+        }
+        if (args.chat_setup !== undefined) {
+          settings.chatsetup = args.chat_setup;
+          settingNames.push('chat_setup');
         }
         const selectable = selectableModelSlugs(before);
         for (const [input, field] of Object.entries(MODEL_FIELDS) as Array<[keyof typeof MODEL_FIELDS, string]>) {
@@ -192,6 +199,8 @@ export function registerUpdateAgent(server: McpServer, client: WiroClient): void
             ...profile,
             ...settings,
             ...(settings.enabledcommands !== undefined ? { enabledCommands: settings.enabledcommands } : {}),
+            // The value in effect is not known without the read: a house agent keeps it off.
+            ...(settings.chatsetup !== undefined ? { chatSetup: undefined } : {}),
             ...(settingNames.some(name => name in MODEL_FIELDS) ? { agentModel: undefined } : {}),
             ...(restarted || mayRestart ? { status: null } : {}),
           }

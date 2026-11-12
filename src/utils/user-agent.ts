@@ -13,6 +13,7 @@ import {
 } from './api.js';
 import { pollUntil, reportProgress, type ToolCallContext } from './poll.js';
 import { quotedSpan } from './quoted-text.js';
+import { CHAT_SETUP_MODES, chatSetupLabel, readChatSetupMode } from './agent-setup.js';
 
 // Deployed agents and the agent catalog. Results are rebuilt from an
 // allowlist: only states, labels, prices and settings are returned.
@@ -510,6 +511,9 @@ export const agentDetailSchema = agentSummarySchema.extend({
   models: modelSettingsSchema.optional(),
   selectableModels: z.array(selectableModelSchema).optional(),
   enabledCommands: z.array(z.string()).nullable(),
+  chatSetup: z.enum(CHAT_SETUP_MODES).optional()
+    .describe('Setup from chat: where the agent may propose setup changes that a person then approves. off, webchat '
+      + '(the Wiro web chat only) or all (also messages sent with an API key). Left out when Wiro does not report it.'),
   credentials: z.array(credentialStatusSchema),
   missingCredentials: z.array(z.object({ key: z.string(), title: z.string(), oauth: z.boolean() })),
   channels: z.array(channelStatusSchema),
@@ -527,6 +531,7 @@ export type AgentDetail = z.infer<typeof agentDetailSchema>;
 
 /** The part of a new agent that matters right after deploying it. */
 export const deployedAgentSchema = agentSummarySchema.extend({
+  chatSetup: agentDetailSchema.shape.chatSetup,
   missingCredentials: agentDetailSchema.shape.missingCredentials,
   channels: agentDetailSchema.shape.channels,
   dashboardUrl: z.string(),
@@ -668,6 +673,7 @@ export function toAgentDetail(row: Record<string, unknown>): AgentDetail {
   const cover = asString(row.cover) || asString(agent.cover);
   const agentModel = isPlainObject(row.agentModel) ? row.agentModel : undefined;
   const models = selectableModels(row.tokenRates);
+  const chatSetup = readChatSetupMode(row.chatSetup);
   // Packs are bought only on an active Pro plan, so only that plan lists them.
   const canBuyPacks = summary.tier === 'pro' && summary.subscription?.status === 'active';
   const packs = canBuyPacks && Array.isArray(agent.extracreditpacks)
@@ -698,6 +704,7 @@ export function toAgentDetail(row: Record<string, unknown>): AgentDetail {
       : {}),
     ...(models.length > 0 ? { selectableModels: models } : {}),
     enabledCommands: Array.isArray(row.enabledCommands) ? toStringArray(row.enabledCommands) : null,
+    ...(chatSetup ? { chatSetup } : {}),
     credentials,
     missingCredentials: credentials
       .filter(credential => credential.requiredMissing)
@@ -973,6 +980,7 @@ export function formatAgentDetail(agent: AgentDetail, plainMember = false, title
   if (agent.timezone !== undefined) {
     lines.push(`**Time zone:** ${agent.timezone?.trim() ? agent.timezone : 'UTC, the default'}. Scheduled tasks run in it.`);
   }
+  if (agent.chatSetup) lines.push(`**Setup from chat:** ${chatSetupLabel(agent.chatSetup)}`);
   if (agent.setupRequired) {
     lines.push(agent.missingCredentials.length > 0
       ? `**Setup required:** missing ${agent.missingCredentials.map(item => item.title).join(', ')}`

@@ -39,6 +39,7 @@ import {
 import { APPROVAL_POLICY_KEY, humanizeCustomSkillKey, isFilledValue, pausedSkillTitles, resolveDeployCustomSkills, type DeployCustomSkill, type TemplateCustomSkill } from '../utils/agent-config.js';
 import { readTemplateRow, toSkillSummary, toTemplateDetail, type SkillSummary } from '../utils/agent-catalog.js';
 import { quotedBlock } from '../utils/quoted-text.js';
+import { CHAT_SETUP_DESCRIPTION, CHAT_SETUP_MODES, chatSetupLabel } from '../utils/agent-setup.js';
 import { payingWalletText, readPayingWallet, type PayingWallet } from '../utils/workspace.js';
 import { nextActionSchema, strictInput } from './schemas.js';
 
@@ -98,6 +99,8 @@ const quoteSchema = z.object({
     .describe('What this agent costs on each tier, every 30 days.'),
   teamSessionMode: z.string().optional()
     .describe('In a team workspace: the chat mode the new agent starts with.'),
+  chatSetup: z.enum(CHAT_SETUP_MODES).optional()
+    .describe('Setup from chat as chosen with chat_setup. Left out, the agent starts with the default, all.'),
   skills: z.array(z.string()).optional(),
   credentialsNeeded: z.array(z.object({ key: z.string(), title: z.string() })),
   customSkills: z.array(quoteCustomSkillSchema).optional(),
@@ -224,6 +227,7 @@ function quoteText(quote: Quote, credentials?: Record<string, unknown>, titles?:
   const otherTier = otherTierLine(quote);
   if (otherTier) lines.push(otherTier);
   if (quote.teamSessionMode) lines.push(`- Chats: ${TEAM_CHATS_NOTE}`);
+  if (quote.chatSetup) lines.push(`- Setup from chat: ${chatSetupLabel(quote.chatSetup)}`);
   if (quote.customSkills?.length) {
     const scheduled = quote.customSkills.some(skill => skill.kind === 'scheduled_task');
     lines.push(`- Custom skills and scheduled tasks: ${quote.customSkills.map(skill => customSkillLine(skill, skill.replacesTemplateEntry)).join('; ')}.${scheduled ? ' Scheduled tasks run in UTC until the time zone is changed, and every run spends the agent\'s credits.' : ''}`);
@@ -311,6 +315,7 @@ function deployedText(
     lines.push(`- Not found on the new agent: ${missing.map(skill => `\`${skill.key}\``).join(', ')}. get_my_agent shows its custom skills; manage_agent_custom_skill adds them.`);
   }
   if (startsCollaborative(agent)) lines.push(`- Chats: ${TEAM_CHATS_NOTE}`);
+  if (agent.chatSetup) lines.push(`- Setup from chat: ${chatSetupLabel(agent.chatSetup)}. update_agent (chat_setup) changes it.`);
   if (defaultTasks.length > 0) {
     lines.push(`- Scheduled tasks on by default: ${defaultTasks.map(task => `${taskLabel(task.key)} (runs on "${task.interval}")`).join(', ')}. ${DEFAULT_TASKS_NOTE}`);
   }
@@ -366,6 +371,8 @@ export function registerDeployAgent(server: McpServer, client: WiroClient): void
           .describe('Optional credential values stored at deployment, keyed by credential key and then field key, for example {"telegram": {"bottoken": "...", "allowedusers": ["123456789"]}}. A chat channel group must contain every required field. Values are never shown back. Other credentials are better set after deployment with set_agent_credentials, which reports field errors.'),
         custom_skills: z.array(customSkillSchema).max(20).optional()
           .describe('Optional custom instructions or scheduled tasks added at deployment, or changes to the ones the template comes with. They are checked before the quote.'),
+        chat_setup: z.enum(CHAT_SETUP_MODES).optional()
+          .describe(`${CHAT_SETUP_DESCRIPTION} Left out, the agent starts with "all". Set it here to deploy an agent for customers with it off from the start; update_agent changes it later.`),
         confirm_charge_usd: z.number().min(0).max(100_000).optional()
           .describe('With confirm: true, the price the user approved, from the quote\'s nextAction (quote.priceUsd). Required to deploy. If a fresh quote no longer matches it, nothing is charged and the new quote is returned.'),
         confirm: z.boolean().default(false)
@@ -524,6 +531,7 @@ export function registerDeployAgent(server: McpServer, client: WiroClient): void
         const wallet = quoteWallet(payer);
         if (wallet) quote.wallet = wallet;
         if (payer.workspace.kind === 'team') quote.teamSessionMode = TEAM_CHATS_MODE;
+        if (args.chat_setup) quote.chatSetup = args.chat_setup;
 
         const resolved = resolveDeployCustomSkills(requestedCustomSkills, templateTasks);
         if (resolved.errors.length > 0) {
@@ -583,6 +591,7 @@ export function registerDeployAgent(server: McpServer, client: WiroClient): void
           useprepaid: true,
           ...(args.description ? { description: args.description } : {}),
           ...(args.cover ? { cover: args.cover } : {}),
+          ...(args.chat_setup ? { chatsetup: args.chat_setup } : {}),
           ...(custom ? { skills: Object.fromEntries(skillNames.map(name => [name, true])) } : {}),
           ...(credentials && Object.keys(credentials).length > 0 ? { credentials } : {}),
           ...(customSkills.length > 0

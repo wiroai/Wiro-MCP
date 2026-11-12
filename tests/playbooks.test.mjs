@@ -35,6 +35,7 @@ const NON_TOOL_IDENTIFIERS = new Set([
   'timeout_seconds', 'wait_seconds', 'call_id', 'function_call', 'custom_tool_call',
   'upgrade_to_pro', 'buy_credits', 'select_accounts', 'confirm_charge_usd', 'idempotency_key', 'redirect_url',
   'session_id', 'debug_node_id', 'custom_skills', 'team_session_mode', 'recent_transactions', 'project_id',
+  'chat_setup',
   // An example Start field key, and an input name the Workflow Agent hides.
   'product_photo', 'api_key',
 ]);

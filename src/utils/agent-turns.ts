@@ -31,8 +31,17 @@ import {
   readAgentMessage,
   type AgentTarget,
 } from './agent-targets.js';
+import {
+  SETUP_LISTING_RULE,
+  SETUP_REPLY_WINDOW_SECONDS,
+  formatSetupChanges,
+  isApprovableByReply,
+  setupResultActed,
+  setupResultSchema,
+  type SetupResult,
+} from './agent-setup.js';
 import { createMediaContent, guessMimeType, isWiroHostedUrl, type MediaItem } from './media.js';
-import { defaultInterval, pollUntil, reportProgress, type ToolCallContext } from './poll.js';
+import { DEFAULT_WAIT_SECONDS, defaultInterval, pollUntil, reportProgress, type ToolCallContext } from './poll.js';
 import { AGENT_REPLY_LABEL, jsonSpan, quotedBlock, quotedSpan, quotedSubItem } from './quoted-text.js';
 import { formatCredits, readAgentDetail } from './user-agent.js';
 import {
@@ -115,6 +124,9 @@ export const agentTurnOutputSchema = {
   attachedWorkflow: attachedWorkflowSchema.optional(),
   workflows: z.array(workflowArtifactSummarySchema).optional(),
   workflowList: workflowListResultSchema.optional(),
+  setupResult: setupResultSchema.optional()
+    .describe('Set when Wiro handled this message itself as the user\'s answer to a setup change the agent proposed: '
+      + 'the ids of the proposals it applied, dismissed or could not apply, and whether the agent restarts.'),
   notes: z.array(z.string()),
   nextAction: nextActionSchema.optional(),
 };
@@ -136,6 +148,7 @@ export interface AgentTurnResult {
   attachedWorkflow?: AttachedWorkflow;
   workflows?: WorkflowArtifactSummary[];
   workflowList?: WorkflowListResult;
+  setupResult?: SetupResult;
   notes: string[];
   nextAction?: NextAction;
 }
@@ -160,6 +173,12 @@ export interface CollectTurnOptions {
   sessionCreated?: boolean;
   modelChange?: { fromModel?: string; toModel?: string };
   attachedWorkflow?: AttachedWorkflow;
+  /**
+   * Set by send when Wiro answered the message itself (a reply to a setup
+   * proposal): the finished row built from Send's answer, so nothing is read.
+   */
+  handledRow?: Record<string, unknown>;
+  setupResult?: SetupResult;
 }
 
 export function notFoundMessage(target: AgentTarget): string {
@@ -520,7 +539,10 @@ export async function collectTurn(options: CollectTurnOptions): Promise<AgentTur
   let done = false;
   let readFailure: unknown = options.readFailure;
   let invisible = false;
-  if (!options.skipRead && readFailure === undefined) {
+  if (options.handledRow) {
+    row = options.handledRow;
+    done = true;
+  } else if (!options.skipRead && readFailure === undefined) {
     let lastError: unknown;
     try {
       const poll = await pollUntil({
@@ -584,6 +606,7 @@ export async function collectTurn(options: CollectTurnOptions): Promise<AgentTur
     notes,
     ...(options.modelChange ? { modelChange: options.modelChange } : {}),
     ...(options.attachedWorkflow ? { attachedWorkflow: options.attachedWorkflow } : {}),
+    ...(options.setupResult ? { setupResult: options.setupResult } : {}),
   };
   const continueArguments: Record<string, unknown> = {
     agent: target.agent,
@@ -626,6 +649,22 @@ export async function collectTurn(options: CollectTurnOptions): Promise<AgentTur
     if (projected.partialReply) result.partialReply = projected.partialReply;
     const voiceCall = result.message.kind === 'voice_call';
     if (voiceCall) notes.push('This is a voice call record. Caller details and transcripts are not returned.');
+    if (result.message.kind === 'setup_result') {
+      notes.push('Wiro answered this message itself as the user\'s answer to a setup change the agent proposed, so the '
+        + 'agent took no turn and no credits were used.');
+      if (result.message.listedSetupChanges) {
+        notes.push('Nothing is applied yet. A "yes" sent with an API key, such as from this server, first gets Wiro\'s '
+          + `own listing of the exact change, written from the stored proposal. ${SETUP_LISTING_RULE}`);
+      } else if (result.setupResult && !setupResultActed(result.setupResult)) {
+        // Send's answer alone does not say whether it is a listing; the stored row does, when it can be read.
+        notes.push('Nothing was applied. If Wiro\'s answer lists a setup change, show it to the user, and send "yes" '
+          + '(or "yes N" for change N) again only after the user agrees to exactly that change. Never send yes on '
+          + 'your own.');
+      }
+      if (result.setupResult?.restarting) {
+        notes.push('The agent restarts to load the change. Send the next message once it is running again, in about a minute.');
+      }
+    }
 
     if (target.kind !== 'deployed') {
       const credits = toNumber(row.tokencost);
@@ -761,6 +800,8 @@ function chooseNextAction(
         + 'message again.',
     };
   }
+  const setup = setupNextAction(target, result);
+  if (setup) return setup;
   if (result.background) {
     if (target.kind === 'studio') {
       if (!state.awaitingBackgroundRuns) return undefined;
@@ -779,6 +820,67 @@ function chooseNextAction(
     };
   }
   return undefined;
+}
+
+/**
+ * The step after a deployed agent's reply that proposes setup changes, after
+ * Wiro listed them, or after Wiro applied one. A change is applied only when the
+ * user approves it: their "yes" as the next message, which Wiro matches itself,
+ * or a key saved with set_agent_credentials. Sent with an API key, the first
+ * "yes" only gets Wiro's listing of the exact change; the next "yes" (or
+ * "yes N") applies it. A key never goes in a chat message.
+ */
+function setupNextAction(target: AgentTarget, result: AgentTurnResult): NextAction | undefined {
+  const guid = target.agentGuid;
+  if (target.kind !== 'deployed' || !guid || result.message.state !== 'completed') return undefined;
+  if (result.setupResult?.restarting) {
+    return {
+      tool: 'get_my_agent',
+      arguments: { agent_guid: guid, wait_seconds: DEFAULT_WAIT_SECONDS },
+      reason: 'The agent restarts to load the change. Wait until it is running again before the next message.',
+    };
+  }
+  const listed = result.message.listedSetupChanges ?? 0;
+  if (listed > 0) {
+    // The proposals behind a listing expire with the window, counted from before the listing.
+    const listedAt = result.message.createdAt ? Date.parse(result.message.createdAt) : NaN;
+    if (!Number.isNaN(listedAt) && Date.now() - listedAt >= SETUP_REPLY_WINDOW_SECONDS * 1000) return undefined;
+    const several = listed > 1
+      ? ' One change per message: "yes" and its number from the listing. Replace the 1 with the number of the change '
+        + 'the user agreed to.'
+      : '';
+    return {
+      tool: 'send_agent_message',
+      arguments: { agent: target.agent, session: result.session, message: listed === 1 ? 'yes' : 'yes 1' },
+      reason: `Wiro listed the exact setup change${listed === 1 ? '' : 's'} the agent proposed; nothing is applied `
+        + `yet. ${SETUP_LISTING_RULE}${several}`,
+    };
+  }
+  const open = (result.message.setupChanges ?? []).filter(change => isApprovableByReply(change));
+  if (open.length === 0) return undefined;
+  const key = open.some(change => change.kind === 'connect')
+    ? ' For a key, use set_agent_credentials instead of a chat message.'
+    : '';
+  if (open.some(change => change.kind !== 'connect')) {
+    return {
+      tool: 'send_agent_message',
+      arguments: { agent: target.agent, session: result.session, message: 'yes' },
+      reason: 'The agent proposes a setup change. Show it to the user and ask; never send yes on your own. If they '
+        + 'approve, send their reply (yes) with send_agent_message: Wiro answers it, not the agent. Sent with an API '
+        + 'key, the first yes applies nothing and gets Wiro\'s own listing of the exact change; show that listing and '
+        + 'send yes (or "yes N") again only after the user agrees to exactly that change.'
+        + `${key} A reply approves only the changes on the latest reply of this session, for `
+        + `${SETUP_REPLY_WINDOW_SECONDS / 60} minutes, and only when the agent's chat_setup `
+        + 'is "all"; otherwise the user applies them in the agent\'s chat on wiro.ai.',
+    };
+  }
+  const connector = open.find(change => change.kind === 'connect')?.connector;
+  return {
+    tool: 'set_agent_credentials',
+    arguments: { agent_guid: guid, ...(connector ? { credential: connector } : {}) },
+    reason: 'The agent asks for a key or sign-in. This call only lists the connector\'s fields: ask the user for the '
+      + 'value and save it with set_agent_credentials, never in a chat message.',
+  };
 }
 
 // ─── Text ───────────────────────────────────────────────────────────
@@ -810,6 +912,12 @@ export function turnContent(target: AgentTarget, result: AgentTurnResult) {
 function heading(target: AgentTarget, result: AgentTurnResult): string {
   if (result.message.status === NOT_VISIBLE_STATUS) return '## Message not visible yet';
   if (!result.done) return `## ${target.name} is still working`;
+  if (result.message.listedSetupChanges) {
+    return result.message.listedSetupChanges === 1
+      ? '## Wiro listed the proposed setup change'
+      : '## Wiro listed the proposed setup changes';
+  }
+  if (result.message.kind === 'setup_result') return '## Wiro answered the setup reply';
   switch (result.message.state) {
     case 'completed':
       return `## ${target.name} replied`;
@@ -843,6 +951,7 @@ export function formatTurn(target: AgentTarget, result: AgentTurnResult): string
   if (result.partialReply) {
     lines.push('', '### Partial reply', '', ...quotedBlock(AGENT_REPLY_LABEL, result.partialReply));
   }
+  if (result.message.setupChanges) lines.push(...formatSetupChanges(result.message.setupChanges));
   if (result.modelRuns && result.modelRuns.length > 0) {
     lines.push('', '### Model runs started by this turn', '');
     for (const run of result.modelRuns) lines.push(formatStudioRun(run));

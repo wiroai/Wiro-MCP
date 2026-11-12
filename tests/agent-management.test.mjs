@@ -1428,3 +1428,101 @@ test('get_agent_activity usage shows this period\'s credits apart from what each
     assert.match(textOf(result), /expired\/skills-apply: -2610 credits, Skill changes \(1\)/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Setup from chat (chat_setup)
+// ---------------------------------------------------------------------------
+
+test('update_agent sets chat_setup through UpdateSettings, and the agent shows it', async () => {
+  const { fake, result } = await updateAgent({ chat_setup: 'webchat' }, { afterRead: detail({ status: 1, chatSetup: 'webchat' }) });
+  assert.notEqual(result.isError, true, textOf(result));
+  assert.deepEqual(fake.called('/UserAgent/UpdateSettings')[0].body, { useragentguid: GUID, chatsetup: 'webchat' });
+  assert.equal(fake.called('/UserAgent/Update').length, 0);
+  assert.deepEqual(result.structuredContent.changed, ['chat_setup']);
+  assert.equal(result.structuredContent.restarted, true);
+  assert.equal(result.structuredContent.agent.chatSetup, 'webchat');
+  assert.match(textOf(result), /\*\*Setup from chat:\*\* Wiro web chat only \(`webchat`\)/);
+
+  // null goes back to the default.
+  const reset = await updateAgent({ chat_setup: null }, { afterRead: detail({ status: 1, chatSetup: 'all' }) });
+  assert.deepEqual(reset.fake.called('/UserAgent/UpdateSettings')[0].body, { useragentguid: GUID, chatsetup: null });
+
+  const wrong = await updateAgent({ chat_setup: 'everyone' });
+  assert.equal(wrong.result.isError, true);
+  assert.equal(wrong.fake.called('/UserAgent/UpdateSettings').length, 0);
+});
+
+test('update_agent does not show a chat_setup it could not read back', async () => {
+  const fake = fakeClient({
+    '/UserAgent/Detail': (_body, calls) => (calls.filter(entry => entry.path === '/UserAgent/Detail').length > 1
+      ? refused('Temporarily unavailable')
+      : detail({ chatSetup: 'all' })),
+    '/UserAgent/UpdateSettings': { result: true, errors: [] },
+  });
+  await withClient(fake, async client => {
+    const result = await call(client, 'update_agent', { agent_guid: GUID, chat_setup: 'off' });
+    assert.notEqual(result.isError, true, textOf(result));
+    assert.equal(result.structuredContent.agent.chatSetup, undefined);
+    assert.doesNotMatch(textOf(result), /Setup from chat/);
+  });
+});
+
+test('get_my_agent shows chatSetup only when Wiro reports a known value', async () => {
+  for (const [value, expected, line] of [
+    ['off', 'off', /\*\*Setup from chat:\*\* off/],
+    ['all', 'all', /\*\*Setup from chat:\*\* Wiro web chat and API messages \(`all`\)/],
+    [undefined, undefined, null],
+    ['sometimes', undefined, null],
+  ]) {
+    const fake = fakeClient({ '/UserAgent/Detail': detail(value === undefined ? {} : { chatSetup: value }) });
+    await withClient(fake, async client => {
+      const result = await call(client, 'get_my_agent', { agent_guid: GUID });
+      assert.notEqual(result.isError, true, textOf(result));
+      assert.equal(result.structuredContent.agent.chatSetup, expected);
+      if (line) assert.match(textOf(result), line);
+      else assert.doesNotMatch(textOf(result), /Setup from chat/);
+    });
+  }
+});
+
+test('deploy_agent carries chat_setup through the quote into Deploy', async () => {
+  const fake = fakeClient(customBuild([], { chatSetup: 'off' }));
+  await withClient(fake, async client => {
+    const quote = await call(client, 'deploy_agent', { ...DEPLOY, chat_setup: 'off' });
+    assert.notEqual(quote.isError, true, textOf(quote));
+    assert.equal(quote.structuredContent.quote.chatSetup, 'off');
+    assert.match(textOf(quote), /- Setup from chat: off/);
+    assert.equal(quote.structuredContent.nextAction.arguments.chat_setup, 'off');
+
+    const result = await call(client, 'deploy_agent', quote.structuredContent.nextAction.arguments);
+    assert.notEqual(result.isError, true, textOf(result));
+    assert.equal(fake.called('/UserAgent/Deploy')[0].body.chatsetup, 'off');
+    assert.equal(result.structuredContent.agent.chatSetup, 'off');
+    assert.match(textOf(result), /- Setup from chat: off\. update_agent \(chat_setup\) changes it\./);
+  });
+
+  const plain = fakeClient(customBuild([]));
+  await withClient(plain, async client => {
+    const quote = await call(client, 'deploy_agent', DEPLOY);
+    assert.equal(quote.structuredContent.quote.chatSetup, undefined);
+    await call(client, 'deploy_agent', { ...DEPLOY, confirm_charge_usd: 4, confirm: true });
+    assert.equal('chatsetup' in plain.called('/UserAgent/Deploy')[0].body, false, 'Wiro applies its own default');
+  });
+});
+
+test('update_agent and deploy_agent say what each chat_setup value allows', async () => {
+  for (const name of ['update_agent', 'deploy_agent']) {
+    let schema;
+    await withClient(fakeClient({}), async client => {
+      schema = (await client.listTools()).tools.find(tool => tool.name === name).inputSchema.properties.chat_setup;
+    });
+    assert.ok(schema, `${name} takes chat_setup`);
+    assert.match(schema.description, /"all" \(the default\)/);
+    assert.match(schema.description, /"webchat" only in the Wiro web chat/);
+    assert.match(schema.description, /"off" turns it off/);
+    assert.match(schema.description, /an agent shared with customers or many people usually uses "webchat" or "off"/);
+  }
+  assert.match(await toolDescription('update_agent'), /setup from chat \(chat_setup\)/);
+  assert.match(await toolDescription('get_my_agent'), /setup from chat \(chatSetup\)/);
+  assert.match(PLAYBOOKS.agents, /`update_agent` \(`chat_setup`\)/);
+});

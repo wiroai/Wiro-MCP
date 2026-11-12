@@ -1,7 +1,16 @@
 import { z } from 'zod';
 import { asString, isPlainObject, toNumber, truncate, unixToIso } from './api.js';
 import { isWiroHostedFile, isWiroHostedUrl, listedAddress } from './media.js';
-import { AGENT_REPLY_LABEL, quotedBlock, quotedSpan, REPLY_FILES_LABEL, REPLY_LINKS_LABEL } from './quoted-text.js';
+import { listedSetupCount, setupChangeSchema, setupChangesFromBlocks } from './agent-setup.js';
+import {
+  AGENT_REPLY_LABEL,
+  quotedBlock,
+  quotedSpan,
+  REPLY_FILES_LABEL,
+  REPLY_LINKS_LABEL,
+  SETUP_LISTING_LABEL,
+  SETUP_RESULT_LABEL,
+} from './quoted-text.js';
 
 // One chat turn with a Wiro agent. Studio, the Workflow Agent and deployed
 // agents share the same message row, so they share this projection. Rows are
@@ -29,7 +38,7 @@ export const agentMessageSchema = z.object({
   messageId: z.string(),
   state: messageStateSchema,
   status: z.string(),
-  kind: z.enum(['user_turn', 'agent_message', 'model_change', 'voice_call']).optional(),
+  kind: z.enum(['user_turn', 'agent_message', 'model_change', 'voice_call', 'setup_result']).optional(),
   userText: z.string().optional(),
   reply: z.string().optional(),
   replyTruncated: z.boolean().optional(),
@@ -38,6 +47,11 @@ export const agentMessageSchema = z.object({
     name: z.string(),
     status: z.string().optional(),
   })),
+  setupChanges: z.array(setupChangeSchema).optional()
+    .describe('Setup changes the agent proposed in this reply. Nothing changes until the user approves one.'),
+  listedSetupChanges: z.number().int().optional()
+    .describe('Set on Wiro\'s own answer that lists the exact setup changes the agent proposed (in reply): how many '
+      + 'it lists. Nothing is applied yet; a later "yes" (or "yes N") the user agreed to applies one.'),
   attachments: z.array(z.object({
     url: z.string(),
     name: z.string().optional(),
@@ -73,7 +87,9 @@ export function messageState(status: unknown): AgentMessage['state'] {
 
 interface TimelineBlock {
   type?: unknown;
+  // Null on a setup block, which carries its proposal in `setup` instead.
   text?: unknown;
+  setup?: unknown;
   toollabel?: unknown;
   toolstatus?: unknown;
   callindex?: unknown;
@@ -162,6 +178,10 @@ function toolsUsed(timeline: unknown): AgentMessage['toolsUsed'] {
     }));
 }
 
+function setupChanges(timeline: unknown): NonNullable<AgentMessage['setupChanges']> {
+  return setupChangesFromBlocks(sortedBlocks(timeline));
+}
+
 function attachments(value: unknown): AgentMessage['attachments'] {
   if (!Array.isArray(value)) return [];
   return value
@@ -178,6 +198,8 @@ export function messageKind(row: Record<string, unknown>): AgentMessage['kind'] 
   const metadata = isPlainObject(row.metadata) ? row.metadata : {};
   const type = asString(metadata.type) ?? '';
   if (type === 'model_change' || row.status === 'agent_done') return 'model_change';
+  // Wiro answered the user's reply to a setup proposal itself; the agent took no turn.
+  if (type === 'setup_result') return 'setup_result';
   if (type.startsWith('realtime_session') || type === 'voice_prep_completed') return 'voice_call';
   if (!asString(row.content) && (type === 'system' || type === 'subagent')) return 'agent_message';
   return 'user_turn';
@@ -226,6 +248,8 @@ export function toAgentMessage(
   const reply = truncate(fullReply, MAX_REPLY_LENGTH);
   const credits = toNumber(row.tokencost);
   const content = asString(row.content);
+  const proposals = setupChanges(row.timeline);
+  const listed = listedSetupCount(row);
 
   return {
     messageId: asString(row.guid) ?? '',
@@ -237,6 +261,8 @@ export function toAgentMessage(
     ...(reply.length < fullReply.length ? { replyTruncated: true } : {}),
     mediaUrls: terminal ? extractMediaUrls(fullReply) : [],
     toolsUsed: toolsUsed(row.timeline),
+    ...(proposals.length > 0 ? { setupChanges: proposals } : {}),
+    ...(listed > 0 ? { listedSetupChanges: listed } : {}),
     attachments: attachments(row.attachments),
     ...(typeof row.model === 'string' && row.model ? { model: row.model } : {}),
     creditsUsed: credits,
@@ -254,7 +280,10 @@ export function formatAgentMessage(message: AgentMessage, heading = 'Reply'): st
     lines.push(`**Tools used:** ${message.toolsUsed.map(tool => quotedSpan(tool.name)).join(', ')}`);
   }
   if (message.reply) {
-    lines.push('', `### ${heading}`, '', ...quotedBlock(AGENT_REPLY_LABEL, message.reply));
+    const label = message.listedSetupChanges
+      ? SETUP_LISTING_LABEL
+      : message.kind === 'setup_result' ? SETUP_RESULT_LABEL : AGENT_REPLY_LABEL;
+    lines.push('', `### ${heading}`, '', ...quotedBlock(label, message.reply));
   }
   if (message.mediaUrls.length > 0) {
     lines.push('', '### Media', '', ...quotedBlock(REPLY_FILES_LABEL, message.mediaUrls.join('\n')));
