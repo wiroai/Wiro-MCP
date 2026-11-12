@@ -39,7 +39,7 @@ export function registerGetAgentMessage(server: McpServer, client: WiroClient): 
         loaded_updatetime: z.string().optional().describe('Workflow Agent only: attachedWorkflow.updatetime from '
           + 'the same send_agent_message call. The save step uses it to stop if the workflow changed since then.'),
         wait_seconds: z.number().int().min(0).max(MAX_WAIT_SECONDS).default(DEFAULT_WAIT_SECONDS)
-          .describe('How long to wait for the turn to finish (0-600 seconds, default 45). Use 0 for an '
+          .describe(`How long to wait for the turn to finish (0-${MAX_WAIT_SECONDS} seconds, default ${DEFAULT_WAIT_SECONDS}). Use 0 for an `
             + 'immediate check.'),
       }),
       outputSchema: agentTurnOutputSchema,

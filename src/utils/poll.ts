@@ -3,11 +3,12 @@ import { ApiResultError } from './api.js';
 
 // Bounded polling for the endpoints that finish asynchronously (agent
 // messages, workflow runs, agent start-up). A tool waits for a limited time and
-// then hands back a nextAction, because most MCP clients time out a tool call
-// after about a minute.
+// then hands back a nextAction. The 45-second default suits clients that time
+// out a tool call after about a minute; a client that allows longer calls can
+// wait up to an hour, which an agent turn or a long model run can take.
 
 export const DEFAULT_WAIT_SECONDS = 45;
-export const MAX_WAIT_SECONDS = 600;
+export const MAX_WAIT_SECONDS = 3600;
 
 export interface ToolCallContext {
   signal: AbortSignal;

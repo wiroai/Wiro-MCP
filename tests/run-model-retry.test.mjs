@@ -193,11 +193,14 @@ test('a run request slower than the budget is not waited for, and an identical c
   });
 });
 
-test('timeout_seconds above 45 is treated as 45', async () => {
+test('timeout_seconds sets the whole wait, up to an hour', async () => {
   const waits = [];
   const fake = {
-    identity: 'cap-test',
-    runModel: async () => ({ result: true, errors: [], taskid: '7', socketaccesstoken: 'cap-token' }),
+    identity: 'wait-test',
+    runModel: async () => {
+      await delay(50);
+      return { result: true, errors: [], taskid: '7', socketaccesstoken: 'wait-token' };
+    },
     waitForTask: async (_token, timeoutMs) => {
       waits.push(timeoutMs);
       throw new TaskWaitTimeoutError(timeoutMs);
@@ -209,18 +212,32 @@ test('timeout_seconds above 45 is treated as 45', async () => {
   await server.connect(serverTransport);
   await client.connect(clientTransport);
   try {
-    const tool = (await client.listTools()).tools.find(entry => entry.name === 'run_model');
-    assert.match(tool.inputSchema.properties.timeout_seconds.description, /A value above 45 is treated as 45, so the call answers before a 60-second client tool timeout/);
+    const tools = (await client.listTools()).tools;
+    for (const name of ['run_model', 'wait_for_task']) {
+      const timeout = tools.find(entry => entry.name === name).inputSchema.properties.timeout_seconds;
+      assert.equal(timeout.maximum, 3600, name);
+      assert.equal(timeout.default, 45, name);
+    }
+    for (const name of ['run_workflow', 'resume_workflow_run', 'send_agent_message', 'get_agent_message', 'control_agent', 'get_my_agent']) {
+      assert.equal(tools.find(entry => entry.name === name).inputSchema.properties.wait_seconds.maximum, 3600, name);
+    }
+    assert.match(
+      tools.find(entry => entry.name === 'run_model').inputSchema.properties.timeout_seconds.description,
+      /counted from the start of the call\. The 45-second default is safe for clients with a 60-second tool timeout; wait longer, such as 300 seconds for a video, when the client allows longer tool calls\./,
+    );
 
-    for (const timeout_seconds of [600, 120, 46]) {
+    // The 50 ms run request comes out of the wait the call asked for; the rest is polling.
+    for (const timeout_seconds of [3600, 300, undefined]) {
       const result = await client.callTool({
         name: 'run_model',
-        arguments: { model: 'owner/model', params: { prompt: `cap ${timeout_seconds}` }, timeout_seconds },
+        arguments: { model: 'owner/model', params: { prompt: `wait ${timeout_seconds}` }, ...(timeout_seconds ? { timeout_seconds } : {}) },
       });
       assert.equal(result.structuredContent.state, 'submitted');
     }
     assert.equal(waits.length, 3);
-    for (const timeoutMs of waits) assert.ok(timeoutMs > 0 && timeoutMs <= 45_000, `waited ${timeoutMs} ms`);
+    for (const [index, seconds] of [3600, 300, 45].entries()) {
+      assert.ok(waits[index] <= seconds * 1000 - 40 && waits[index] > seconds * 1000 - 2000, `asked ${seconds} s, polled ${waits[index]} ms`);
+    }
   } finally {
     await client.close();
     await server.close();
