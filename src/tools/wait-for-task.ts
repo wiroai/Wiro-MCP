@@ -14,6 +14,7 @@ import {
   TASK_ID_NOT_NUMERIC,
   TASK_NOT_FOUND,
 } from '../utils/format.js';
+import { MAX_WAIT_SECONDS } from '../utils/poll.js';
 import {
   createTaskContent,
   toPendingTaskResult,
@@ -36,8 +37,8 @@ export function registerWaitForTask(server: McpServer, client: WiroClient): void
       inputSchema: strictInput({
         tasktoken: z.string().optional().describe('The task token returned from run_model.'),
         taskid: z.string().optional().describe('The task ID (alternative to tasktoken).'),
-        timeout_seconds: z.number().int().min(10).max(600).default(45)
-          .describe('Maximum seconds to wait. The 45-second default is safe for clients with a 60-second tool timeout.'),
+        timeout_seconds: z.number().int().min(10).max(MAX_WAIT_SECONDS).default(45)
+          .describe(`Maximum seconds to wait (up to ${MAX_WAIT_SECONDS}). The 45-second default is safe for clients with a 60-second tool timeout; wait longer when the client allows longer tool calls.`),
       }),
       outputSchema: taskResultOutputSchema,
       annotations: {

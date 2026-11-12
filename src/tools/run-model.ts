@@ -13,7 +13,7 @@ import {
   formatTaskResult,
   formatTaskSubmitted,
 } from '../utils/format.js';
-import type { ToolCallContext } from '../utils/poll.js';
+import { MAX_WAIT_SECONDS, type ToolCallContext } from '../utils/poll.js';
 import {
   runKey,
   runLedger,
@@ -34,21 +34,22 @@ import { strictInput, taskResultOutputSchema } from './schemas.js';
 
 /** How long run_model waits, and when an identical call continues an earlier run. */
 export interface RunModelTiming extends RunReuseTiming {
-  /** The longest one call waits, counted from its start, the run request included. */
+  /** The longest one call may wait, counted from its start, the run request included. */
   maxWaitMs: number;
 }
 
 /**
- * A call answers within 45 seconds of its start, so it ends before a 60-second
- * client tool timeout. An identical call (same API key, model and parameters)
- * continues the earlier call's task instead of starting a new one when it
- * comes within 10 minutes of that call ending without its answer reaching the
- * client (cancelled, connection lost, or no task confirmed yet), or while that
- * call is still waiting and at least 10 seconds after it started: a retry after
- * the client gave up without telling the server.
+ * A call waits as long as `timeout_seconds` asks, up to an hour, counted from
+ * its start with the run request included. Some clients drop a tool call
+ * sooner, Zed at 60 seconds without telling the server, and the agent then
+ * repeats the call. So an identical call (same API key, model and parameters)
+ * continues the earlier call's task instead of starting a new one when it comes
+ * within 10 minutes of that call ending without its answer reaching the client
+ * (cancelled, connection lost, or no task confirmed yet), or while that call is
+ * still waiting and at least 10 seconds after it started.
  */
 export const RUN_MODEL_TIMING: Readonly<RunModelTiming> = Object.freeze({
-  maxWaitMs: 45_000,
+  maxWaitMs: MAX_WAIT_SECONDS * 1000,
   retryAfterMs: 10_000,
   unansweredWindowMs: 10 * 60_000,
 });
@@ -133,8 +134,8 @@ function runFailure(settled: RunSubmission, model: string, project: string): Too
 
 /** What a call answers when Wiro has not confirmed the run before the deadline. */
 function notConfirmed(model: string, project: string, sentSecondsAgo: number): ToolResult {
-  return errorResult(`Wiro had not confirmed the run request ${sentSecondsAgo} seconds after it was sent, so this call stopped `
-    + 'waiting to answer within the client\'s time limit. The task may still start and may be charged. '
+  return errorResult(`Wiro had not confirmed the run request ${sentSecondsAgo} seconds after it was sent, when this call's `
+    + 'wait ended. The task may still start and may be charged. '
     + `Do not run the model again now: in a minute, call list_tasks with model "${project}" and look for a task of `
     + `${model} that started in the last few minutes, then follow it with wait_for_task.`);
 }
@@ -260,7 +261,6 @@ export function registerRunModel(
   client: WiroClient,
   timing: RunModelTiming = RUN_MODEL_TIMING,
 ): void {
-  const maxWaitSeconds = Math.round(timing.maxWaitMs / 1000);
   server.registerTool(
     'run_model',
     {
@@ -278,7 +278,7 @@ export function registerRunModel(
         model: z.string().describe('Model slug in "owner/model" format, e.g. "google/veo3-1", "google/nano-banana-pro"'),
         params: z.record(z.string(), z.unknown()).describe('Model-specific parameters as key-value pairs. Use get_model_schema to discover available parameters. Pass json and json-array parameters as structured JSON values in this same object. File parameters take public URLs, no upload needed: one URL for fileinput, an array of URLs for combinefileinput, and for multifileinput the URLs comma-separated in its matching ...UrlMultiple field. A parameter you leave out gets the default get_model_schema shows for it. A run fills nothing for the ones it marks as samples (file fields, ids that contain "input", the prompt and the LLM chat fields), picks a random seed, and refuses a required parameter that is missing. To continue a chat, send the same session_id with the next prompt, without previousTaskToken. A turn that ended with tool calls is continued with previousTaskToken, toolOutputs rows (call_id and output) and the same session_id, as its nextAction shows.'),
         wait: z.boolean().default(true).describe('If true, poll until completion and return the result. If false, return the task identifiers immediately.'),
-        timeout_seconds: z.number().int().min(10).max(600).default(45).describe(`Maximum seconds this call waits, counted from its start. A value above ${maxWaitSeconds} is treated as ${maxWaitSeconds}, so the call answers before a 60-second client tool timeout. A longer task continues with wait_for_task.`),
+        timeout_seconds: z.number().int().min(10).max(MAX_WAIT_SECONDS).default(45).describe(`Maximum seconds to wait when wait=true (up to ${MAX_WAIT_SECONDS}), counted from the start of the call. The 45-second default is safe for clients with a 60-second tool timeout; wait longer, such as 300 seconds for a video, when the client allows longer tool calls. A task that is still running then continues with wait_for_task.`),
       }, 'Model parameters go inside `params`.'),
       outputSchema: taskResultOutputSchema,
       annotations: {

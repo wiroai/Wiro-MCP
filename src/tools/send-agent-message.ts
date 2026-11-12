@@ -93,7 +93,7 @@ export function registerSendAgentMessage(server: McpServer, client: WiroClient):
           + '(from list_workflows) or its wiro.ai/workflows/... link. Its current definition is attached to this '
           + 'message; saved Start input values are never sent.'),
         wait_seconds: z.number().int().min(0).max(MAX_WAIT_SECONDS).default(DEFAULT_WAIT_SECONDS)
-          .describe('How long to wait for the reply before returning (0-600 seconds, default 45). Use 0 to '
+          .describe(`How long to wait for the reply before returning (0-${MAX_WAIT_SECONDS} seconds, default ${DEFAULT_WAIT_SECONDS}). Use 0 to `
             + 'return right after the message is queued.'),
       }),
       outputSchema: agentTurnOutputSchema,
