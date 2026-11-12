@@ -236,6 +236,10 @@ export const modelListOutputSchema = {
   start: z.number().int().nonnegative(),
   limit: z.number().int().positive(),
   nextStart: z.number().int().nonnegative().nullable(),
+  searchUsed: z.string().optional()
+    .describe('Set when no model matched every search word: the part of the search the results are for.'),
+  ignoredWords: z.array(z.string()).optional()
+    .describe('Set when no model matched every search word: the words the results leave out.'),
   nextAction: nextActionSchema.optional(),
 };
 

@@ -209,6 +209,10 @@ export interface ToolListResponse {
   errors: Array<{ message: string }>;
   total: number | string;
   tool: ToolListItem[];
+  /** With `searchfallback`: the part of the search the results are for, when no model matched every word. */
+  searchused?: string;
+  /** With `searchfallback`: the search words the results leave out. */
+  searchignored?: string[];
 }
 
 export interface ToolDetailResponse {

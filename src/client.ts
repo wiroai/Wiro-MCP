@@ -394,6 +394,10 @@ export class WiroClient {
     };
     if (params.slugowner) body.slugowner = params.slugowner;
     if (params.order) body.order = params.order;
+    // A search that no model matches in full comes back with the results for
+    // the longest run of its words that some model has, plus `searchused` and
+    // `searchignored`. An API without the fallback ignores the flag.
+    if (params.search?.trim()) body.searchfallback = true;
     return this.request<ToolListResponse>('/Tool/List', body);
   }
 
