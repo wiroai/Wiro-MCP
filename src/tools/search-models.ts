@@ -2,6 +2,13 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { WiroClient } from '../client.js';
 import { formatModelList } from '../utils/format.js';
+import {
+  missingWordsNote,
+  partialSearchNote,
+  readSearchFallback,
+  SEARCH_WORDS_HINT,
+  searchFallbackFields,
+} from '../utils/search-fallback.js';
 import { toStructuredModel } from '../utils/structured.js';
 import { modelListOutputSchema, strictInput } from './schemas.js';
 
@@ -17,7 +24,7 @@ export function registerSearchModels(server: McpServer, client: WiroClient): voi
         + 'after the run. "No fixed price" means the run is charged for the time it takes. Choose a '
         + 'model and call the returned `get_model_schema` next action before using `run_model`.',
       inputSchema: strictInput({
-        search: z.string().optional().describe('One to three key words, e.g. "flux", "upscale" or "remove background"; each extra word narrows the results. It looks at each model\'s name and owner, its description, its parameters (id, label, placeholder, notes and help) and the option names of a selectwithcover field, such as an effect. Case, spaces, dots, dashes and underscores are ignored, and a short stem such as "timestamp" also finds the longer words that contain it.'),
+        search: z.string().optional().describe('One to three key words that name the task or the model, e.g. "flux", "upscale" or "remove background". It looks at each model\'s name and owner, its description, its parameters (id, label, placeholder, notes and help) and the option names of a selectwithcover field, such as an effect, and a model matches when one of these has every word. Case, spaces, dots, dashes and underscores are ignored, and a short stem such as "timestamp" also finds the longer words that contain it. Style and subject words, such as "flat illustration", describe the output, so they belong in the prompt. A result for only part of the words names the words it left out.'),
         categories: z.array(z.string()).optional().describe(
           'Filter by categories. Available: "text-to-image", "image-to-image", "image-editing", '
           + '"text-to-video", "image-to-video", "video-to-video", "speech-to-video", "talking-head", '
@@ -57,31 +64,37 @@ export function registerSearchModels(server: McpServer, client: WiroClient): voi
           ? start + models.length
           : null;
         const firstModel = models[0];
+        const fallback = readSearchFallback(result);
 
         if (!models.length) {
+          const missing = fallback ? ` ${missingWordsNote(fallback)}` : '';
+          const hint = search?.trim() ? ` ${SEARCH_WORDS_HINT}` : '';
           return {
-            content: [{ type: 'text' as const, text: 'No models found matching your criteria.' }],
+            content: [{ type: 'text' as const, text: `No models found matching your criteria.${missing}${hint}` }],
             structuredContent: {
               models: [],
               total,
               start,
               limit,
               nextStart,
+              ...searchFallbackFields(fallback),
             },
           };
         }
 
+        const note = fallback && search ? `${partialSearchNote(search, fallback)}\n\n` : '';
         const text = formatModelList(models);
         const totalNote = result.total ? `\n\n*Total available: ${result.total}*` : '';
 
         return {
-          content: [{ type: 'text' as const, text: text + totalNote }],
+          content: [{ type: 'text' as const, text: note + text + totalNote }],
           structuredContent: {
             models: models.map(toStructuredModel),
             total,
             start,
             limit,
             nextStart,
+            ...searchFallbackFields(fallback),
             nextAction: {
               tool: 'get_model_schema',
               arguments: {
