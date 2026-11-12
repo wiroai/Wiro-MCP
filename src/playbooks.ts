@@ -125,7 +125,7 @@ Wiro hosts image, video, audio, speech, 3D and LLM models from many providers. E
 
 ## Run and wait
 
-1. Call \`run_model\` with \`model\` and \`params\`. It waits up to 45 seconds by default (\`timeout_seconds\`).
+1. Call \`run_model\` with \`model\` and \`params\`. It waits at most 45 seconds, counted from the start of the call; \`timeout_seconds\` can make that shorter.
 2. If the task is still running, follow the \`nextAction\` for \`wait_for_task\`, and repeat. Video and long audio often take several minutes.
 3. Never call \`run_model\` again for the same request: that starts a second task, billed again.
 4. A task is \`submitted\` or \`running\` until it ends as \`completed\`, \`failed\` or \`cancelled\`.
