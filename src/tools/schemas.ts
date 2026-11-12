@@ -195,6 +195,8 @@ export const taskResultOutputSchema = {
   response: z.string().optional(),
   error: z.string().optional(),
   nextAction: nextActionSchema.optional(),
+  reused: z.boolean().optional()
+    .describe('True when run_model continued the task of an identical earlier call whose answer did not reach the client, instead of starting and billing a new task.'),
 };
 
 const taskListItemOutputSchema = taskOutputSchema.omit({

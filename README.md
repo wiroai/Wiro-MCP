@@ -243,7 +243,7 @@ The hosted server takes the same credentials as a bearer token:
 | `get_model_schema` | Get full parameter schema and pricing for any model, or the parameters and output ports of a workflow utility |
 | `recommend_model` | Find models for a goal from two or three key words, best matches first |
 | `explore` | Browse curated models grouped by category, no parameters needed |
-| `run_model` | Run any model, waiting up to 45s by default before it returns a recoverable task token |
+| `run_model` | Run any model, waiting at most 45s from the start of the call before it returns a recoverable task token |
 | `wait_for_task` | Continue waiting for an existing task without submitting or billing a duplicate run |
 | `get_task` | Check task status immediately or wait up to 45s with `wait_seconds` |
 | `list_tasks` | Browse authenticated task history across conversations, then continue with `get_task` |
