@@ -3103,8 +3103,13 @@ function pastDue(overrides = {}) {
   return subscription({ status: 'past_due', provider: 'stripe', amount: 90, currentperiodend: NOW + 25 * 86_400, renewaldate: null, daysremaining: 0, ...overrides });
 }
 
-const PAYMENT_FIX = 'Fix the payment in the Wiro dashboard: pay the open invoice, with another card if needed, and the plan renews by itself. '
-  + 'It can also be cancelled there.';
+// The agent's page offers the billing portal only for an active plan, and a team workspace has none: the payer
+// pays the open invoice, or cancels, from Billing in their personal workspace. The fix never links the agent's page.
+const PAYMENT_STEPS = 'To fix the payment, open Billing in the personal workspace of the Wiro dashboard and choose Open Billing Portal. '
+  + 'Pay the open invoice there, with another card if needed, and the plan renews by itself. The plan can also be cancelled there.';
+const BILLING_URL = 'https://wiro.ai/panel/billing';
+const PAYMENT_FIX = `${PAYMENT_STEPS} ${BILLING_URL}`;
+const TEAM_PAYMENT_FIX = `${PAYMENT_STEPS} On a team agent, the member whose card pays for the plan does this, from their own personal workspace. ${BILLING_URL}`;
 
 test('manage_agent_billing subscribe starts no plan beside one that has not ended, and says to fix its payment instead', async () => {
   // Wiro counts every status but expired, cancelled and refunded as a plan that has not ended.
@@ -3120,7 +3125,7 @@ test('manage_agent_billing subscribe starts no plan beside one that has not ende
         const out = result.structuredContent;
         assert.equal(out.outcome, 'refused', `${status} ${JSON.stringify(args)}`);
         assert.equal(out.message, `The last payment for this card plan did not go through (${status}), so the plan has not ended. `
-          + `A new plan is not started beside it, since both would bill. Nothing was charged. ${PAYMENT_FIX} https://wiro.ai/panel/agents/ua-1`);
+          + `A new plan is not started beside it, since both would bill. Nothing was charged. ${PAYMENT_FIX}`);
         assert.equal(out.quote, undefined);
         assert.equal(out.nextAction, undefined);
         assert.match(textOf(result), /^## subscribe: Not possible\n/);
@@ -3146,7 +3151,8 @@ test('manage_agent_billing subscribe starts no plan beside one that has not ende
   await withClient(team, async client => {
     const result = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'subscribe' });
     assert.equal(result.structuredContent.outcome, 'refused');
-    assert.match(result.structuredContent.message, /It can also be cancelled there\. On a team agent, the member whose card pays for the plan does this\. https:\/\/wiro\.ai\/panel\/agents\/ua-1$/);
+    assert.equal(result.structuredContent.message, 'The last payment for this card plan did not go through (past_due), so the plan has not ended. '
+      + `A new plan is not started beside it, since both would bill. Nothing was charged. ${TEAM_PAYMENT_FIX}`);
     assertNoSecrets(result);
   });
   assert.deepEqual(team.calls.map(item => item.path).filter(path => path !== '/UserAgent/Detail' && path !== '/Organization/List'), []);
@@ -3168,7 +3174,7 @@ test('manage_agent_billing subscribe starts no plan beside one that has not ende
   }
 });
 
-test('manage_agent_billing sends every action on a card plan whose payment did not go through to the dashboard, never to subscribe', async () => {
+test('manage_agent_billing sends every action on a card plan whose payment did not go through to Billing, never to subscribe', async () => {
   const fake = fakeClient({ '/UserAgent/Detail': detailResponse(agentRow({ tier: 'pro', monthlypriceusd: 90, subscription: pastDue() })) });
   const state = 'The last payment for this card plan did not go through (past_due), so the plan has not ended.';
   await withClient(fake, async client => {
@@ -3183,7 +3189,7 @@ test('manage_agent_billing sends every action on a card plan whose payment did n
       const result = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', ...args });
       const out = result.structuredContent;
       assert.equal(out.outcome, 'refused', JSON.stringify(args));
-      assert.equal(out.message, `${state} ${lead} ${PAYMENT_FIX} https://wiro.ai/panel/agents/ua-1`);
+      assert.equal(out.message, `${state} ${lead} ${PAYMENT_FIX}`);
       assert.equal(out.nextAction, undefined, JSON.stringify(args));
     }
   });
@@ -3206,7 +3212,7 @@ test('get_my_agent shows a card plan whose payment did not go through as not end
     assert.equal(detail.structuredContent.agent.subscription.amountUsd, 90);
     assert.equal(detail.structuredContent.nextAction, undefined);
     assert.equal(detail.structuredContent.advice, 'The agent is stopped. The last payment for this card plan did not go through (past_due), so the plan has not ended. '
-      + `The agent cannot start until the plan is active again, since it has no extra credits left. ${PAYMENT_FIX} https://wiro.ai/panel/agents/ua-1`);
+      + `The agent cannot start until the plan is active again, since it has no extra credits left. ${PAYMENT_FIX}`);
 
     const list = await call(client, 'list_my_agents', {});
     assert.match(textOf(list), /past_due, billed by card, \$90\.00 per 30 days, its last payment did not go through/);

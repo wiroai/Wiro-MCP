@@ -1101,8 +1101,9 @@ export function registerManageAgentBilling(server: McpServer, client: WiroClient
         + 'plan here: the card pays the smaller plan from the next renewal; a team\'s card plan changes plans in the '
         + 'dashboard. A card plan that is moving to wallet billing '
         + 'pays change_plan and buy_credits from the wallet, and cancel works once the wallet bills it. A card plan '
-        + 'whose last payment did not go through has not ended and takes no new plan: the payment is fixed in the '
-        + 'dashboard, and the plan then renews by itself. On a team '
+        + 'whose last payment did not go through has not ended and takes no new plan: the payment is fixed from '
+        + 'Billing in the dashboard, in the personal workspace of the person whose card pays for the plan, and the '
+        + 'plan then renews by itself. On a team '
         + 'agent only a team admin, the organization\'s owner or the person who deployed the agent can pay for it or '
         + 'change its plan; other members are refused and nothing is charged.',
       inputSchema: strictInput({

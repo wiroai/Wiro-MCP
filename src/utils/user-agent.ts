@@ -288,26 +288,33 @@ export function isUnsettledPlan(plan: Pick<AgentSubscription, 'status'> | null |
   return Boolean(plan) && plan?.status !== 'active' && isLivePlanStatus(plan?.status);
 }
 
+// Billing in the dashboard's personal workspace. Its Open Billing Portal button is where a card plan whose last
+// payment did not go through is paid or cancelled: the agent's page offers the billing portal only for an active
+// plan, and a team workspace has no billing portal, since a team's card plans are billed to the member who pays.
+const BILLING_PAGE_URL = 'https://wiro.ai/panel/billing';
+
 /**
  * What to do about a plan that has not ended and is not active. Wiro starts no new plan beside it, and renews,
  * changes, cancels and adds packs only to an active plan, so the dashboard settles it: a card plan whose last
- * payment did not go through renews by itself once its open invoice is paid. lead says
- * what the call could not do, after the plan's state.
+ * payment did not go through renews by itself once its open invoice is paid in the billing portal, which Billing
+ * opens in the personal workspace of whoever pays for the plan. lead says what the call could not do, after the
+ * plan's state.
  */
 export function unsettledPlanText(
   plan: Pick<AgentSubscription, 'status' | 'billing'>,
   agent: { guid: string; workspace: 'personal' | 'team' },
   lead = '',
 ): string {
-  const url = agentDashboardUrl(agent.guid);
   const failed = plan.billing === 'card' && PAYMENT_FAILED_STATUSES.has(plan.status);
   const state = failed
     ? `The last payment for this card plan did not go through (${plan.status}), so the plan has not ended.`
     : `This ${plan.billing === 'card' ? 'card ' : ''}plan is ${plan.status}, so it has not ended.`;
   const fix = failed
-    ? 'Fix the payment in the Wiro dashboard: pay the open invoice, with another card if needed, and the plan renews by itself. '
-      + `It can also be cancelled there.${agent.workspace === 'team' ? ' On a team agent, the member whose card pays for the plan does this.' : ''} ${url}`
-    : `It is managed in the Wiro dashboard: ${url}`;
+    ? 'To fix the payment, open Billing in the personal workspace of the Wiro dashboard and choose Open Billing Portal. '
+      + 'Pay the open invoice there, with another card if needed, and the plan renews by itself. The plan can also be cancelled there. '
+      + (agent.workspace === 'team' ? 'On a team agent, the member whose card pays for the plan does this, from their own personal workspace. ' : '')
+      + BILLING_PAGE_URL
+    : `It is managed in the Wiro dashboard: ${agentDashboardUrl(agent.guid)}`;
   return [state, lead, fix].filter(Boolean).join(' ');
 }
 
