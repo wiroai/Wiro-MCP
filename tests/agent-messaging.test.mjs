@@ -4240,6 +4240,73 @@ test('a key the proposal\'s own text mentions is not read as Wiro asking for one
   });
 });
 
+// Wiro names a scheduled task or a custom skill by the title the agent wrote, inside its own sentence, in its
+// listing and in its answer once the change is applied. Only Wiro's own lines that start with the ask count.
+test('a title that holds a key phrase is not read as Wiro asking for a key, in a listing or an answer that restarts', async () => {
+  const titles = ['Paste your Stripe key reminder', 'Reply with your API key to add notes', '2 connector cards still need their keys'];
+  for (const title of titles) {
+    const listing = LISTING_ONE.replace('(title: Weekly digest)', `(title: ${title})`);
+    const listed = fakeClient({
+      '/UserAgent/Message/Detail': { result: true, errors: [], data: listingRow(['aaaaaaaaaaa1'], { response: listing, debugoutput: listing }) },
+    });
+    await withClient(listed, async client => {
+      const result = await client.callTool({
+        name: 'get_agent_message',
+        arguments: { agent: 'agent-guid-1', message_id: 'msg-list', wait_seconds: 0 },
+      });
+      assert.notEqual(result.isError, true, textOf(result));
+      const { message, notes, nextAction } = result.structuredContent;
+      assert.ok(message.reply.includes(`(title: ${title})`), message.reply);
+      assert.equal(notes.some(note => /offers to take a key|asks for a key/.test(note)), false, notes.join('|'));
+      assert.equal(nextAction.tool, 'send_agent_message');
+      assert.doesNotMatch(nextAction.reason, /offers to take a key/);
+    });
+
+    const applied = fakeClient({
+      '/UserAgent/Message/Send': {
+        ...LISTING_SEND,
+        messageguid: 'msg-yes',
+        response: `✅ Applied: Scheduled task ${title} created.\nYour agent is restarting to load the change. Continue in about a minute.`,
+        setupresult: { applied: ['aaaaaaaaaaa1'], dismissed: [], failed: [], restarting: true },
+      },
+    });
+    await withClient(applied, async client => {
+      const result = await client.callTool({
+        name: 'send_agent_message',
+        arguments: { agent: 'agent-guid-1', session: 'default', message: 'yes', wait_seconds: 0 },
+      });
+      assert.notEqual(result.isError, true, textOf(result));
+      const { notes, nextAction } = result.structuredContent;
+      assert.equal(notes.some(note => /asks for a key|offers to take a key/.test(note)), false, notes.join('|'));
+      // The restart is still waited for before any message other than a setup reply.
+      assert.equal(nextAction.tool, 'get_my_agent', title);
+      assert.deepEqual(nextAction.arguments, { agent_guid: 'agent-guid-1', wait_seconds: 45 });
+    });
+  }
+});
+
+test('an answer that counts several connect cards still waiting for their keys asks for set_agent_credentials, with no wait', async () => {
+  const fake = fakeClient({
+    '/UserAgent/Message/Send': {
+      ...LISTING_SEND,
+      messageguid: 'msg-yes',
+      response: '✅ Applied: WordPress Post added.\n2 connector cards still need their keys: add each key on its card.\n'
+        + 'Your agent is restarting to load the change. Continue in about a minute.',
+      setupresult: { applied: ['zzzzzzzzzz31'], dismissed: [], failed: [], restarting: true },
+    },
+  });
+  await withClient(fake, async client => {
+    const result = await client.callTool({
+      name: 'send_agent_message',
+      arguments: { agent: 'agent-guid-1', session: 'default', message: 'yes', wait_seconds: 0 },
+    });
+    assert.notEqual(result.isError, true, textOf(result));
+    const { notes, nextAction } = result.structuredContent;
+    assert.ok(notes.includes(`Wiro's answer asks for a key as the next reply. ${KEY_RULE}`), notes.join('|'));
+    assert.equal(nextAction, undefined);
+  });
+});
+
 test('a send refused while the agent restarts says it comes back by itself, not to start it', async () => {
   const cases = [
     ['Agent is restarting. Please wait a moment and try again.', /^## Error\n\nYour agent is restarting to load a change and starts again by itself, in about a minute\. Wait until get_my_agent shows it running, then send the message again\.$/],
