@@ -310,14 +310,21 @@ export const SETUP_LISTING_RULE = 'Show the listing to the user, and send "yes" 
   + 'only after the user agrees to exactly that change. Never send yes on your own.';
 
 // Wiro's own answer to a setup reply is written for a person typing in the chat, so it can ask for a key as the
-// next reply: "Next: paste your Serper key as your reply.", a listing that takes the key in place of the yes, or
-// connect cards that still need their keys. Lines quoting a proposal's text start with ">" and are left out.
-const KEY_AS_REPLY = /\b(?:paste|reply with) your .{1,100}? key\b|\bstill need their keys\b/i;
+// next reply, always on a line of its own that starts with Wiro's words: "Next: paste your Serper key as your
+// reply.", the last line of a listing that takes the key in place of the yes, or the count of connect cards that
+// still need their keys. Text the agent wrote never starts a line there: a title is one line inside Wiro's own
+// sentence, such as "Card 1: Create scheduled task ... (title: ...)", and the proposal's text is quoted on lines
+// that start with ">". So only the start of a line is read, and a title cannot ask for a key in Wiro's name.
+const KEY_AS_REPLY_LINES: readonly RegExp[] = [
+  /^Next: paste your .{1,100}? key as your reply\b/i,
+  /^Reply with your .{1,100}? key to add /i,
+  /^\d+ connector cards still need their keys\b/i,
+];
 
 /** Whether Wiro's answer to a setup reply asks for a key as the next chat reply. */
 export function asksKeyAsReply(answer: string | undefined): boolean {
   return typeof answer === 'string'
-    && answer.split(/\r?\n/).some(line => !line.trimStart().startsWith('>') && KEY_AS_REPLY.test(line));
+    && answer.split(/\r?\n/).some(line => KEY_AS_REPLY_LINES.some(pattern => pattern.test(line.trim())));
 }
 
 /** What to do when Wiro's answer asks for a key as the next reply, said the same way by the note and the Next line. */
