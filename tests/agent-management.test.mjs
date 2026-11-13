@@ -947,6 +947,11 @@ test('the refusals that come before any charge settle the outcome', () => {
     'Already on the max plan.',
     "We couldn't schedule the cancellation. Please try again in a minute.",
     "We couldn't undo the cancellation. Please try again in a minute.",
+    // A plan change and a renewal that could not read the plan stop before any charge.
+    "Could not read the agent's plan. Nothing was changed; please retry.",
+    "The agent's plan could not be read. Nothing was charged; please retry.",
+    // A smaller plan sent without asking for a move down changes nothing.
+    "The Pro plan is smaller than this agent's Max plan, so this is not an upgrade. Nothing was changed. A move to a smaller plan starts at the next renewal; to ask for it, send allowDowngrade: true.",
   ]) {
     assert.equal(isPreChargeRefusal(apiError(message)), true, message);
     assert.equal(outcomeUnknown(apiError(message)), false, message);
@@ -954,6 +959,8 @@ test('the refusals that come before any charge settle the outcome', () => {
   // A skill name inside another sentence is not this refusal.
   assert.equal(isPreChargeRefusal(apiError('Could not bill Unknown skill: x')), false);
   assert.equal(isPreChargeRefusal(apiError("An earlier answer: We couldn't schedule the cancellation.")), false);
+  assert.equal(isPreChargeRefusal(apiError("The wallet was charged $5.00. Could not read the agent's plan. Nothing was changed; please retry.")), false);
+  assert.equal(isPreChargeRefusal(apiError("The agent's plan could not be read.")), false, 'only the sentence that says nothing was charged');
 });
 
 test('an answer that says what the wallet paid settles the outcome on the fixed words of its sentence', () => {
@@ -962,6 +969,8 @@ test('an answer that says what the wallet paid settles the outcome on the fixed 
     'The wallet was charged $4.25, but the tier change did not finish. Please contact support and do not try again.',
     'The wallet was charged $25.00, but the plan change did not finish. Please contact support and do not try again.',
     'The wallet was charged $40.00, but the renewal did not finish. Please contact support and do not try again.',
+    // A new plan paid from the wallet whose plan was not saved, from subscribe or a deploy.
+    'The wallet was charged $5.00, but the plan could not be saved. Please contact support and do not try again.',
   ];
   for (const message of sentences) {
     assert.equal(isKnownPaidOutcome(apiError(message)), true, message);
@@ -972,6 +981,8 @@ test('an answer that says what the wallet paid settles the outcome on the fixed 
     'The wallet was charged $98.00.',
     'Something else, but the renewal did not finish. Please contact support and do not try again.',
     'The wallet was charged $98.00, but the renewal did not finish.',
+    'The wallet was charged $5.00, but the plan could not be saved.',
+    'Something else, but the plan could not be saved. Please contact support and do not try again.',
   ]) {
     assert.equal(isKnownPaidOutcome(apiError(message)), false, message);
     assert.equal(outcomeUnknown(apiError(message)), true, message);
@@ -1175,6 +1186,56 @@ test('manage_agent_billing: a cancel or an undo that could not be saved is a ref
     '/UserAgent/CancelSubscription': refused('Something else went wrong.'),
   }, { action: 'cancel' });
   assert.match(textOf(other.result), /may have taken effect\. Check get_my_agent before trying again\.$/);
+});
+
+test('manage_agent_billing: a plan change or a renewal that could not read the plan is a refusal, with nothing to check', async () => {
+  const changeSentence = "Could not read the agent's plan. Nothing was changed; please retry.";
+  const change = await confirmBilling({
+    '/UserAgent/Detail': detail(),
+    '/UserAgent/UpgradeTier': refused(changeSentence),
+  }, { action: 'change_plan', plan: 'pro', confirm_charge_usd: 18 });
+  assert.equal(change.result.isError, true);
+  assert.equal(textOf(change.result), `## Error\n\n${changeSentence}`);
+  assert.equal(change.fake.called('/UserAgent/Detail').length, 1, 'no read to observe the outcome');
+
+  const renewSentence = "The agent's plan could not be read. Nothing was charged; please retry.";
+  const renew = await confirmBilling({
+    '/UserAgent/Detail': detail({
+      status: 0,
+      monthlypriceusd: 5,
+      subscription: { plan: 'agent', status: 'expired', amount: 5, currentperiodend: NOW - 86_400, provider: 'prepaid', nextprovider: null },
+    }),
+    '/UserAgent/RenewSubscription': refused(renewSentence),
+  }, { action: 'renew', confirm_charge_usd: 5 });
+  assert.equal(renew.result.isError, true);
+  assert.equal(textOf(renew.result), `## Error\n\n${renewSentence}`);
+  assert.equal(renew.fake.called('/UserAgent/Detail').length, 1);
+});
+
+test('manage_agent_billing: a new plan the wallet paid for but that was not saved shows the sentence as it is', async () => {
+  const sentence = 'The wallet was charged $5.00, but the plan could not be saved. Please contact support and do not try again.';
+  const { fake, result } = await confirmBilling({
+    '/UserAgent/Detail': detail({ status: 6, subscription: null }),
+    '/UserAgent/CreateSubscriptionCheckout': refused(sentence),
+  }, { action: 'subscribe', plan: 'starter', confirm_charge_usd: 5 });
+  assert.equal(result.isError, true);
+  assert.equal(textOf(result), `## Error\n\n${sentence}`);
+  assert.equal(fake.called('/UserAgent/Detail').length, 1, 'no read to observe the outcome');
+  assert.equal(fake.called('/UserAgent/CreateSubscriptionCheckout').length, 1);
+  assert.doesNotMatch(textOf(result), /may have taken effect|before trying again|Do not repeat the call until/);
+});
+
+test('manage_agent_billing: a move up that Wiro answers as a move down, after the plan moved, says nothing was charged', async () => {
+  const sentence = "The Pro plan is smaller than this agent's Max plan, so this is not an upgrade. Nothing was changed. A move to a smaller plan starts at the next renewal; to ask for it, send allowDowngrade: true.";
+  const { fake, result } = await confirmBilling({
+    '/UserAgent/Detail': detail(),
+    '/UserAgent/UpgradeTier': refused(sentence),
+  }, { action: 'change_plan', plan: 'pro', confirm_charge_usd: 18 });
+  assert.equal(result.isError, true);
+  assert.equal(textOf(result), `## Error\n\n${sentence}\n\nNothing was charged: the agent's plan changed after it was read. get_my_agent shows the plan it is on now, and change_plan quotes a move from it.`);
+  assert.equal(fake.called('/UserAgent/Detail').length, 1, 'no read to observe the outcome');
+  // A move up never asks for a move down.
+  assert.deepEqual(fake.called('/UserAgent/UpgradeTier')[0].body, { guid: GUID, targetTier: 'pro' });
 });
 
 // ---------------------------------------------------------------------------

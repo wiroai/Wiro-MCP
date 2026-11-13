@@ -2802,7 +2802,8 @@ test('manage_agent_billing moves to a smaller plan at the next renewal, with not
 
     const done = await call(client, 'manage_agent_billing', quote.structuredContent.nextAction.arguments);
     assert.equal(done.structuredContent.outcome, 'done');
-    assert.deepEqual(fake.called('/UserAgent/UpgradeTier')[0].body, { guid: 'ua-1', targetTier: 'pro' });
+    // Wiro moves an agent to a smaller plan only when the request asks for it.
+    assert.deepEqual(fake.called('/UserAgent/UpgradeTier')[0].body, { guid: 'ua-1', targetTier: 'pro', allowDowngrade: true });
     assert.equal(done.structuredContent.message, `The move to Pro is set: it starts with the renewal after ${iso}. Until then the agent keeps Max and its credits. Nothing was charged or refunded.`);
     assert.deepEqual(done.structuredContent.result, { chargedUsd: 0, plan: 'max', nextPlan: 'pro', change: 'downgrade', startsAt: iso });
     assert.equal(done.structuredContent.agent.nextPlan, 'pro');
@@ -2855,6 +2856,42 @@ test('manage_agent_billing undoes a move set for the next renewal when the agent
     assert.equal(same.structuredContent.outcome, 'not_needed');
     assert.equal(same.structuredContent.message, 'The agent is already on Max. Nothing to do.');
     assert.equal(fake.called('/UserAgent/UpgradeTier').length, 1);
+  });
+
+  // An agent on a price from before the plans keeps its plan with that plan set for its renewal, which
+  // bills the plan's own price: that is the move undone, not a move still set.
+  const end = NOW + 15 * 86_400;
+  const iso = new Date(end * 1000).toISOString();
+  let kept = false;
+  const legacy = fakeClient({
+    '/UserAgent/Detail': () => detailResponse(agentRow({ tier: 'max', monthlypriceusd: 70, subscription: subscription({ amount: 70, currentperiodend: end }), nextplan: kept ? 'max' : 'starter' })),
+    '/UserAgent/UpgradeTier': () => {
+      kept = true;
+      return { result: true, errors: [], change: 'downgrade-cancelled', tier: 'max', previousTier: 'max', targetTier: 'max', nextplan: 'max', effectiveAt: NOW, periodEnd: end, startsAt: end, newPriceUsd: 100, newMonthlyCredits: 10000 };
+    },
+  });
+  await withClient(legacy, async client => {
+    const quote = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'change_plan', plan: 'max' });
+    assert.equal(quote.structuredContent.quote.change, 'undo_downgrade');
+    assert.match(quote.structuredContent.message, /The plan then renews on Max at \$100\.00 every 30 days with 10,000 monthly credits\./);
+    const done = await call(client, 'manage_agent_billing', quote.structuredContent.nextAction.arguments);
+    assert.equal(done.structuredContent.outcome, 'done', textOf(done));
+    assert.deepEqual(legacy.called('/UserAgent/UpgradeTier')[0].body, { guid: 'ua-1', targetTier: 'max' });
+    assert.equal(done.structuredContent.message, `The move to Starter is undone. The agent stays on Max, and nothing was charged. It renews at the Max price from ${iso}, $100.00 every 30 days with 10,000 monthly credits.`);
+    assert.deepEqual(done.structuredContent.result, { chargedUsd: 0, plan: 'max', nextPlan: 'max', change: 'undo_downgrade', startsAt: iso });
+    assert.equal(done.structuredContent.agent.nextPlan, 'max');
+    assert.match(textOf(done), new RegExp(`; from the renewal after ${iso.replace(/\./g, '\\.')} it is billed at today's Max price`));
+  });
+
+  // Another plan still set after the undo is said, not claimed undone.
+  const stuck = fakeClient({
+    '/UserAgent/Detail': detailResponse(agentRow({ tier: 'max', monthlypriceusd: 100, nextplan: 'starter' })),
+    '/UserAgent/UpgradeTier': { result: true, errors: [], tier: 'max', nextplan: null },
+  });
+  await withClient(stuck, async client => {
+    const done = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'change_plan', plan: 'max', confirm: true });
+    assert.equal(done.structuredContent.outcome, 'done');
+    assert.match(done.structuredContent.message, /nothing was charged\. get_my_agent still shows the move set for the next renewal; check it again in a minute\.$/);
   });
 
   // A plan set to renew at its plan's price today keeps that: asking for the same plan changes nothing.
@@ -3007,6 +3044,101 @@ test('manage_agent_billing: a plan change on an ended wallet plan of the same pl
   for (const row of [ended('starter'), ended('pro', { provider: 'stripe' }), ended('pro', { status: 'refunded' }), agentRow({ tier: 'pro', status: 0, subscription: null })]) {
     assert.deepEqual((await change(row)).nextAction.arguments, { agent_guid: 'ua-1', action: 'subscribe', plan: 'pro' });
   }
+});
+
+test('manage_agent_billing: on an ended wallet plan with a move set for its renewal, only that plan points to renew', async () => {
+  // A Pro plan whose move to Max was set for its renewal, which ended unpaid: renew brings it back on Max.
+  const row = agentRow({ tier: 'pro', nextplan: 'max', status: 0, monthlycredits: 0, monthlypriceusd: 30, subscription: subscription({ status: 'expired', amount: 30, currentperiodend: NOW - 86_400 }) });
+  const fake = fakeClient({ '/UserAgent/Detail': detailResponse(row) });
+  await withClient(fake, async client => {
+    const max = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'change_plan', plan: 'max' });
+    assert.equal(max.structuredContent.outcome, 'refused');
+    assert.equal(max.structuredContent.message, 'This agent\'s plan has ended, and action renew brings it back on Max, the plan set for its renewal; subscribe starts a new plan.');
+    assert.deepEqual(max.structuredContent.nextAction.arguments, { agent_guid: 'ua-1', action: 'renew' });
+    const renew = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'renew' });
+    assert.equal(renew.structuredContent.quote.plan, 'max');
+    assert.equal(renew.structuredContent.quote.chargeNowUsd, 100);
+    // Its own plan, like any other, takes a new plan: renew would bring back Max.
+    for (const plan of ['pro', 'starter']) {
+      const other = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'change_plan', plan });
+      assert.equal(other.structuredContent.outcome, 'refused');
+      assert.equal(other.structuredContent.message, `Changing the plan needs an active plan. Use action subscribe with plan ${plan} instead.`);
+      assert.deepEqual(other.structuredContent.nextAction.arguments, { agent_guid: 'ua-1', action: 'subscribe', plan });
+    }
+  });
+  assert.equal(fake.calls.filter(item => item.path !== '/UserAgent/Detail').length, 0);
+});
+
+test('manage_agent_billing: a renewal Wiro refuses above the price the agent showed is read and quoted again, never renewed on its own', async () => {
+  const sentence = 'This plan now renews on the Max plan at $100.00 a month, not the $70.00 it showed. Nothing was charged. Renew again to pay the new price.';
+  const endedAt = NOW - 86_400;
+  // A Pro plan at $70 whose move to Max was set for its renewal, which ended unpaid. Once refused, the
+  // agent shows the plan and the price its renewal takes.
+  const before = overrides => agentRow({ tier: 'pro', nextplan: 'max', status: 0, monthlycredits: 0, monthlypriceusd: 70, subscription: subscription({ status: 'expired', amount: 70, currentperiodend: endedAt }), ...overrides });
+  const after = overrides => agentRow({ tier: 'max', nextplan: null, status: 0, monthlycredits: 0, monthlypriceusd: 100, subscription: subscription({ status: 'expired', amount: 70, currentperiodend: endedAt }), ...overrides });
+  const renewal = (rows, renewed = { result: false, errors: [{ code: 0, message: sentence }] }) => {
+    let refusedOnce = false;
+    return fakeClient({
+      '/UserAgent/Detail': () => {
+        if (refusedOnce && rows.after instanceof Error) throw rows.after;
+        return detailResponse(refusedOnce ? rows.after : rows.before);
+      },
+      '/UserAgent/RenewSubscription': () => {
+        refusedOnce = true;
+        return renewed;
+      },
+    });
+  };
+
+  // The quote was the Max price already: the new quote is the same amount, and the user is still asked again.
+  const same = renewal({ before: before(), after: after() });
+  await withClient(same, async client => {
+    const quote = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'renew' });
+    assert.equal(quote.structuredContent.quote.chargeNowUsd, 100, textOf(quote));
+    const result = await call(client, 'manage_agent_billing', quote.structuredContent.nextAction.arguments);
+    assert.notEqual(result.isError, true, textOf(result));
+    const output = result.structuredContent;
+    assert.equal(output.outcome, 'quote');
+    assert.equal(output.priceChanged, undefined);
+    assert.equal(output.quote.chargeNowUsd, 100);
+    assert.equal(output.quote.plan, 'max');
+    assert.ok(output.message.startsWith('This plan now renews on the Max plan at $100.00 a month, not the $70.00 it showed. Nothing was charged. '
+      + 'The agent was read again for this new quote. Show it to the user and ask again; renew only after they agree to it.\n\n'
+      + 'Renew the expired plan on Max: $100.00 now from the personal wallet, then every 30 days until it is cancelled.'), output.message);
+    assert.doesNotMatch(output.message, /Renew again to pay the new price/);
+    assert.deepEqual(output.nextAction, {
+      tool: 'manage_agent_billing',
+      arguments: { agent_guid: 'ua-1', action: 'renew', confirm_charge_usd: 100, confirm: true },
+      reason: 'Ask the user to approve this charge first.',
+    });
+    assert.match(textOf(result), /^## renew: Quote \(nothing done yet\)\n/);
+    assert.equal(output.agent.tier, 'max');
+  });
+  assert.equal(same.called('/UserAgent/RenewSubscription').length, 1, 'nothing renews on its own');
+  assert.equal(same.called('/UserAgent/Detail').length, 3);
+
+  // Without the plans' prices the quote was the agent's own $70: the new amount is a changed price.
+  const unpriced = row => ({ ...row, agent: { ...row.agent, tiers: null } });
+  const lower = renewal({ before: unpriced(before()), after: unpriced(after()) });
+  await withClient(lower, async client => {
+    const result = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'renew', confirm_charge_usd: 70, confirm: true });
+    assert.notEqual(result.isError, true, textOf(result));
+    assert.equal(result.structuredContent.outcome, 'quote');
+    assert.equal(result.structuredContent.priceChanged, true);
+    assert.equal(result.structuredContent.quote.chargeNowUsd, 100);
+    assert.equal(result.structuredContent.nextAction.arguments.confirm_charge_usd, 100);
+  });
+  assert.equal(lower.called('/UserAgent/RenewSubscription').length, 1);
+
+  // When the agent cannot be read again, nothing was charged and the next step is a new quote.
+  const unread = renewal({ before: before(), after: new Error('socket hang up') });
+  await withClient(unread, async client => {
+    const result = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'renew', confirm_charge_usd: 100, confirm: true });
+    assert.equal(result.isError, true);
+    assert.equal(textOf(result), '## Error\n\nThis plan now renews on the Max plan at $100.00 a month, not the $70.00 it showed. Nothing was charged.\n\n'
+      + 'The agent could not be read again just now. Call manage_agent_billing with action renew and without confirm for the new quote, and show it to the user before renewing.');
+  });
+  assert.equal(unread.called('/UserAgent/RenewSubscription').length, 1);
 });
 
 test('a move to a larger plan starts from the plan\'s amount when the agent shows no monthly price, as the charge does', async () => {
