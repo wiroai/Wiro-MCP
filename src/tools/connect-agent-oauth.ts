@@ -271,8 +271,11 @@ async function connect(
   const refusal = unusedCredentialRefusal(row, context, await loadSkillRegistry(client, signal));
   if (refusal) return errorResult(new Error(refusal));
   const group = credentialGroup(row, credential);
-  const modes = connectionModeRequirements(meta, group);
-  const redirectUri = meta.connectionModes.includes('own') ? ownAppRedirectUri(meta) : undefined;
+  // One status read gives the connection time before this sign-in and the redirect URI Wiro gives for the user's
+  // own app. A connect still goes ahead without it.
+  const before = await readOAuthStatus(client, agentGuid, credential, oauth.picker, signal).catch(() => null);
+  const modes = connectionModeRequirements(meta, group, before?.redirectUri);
+  const redirectUri = meta.connectionModes.includes('own') ? ownAppRedirectUri(meta, before?.redirectUri) : undefined;
   const setupExtra = { connectionModes: modes, ...(redirectUri ? { ownAppRedirectUri: redirectUri } : {}) };
   const describeAction = {
     tool: 'set_agent_credentials',
@@ -400,12 +403,7 @@ async function connect(
   if (!isAllowedRedirectUrl(redirectUrl, agentGuid)) {
     return errorResult(new Error(`redirect_url can only be the agent's page in the Wiro dashboard (${dashboardAgentUrl(agentGuid)}) or a local address on the user's own machine (http://localhost or http://127.0.0.1, any port). Leave it out to use the dashboard page.`));
   }
-  let since = '';
-  try {
-    since = (await readOAuthStatus(client, agentGuid, credential, oauth.picker, signal)).connectedAt;
-  } catch {
-    since = '';
-  }
+  const since = before?.connectedAt ?? '';
   const answer = await client.post<ConnectBody>('/UserAgentOAuth/OAuthConnect', {
     useragentguid: agentGuid,
     credentialkey: credential,
@@ -422,7 +420,7 @@ async function connect(
       : '';
     return result('connect', context, 'setup_needed',
       `Mode ${mode} needs these saved first with set_agent_credentials: ${appKeys.map(field => `${field.label} (${field.field})`).join(', ')}. ${requirement.note}${goneText}`,
-      { ...setupExtra, connectionModes: connectionModeRequirements(meta, groupNow), mode, nextAction: describeAction });
+      { ...setupExtra, connectionModes: connectionModeRequirements(meta, groupNow, before?.redirectUri), mode, nextAction: describeAction });
   }
   const body = requireApiSuccess(answer, `Could not start the ${meta.title} sign-in.`);
   const authorizeUrl = asString(body.authorizeUrl);
