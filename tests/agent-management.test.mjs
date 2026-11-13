@@ -952,10 +952,18 @@ test('the refusals that come before any charge settle the outcome', () => {
     "The agent's plan could not be read. Nothing was charged; please retry.",
     // A smaller plan sent without asking for a move down changes nothing.
     "The Pro plan is smaller than this agent's Max plan, so this is not an upgrade. Nothing was changed. A move to a smaller plan starts at the next renewal; to ask for it, send allowDowngrade: true.",
+    // An undo refused because the move already started with this billing period changes nothing.
+    'The move to the Pro plan started with this billing period, and its payment moves the agent there, so it can no longer be undone. Nothing was changed. Once the agent shows the Pro plan, change the plan again.',
+    'The move to the Starter plan started with this billing period, and its payment moves the agent there, so it can no longer be undone. Nothing was changed. Once the agent shows the Starter plan, change the plan again.',
   ]) {
     assert.equal(isPreChargeRefusal(apiError(message)), true, message);
     assert.equal(outcomeUnknown(apiError(message)), false, message);
   }
+  assert.equal(
+    isPreChargeRefusal(apiError('The move to the Pro plan started with this billing period, and its payment moves the agent there, so it can no longer be undone.')),
+    false,
+    'only the sentence that says nothing was changed',
+  );
   // A skill name inside another sentence is not this refusal.
   assert.equal(isPreChargeRefusal(apiError('Could not bill Unknown skill: x')), false);
   assert.equal(isPreChargeRefusal(apiError("An earlier answer: We couldn't schedule the cancellation.")), false);
