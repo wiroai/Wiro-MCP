@@ -259,6 +259,16 @@ function renewalPlanPrice(agent: Pick<AgentDetail, 'tier' | 'nextPlan' | 'pricin
   return key ? agent.pricing?.[key] ?? null : null;
 }
 
+/**
+ * What the wallet paid for a plan, as Wiro answers it (chargedUsd), with the plan's price when a discount on the
+ * account took the charge below it. Without that answer, the plan's price.
+ */
+function walletPaid(body: Record<string, unknown>, priceUsd: number): { chargedUsd: number; text: string } {
+  const chargedUsd = toNumber(body.chargedUsd) ?? priceUsd;
+  const discounted = chargedUsd < priceUsd && !sameAmount(chargedUsd, priceUsd);
+  return { chargedUsd, text: `${formatUsd(chargedUsd)}${discounted ? ` (the ${formatUsd(priceUsd)} price after a discount)` : ''}` };
+}
+
 /** The amount a confirmed call charges now, or at most when that is worked out only then; null when it charges nothing. */
 function chargeOf(quote: Quote | undefined): number | null {
   const amount = quote?.chargeNowUsd ?? quote?.maxChargeUsd ?? null;
@@ -385,13 +395,14 @@ async function planFor(
             }, signal),
             'The plan could not be started.',
           );
-          const charged = toNumber(body.monthlypriceusd) ?? price.priceUsd;
+          const monthly = toNumber(body.monthlypriceusd) ?? price.priceUsd;
+          const paid = walletPaid(body, monthly);
           const credits = toNumber(body.monthlycredits) ?? price.monthlyCredits;
           return {
             outcome: 'done',
-            message: `Subscribed on ${planName(plan)} and charged ${formatUsd(charged)} from ${wallet}. The plan renews every 30 days until it is cancelled. `
+            message: `Subscribed on ${planName(plan)} and charged ${paid.text} from ${wallet}. The plan renews every 30 days until it is cancelled. `
               + (subscribeStarts(agent.status) ? 'The agent is starting.' : 'The agent keeps running: a new plan does not restart it.'),
-            result: { chargedUsd: charged, monthlyPriceUsd: charged, monthlyCredits: credits, plan },
+            result: { chargedUsd: paid.chargedUsd, monthlyPriceUsd: monthly, monthlyCredits: credits, plan },
             nextAction: subscribeWait(agent),
           };
         },
@@ -502,15 +513,19 @@ async function planFor(
             await client.post<BillingEnvelope>('/UserAgent/RenewSubscription', { guid }, signal),
             'The plan could not be renewed.',
           );
-          const charged = toNumber(body.amount) ?? price;
+          const monthly = toNumber(body.amount) ?? price;
+          const paid = walletPaid(body, monthly);
           const credits = toNumber(body.monthlycredits);
+          // The plan it renewed on, which the wallet line names too.
+          const renewedOn = asPlan(body.tier) ?? planKey;
           return {
             outcome: 'done',
-            message: `Renewed and charged ${formatUsd(charged)} from ${wallet}. The plan renews every 30 days until it is cancelled.`,
+            message: `Renewed${renewedOn ? ` on ${planName(renewedOn)}` : ''} and charged ${paid.text} from ${wallet}. The plan renews every 30 days until it is cancelled.`,
             result: {
-              chargedUsd: charged,
-              monthlyPriceUsd: charged,
+              chargedUsd: paid.chargedUsd,
+              monthlyPriceUsd: monthly,
               ...(credits !== null ? { monthlyCredits: credits } : {}),
+              ...(renewedOn ? { plan: renewedOn } : {}),
               renewal: 'renewed',
             },
             nextAction: renewWait(agent),
@@ -599,7 +614,8 @@ async function planFor(
         const open = unsettled('A plan change needs an active plan.');
         if (open) return { outcome: 'refused', message: open };
         // A wallet plan that ended comes back with renew on the plan set for its renewal, else on its own
-        // plan, so renew answers a target that is that plan; any other target takes a new plan.
+        // plan, so renew answers a target that is that plan; any other target takes a new plan. When the plan
+        // ends, Wiro writes that plan on the agent: the one set for its renewal, else the one nearest its last price.
         const renewsOn = asPlan(agent.nextPlan) ?? current;
         if (renewsOn === target && raw?.status === 'expired' && prepaid) {
           return {

@@ -3262,6 +3262,46 @@ test('manage_agent_billing: a wallet cancel keeps the move set for the renewal, 
   });
 });
 
+test('manage_agent_billing says what the wallet paid for a plan, with the plan\'s price when a discount took it lower', async () => {
+  const fake = fakeClient({
+    '/UserAgent/Detail': detailResponse(agentRow({ status: 6, subscription: null, credentials: {} })),
+    '/UserAgent/CreateSubscriptionCheckout': { result: true, errors: [], tier: 'pro', monthlypriceusd: 30, chargedUsd: 24, monthlycredits: 3000 },
+  });
+  await withClient(fake, async client => {
+    const done = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'subscribe', plan: 'pro', confirm_charge_usd: 30, confirm: true });
+    assert.equal(done.structuredContent.outcome, 'done', textOf(done));
+    assert.match(done.structuredContent.message, /^Subscribed on Pro and charged \$24\.00 \(the \$30\.00 price after a discount\) from the personal wallet\./);
+    assert.deepEqual(done.structuredContent.result, { chargedUsd: 24, monthlyPriceUsd: 30, monthlyCredits: 3000, plan: 'pro' });
+  });
+
+  // A wallet plan that ended renews on the plan the agent shows: here Max, the plan nearest the $90 it ended at.
+  const ended = agentRow({ tier: 'max', nextplan: null, status: 0, monthlycredits: 0, monthlypriceusd: 100, subscription: subscription({ status: 'expired', amount: 90, currentperiodend: NOW - 86_400 }) });
+  const renewed = fakeClient({
+    '/UserAgent/Detail': detailResponse(ended),
+    '/UserAgent/RenewSubscription': { result: true, errors: [], action: 'renewed', plan: 'agent', tier: 'max', amount: 100, chargedUsd: 80, monthlycredits: 10000 },
+  });
+  await withClient(renewed, async client => {
+    const quote = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'renew' });
+    assert.equal(quote.structuredContent.quote.plan, 'max');
+    assert.equal(quote.structuredContent.quote.chargeNowUsd, 100);
+    const done = await call(client, 'manage_agent_billing', quote.structuredContent.nextAction.arguments);
+    assert.equal(done.structuredContent.outcome, 'done', textOf(done));
+    assert.match(done.structuredContent.message, /^Renewed on Max and charged \$80\.00 \(the \$100\.00 price after a discount\) from the personal wallet\./);
+    assert.deepEqual(done.structuredContent.result, { chargedUsd: 80, monthlyPriceUsd: 100, monthlyCredits: 10000, plan: 'max', renewal: 'renewed' });
+  });
+
+  // An answer without chargedUsd: the plan's price is what was charged.
+  const plain = fakeClient({
+    '/UserAgent/Detail': detailResponse(ended),
+    '/UserAgent/RenewSubscription': { result: true, errors: [], action: 'renewed', plan: 'agent', amount: 100, monthlycredits: 10000 },
+  });
+  await withClient(plain, async client => {
+    const done = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'renew', confirm_charge_usd: 100, confirm: true });
+    assert.match(done.structuredContent.message, /^Renewed on Max and charged \$100\.00 from the personal wallet\. /);
+    assert.equal(done.structuredContent.result.chargedUsd, 100);
+  });
+});
+
 test('manage_agent_billing: a renewal Wiro refuses above the price the agent showed is read and quoted again, never renewed on its own', async () => {
   const sentence = 'This plan now renews on the Max plan at $100.00 a month, not the $70.00 it showed. Nothing was charged. Renew again to pay the new price.';
   const endedAt = NOW - 86_400;

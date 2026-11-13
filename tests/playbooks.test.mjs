@@ -585,6 +585,11 @@ test('the agents playbook says a wallet cancel keeps the move set for its renewa
   assert.doesNotMatch(PLAYBOOKS.agents, /and drops a move set for it/);
 });
 
+test('the agents playbook says which plan an ended wallet plan renews on', () => {
+  assert.match(PLAYBOOKS.agents, /renews a wallet plan that already ended, on the plan `get_my_agent` shows for it, at that plan's price today\. When a wallet plan ends, Wiro shows it on the plan set for its renewal, else on the plan nearest its last monthly price\./);
+  assert.doesNotMatch(PLAYBOOKS.agents, /on the plan set for its renewal \(else its own\)/);
+});
+
 test('the playbooks name the three plans and say skills do not change the price', () => {
   assert.match(PLAYBOOKS.agents, /Every agent has one of three monthly plans, smallest first: Starter, Pro or Max\./);
   assert.match(PLAYBOOKS.agents, /every plan includes every skill/);
