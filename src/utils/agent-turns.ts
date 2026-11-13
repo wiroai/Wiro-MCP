@@ -828,7 +828,9 @@ function chooseNextAction(
  * user approves it: their "yes" as the next message, which Wiro matches itself,
  * or a key saved with set_agent_credentials. Sent with an API key, the first
  * "yes" only gets Wiro's listing of the exact change; the next "yes" (or
- * "yes N") applies it. A key never goes in a chat message.
+ * "yes N") applies it. A key never goes in a chat message. Only a connect
+ * asks for a key: a disconnect removes the saved one and is approved with a
+ * reply like the other changes.
  */
 function setupNextAction(target: AgentTarget, result: AgentTurnResult): NextAction | undefined {
   const guid = target.agentGuid;

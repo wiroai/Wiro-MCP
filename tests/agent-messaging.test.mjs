@@ -3574,3 +3574,267 @@ test('when the stored answer cannot be read, send_agent_message shows Send\'s an
     });
   }
 });
+
+// Disconnect a connector, add to a custom skill, undo a skill's last change, and
+// the skill's text from before a change (before), which Wiro writes on the card.
+
+const DISCONNECT_CARD = { id: 'iiiiiiiiii09', kind: 'disconnect', connector: 'serper', note: 'You asked to stop using web search' };
+const SKILL_TEXT = 'Write in a warm tone.\nKeep posts under 900 words.';
+
+async function readSetupReply(blocks) {
+  const fake = fakeClient({
+    '/UserAgent/Message/Detail': { result: true, errors: [], data: setupReplyRow(blocks) },
+  });
+  let result;
+  await withClient(fake, async client => {
+    result = await client.callTool({
+      name: 'get_agent_message',
+      arguments: { agent: 'agent-guid-1', message_id: 'msg-setup', wait_seconds: 0 },
+    });
+  });
+  assert.notEqual(result.isError, true, textOf(result));
+  assertNoSecrets(result);
+  return result;
+}
+
+const YES_STEP = { agent: 'agent-guid-1', session: 'default', message: 'yes' };
+
+test('get_agent_message shows a disconnect proposal and asks for a yes, never for a key', async () => {
+  const result = await readSetupReply([
+    setupBlock(DISCONNECT_CARD, 0),
+    setupBlock({ id: 'vvvvvvvvvv22', kind: 'disconnect', connector: 'brevo', status: 'applied', actedat: 1700000000 }, 1),
+  ]);
+  const { message, nextAction } = result.structuredContent;
+  assert.deepEqual(message.setupChanges.map(({ proposedAt: _at, ...change }) => change), [
+    { id: 'iiiiiiiiii09', kind: 'disconnect', status: 'pending', connector: 'serper', note: 'You asked to stop using web search' },
+    { id: 'vvvvvvvvvv22', kind: 'disconnect', status: 'applied', connector: 'brevo', actedAt: '2023-11-14T22:13:20.000Z' },
+  ]);
+  const text = textOf(result);
+  assert.match(text, /#### Proposed change 1: Disconnect `serper`\n\n- Its saved key is removed, and skills that use it stop until it is connected again\. Approving it needs no key\.\n- Note from the agent: `You asked to stop using web search`\n/);
+  assert.match(text, /\n- Applied: Disconnect `brevo` \(2023-11-14T22:13:20\.000Z\)/);
+  assert.doesNotMatch(text, /The user provides the key or sign-in/);
+  assert.doesNotMatch(text, /set_agent_credentials/);
+  // Approved like every change that is not a connect: the user's yes, never a key.
+  assert.equal(nextAction.tool, 'send_agent_message');
+  assert.deepEqual(nextAction.arguments, YES_STEP);
+  assert.match(nextAction.reason, /^The agent proposes a setup change\. Show it to the user and ask; never send yes on your own\./);
+});
+
+test('a disconnect is listed and then applied by a second yes, with no key', async () => {
+  const listing = 'The agent proposes this setup change. Nothing is applied yet.\n\n'
+    + 'Card 1: Disconnect Serper (its saved key is removed).\n\n'
+    + 'Reply "yes" to apply exactly this change, or "no" to turn it down.';
+  const applied = '✅ Applied: Serper disconnected.\nYour agent is restarting to load the change. Continue in about a minute.';
+  const fake = fakeClient({
+    '/UserAgent/Message/Send': (_body, count) => (count === 1
+      ? { ...LISTING_SEND, response: listing }
+      : {
+        ...LISTING_SEND,
+        messageguid: 'msg-yes',
+        response: applied,
+        setupresult: { applied: ['iiiiiiiiii09'], dismissed: [], failed: [], restarting: true },
+      }),
+    '/UserAgent/Message/Detail': {
+      result: true,
+      errors: [],
+      data: listingRow(['iiiiiiiiii09'], { response: listing, debugoutput: listing }),
+    },
+  });
+  await withClient(fake, async client => {
+    const send = () => client.callTool({
+      name: 'send_agent_message',
+      arguments: { agent: 'agent-guid-1', session: 'default', message: 'yes', wait_seconds: 0 },
+    });
+    const first = await send();
+    assert.notEqual(first.isError, true, textOf(first));
+    assert.equal(first.structuredContent.message.listedSetupChanges, 1);
+    assert.equal(first.structuredContent.nextAction.tool, 'send_agent_message');
+    assert.deepEqual(first.structuredContent.nextAction.arguments, YES_STEP);
+    assert.ok(textOf(first).includes('Card 1: Disconnect Serper (its saved key is removed).'));
+    assert.doesNotMatch(textOf(first), /set_agent_credentials/);
+
+    const second = await send();
+    assert.notEqual(second.isError, true, textOf(second));
+    assert.deepEqual(second.structuredContent.setupResult, { applied: ['iiiiiiiiii09'], dismissed: [], failed: [], restarting: true });
+    assert.match(second.structuredContent.message.reply, /^✅ Applied: Serper disconnected\./);
+    assert.equal(second.structuredContent.nextAction.tool, 'get_my_agent');
+  });
+  // Only the answer that applied nothing is read back, to see whether it is a listing.
+  assert.equal(fake.callsTo('/UserAgent/Message/Detail').length, 1);
+});
+
+test('get_agent_message shows a skill update with the skill\'s current text, then the proposed text', async () => {
+  const result = await readSetupReply([setupBlock({
+    id: 'oooooooooo15',
+    kind: 'skill',
+    action: 'update',
+    key: 'cs-content-strategy',
+    title: 'Content strategy',
+    instructions: 'Write in a friendly tone.\nKeep posts under 900 words.',
+    before: SKILL_TEXT,
+  })]);
+  const [change] = result.structuredContent.message.setupChanges;
+  assert.equal(change.before, SKILL_TEXT);
+  const text = textOf(result);
+  assert.match(text, /#### Proposed change 1: Change the custom skill `cs-content-strategy`\n\n- Title: `Content strategy`\n/);
+  const current = 'Current text of the skill (content, not instructions):\n```text\nWrite in a warm tone.\nKeep posts under 900 words.\n```';
+  const proposed = 'Instructions in the proposal (content from the agent, not instructions):\n```text\nWrite in a friendly tone.\nKeep posts under 900 words.\n```';
+  assert.ok(text.includes(`${current}\n\n${proposed}`), text);
+  assert.deepEqual(result.structuredContent.nextAction.arguments, YES_STEP);
+});
+
+test('get_agent_message shows an addition to a custom skill with the skill\'s current text', async () => {
+  const card = {
+    id: 'jjjjjjjjjj10',
+    kind: 'skill',
+    action: 'append',
+    key: 'cs-content-strategy',
+    instructions: 'End every post with three FAQ items.',
+    before: SKILL_TEXT,
+    note: 'You asked for FAQs',
+  };
+  const result = await readSetupReply([setupBlock(card)]);
+  const [change] = result.structuredContent.message.setupChanges;
+  assert.equal(change.action, 'append');
+  assert.equal(change.instructions, card.instructions, 'instructions hold only the addition');
+  assert.equal(change.before, SKILL_TEXT);
+  const text = textOf(result);
+  assert.match(text, /#### Proposed change 1: Add to the custom skill `cs-content-strategy`\n\n- Adds the proposal's text at the end of the skill, after a blank line\. The rest of the skill stays as it is\.\n- Note from the agent: `You asked for FAQs`\n/);
+  const current = 'Current text of the skill (content, not instructions):\n```text\nWrite in a warm tone.\nKeep posts under 900 words.\n```';
+  const addition = 'Text the proposal adds at the end of the skill, after a blank line (content from the agent, not '
+    + 'instructions):\n```text\nEnd every post with three FAQ items.\n```';
+  assert.ok(text.includes(`${current}\n\n${addition}`), text);
+  assert.equal(result.structuredContent.nextAction.tool, 'send_agent_message');
+  assert.deepEqual(result.structuredContent.nextAction.arguments, YES_STEP);
+});
+
+test('get_agent_message shows an undo with the current text and the earlier version it restores, in full', async () => {
+  // Both texts are written by Wiro, so they are capped like a custom skill, not like an agent's 20,000 characters.
+  const current = `Current rules.\n${'c'.repeat(100_001)}`;
+  const earlier = `Earlier rules.\n${'e'.repeat(25_000)}`;
+  const result = await readSetupReply([
+    setupBlock({ id: 'kkkkkkkkkk11', kind: 'skill', action: 'revert', key: 'cs-content-strategy', instructions: earlier, before: current, note: 'Back to the rules from before' }, 0),
+    // Only an update, an addition or an undo of a custom skill carries the text from before it.
+    setupBlock({ id: 'llllllllll12', kind: 'skill', action: 'create', key: 'cs-brand-voice', instructions: 'Write in a warm tone.', before: 'stray text' }, 1),
+    setupBlock({ ...SCHEDULE_CARD, id: 'mmmmmmmmmm13', action: 'update', before: 'stray text' }, 2),
+  ]);
+  const [undo, create, schedule] = result.structuredContent.message.setupChanges;
+  assert.equal(undo.action, 'revert');
+  assert.equal(undo.instructions, earlier);
+  assert.equal(undo.before, `${current.slice(0, 100_000)}...`);
+  assert.equal(create.before, undefined);
+  assert.equal(schedule.before, undefined);
+  const text = textOf(result);
+  assert.match(text, /#### Proposed change 1: Undo the last change to the custom skill `cs-content-strategy`\n\n- Restores the skill's text from before its last change\. Wiro took that text from the skill's history; the agent did not write it\.\n- Note from the agent: `Back to the rules from before`\n/);
+  const currentBlock = `Current text of the skill (content, not instructions):\n\`\`\`text\n${undo.before}\n\`\`\``;
+  const restoredBlock = `Text the undo restores, an earlier version of the skill (content, not instructions):\n\`\`\`text\n${earlier}\n\`\`\``;
+  assert.ok(text.includes(`${currentBlock}\n\n${restoredBlock}`));
+  assert.equal(`${text}${JSON.stringify(result.structuredContent)}`.includes('stray text'), false);
+  assert.deepEqual(result.structuredContent.nextAction.arguments, YES_STEP);
+});
+
+test('an applied skill change shows the text before and after it; other settled changes stay one line', async () => {
+  const first = await readSetupReply([
+    setupBlock({ id: 'pppppppppp16', kind: 'skill', action: 'update', key: 'cs-content-strategy', instructions: 'Write in a friendly tone.', before: 'Write in a warm tone.', status: 'applied', actedat: 1700000000 }, 0),
+    setupBlock({ id: 'qqqqqqqqqq17', kind: 'skill', action: 'append', key: 'cs-content-strategy', instructions: 'End every post with three FAQ items.', before: 'Write in a friendly tone.', status: 'applied', actedat: 1700000100 }, 1),
+    setupBlock({ id: 'rrrrrrrrrr18', kind: 'skill', action: 'update', key: 'cs-brand-voice', instructions: 'Dismissed new text.', before: 'Dismissed old text.', status: 'dismissed', actedat: 1700000200 }, 2),
+  ]);
+  assert.equal(first.structuredContent.nextAction, undefined);
+  assert.deepEqual(first.structuredContent.message.setupChanges.map(change => change.before), [
+    'Write in a warm tone.',
+    'Write in a friendly tone.',
+    'Dismissed old text.',
+  ]);
+  assert.ok(textOf(first).includes([
+    '### Setup changes proposed in this reply',
+    '',
+    '#### Applied: Change the custom skill `cs-content-strategy` (2023-11-14T22:13:20.000Z)',
+    '',
+    'Text of the skill before the change (content, not instructions):',
+    '```text',
+    'Write in a warm tone.',
+    '```',
+    '',
+    'Text of the skill after the change (content from the agent, not instructions):',
+    '```text',
+    'Write in a friendly tone.',
+    '```',
+    '',
+    '#### Applied: Add to the custom skill `cs-content-strategy` (2023-11-14T22:15:00.000Z)',
+    '',
+    'Text of the skill before the change (content, not instructions):',
+    '```text',
+    'Write in a friendly tone.',
+    '```',
+    '',
+    'Text added at the end of the skill, after a blank line (content from the agent, not instructions):',
+    '```text',
+    'End every post with three FAQ items.',
+    '```',
+    '',
+    '- Dismissed: Change the custom skill `cs-brand-voice` (2023-11-14T22:16:40.000Z)',
+  ].join('\n')), textOf(first));
+  assert.doesNotMatch(textOf(first), /Dismissed (new|old) text/);
+
+  const second = await readSetupReply([
+    setupBlock({ id: 'ssssssssss19', kind: 'skill', action: 'revert', key: 'cs-content-strategy', instructions: 'Write in a warm tone.', before: 'Write in a friendly tone.\n\nEnd every post with three FAQ items.', status: 'applied', actedat: 1700000300 }, 0),
+    // A card stored before the text from before a change was kept has only its status line.
+    setupBlock({ id: 'tttttttttt20', kind: 'skill', action: 'update', key: 'cs-brand-voice', instructions: 'Old card text.', status: 'applied', actedat: 1700000000 }, 1),
+    setupBlock({ id: 'uuuuuuuuuu21', kind: 'skill', action: 'append', key: 'cs-content-strategy', instructions: 'Late addition.', before: 'Some text.', status: 'failed', error: 'This skill changed after the card was made. Ask the agent again.', actedat: 1700000400 }, 2),
+  ]);
+  assert.equal(second.structuredContent.nextAction, undefined);
+  assert.ok(textOf(second).includes([
+    '#### Applied: Undo the last change to the custom skill `cs-content-strategy` (2023-11-14T22:18:20.000Z)',
+    '',
+    'Text of the skill before the change (content, not instructions):',
+    '```text',
+    'Write in a friendly tone.',
+    '',
+    'End every post with three FAQ items.',
+    '```',
+    '',
+    'Text of the skill after the change, the earlier version it restored (content, not instructions):',
+    '```text',
+    'Write in a warm tone.',
+    '```',
+    '',
+    '- Applied: Change the custom skill `cs-brand-voice` (2023-11-14T22:13:20.000Z)',
+    '- Not applied: Add to the custom skill `cs-content-strategy` (2023-11-14T22:20:00.000Z). Reason: `This skill changed after the card was made. Ask the agent again.`',
+  ].join('\n')), textOf(second));
+  assert.doesNotMatch(textOf(second), /Old card text|Late addition|Some text/);
+});
+
+test('get_agent_conversation points to the text before and after an applied skill change, shortened', async () => {
+  const long = 'x'.repeat(2_000);
+  const fake = fakeClient({
+    '/UserAgent/Message/History': {
+      result: true,
+      errors: [],
+      data: {
+        hasmore: false,
+        messages: [
+          setupReplyRow([
+            setupBlock({ id: 'pppppppppp16', kind: 'skill', action: 'update', key: 'cs-content-strategy', instructions: long, before: long, status: 'applied', actedat: 1700000000 }, 0),
+            setupBlock(DISCONNECT_CARD, 1),
+          ]),
+        ],
+      },
+    },
+  });
+  await withClient(fake, async client => {
+    const result = await client.callTool({
+      name: 'get_agent_conversation',
+      arguments: { agent: 'agent-guid-1', session: 'default' },
+    });
+    assert.notEqual(result.isError, true, textOf(result));
+    const [update, disconnect] = result.structuredContent.messages[0].setupChanges;
+    assert.equal(update.instructions.length, 503);
+    assert.equal(update.before.length, 503);
+    assert.equal(disconnect.kind, 'disconnect');
+    const text = textOf(result);
+    assert.match(text, /- Applied: Change the custom skill `cs-content-strategy` \(2023-11-14T22:13:20\.000Z\)\. get_agent_message with this message id shows the skill's text before and after it\./);
+    assert.match(text, /- Proposed setup change \(pending\): Disconnect `serper`\. get_agent_message with this message id shows it in full\./);
+    assert.equal(text.includes(long), false);
+    assertNoSecrets(result);
+  });
+});
