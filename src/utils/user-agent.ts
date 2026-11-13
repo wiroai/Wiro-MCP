@@ -1330,6 +1330,7 @@ const PRE_CHARGE_REFUSALS: RegExp[] = [
   /^could not read the agent's plan\. nothing was changed; please retry\./i,
   /^the agent's plan could not be read\. nothing was charged; please retry\./i,
   /^the (starter|pro|max) plan is smaller than this agent's (starter|pro|max) plan, so this is not an upgrade\. nothing was changed\./i,
+  /^the move to the (starter|pro|max) plan started with this billing period, and its payment moves the agent there, so it can no longer be undone\. nothing was changed\./i,
   /^the (scheduled )?plan change could not be (scheduled|cancelled)\./i,
   /^we couldn't (schedule|undo) the cancellation\./i,
   /enabledchannels is not accepted|credentials must be an object|credential field|is missing required fields/i,

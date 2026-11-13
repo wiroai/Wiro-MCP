@@ -2904,6 +2904,32 @@ test('manage_agent_billing undoes a move set for the next renewal when the agent
   });
 });
 
+test('manage_agent_billing: an undo Wiro refuses because the move already started comes back as Wiro says it', async () => {
+  // A personal card plan whose move to Pro started with this billing period: Wiro keeps the move and changes nothing.
+  const started = 'The move to the Pro plan started with this billing period, and its payment moves the agent there, so it can no longer be undone. Nothing was changed. Once the agent shows the Pro plan, change the plan again.';
+  const fake = fakeClient({
+    '/UserAgent/Detail': detailResponse(agentRow({ tier: 'max', monthlypriceusd: 100, nextplan: 'pro', subscription: subscription({ provider: 'stripe', amount: 100 }), stripecancelatperiodend: false })),
+    '/UserAgent/UpgradeTier': { result: false, errors: [{ code: 0, message: started }] },
+  });
+  await withClient(fake, async client => {
+    const quote = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'change_plan', plan: 'max' });
+    assert.equal(quote.structuredContent.outcome, 'quote', textOf(quote));
+    assert.equal(quote.structuredContent.quote.change, 'undo_downgrade');
+    assert.equal(quote.structuredContent.quote.paidFrom, 'card');
+    assert.equal(quote.structuredContent.quote.chargeNowUsd, 0);
+    assert.deepEqual(quote.structuredContent.nextAction.arguments, { agent_guid: 'ua-1', action: 'change_plan', plan: 'max', confirm: true });
+
+    const reads = fake.called('/UserAgent/Detail').length;
+    const result = await call(client, 'manage_agent_billing', quote.structuredContent.nextAction.arguments);
+    assert.equal(result.isError, true);
+    assert.equal(textOf(result), `## Error\n\n${started}`);
+    assert.doesNotMatch(textOf(result), /may have taken effect|does not show whether it went through/);
+    assert.deepEqual(fake.called('/UserAgent/UpgradeTier').map(entry => entry.body), [{ guid: 'ua-1', targetTier: 'max' }]);
+    // Wiro's sentence settles the outcome, so the agent is not read again to find out.
+    assert.equal(fake.called('/UserAgent/Detail').length - reads, 1);
+  });
+});
+
 test('manage_agent_billing: a move to a larger plan drops a smaller one set for the next renewal', async () => {
   const fake = fakeClient({
     '/UserAgent/Detail': detailResponse(agentRow({ tier: 'pro', monthlypriceusd: 30, subscription: subscription({ amount: 30 }), nextplan: 'starter' })),
