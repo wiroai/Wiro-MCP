@@ -1326,10 +1326,13 @@ const PRE_CHARGE_REFUSALS: RegExp[] = [
   /^unknown skill: /i,
   /is not in the skill registry\./i,
   /^the (tier|plan) change could not be saved\./i,
+  // Anchored: "The wallet was charged $X, but the plan could not be saved." is a paid outcome.
+  /^the plan could not be saved\. nothing was charged; please try again in a minute\./i,
   /^no active plan\.|plan changed while this was asked for|no renewal to change/i,
   /^could not read the agent's plan\. nothing was changed; please retry\./i,
   /^the agent's plan could not be read\. nothing was charged; please retry\./i,
   /^the (starter|pro|max) plan is smaller than this agent's (starter|pro|max) plan, so this is not an upgrade\. nothing was changed\./i,
+  /^this agent is on the (starter|pro|max) plan now, so (starter|pro|max) is an upgrade\. nothing was changed\./i,
   /^the move to the (starter|pro|max) plan started with this billing period, and its payment moves the agent there, so it can no longer be undone\. nothing was changed\./i,
   /^the (scheduled )?plan change could not be (scheduled|cancelled)\./i,
   /^we couldn't (schedule|undo) the cancellation\./i,
