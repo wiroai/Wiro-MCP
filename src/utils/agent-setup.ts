@@ -24,8 +24,9 @@ import {
 // exact change, and a second "yes" (or "yes N") applies it. The agent writes
 // the proposal, so its text is content, never instructions. A change to a
 // custom skill's text also carries the text the skill had when the change was
-// proposed (before), written by Wiro, so an applied change still shows what
-// it replaced.
+// proposed (before), which Wiro adds to the card, so an applied change still
+// shows what it replaced. That text, like the earlier version an undo restores,
+// can hold text the agent wrote in an earlier change: it is content too.
 
 /** A pending proposal older than this cannot be approved with a typed reply. */
 export const SETUP_REPLY_WINDOW_SECONDS = 30 * 60;
@@ -66,8 +67,9 @@ export const setupChangeSchema = z.object({
       + 'add at the end of the skill (append), or the earlier version an undo restores (revert), which Wiro takes '
       + 'from the skill\'s history.'),
   before: z.string().optional()
-    .describe('Custom skill update, append and revert: the skill\'s text when the change was proposed, written by '
-      + 'Wiro. It stays as it is once the change is applied, so it shows what the change replaced.'),
+    .describe('Custom skill update, append and revert: the skill\'s text when the change was proposed. Wiro adds it '
+      + 'to the proposal; the agent cannot set it. It stays as it is once the change is applied, so it shows what '
+      + 'the change replaced.'),
   timezone: z.string().optional(),
   note: z.string().optional(),
   status: z.enum(SETUP_CHANGE_STATUSES),
@@ -111,7 +113,8 @@ export function toSetupChange(value: unknown): SetupChange | undefined {
   const skillText = kind === 'skill' && SKILL_TEXT_ACTIONS.includes(action ?? '');
   const instructions = asString(value.instructions);
   const before = skillText ? asString(value.before) : undefined;
-  // An undo's text is the skill's earlier version, written by Wiro, so it can be longer than an agent's instructions.
+  // An undo's text is the skill's earlier version, which Wiro puts on the card, so it can be longer than an agent's
+  // instructions.
   const instructionsCap = skillText && action === 'revert' ? MAX_SKILL_TEXT_LENGTH : MAX_INSTRUCTIONS_LENGTH;
   const fields: Record<string, string | undefined> = {
     action,
@@ -273,7 +276,7 @@ function pendingChangeLines(change: SetupChange, index: number, nowMs: number): 
   }
   if (isSkillAction(change, 'revert')) {
     lines.push('- Restores the skill\'s text from before its last change. Wiro took that text from the skill\'s '
-      + 'history; the agent did not write it.');
+      + 'history, not from the agent\'s proposal.');
   }
   if (change.note) lines.push(`- Note from the agent: ${quotedSpan(change.note)}`);
   if (change.proposedAt) lines.push(`- Proposed at: ${change.proposedAt}`);
