@@ -87,10 +87,8 @@ export function describeAgentStatus(status: number | null | undefined): string {
 // can read it and message it, so their hints say who can act instead of naming
 // a call they cannot make.
 const TEAM_AGENT_MANAGERS = 'a team admin or the person who deployed it';
-// Connected accounts are the exception: Wiro lets only the person who
-// deployed the agent connect them (connect_agent_oauth).
-export const MEMBER_SETUP_HELP = `On this team agent, ${TEAM_AGENT_MANAGERS} saves credentials and pays for the plan. `
-  + 'Only the person who deployed it can connect accounts, such as Instagram or Google Ads.';
+export const MEMBER_SETUP_HELP = `On this team agent, ${TEAM_AGENT_MANAGERS} saves credentials, connects accounts such `
+  + 'as Instagram or Google Ads, and pays for the plan.';
 
 const MEMBER_STATUS_HINT: Partial<Record<AgentStatusLabel, string>> = {
   stopped: `It is not running. On this team agent, ${TEAM_AGENT_MANAGERS} can start it.`,

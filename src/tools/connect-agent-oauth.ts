@@ -429,7 +429,7 @@ async function connect(
   if (!authorizeUrl) throw new Error(`Wiro did not return a sign-in link for ${meta.title}.`);
   const usesDashboard = !/^http:/i.test(redirectUrl);
   const after = usesDashboard
-    ? `After approving, the browser returns to the agent's page in the Wiro dashboard${oauth.picker ? ', which asks which accounts the agent should use' : ''}. Use a browser where the user is signed in to wiro.ai as the agent's owner.`
+    ? `After approving, the browser returns to the agent's page in the Wiro dashboard.${oauth.picker ? ' Then status lists the accounts the sign-in found, to choose from within 15 minutes.' : ''}`
     : `After approving, the browser goes to ${redirectUrl}.`;
   const turnsOn = entriesTurnedOnBy(row, credential);
   const titles = await skillTitles(client, [...turnsOn.paused, ...turnsOn.waiting].flatMap(task => task.groups.flat()), signal);
@@ -740,8 +740,8 @@ export function registerConnectAgentOauth(server: McpServer, client: WiroClient)
         + 'turn off any you do not want. '
         + 'Remove a connection with disconnect_agent_oauth. A credential that none of the agent\'s active '
         + 'skills use, that no custom skill or scheduled task of the agent requires, and that its setup does not wait for, is refused before any link is made (get_my_agent '
-        + 'lists the skills; apply_agent_skills turns one on). Only the person who deployed the agent can connect, so the '
-        + 'connected project must be one that person created. The agents playbook (get_playbook) has the '
+        + 'lists the skills; apply_agent_skills turns one on). The person who deployed the agent or a team admin of its '
+        + 'team can connect; the account list after a sign-in goes only to the person who started it. The agents playbook (get_playbook) has the '
         + 'full setup walkthrough.',
       inputSchema: strictInput({
         action: z.enum(['connect', 'status', 'select_accounts']).default('connect')

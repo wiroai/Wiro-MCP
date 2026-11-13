@@ -2176,6 +2176,9 @@ test('connect_agent_oauth asks before a sign-in removes a saved token', async ()
 
     const confirmed = await client.callTool({ name: 'connect_agent_oauth', arguments: asked.structuredContent.nextAction.arguments });
     assert.equal(confirmed.structuredContent.state, 'authorize_in_browser');
+    // The account choice comes back to this chat, so that browser needs no Wiro sign-in as the agent's owner.
+    assert.match(confirmed.structuredContent.message, /After approving, the browser returns to the agent's page in the Wiro dashboard\. Then status lists the accounts the sign-in found, to choose from within 15 minutes\./);
+    assert.doesNotMatch(confirmed.structuredContent.message, /agent's owner|which asks which accounts/);
   });
 });
 
@@ -3459,18 +3462,23 @@ test('connect_agent_oauth and disconnect_agent_oauth say whose project can chang
     // The hint says to connect this server with the deployer's project, and starts after Wiro's own sentence.
     const connect = await client.callTool({ name: 'connect_agent_oauth', arguments: { agent_guid: AGENT, credential: 'hubspot', confirm: true } });
     assert.equal(connect.isError, true);
-    assert.ok(text(connect).includes('User agent not found or unauthorized\n\nIntegrations can only be connected with a project created by the person who deployed the agent: connect this server with such a project, by its API key or a browser sign-in.'), text(connect));
+    assert.ok(text(connect).includes('User agent not found or unauthorized\n\nIntegrations can only be connected with a project of the person who deployed the agent or of a team admin of its team: connect this server with such a project, by its API key or a browser sign-in.'), text(connect));
 
     const disconnect = await client.callTool({ name: 'disconnect_agent_oauth', arguments: { agent_guid: AGENT, credential: 'hubspot', confirm: true } });
     assert.equal(disconnect.isError, true);
-    assert.ok(text(disconnect).includes('User agent not found or unauthorized\n\nIntegrations can only be changed with a project created by the person who deployed the agent: connect this server with such a project, by its API key or a browser sign-in.'), text(disconnect));
+    assert.ok(text(disconnect).includes('User agent not found or unauthorized\n\nIntegrations can only be changed with a project of the person who deployed the agent or of a team admin of its team: connect this server with such a project, by its API key or a browser sign-in.'), text(disconnect));
     for (const result of [connect, disconnect]) assert.doesNotMatch(text(result), /unauthorized Integrations/);
 
     const { tools } = await client.listTools();
     const description = tools.find(tool => tool.name === 'connect_agent_oauth').description;
-    assert.match(description, /Only the person who deployed the agent can connect, so the connected project must be one that person created\./);
+    assert.match(description, /The person who deployed the agent or a team admin of its team can connect; the account list after a sign-in goes only to the person who started it\./);
+    assert.doesNotMatch(description, /Only the person who deployed the agent can connect/);
   });
-  assert.match(PLAYBOOKS.agents, /Only the person who deployed the agent can connect, so the connected project must be one that person created\./);
+  assert.match(PLAYBOOKS.agents, /The person who deployed the agent or a team admin of its team can connect; the account list after a sign-in goes only to the person who started it\./);
+  assert.doesNotMatch(PLAYBOOKS.agents, /Only the person who deployed the agent can connect|signed in to wiro\.ai as the person who deployed the agent/);
+  // The sign-in steps: status lists the accounts, and select_accounts saves only ones from that list.
+  assert.match(PLAYBOOKS.agents, /3\. `connect_agent_oauth` \(status\) confirms the connection\. When the service has an account choice, it lists the accounts the sign-in found instead\./);
+  assert.match(PLAYBOOKS.agents, /4\. Ask the user which of those accounts the agent should use, and save them with `connect_agent_oauth` \(select_accounts\) within 15 minutes\. Wiro keeps the list that long, only for the person who started the sign-in, and saves only accounts from it; the agent's page offers the same list\./);
 });
 
 // ---------------------------------------------------------------------------
@@ -4249,7 +4257,7 @@ test('connect_agent_oauth tells a guid it cannot reach from a project that may n
   await withClient(refused, async client => {
     const status = await client.callTool({ name: 'connect_agent_oauth', arguments: { action: 'status', agent_guid: AGENT, credential: 'meta-ads' } });
     assert.equal(status.isError, true);
-    assert.ok(text(status).includes('User agent not found or unauthorized\n\nIntegrations can only be connected with a project created by the person who deployed the agent: connect this server with such a project, by its API key or a browser sign-in.'), text(status));
+    assert.ok(text(status).includes('User agent not found or unauthorized\n\nIntegrations can only be connected with a project of the person who deployed the agent or of a team admin of its team: connect this server with such a project, by its API key or a browser sign-in.'), text(status));
     assert.doesNotMatch(text(status), /list_my_agents/);
   });
 
@@ -4257,7 +4265,7 @@ test('connect_agent_oauth tells a guid it cannot reach from a project that may n
   const unreadable = fakeClient(routes(() => { throw new Error('socket hang up'); }));
   await withClient(unreadable, async client => {
     const status = await client.callTool({ name: 'connect_agent_oauth', arguments: { action: 'status', agent_guid: AGENT, credential: 'meta-ads' } });
-    assert.ok(text(status).includes('User agent not found or unauthorized\n\nCheck the guid with list_my_agents. If the agent is listed, integrations can only be connected with a project created by the person who deployed the agent'), text(status));
+    assert.ok(text(status).includes('User agent not found or unauthorized\n\nCheck the guid with list_my_agents. If the agent is listed, integrations can only be connected with a project of the person who deployed the agent or of a team admin of its team'), text(status));
     const disconnect = await client.callTool({ name: 'disconnect_agent_oauth', arguments: { agent_guid: AGENT, credential: 'meta-ads', confirm: true } });
     assert.ok(text(disconnect).includes('Check the guid with list_my_agents. If the agent is listed, integrations can only be changed with a project'), text(disconnect));
   });

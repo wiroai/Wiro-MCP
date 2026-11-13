@@ -720,7 +720,7 @@ export async function connectionRefusalText(
   done: 'connected' | 'changed',
   signal?: AbortSignal,
 ): Promise<string> {
-  const rule = `can only be ${done} with a project created by the person who deployed the agent: `
+  const rule = `can only be ${done} with a project of the person who deployed the agent or of a team admin of its team: `
     + 'connect this server with such a project, by its API key or a browser sign-in.';
   try {
     await readUserAgent(client, agentGuid, signal);
