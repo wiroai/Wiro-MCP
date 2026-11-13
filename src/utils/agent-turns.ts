@@ -830,7 +830,9 @@ function chooseNextAction(
  * "yes" only gets Wiro's listing of the exact change; the next "yes" (or
  * "yes N") applies it. A key never goes in a chat message. Only a connect
  * asks for a key: a disconnect removes the saved one and is approved with a
- * reply like the other changes.
+ * reply like the other changes. An add and a remove are approved with a reply
+ * too; an add that brings a connector connected with a key needs that key
+ * saved once it is applied.
  */
 function setupNextAction(target: AgentTarget, result: AgentTurnResult): NextAction | undefined {
   const guid = target.agentGuid;
@@ -860,7 +862,7 @@ function setupNextAction(target: AgentTarget, result: AgentTurnResult): NextActi
   }
   const open = (result.message.setupChanges ?? []).filter(change => isApprovableByReply(change));
   if (open.length === 0) return undefined;
-  const key = open.some(change => change.kind === 'connect')
+  const key = open.some(change => change.kind === 'connect' || change.needs?.some(need => need.mode === 'key'))
     ? ' For a key, use set_agent_credentials instead of a chat message.'
     : '';
   if (open.some(change => change.kind !== 'connect')) {
