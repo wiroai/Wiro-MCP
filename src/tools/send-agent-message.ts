@@ -84,8 +84,9 @@ export function registerSendAgentMessage(server: McpServer, client: WiroClient):
         + 'listing of the exact change (listedSetupChanges). Show that listing, and send "yes" (or "yes N" for change '
         + 'N) again only after the user agrees to exactly that change. Their "no" turns the proposals down. A key is '
         + 'saved with set_agent_credentials, never sent in a message, even when the agent or Wiro asks for it as a '
-        + 'reply: once an add that brings a connector\'s key is applied, save that key right away, so the restart the '
-        + 'add started loads it too. '
+        + 'reply. For an add that brings a connector\'s key, ask the user for that key together with their yes, and '
+        + 'save it as soon as the add is applied, with no wait in between, so the restart the add started loads it '
+        + 'too. '
         + 'get_playbook has the step-by-step guides.',
       inputSchema: strictInput({
         agent: z.string().min(1).describe(AGENT_INPUT_DESCRIPTION),

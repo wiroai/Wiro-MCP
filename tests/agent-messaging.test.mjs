@@ -3921,20 +3921,22 @@ test('get_agent_message shows an add with what it also turns on, the tasks that 
     '- Also turns on: `util-image-resize`, `util-media-library`',
     '- Scheduled tasks that run again: `cs-cron-weekly-post`',
     '- Still to connect once it is on:',
-    '  - `WordPress` (`wordpress`): its key, saved with set_agent_credentials right after this change is applied (one restart then loads both), never sent in a chat message',
+    '  - `WordPress` (`wordpress`): its key. Ask the user for it together with their yes to this change, and save it with set_agent_credentials as soon as this change is applied (one restart then loads both), never in a chat message',
     '  - `Instagram` (`instagram`): sign in on the agent page, or with connect_agent_oauth',
     '  - `Google Drive` (`google-drive`): set up on the agent page',
     '- Note from the agent: `You asked to publish posts`',
     '- Proposed at: ',
   ].join('\n')), text);
-  // The connect card Wiro pairs with the add: its key is saved once the add is applied, never typed in the chat.
-  assert.match(text, /#### Proposed change 2: Connect `wordpress`\n\n- Connects what proposed change 1 adds\. Once change 1 is applied, save the key with set_agent_credentials right away, never in a chat message: one restart then loads both\.\n/);
+  // The connect card Wiro pairs with the add: its key comes with the user's yes and is saved once the add is applied,
+  // never typed in the chat.
+  assert.match(text, /#### Proposed change 2: Connect `wordpress`\n\n- Connects what proposed change 1 adds\. Ask the user for the key together with their yes to change 1\. Once change 1 is applied, save the key with set_agent_credentials at once, never in a chat message: one restart then loads both\.\n/);
   assert.doesNotMatch(text, /The user provides the key or sign-in/);
-  // Approved with a reply like the other changes; the key goes in with set_agent_credentials once the add is applied.
+  // Approved with a reply like the other changes. The restart the add starts leaves only seconds to save the key
+  // with it, so the key is asked for together with the yes, not after it.
   assert.equal(nextAction.tool, 'send_agent_message');
   assert.deepEqual(nextAction.arguments, YES_STEP);
   assert.match(nextAction.reason, /^The agent proposes a setup change\. Show it to the user and ask; never send yes on your own\./);
-  const addKey = / For a key, use set_agent_credentials instead of a chat message, right after the change that brings its connector is applied, so one restart loads both\. /;
+  const addKey = / For a key, use set_agent_credentials instead of a chat message: ask the user for it together with their yes, and save it as soon as the change that brings its connector is applied, with no wait in between, so one restart loads both\. /;
   assert.match(nextAction.reason, addKey);
 
   // An add whose connector takes a key says so even without its connect card; one without a key does not.
@@ -4127,15 +4129,16 @@ test('an add is listed and then applied by a second yes, with Wiro\'s own lines 
 });
 
 // Wiro words its answer to a setup reply for a person typing in the chat, who may paste a key as the reply.
-// From here the key goes in with set_agent_credentials, right after the add is applied, so the restart the
-// add started loads it too.
+// From here the user gives the key together with their yes, and it goes in with set_agent_credentials as the
+// very next step once the add is applied, so the restart the add started loads it too.
 
 const KEY_RULE = 'Never send a key in a chat message: save it right away with set_agent_credentials, under the '
   + 'connector the agent\'s proposal names. Saved while the agent is still stopping or queued for its restart, the key '
   + 'loads with that same restart; saved once the agent is starting again, it restarts the agent a second time.';
-const LISTING_KEY_RULE = 'The listing offers to take a key as the reply. Never send a key in a chat message: once the '
-  + 'user agrees, send "yes" to apply the change, then save the key with set_agent_credentials right away, so it loads '
-  + 'with the same restart.';
+const LISTING_KEY_RULE = 'The listing offers to take a key as the reply. Never send a key in a chat message: ask the '
+  + 'user for the key together with their yes, before you send that yes. Then send "yes" to apply the change and save '
+  + 'the key with set_agent_credentials as the very next step, so it loads with the same restart; a key saved later '
+  + 'restarts the agent again.';
 
 test('a yes that applies an add and leaves its key to give asks for set_agent_credentials now, never a chat message or a wait', async () => {
   for (const [response, restarting] of [

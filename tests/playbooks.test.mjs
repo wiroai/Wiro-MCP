@@ -585,8 +585,9 @@ test('the playbooks name the three plans and say skills do not change the price'
 });
 
 // Wiro answers a reply to an agent's setup proposals itself, at any status. A key is never typed in the chat:
-// it is saved right after the add that brings it, so the add's restart loads it too. Studio and the Workflow
-// Agent are shared, so they take no setup changes.
+// the user gives it together with their yes to the add that brings it, and it is saved as the very next step
+// once the add is applied, so the add's restart loads it too. Studio and the Workflow Agent are shared, so they
+// take no setup changes.
 test('the playbooks and send_agent_message say how setup replies, keys and the house agents work', async () => {
   const { agents, studio } = PLAYBOOKS;
   assert.match(agents, /The agent never applies its own proposal and never sees a key: nothing changes until the user approves it\./);
@@ -595,7 +596,8 @@ test('the playbooks and send_agent_message say how setup replies, keys and the h
   assert.match(agents, /Wiro takes these replies whatever the agent's status, also while it restarts or is stopped, but only for the proposals of the session's latest reply, for 30 minutes, and only when `chat_setup` is "all"/);
   assert.match(agents, /It must be running \(4\) and have credits left; only a reply to its setup proposals goes through at any status/);
   assert.match(agents, /never sent in a message, even when the agent or Wiro's answer asks for it as a reply: that wording is for a person typing in the chat\./);
-  assert.match(agents, /An add whose connector is connected with a key comes with that connector's connect card in the same reply\. Get the user's yes for the add, and once it is applied, save the key right away: saved while the agent is still stopping or queued for the restart the add started, it loads with that restart; saved once it is starting again, it restarts the agent a second time\./);
+  assert.match(agents, /An add whose connector is connected with a key comes with that connector's connect card in the same reply\. Ask the user for the key together with their yes for the add, before you send the yes that applies it; `set_agent_credentials` with only `credential` shows the fields to ask for and saves nothing\. Once the add is applied, save the key as the very next step, with no `get_my_agent` wait in between: the agent stays stopping or queued for the restart the add started only for seconds, and a key saved then loads with that restart; saved once it is starting again, it restarts the agent a second time\./);
+  assert.doesNotMatch(agents, /Get the user's yes for the add, and once it is applied/);
   assert.match(agents, /A connector connected with a sign-in or on the agent page gets no connect card: Wiro's answer says to connect it on the agent page, and a sign-in also works with `connect_agent_oauth`\./);
   assert.match(agents, /Studio and the Workflow Agent always have it off: each is one agent shared by every Wiro user, so their connectors, skills and scheduled tasks are fixed, and they help with each request as a one-time task\./);
   assert.match(agents, /`apply_agent_skills` turns skills on or off, Connectors \(`int-\*`\) and Skills \(`util-\*`\) alike\./);
@@ -609,7 +611,7 @@ test('the playbooks and send_agent_message say how setup replies, keys and the h
     assert.match(send, /Studio and the Workflow Agent never do\./);
     assert.match(send, /Wiro answers it without an agent turn, whatever the agent's status, also while it restarts\./);
     assert.match(send, /Their "no" turns the proposals down\./);
-    assert.match(send, /never sent in a message, even when the agent or Wiro asks for it as a reply: once an add that brings a connector's key is applied, save that key right away, so the restart the add started loads it too\./);
+    assert.match(send, /never sent in a message, even when the agent or Wiro asks for it as a reply\. For an add that brings a connector's key, ask the user for that key together with their yes, and save it as soon as the add is applied, with no wait in between, so the restart the add started loads it too\./);
     assert.match(tools.find(tool => tool.name === 'get_playbook').description, /statuses and restarts, setup and sign-ins, an agent that does not answer, messages and setup proposals in chat/);
     const credentials = tools.find(tool => tool.name === 'set_agent_credentials').description;
     assert.match(credentials, /A running agent restarts to load values that change, and one still stopping or queued for a restart, such as after a setup change approved in its chat, loads them with that restart;/);
