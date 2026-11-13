@@ -1632,9 +1632,26 @@ export function isAllowedRedirectUrl(url: string, agentGuid: string): boolean {
     && parsed.hash === '';
 }
 
-/** The redirect URI a customer registers in their own OAuth app. */
-export function ownAppRedirectUri(meta: CredentialMeta): string | undefined {
-  return meta.oauth?.callbackPath ? `${OAUTH_CALLBACK_BASE}${meta.oauth.callbackPath}` : undefined;
+/**
+ * The redirect URI a customer registers in their own OAuth app. Wiro's status gives the one for the host this
+ * server talks to; without it, or when it is not an address for this service's callback, the public host's is used.
+ */
+export function ownAppRedirectUri(meta: CredentialMeta, fromStatus?: string): string | undefined {
+  const callbackPath = meta.oauth?.callbackPath;
+  if (!callbackPath) return undefined;
+  return fromStatus && isCallbackAddress(fromStatus, callbackPath) ? fromStatus : `${OAUTH_CALLBACK_BASE}${callbackPath}`;
+}
+
+function isCallbackAddress(value: string, callbackPath: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return false;
+  }
+  return (parsed.protocol === 'https:' || parsed.protocol === 'http:')
+    && !parsed.username && !parsed.password && !parsed.search && !parsed.hash
+    && parsed.pathname.endsWith(callbackPath);
 }
 
 export interface ModeRequirement {
@@ -1676,8 +1693,8 @@ function fieldsForMode(meta: CredentialMeta, mode: string): CredentialField[] {
     .filter(field => isWritableField(field));
 }
 
-/** What each connection mode needs, with which of those fields are already saved. */
-export function connectionModeRequirements(meta: CredentialMeta, group: Row | null): ModeRequirement[] {
+/** What each connection mode needs, with which of those fields are already saved. redirectUri is the one Wiro's status gave. */
+export function connectionModeRequirements(meta: CredentialMeta, group: Row | null, redirectUri?: string): ModeRequirement[] {
   const modes = meta.connectionModes.length > 0 ? meta.connectionModes : ['wiro'];
   return modes.map(mode => {
     const fields = fieldsForMode(meta, mode).map(field => {
@@ -1719,7 +1736,7 @@ export function connectionModeRequirements(meta: CredentialMeta, group: Row | nu
       };
     }
     if (mode === 'own') {
-      const redirect = ownAppRedirectUri(meta);
+      const redirect = ownAppRedirectUri(meta, redirectUri);
       const requirements = meta.oauth?.connectRequirements ?? [];
       return {
         mode,

@@ -1886,6 +1886,34 @@ test('connect_agent_oauth explains what to save before a provider can connect', 
   });
 });
 
+test('connect_agent_oauth shows the redirect URI Wiro gives for the user\'s own app', async () => {
+  const answer = redirecturi => fakeClient({
+    '/Credentials/Detail': credentialDetail,
+    '/Skills/List': connectSkillList,
+    '/UserAgent/Detail': detail({ skills: skillsOn('int-metaads-manage') }),
+    '/UserAgentOAuth/OAuthStatus': { ...OAUTH_STATUS_BEFORE, authmethod: '', redirecturi, appkeyssaved: false, tokensaved: false },
+  });
+  // The host this server talks to has its own callback address.
+  const own = answer('https://api.example.test/v1/UserAgentOAuth/MetaAdsCallback');
+  await withClient(own, async client => {
+    const result = await client.callTool({ name: 'connect_agent_oauth', arguments: { agent_guid: AGENT, credential: 'meta-ads' } });
+    const out = result.structuredContent;
+    assert.equal(out.state, 'setup_needed');
+    assert.equal(out.ownAppRedirectUri, 'https://api.example.test/v1/UserAgentOAuth/MetaAdsCallback');
+    const ownMode = out.connectionModes.find(mode => mode.mode === 'own');
+    assert.match(ownMode.note, /allow https:\/\/api\.example\.test\/v1\/UserAgentOAuth\/MetaAdsCallback as a redirect URI/);
+    assert.doesNotMatch(text(result), /api\.wiro\.ai/);
+  });
+  // An address for another callback, or one that is not a web address, is not shown.
+  for (const other of ['https://api.example.test/v1/UserAgentOAuth/OtherCallback', 'javascript:alert(1)//UserAgentOAuth/MetaAdsCallback', 'https://api.example.test/v1/UserAgentOAuth/MetaAdsCallback?next=x']) {
+    const fake = answer(other);
+    await withClient(fake, async client => {
+      const result = await client.callTool({ name: 'connect_agent_oauth', arguments: { agent_guid: AGENT, credential: 'meta-ads' } });
+      assert.equal(result.structuredContent.ownAppRedirectUri, 'https://api.wiro.ai/v1/UserAgentOAuth/MetaAdsCallback', other);
+    });
+  }
+});
+
 // Wiro sends an agent's own-app keys back as empty strings, saved or not, so these
 // tests use that shape. Only the sign-in route can tell whether they are saved.
 const googleAdsKeys = { clientid: '', clientsecret: '', developertoken: '', _connected: false, _filled: false, optional: false, _schema: { title: 'Google Ads' } };
