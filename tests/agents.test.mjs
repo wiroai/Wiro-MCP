@@ -4174,7 +4174,7 @@ test('get_my_agent, list_my_agents and control_agent give a team member no call 
   const cases = [
     { row: teamAgentRow({ status: 0 }), hint: /\*\*Status:\*\* Stopped \(0\)\. It is not running\. On this team agent, a team admin or the person who deployed it can start it\./ },
     { row: teamAgentRow({ status: 5 }), hint: /\*\*Status:\*\* Error \(5\)\. The start failed or the agent stopped unexpectedly\. On this team agent, a team admin or the person who deployed it can start it again and read its logs\./ },
-    { row: teamAgentRow({ status: 6, subscription: null }), hint: /On this team agent, a team admin or the person who deployed it saves credentials and pays for the plan\. Only the person who deployed it can connect accounts, such as Instagram or Google Ads\./ },
+    { row: teamAgentRow({ status: 6, subscription: null }), hint: /On this team agent, a team admin or the person who deployed it saves credentials, connects accounts such as Instagram or Google Ads, and pays for the plan\./ },
   ];
   for (const { row, hint } of cases) {
     const member = fakeClient({ '/UserAgent/Detail': detailResponse(row), '/Organization/List': organizations('member') });
@@ -4231,7 +4231,7 @@ test('get_my_agent, list_my_agents and control_agent give a team member no call 
   await withClient(control, async client => {
     const result = await call(client, 'control_agent', { agent_guid: 'ua-1', action: 'start' });
     assert.equal(result.structuredContent.outcome, 'refused');
-    assert.equal(result.structuredContent.message, 'The agent cannot start until it has a paid plan and its setup is finished. On this team agent, a team admin or the person who deployed it saves credentials and pays for the plan. Only the person who deployed it can connect accounts, such as Instagram or Google Ads.');
+    assert.equal(result.structuredContent.message, 'The agent cannot start until it has a paid plan and its setup is finished. On this team agent, a team admin or the person who deployed it saves credentials, connects accounts such as Instagram or Google Ads, and pays for the plan.');
     assert.equal(result.structuredContent.nextAction, undefined);
     assert.equal(control.called('/UserAgent/Start').length, 0);
   });
