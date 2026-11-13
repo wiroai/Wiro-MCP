@@ -2009,10 +2009,20 @@ export type ConnectionState =
 function ownFlowState(status: OAuthStatusSnapshot): ConnectionState | null {
   const flow = status.flow;
   if (!flow?.mine) return null;
-  if (flow.status === 'candidates' && status.candidates.length > 0) return 'pick_accounts';
+  if (ownCandidates(status).length > 0) return 'pick_accounts';
   if (flow.status === 'waiting') return 'waiting_for_user';
   if (flow.status === 'failed') return 'not_connected';
   return null;
+}
+
+/** The accounts this connection's person can choose from now: the list of their own latest sign-in or token check. */
+export function ownCandidates(status: OAuthStatusSnapshot): AccountRef[] {
+  return status.flow?.mine === true && status.flow.status === 'candidates' ? status.candidates ?? [] : [];
+}
+
+/** The latest sign-in or token check of this connection's person, when it failed, so waiting for it ends. */
+export function ownFailedFlow(status: OAuthStatusSnapshot): OAuthFlow | null {
+  return status.flow?.mine === true && status.flow.status === 'failed' ? status.flow : null;
 }
 
 /**

@@ -36,6 +36,9 @@ import {
 const AGENT = 'ua-0001';
 const NOW = Math.floor(Date.now() / 1000);
 const TOKEN = '000000:TEST-BOT-TOKEN';
+// An OAuthStatus answer with no sign-in started. Wiro keeps the latest sign-in or token check of a connection
+// for 15 minutes, with the accounts it found, and shows them only to the person who started it.
+const OAUTH_STATUS_BEFORE = { result: true, errors: [], connected: false, accounts: [], connectedat: '', tokenexpiresat: '' };
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -215,6 +218,36 @@ const credentials = {
           persist_field: 'pagemappings',
         },
       },
+    },
+  },
+};
+
+credentials['facebook-pages'] = {
+  key: 'facebook-pages',
+  title: 'Facebook',
+  credential_mode: 'hybrid',
+  connection_modes: ['api_key', 'own', 'wiro'],
+  default_connection_mode: 'api_key',
+  wiro_connect_pending: true,
+  credential_schema: [
+    { key: 'appid', type: 'text', label: 'App ID', required: true, oauth_managed: true, only_in_modes: ['own'] },
+    { key: 'appsecret', type: 'password', label: 'App Secret', required: true, encrypted: true, oauth_managed: true, only_in_modes: ['own'] },
+    { key: 'systemusertoken', type: 'password', label: 'System User Token', required: true, encrypted: true, only_in_modes: ['api_key'] },
+    { key: 'pageid', type: 'text', label: 'Page ID', required: true, auto_filled_by_oauth: true },
+    { key: 'fbpagename', type: 'text', label: 'Connected Page', auto_filled_by_oauth: true },
+  ],
+  oauth_provider: {
+    auth_method_value: 'wiro',
+    oauth_flow: { callback_path: '/UserAgentOAuth/FBCallback', client_id_field: 'appid', client_secret_field: 'appsecret' },
+    direct_probe: { mode: 'api_key', mode_label: 'System User Token', token_field: 'systemusertoken', required_fields: ['systemusertoken'] },
+    account_picker: {
+      enabled: true,
+      multi_select: true,
+      item_value_field: 'pageid',
+      item_label_field: 'fbpagename',
+      item_fields_to_save: ['pageid', 'fbpagename'],
+      url_item_fields: { pageid: 'id', fbpagename: 'name' },
+      pending_cache: { list_field: 'pages' },
     },
   },
 };
@@ -2443,7 +2476,10 @@ test('connect_agent_oauth status tells a finished sign-in from one still waiting
       arguments: { action: 'status', agent_guid: AGENT, credential: 'meta-ads', since_connected_at: '' },
     });
     assert.equal(result.structuredContent.state, 'pick_accounts');
-    assert.match(result.structuredContent.message, /chosen on the agent's page in the Wiro dashboard/);
+    assert.equal(result.structuredContent.message, 'The Meta Ads sign-in finished, but its account list is no longer kept: Wiro keeps it 15 minutes, only for the person who started the sign-in. Connect again to choose the accounts.');
+    assert.doesNotMatch(text(result), /account IDs the user gives you/);
+    assert.equal(result.structuredContent.candidates, undefined);
+    assert.deepEqual(result.structuredContent.nextAction.arguments, { action: 'connect', agent_guid: AGENT, credential: 'meta-ads' });
   });
 
   const waiting = fakeClient({
@@ -2464,6 +2500,98 @@ test('connect_agent_oauth status tells a finished sign-in from one still waiting
       since_connected_at: '',
       wait_seconds: 45,
     });
+  });
+});
+
+test('connect_agent_oauth status lists the accounts a Facebook own-app sign-in found', async () => {
+  // Facebook keeps its Pages on the server until they are chosen, so connectedat stays empty.
+  const fake = fakeClient({
+    '/Credentials/Detail': credentialDetail,
+    '/UserAgentOAuth/OAuthStatus': {
+      ...OAUTH_STATUS_BEFORE,
+      authmethod: 'own',
+      redirecturi: 'https://api.wiro.ai/v1/UserAgentOAuth/FBCallback',
+      appkeyssaved: true,
+      tokensaved: false,
+      flow: { flowid: '4b1f0c7a9e2d4c1b8a7f6e5d4c3b2a19', mine: true, mode: 'own', status: 'candidates', account: '', errorcode: '', errordetail: '', restart: 'none', expiresat: NOW + 900 },
+      candidates: [{ id: '111', name: 'Acme Page' }, { id: '222', name: 'Beta Page' }],
+    },
+  });
+  await withClient(fake, async client => {
+    const result = await client.callTool({
+      name: 'connect_agent_oauth',
+      arguments: { action: 'status', agent_guid: AGENT, credential: 'facebook-pages', since_connected_at: '', wait_seconds: 30 },
+    });
+    assert.notEqual(result.isError, true, text(result));
+    const out = result.structuredContent;
+    assert.equal(out.state, 'pick_accounts');
+    assert.equal(out.message, 'The user approved access. Ask which of these accounts the agent should use, then save them with select_accounts within 15 minutes. If the agent\'s page in the Wiro dashboard is open, it offers the same list.');
+    assert.deepEqual(out.candidates, [{ id: '111', name: 'Acme Page' }, { id: '222', name: 'Beta Page' }]);
+    assert.deepEqual(out.nextAction, {
+      tool: 'connect_agent_oauth',
+      arguments: { action: 'select_accounts', agent_guid: AGENT, credential: 'facebook-pages', accounts: [{ id: '111', name: 'Acme Page' }, { id: '222', name: 'Beta Page' }] },
+      reason: 'Ask the user which accounts to use, then save only those.',
+    });
+    assert.ok(text(result).split('\n').includes('- `Acme Page` (`111`)'), text(result));
+    // The list ends the wait at once.
+    assert.equal(fake.called('/UserAgentOAuth/OAuthStatus').length, 1);
+    assert.doesNotMatch(JSON.stringify(result), /4b1f0c7a9e2d4c1b8a7f6e5d4c3b2a19/);
+  });
+});
+
+test('connect_agent_oauth status sends no list that belongs to another admin', async () => {
+  const fake = fakeClient({
+    '/Credentials/Detail': credentialDetail,
+    '/UserAgentOAuth/OAuthStatus': { ...OAUTH_STATUS_BEFORE, connectedat: '2026-11-13T10:00:00.000Z', flow: { mine: false, status: 'candidates', expiresat: NOW + 600 } },
+  });
+  await withClient(fake, async client => {
+    const result = await client.callTool({
+      name: 'connect_agent_oauth',
+      arguments: { action: 'status', agent_guid: AGENT, credential: 'meta-ads', since_connected_at: '' },
+    });
+    assert.equal(result.structuredContent.state, 'pick_accounts');
+    assert.equal(result.structuredContent.message, 'The Meta Ads sign-in finished, but another admin of this agent\'s team started a newer one, so the account list goes only to them. Connect again to choose the accounts yourself.');
+    assert.equal(result.structuredContent.candidates, undefined);
+    assert.equal(result.structuredContent.nextAction.arguments.action, 'connect');
+  });
+});
+
+test('connect_agent_oauth status names a failed sign-in and stops waiting for it', async () => {
+  const failed = { mine: true, mode: 'own', status: 'failed', account: '', errorcode: 'authorization_denied', errordetail: 'access_denied', restart: 'none', expiresat: NOW + 600 };
+  const fake = fakeClient({
+    '/Credentials/Detail': credentialDetail,
+    '/Skills/List': connectSkillList,
+    '/UserAgent/Detail': detail({ skills: skillsOn('int-hubspot-crm') }),
+    '/UserAgentOAuth/OAuthStatus': { ...OAUTH_STATUS_BEFORE, flow: failed },
+  });
+  await withClient(fake, async client => {
+    const result = await client.callTool({
+      name: 'connect_agent_oauth',
+      arguments: { action: 'status', agent_guid: AGENT, credential: 'hubspot', since_connected_at: '', wait_seconds: 30 },
+    });
+    assert.notEqual(result.isError, true, text(result));
+    assert.equal(result.structuredContent.state, 'not_connected');
+    assert.equal(result.structuredContent.message, 'The latest HubSpot connection attempt did not finish (authorization_denied). Connect again with action connect.');
+    assert.deepEqual(result.structuredContent.nextAction.arguments, { action: 'connect', agent_guid: AGENT, credential: 'hubspot' });
+    assert.equal(fake.called('/UserAgentOAuth/OAuthStatus').length, 1);
+  });
+
+  // A connection from before that the failed attempt left in place is named.
+  const kept = detailRow({ skills: skillsOn('int-hubspot-crm') });
+  kept.credentials.hubspot = { portalname: 'Acme', _connected: true, _filled: true, _required_missing: false, optional: true, _schema: { title: 'HubSpot' } };
+  const reconnect = fakeClient({
+    '/Credentials/Detail': credentialDetail,
+    '/Skills/List': connectSkillList,
+    '/UserAgent/Detail': { result: true, useragents: [kept] },
+    '/UserAgentOAuth/OAuthStatus': { ...OAUTH_STATUS_BEFORE, connected: true, connectedat: '2026-10-01T10:00:00.000Z', flow: { ...failed, errorcode: 'token_exchange_failed' } },
+  });
+  await withClient(reconnect, async client => {
+    const result = await client.callTool({
+      name: 'connect_agent_oauth',
+      arguments: { action: 'status', agent_guid: AGENT, credential: 'hubspot', since_connected_at: '2026-10-01T10:00:00.000Z' },
+    });
+    assert.equal(result.structuredContent.state, 'not_connected');
+    assert.equal(result.structuredContent.message, 'The latest HubSpot connection attempt did not finish (token_exchange_failed). The HubSpot connection saved before it is still there, so get_my_agent lists it as connected. Connect again with action connect.');
   });
 });
 
@@ -3878,10 +4006,6 @@ test('connection states follow the picker and expiry rules', () => {
   }, { hasPicker: true }), 'pick_child_items');
   assert.equal(connectionState(base, { hasPicker: false }), 'not_connected');
 });
-
-// Wiro keeps the latest sign-in or token check of a connection for 15 minutes, with the accounts it found, and
-// shows them only to the person who started it.
-const OAUTH_STATUS_BEFORE = { result: true, errors: [], connected: false, accounts: [], connectedat: '', tokenexpiresat: '' };
 
 test('OAuthStatus gives the account list and the sign-in Wiro keeps for 15 minutes', () => {
   const snapshot = parseOAuthStatus({
