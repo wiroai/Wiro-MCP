@@ -5,10 +5,7 @@ import {
   asString,
   errorResult,
   errorText,
-  isPlainObject,
   requireApiSuccess,
-  toNumber,
-  unixToIso,
   type ApiEnvelope,
 } from '../utils/api.js';
 import {
@@ -19,97 +16,51 @@ import {
   credentialTitles,
   credentialsNeededFor,
   customSkillEntries,
-  daysLeftText,
   describeSkillsApplyError,
   diffSkills,
   enabledSkillNames,
-  formatUsd,
   isAgentRunning,
   loadSkillRegistry,
   newSkillChangeKey,
   parseSkillChangeKey,
   pausedSkillTitles,
-  planBilling,
   planSkillChanges,
-  readPlanChange,
   readUserAgent,
   registryTitles,
-  underOneDayLeft,
   restartNote,
   skillChangeDigest,
-  skillPriceTag,
   workspaceHint,
-  type PlanBilling,
-  type PlanChange,
   type CustomSkillEntry,
 } from '../utils/agent-config.js';
-import { asTier, bindProjectStep, formatCredits, outcomeUnknown, skillLabel, skillOffTasksNote, taskLabel, taskNamedByWiro, toStringArray, toTierPricing, WIRO_PROJECT_CREDENTIAL } from '../utils/user-agent.js';
+import { bindProjectStep, outcomeUnknown, skillLabel, skillOffTasksNote, WIRO_PROJECT_CREDENTIAL } from '../utils/user-agent.js';
 import { DEFAULT_WAIT_SECONDS } from '../utils/poll.js';
-import { quotedSpan } from '../utils/quoted-text.js';
 import { isPlainTeamMember, teamAgentBillingRefused } from '../utils/workspace.js';
 import { nextActionSchema, strictInput } from './schemas.js';
 
-const pricingSchema = z.object({
-  currentMonthlyUsd: z.number().nullable(),
-  newMonthlyUsd: z.number().nullable(),
-  deltaMonthlyUsd: z.number().nullable(),
-  currentMonthlyCredits: z.number().nullable()
-    .describe('The monthly credits each renewal grants now.'),
-  newMonthlyCredits: z.number().nullable()
-    .describe('The monthly credits each renewal grants after the change.'),
-  deltaMonthlyCredits: z.number().nullable(),
-  creditsNow: z.number().optional()
-    .describe('The credits this period gains now, below 0 when it loses them: the change counts for the time left in the period.'),
-  creditsThisPeriod: z.number().optional()
-    .describe('The monthly credits this period grants in all after the change.'),
-  creditsFromRenewal: z.number().optional()
-    .describe('The monthly credits every renewal grants after the change.'),
-  periodEnd: z.string().optional()
-    .describe('When the current period ends.'),
-  note: z.string().optional(),
-});
+// Every plan includes every skill, so a skill change moves no money and leaves the plan as it is.
+const FREE_NOTE = 'A skill change costs nothing: the plan keeps its price and monthly credits.';
+// Turning a skill on is free, but the work it does is not.
+const WORK_NOTE = 'The skills\' work uses the agent\'s credits, and model runs they start are billed to the wallet '
+  + 'of the workspace that owns the Wiro project connected to the agent.';
 
 const outputSchema = {
   agentGuid: z.string(),
-  status: z.enum(['quote', 'applied', 'no_change', 'refused']),
-  idempotencyKey: z.string().optional(),
-  priceChanged: z.boolean().optional(),
+  status: z.enum(['applied', 'no_change', 'refused']),
+  idempotencyKey: z.string().optional()
+    .describe('The key of this change. If the answer to it does not arrive, repeating the same change with this key never applies it twice.'),
   changes: z.object({
     enable: z.array(z.string()),
     disable: z.array(z.string()),
     addedDependencies: z.array(z.string()),
     alreadySet: z.array(z.string()),
   }),
-  tier: z.object({
-    current: z.string().nullable(),
-    next: z.string().nullable(),
-  }),
-  pricing: pricingSchema.optional(),
-  billing: z.object({
-    plan: z.enum(['prepaid', 'card', 'none']),
-    subscriptionStatus: z.string().nullable(),
-    wallet: z.enum(['team', 'personal']),
-    estimatedChargeNowUsd: z.number().nullable().optional()
-      .describe('What a wallet plan pays now at list price, as Wiro works it out, before any discount on the wallet; 0 on a card plan, whose difference goes to the card subscription.'),
-    creditNowUsd: z.number().nullable().optional()
-      .describe('For a drop on a wallet plan, what goes back to the balances that paid; null when it is worked out when the change is applied.'),
-    usedCreditsUsd: z.number().nullable().optional()
-      .describe('The part of a credit that comes off for credits already used above what the plan keeps.'),
-    chargedNowUsd: z.number().nullable().optional(),
-    note: z.string(),
-  }),
+  note: z.string()
+    .describe('What the change does to the plan and its cost: nothing, since every plan includes every skill.'),
   enabledSkills: z.array(z.string()).optional(),
   credentialsNeeded: z.array(z.object({
     skill: z.string(),
     credentials: z.array(z.string()),
   })),
-  scheduledTasks: z.object({
-    stop: z.array(z.string())
-      .describe('Scheduled tasks this change stops: they run now, or would once an agent that is not running starts. They keep their text, schedule and on/off state, and get_my_agent then shows what each waits for.'),
-    resume: z.array(z.string())
-      .describe('Scheduled tasks that do not run now and start running once this change is applied, and the agent is running.'),
-  }).nullable().optional()
-    .describe('Quote: the scheduled tasks this change stops or starts, as Wiro works it out; null when Wiro could not tell.'),
   pausedTasks: z.array(z.string()).optional()
     .describe('After an applied change: the scheduled tasks it paused, which wait for skills that are off. get_my_agent names those skills.'),
   agentStatus: z.string(),
@@ -119,325 +70,26 @@ const outputSchema = {
     message: z.string(),
     deps: z.array(z.object({ skill: z.string(), requires: z.string() })).optional(),
     conflicts: z.array(z.object({ a: z.string(), b: z.string() })).optional(),
-    requiredUsd: z.number().nullable().optional(),
-    availableUsd: z.number().nullable().optional(),
   }).optional(),
   nextAction: nextActionSchema.optional(),
 };
 
 type Row = Record<string, unknown>;
 
-type PricingPreviewBody = ApiEnvelope & {
-  tier?: string;
-  totalPriceUsd?: unknown;
-  totalMonthlyCredits?: unknown;
-  enabledSkills?: unknown;
-  planChange?: unknown;
-  scheduledTasks?: unknown;
-};
-
 type SkillsApplyBody = ApiEnvelope & {
   noOp?: boolean;
   pricing?: Record<string, unknown>;
-  tier?: string;
-  stripeProrationApplied?: boolean;
-  prepaidWalletDelta?: unknown;
-  prepaidCreditParts?: unknown;
-  usedCreditsUsd?: unknown;
-  prepaidCreditFailedUsd?: unknown;
   restartTriggered?: unknown;
   warnings?: unknown;
 };
 
 const UNCHANGED_RESTART = 'Nothing changed, so the agent does not restart.';
-// The tier and the price live with Wiro, and the agent reads neither: only a skill that turns on or off restarts it.
-const TIER_ONLY_RESTART = 'No skill turns on or off, so a change of the tier alone does not restart the agent.';
 
-function roundCents(usd: number): number {
-  return Math.round(usd * 100) / 100;
-}
-
-/**
- * How long an applied credit lasts, from the parts Wiro says it split into. Each
- * part went back to the balance that paid it and keeps that balance's end date,
- * except the part whose source has ended since (each ...UntilPeriodEndUsd): that
- * part lasts until the plan's current period ends. The two amounts add up to the
- * credit, and parts that come to nothing say nothing.
- */
-function creditTerms(parts: unknown): string {
-  if (!isPlainObject(parts)) return '';
-  const usd = (key: string) => toNumber(parts[key]) ?? 0;
-  const untilEnd = roundCents(usd('couponUntilPeriodEndUsd') + usd('storeUntilPeriodEndUsd') + usd('depositUntilPeriodEndUsd'));
-  const keepsEnd = roundCents(roundCents(usd('couponUsd') + usd('storeUsd') + usd('depositUsd')) - untilEnd);
-  if (keepsEnd > 0 && untilEnd > 0) {
-    return `${formatUsd(keepsEnd)} of it went back to the balances that paid and keeps their end dates, and ${formatUsd(untilEnd)} lasts until this period ends, because the credit that paid it has ended.`;
-  }
-  if (keepsEnd > 0) return 'It went back to the balances that paid and keeps their end dates.';
-  return untilEnd > 0 ? 'It lasts until this period ends, because the credit that paid it has ended.' : '';
-}
-
-/** A count of credits with its sign, such as +97 or -690. */
-function signedCredits(credits: number): string {
-  return `${credits > 0 ? '+' : ''}${formatCredits(credits)}`;
-}
-
-/** The fields of Wiro's plan change that the pricing output carries. */
-function periodFields(change: PlanChange | null) {
-  if (!change) return {};
-  const periodEnd = unixToIso(change.periodEnd);
-  return {
-    ...(change.creditsNow !== null ? { creditsNow: change.creditsNow } : {}),
-    ...(change.creditsThisPeriod !== null ? { creditsThisPeriod: change.creditsThisPeriod } : {}),
-    ...(change.creditsFromRenewal !== null ? { creditsFromRenewal: change.creditsFromRenewal } : {}),
-    ...(periodEnd ? { periodEnd } : {}),
-  };
-}
-
-/**
- * What a change does to this period's credits when none come with it: those it takes away end for the
- * time left, and the period keeps the rest. A plan priced again at today's rates can also keep its
- * credits, or gain some, while its price drops.
- */
-function creditsEndNote(skillsOff: number, creditsNow: number | null, creditsThisPeriod: number | null): string {
-  if (creditsNow !== null && creditsNow > 0) {
-    return `This period gains ${formatCredits(creditsNow)} credits for the time left${creditsThisPeriod !== null ? `, ${formatCredits(creditsThisPeriod)} in all` : ''}.`;
-  }
-  if (creditsNow === 0) {
-    return creditsThisPeriod !== null ? `This period keeps its ${formatCredits(creditsThisPeriod)} credits.` : 'This period keeps its credits.';
-  }
-  const keeps = creditsThisPeriod !== null ? `, and this period keeps ${formatCredits(creditsThisPeriod)}` : '';
-  if (skillsOff === 0) return `The credits the change takes away end now for the time left${keeps}.`;
-  return `${skillsOff === 1 ? 'Its' : 'Their'} credits for the time left end now${keeps}.`;
-}
-
-function difference(next: number | null, current: number | null): number | null {
-  return next === null || current === null ? null : Math.round((next - current) * 100) / 100;
-}
-
-/**
- * A skill change prices the plan at today's prices for all its skills, so a
- * plan that started at other prices also changes for the skills it already
- * has, and so do its monthly credits. The agent's tiers carry today's prices
- * and credits for those skills. They are the base of the new price, not a price
- * the plan reaches. An agent without an active plan cannot take the change yet,
- * and a move to Pro prices the whole plan at today's Pro prices, which the quote
- * already shows.
- */
-function todayPriceNote(row: Row, billing: PlanBilling, currentPrice: number | null, currentCredits: number | null, tierChange: string | undefined): string | null {
-  if (tierChange) return null;
-  const tier = asTier(row.tier);
-  const tiers = toTierPricing(isPlainObject(row.agent) ? row.agent.tiers : undefined);
-  const today = tier && tiers ? tiers[tier] : null;
-  if (billing.status !== 'active' || currentPrice === null || today === null || !difference(today.priceUsd, currentPrice)) return null;
-  const versus = currentCredits !== null && today.monthlyCredits !== currentCredits
-    ? ` with ${formatCredits(today.monthlyCredits)} monthly credits, not its current ${formatUsd(currentPrice)} and ${formatCredits(currentCredits)}`
-    : `, not its current ${formatUsd(currentPrice)}`;
-  return `Today's ${tier === 'pro' ? 'Pro' : 'Starter'} price for the skills this plan already has is ${formatUsd(today.priceUsd)} a month${versus}. A skill change counts from today's price, and the new price in this quote already includes that.`;
-}
-
-/**
- * The wallet of the agent's workspace, which Wiro charges or credits for a
- * skill change: the team's for a team agent, else its owner's personal wallet.
- * Only the owner can change a personal agent's skills, so that wallet is the
- * caller's own.
- */
-function walletName(billing: PlanBilling): string {
-  return billing.wallet === 'team' ? 'the team wallet' : 'your personal wallet';
-}
-
-/** When the new monthly credits come: a plan set to end renews only if it is kept, and an agent without a plan gets them once it is subscribed. */
-function creditsWhen(billing: PlanBilling): string {
-  if (billing.plan === 'none') return 'a month once it is subscribed';
-  return billing.status === 'active' && billing.cancelAtPeriodEnd === true
-    ? 'at each renewal after the change, if the plan is kept'
-    : 'at each renewal after the change';
-}
-
-/** When an active plan's next renewal gives the new monthly credits. A card plan whose renewal is not known names it as a condition. */
-function renewalWhen(billing: PlanBilling): string {
-  if (billing.cancelAtPeriodEnd === true) return 'from the next renewal, if the plan is kept';
-  return billing.cancelAtPeriodEnd === null ? 'from the next renewal, if the plan renews' : 'from the next renewal';
-}
-
-/** What renewals give after an applied change: a plan that may not renew names it as a condition, as its quote did. */
-function renewalGives(billing: PlanBilling, credits: number): string {
-  return billing.cancelAtPeriodEnd === false ? `every renewal gives ${formatCredits(credits)}` : `${formatCredits(credits)} ${renewalWhen(billing)}`;
-}
-
-/** For a cancelled plan, a skill change only covers the time left: nothing renews at the new price. */
-function cancelledNote(billing: PlanBilling): string {
-  const end = billing.periodEnd !== null ? unixToIso(billing.periodEnd) : undefined;
-  if (billing.plan === 'card') {
-    return `The plan is set to end${end ? ` after ${end}` : ' with this period'} and does not renew.`;
-  }
-  return `The plan is cancelled and ends about a day after ${end ?? 'the end of this period'}, so this covers only the time left and the new price is not renewed. Undo the cancellation with manage_agent_billing (renew) to keep the plan.`;
-}
-
-/** A card subscription that ends with this period: the plan is set to end, or it moves to wallet billing. */
-function cardEndsWithPeriod(billing: PlanBilling): boolean {
-  return billing.plan === 'card' && (billing.cancelAtPeriodEnd === true || billing.switchingToWallet);
-}
-
-function walletSwitchNote(billing: PlanBilling, price: number | null): string {
-  return `When this period ends, the plan moves to wallet billing and renews from ${walletName(billing)}${price !== null ? ` at ${formatUsd(price)} a month` : ''}.`;
-}
-
-// A card subscription that ends with this period is not renewed by card, so its notes point to no next invoice.
-const CARD_ENDS_QUOTE = 'Nothing is charged now. The card subscription is updated to the new price for the rest of this period.';
-// A card plan whose renewal is not known may also end with this period, so its next invoice is named only for a plan that renews by card.
-const CARD_UNKNOWN_QUOTE = 'Nothing is charged now. The card subscription is updated to the new price, and a plan that renews by card shows the prorated difference on its next invoice.';
-
-/** Only a wallet plan that has ended comes back with renew; any other plan that is not active takes a new one (manage_agent_billing). */
-function renewsBack(billing: PlanBilling): boolean {
-  return billing.plan === 'prepaid' && billing.status === 'expired';
-}
-
-/** What a price drop on a wallet plan gives back now, from Wiro's own plan change. */
-function walletCreditNote(change: PlanChange): string {
-  const used = change.usedCreditsUsd ?? 0;
-  // A credit is at most 1 cent for each credit the change takes away unused, so one that takes none away gives nothing back.
-  if (change.creditNowUsd === 0 && used > 0 && change.creditsNow !== null && change.creditsNow >= 0) {
-    return 'Nothing comes back: the change takes no credits away.';
-  }
-  if (change.creditNowUsd === null) {
-    return 'What comes back is worked out when the change is applied: what the time left is worth, less 1 cent for each credit already used above what the plan keeps.';
-  }
-  if (change.creditNowUsd > 0) {
-    return `${formatUsd(change.creditNowUsd)} goes back to the balances that paid, and each keeps its own end date.`
-      + (used > 0 ? ` ${formatUsd(used)} comes off for credits already used above what the plan keeps.` : '');
-  }
-  return used > 0
-    ? 'Nothing comes back: the credits already used are worth more than the time left.'
-    : 'Nothing comes back to the wallet now.';
-}
-
-/**
- * The quote's billing line. An active plan's money and credits come from the
- * plan change Wiro works out on the plan as it is now (change); without it,
- * the line says what happens without a number.
- */
-function quoteBillingNote(billing: PlanBilling, delta: number | null, change: PlanChange | null, nextPrice: number | null, skillsOff: number): string {
-  // A card plan whose renewal is not known gets the new price without a renewal claim.
-  const after = billing.cancelAtPeriodEnd === true
-    ? ` ${cancelledNote(billing)}`
-    : billing.switchingToWallet
-      ? ` ${walletSwitchNote(billing, nextPrice)}`
-      : nextPrice === null
-        ? ''
-        : billing.cancelAtPeriodEnd === false
-          ? ` The plan then renews at ${formatUsd(nextPrice)} a month.`
-          : ` The new monthly price is ${formatUsd(nextPrice)}.`;
-  if (billing.plan === 'none') {
-    return 'The agent has no subscription yet, so nothing is charged now. The new monthly price applies once it is subscribed.';
-  }
-  if (billing.status !== 'active') {
-    return renewsBack(billing)
-      ? `The subscription is ${billing.status ?? 'not active'}. Skills can only change on an active subscription, so renew it with manage_agent_billing first.`
-      : `The subscription is ${billing.status ?? 'not active'}. Skills can only change on an active subscription, so start a new plan with manage_agent_billing (subscribe) first.`;
-  }
-  if (delta !== null && Math.abs(delta) < 0.005) return 'The monthly price does not change, so nothing is charged.';
-  if (delta === null || change === null) {
-    return billing.plan === 'prepaid'
-      ? `The difference for the rest of this period is taken from, or credited to, ${walletName(billing)} when the change is applied. A credit goes back to the balances that paid, and each keeps its own end date.${after}`
-      : cardEndsWithPeriod(billing)
-        ? `${CARD_ENDS_QUOTE}${after}`
-        : billing.cancelAtPeriodEnd === null
-          ? `${CARD_UNKNOWN_QUOTE}${after}`
-          : `Any prorated difference appears on the next invoice.${after}`;
-  }
-  const ends = creditsEndNote(skillsOff, change.creditsNow, change.creditsThisPeriod);
-  // Credits come with a rise when this period gains them. A plan priced again at today's rates can also
-  // lose credits, or keep them, while its price rises.
-  const gained = change.creditsNow !== null && change.creditsNow > 0 ? change.creditsNow : null;
-  const notGained = change.creditsNow !== null && change.creditsNow <= 0 ? ` ${ends}` : '';
-  if (!change.wallet) {
-    if (delta > 0) {
-      const added = gained !== null ? ` ${formatCredits(gained)} credits come now for the rest of this period.` : notGained;
-      if (cardEndsWithPeriod(billing)) return `${CARD_ENDS_QUOTE}${added}${after}`;
-      if (billing.cancelAtPeriodEnd === null) return `${CARD_UNKNOWN_QUOTE}${added}${after}`;
-      return gained !== null
-        ? `Nothing is charged now. The prorated difference appears on the next invoice, and ${formatCredits(gained)} credits come now for the rest of this period.${after}`
-        : `Nothing is charged now. The prorated difference appears on the next invoice.${notGained}${after}`;
-    }
-    if (cardEndsWithPeriod(billing)) return `${CARD_ENDS_QUOTE} ${ends}${after}`;
-    if (billing.cancelAtPeriodEnd === null) return `${CARD_UNKNOWN_QUOTE} ${ends}${after}`;
-    return `The prorated difference comes off the next invoice. ${ends}${after}`;
-  }
-  if (delta > 0) {
-    const charge = formatUsd(change.chargeNowUsd ?? 0);
-    const credits = gained !== null ? `, and ${formatCredits(gained)} credits come with it` : '';
-    const days = daysLeftText(change.secondsLeft);
-    return underOneDayLeft(change.secondsLeft)
-      ? `${charge} is taken from ${walletName(billing)} now at the one-day minimum${credits}.${notGained}${after}`
-      : `${charge} is taken from ${walletName(billing)} now for the rest of this period${days ? ` (${days})` : ''}${credits}.${notGained}${after}`;
-  }
-  return `${walletCreditNote(change)} ${ends}${after}`;
-}
-
-function chargeNote(billing: PlanBilling, body: SkillsApplyBody): { note: string; charged: number | null } {
-  const charged = toNumber(body.prepaidWalletDelta);
-  const used = toNumber(body.usedCreditsUsd) ?? 0;
-  const creditsNow = isPlainObject(body.pricing) ? toNumber(body.pricing.creditsNow) : null;
-  const cancelled = billing.cancelAtPeriodEnd === true && billing.status === 'active' ? ` ${cancelledNote(billing)}` : '';
-  if (charged !== null && charged > 0) {
-    const credits = creditsNow !== null && creditsNow > 0 ? `, and ${formatCredits(creditsNow)} credits came with it` : '';
-    return { charged, note: `${formatUsd(charged)} was taken from ${walletName(billing)} for the rest of this period${credits}.${cancelled}` };
-  }
-  if (charged !== null && charged < 0) {
-    const terms = creditTerms(body.prepaidCreditParts);
-    const usedNote = used > 0 ? ` ${formatUsd(used)} came off for credits already used above what the plan keeps.` : '';
-    return { charged, note: `${formatUsd(Math.abs(charged))} was credited to ${walletName(billing)}.${terms ? ` ${terms}` : ''}${usedNote}${cancelled}` };
-  }
-  // A change that took no credits away had nothing to credit, and nothing failed.
-  if (billing.plan === 'prepaid' && used > 0 && creditsNow !== null && creditsNow >= 0) {
-    return { charged: null, note: `Nothing came back: the change took no credits away.${cancelled}` };
-  }
-  // The credits already used came to more than the time left was worth: no credit, and nothing failed.
-  // A part Wiro could not add (prepaidCreditFailedUsd) was due all the same: its warning follows, and the
-  // credits used took only what Wiro names.
-  if (billing.plan === 'prepaid' && used > 0) {
-    return (toNumber(body.prepaidCreditFailedUsd) ?? 0) > 0
-      ? { charged: null, note: `Nothing came back now. ${formatUsd(used)} came off for credits already used above what the plan keeps.${cancelled}` }
-      : { charged: null, note: `Nothing came back: the credits already used were worth more than the time left.${cancelled}` };
-  }
-  if (body.stripeProrationApplied === true) {
-    const moved = isPlainObject(body.pricing) ? toNumber(body.pricing.deltaUsd) : null;
-    if (moved !== null && Math.abs(moved) < 0.005) {
-      return { charged: null, note: `The monthly price did not change, so nothing was charged.${cancelled}` };
-    }
-    const added = moved !== null && moved > 0 && creditsNow !== null && creditsNow > 0
-      ? ` ${formatCredits(creditsNow)} credits came now for the rest of this period.`
-      : '';
-    if (cardEndsWithPeriod(billing)) {
-      const price = isPlainObject(body.pricing) ? toNumber(body.pricing.newPriceUsd) : null;
-      const switching = billing.switchingToWallet ? ` ${walletSwitchNote(billing, price)}` : '';
-      return { charged: null, note: `Nothing was charged now. The card subscription was updated to the new price for the rest of this period.${added}${cancelled}${switching}` };
-    }
-    if (billing.cancelAtPeriodEnd === null) {
-      return { charged: null, note: `Nothing was charged now. The card subscription was updated to the new price, and a plan that renews by card shows the prorated difference on its next invoice.${added}` };
-    }
-    return { charged: null, note: `The card subscription was updated; any prorated difference appears on the next invoice.${added}${cancelled}` };
-  }
-  if (billing.plan === 'none') {
-    return { charged: null, note: 'Nothing was charged: the agent has no subscription yet.' };
-  }
-  return { charged: null, note: `Nothing was charged now.${cancelled}` };
-}
-
-/** What the change charged, then any notes Wiro adds about its billing, as Wiro wrote them. */
-function appliedBillingNote(billing: PlanBilling, body: SkillsApplyBody): { note: string; charged: number | null } {
-  const result = chargeNote(billing, body);
-  const warnings = (Array.isArray(body.warnings) ? body.warnings : [])
+/** Wiro's own notes on an applied change, as it wrote them. */
+function warningsOf(body: SkillsApplyBody): string[] {
+  return (Array.isArray(body.warnings) ? body.warnings : [])
     .map(warning => asString(warning)?.trim())
     .filter((warning): warning is string => Boolean(warning));
-  return warnings.length > 0 ? { ...result, note: [result.note, ...warnings].join(' ') } : result;
-}
-
-/** The sentence for a change whose skills need a Wiro project. */
-function bindProjectNote(needed: Array<{ credentials: string[] }>): string {
-  return needed.some(entry => entry.credentials.includes(WIRO_PROJECT_CREDENTIAL))
-    ? ' bind_agent_project connects a Wiro project, with no key to paste.'
-    : '';
 }
 
 /** How to give the new skills what they still need. A Wiro project comes first, since it takes no key. */
@@ -464,68 +116,22 @@ function neededText(
   return needed.map(entry => `${skillLabel(entry.skill, titles)}: ${entry.credentials.map(key => credentialLabel(row, key, serviceTitles)).join(', ')}`).join('; ');
 }
 
-/**
- * The scheduled tasks a change stops or starts, as Wiro works them out with its own gates: null when Wiro
- * could not tell (it sends null or nothing), undefined when there are none.
- */
-function scheduledTasksOf(value: unknown): { stop: string[]; resume: string[] } | null | undefined {
-  if (!isPlainObject(value)) return null;
-  const stop = toStringArray(value.stop);
-  const resume = toStringArray(value.resume);
-  return stop.length > 0 || resume.length > 0 ? { stop, resume } : undefined;
-}
-
-/**
- * The quote's lines for the scheduled tasks the change stops or starts, or that Wiro could not tell. Wiro
- * counts a task as running by its gates, so on an agent that is not running it is a task that would run once
- * the agent starts. Each task is named as people see it.
- */
-function movedTaskLines(moved: { stop: string[]; resume: string[] } | null | undefined, row: Row, running: boolean): string[] {
-  if (moved === null) {
-    return ['**Scheduled tasks:** Wiro could not tell which scheduled tasks this change stops or starts. Once it is applied, the result names the tasks it paused.'];
-  }
-  if (!moved) return [];
-  const entries = new Map(customSkillEntries(row).map(entry => [entry.key, entry]));
-  const names = (list: string[]) => list.map(key => {
-    const entry = entries.get(key);
-    return taskLabel(key, entry ? taskNamedByWiro(entry) : true);
-  }).join(', ');
-  const lines: string[] = [];
-  if (moved.stop.length > 0) {
-    const one = moved.stop.length === 1;
-    const now = running
-      ? (one ? 'It runs now and stops with this change.' : 'They run now and stop with this change.')
-      : (one ? 'It would run once the agent starts, and this change stops it.' : 'They would run once the agent starts, and this change stops them.');
-    lines.push(`**Scheduled tasks that stop:** ${names(moved.stop)}. ${now} ${one ? 'It keeps its' : 'They keep their'} text, schedule and on/off state, and get_my_agent then shows what ${one ? 'it waits' : 'each waits'} for.`);
-  }
-  if (moved.resume.length > 0) {
-    const one = moved.resume.length === 1;
-    const after = running ? 'once this change is applied' : 'once this change is applied and the agent starts';
-    lines.push(`**Scheduled tasks that start running:** ${names(moved.resume)}. ${one ? 'It does not run now and runs' : 'They do not run now and run'} ${after}.`);
-  }
-  return lines;
-}
-
-/**
- * The scheduled tasks the change paused: on and paused in the agent read after it, not paused before it, and
- * among those Wiro said the change stops (stops), when it could tell.
- */
-function newlyPaused(before: Row, after: Row | null, stops: string[] | null): CustomSkillEntry[] {
+/** The scheduled tasks the change paused: on and paused in the agent read after it, and not paused before it. */
+function newlyPaused(before: Row, after: Row | null): CustomSkillEntry[] {
   if (!after) return [];
   const pausedBefore = new Set(customSkillEntries(before).filter(entry => entry.skillOff).map(entry => entry.key));
   return customSkillEntries(after).filter(entry => entry.kind === 'scheduled_task' && entry.enabled && entry.skillOff
-    && !pausedBefore.has(entry.key) && (stops === null || stops.includes(entry.key)));
+    && !pausedBefore.has(entry.key));
 }
 
 /**
- * The agent read again after the change, and whether its live skills and tier are what this change asked
- * for; both null when it cannot be read.
+ * The agent read again after the change, and whether its live skills are what this change asked for; both
+ * null when it cannot be read.
  */
 async function readAfterChange(
   client: WiroClient,
   agentGuid: string,
   requested: Record<string, boolean>,
-  tier: string | undefined,
   signal: AbortSignal,
 ): Promise<{ holds: boolean | null; live: Row | null }> {
   let live: Row;
@@ -535,8 +141,7 @@ async function readAfterChange(
     return { holds: null, live: null };
   }
   const enabled = new Set(enabledSkillNames(live));
-  const skillsHold = Object.entries(requested).every(([name, on]) => enabled.has(name) === on);
-  return { holds: skillsHold && (!tier || asString(live.tier) === tier), live };
+  return { holds: Object.entries(requested).every(([name, on]) => enabled.has(name) === on), live };
 }
 
 /** The line that names the tasks a change paused, with the skills each waits for. */
@@ -549,43 +154,30 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
     'apply_agent_skills',
     {
       title: 'Change an agent\'s skills',
-      description: 'Turn registry skills on or off for a deployed agent, and optionally move it '
-        + 'from Starter to Pro, as one billed change. Skills set the agent\'s monthly price and monthly credits. '
-        + 'On a team agent only a team admin or the person who deployed the agent can change its skills; other '
-        + 'members are refused and nothing is charged. '
-        + 'Steps: 1) call without confirm. The tool checks the names, adds the skills they '
-        + 'depend on, and returns the current and new monthly price, what Wiro charges or credits now, '
-        + 'the credits this period gains or loses, the scheduled tasks it stops or starts, and an idempotency_key. Nothing changes yet. 2) Show the price to the '
-        + 'user. 3) After they approve, call again with confirm: true and that idempotency_key. '
-        + 'The key is tied to the quoted prices and, on a prepaid plan, the billing period: if '
-        + 'either changed since the quote, nothing is applied and a new quote with a new key comes back. Reusing the key after a timeout '
-        + 'is safe, the change is applied once. Billing: on a prepaid plan the monthly difference '
-        + 'for the time left in the period is taken from the wallet at once, and the added credits come '
-        + 'for that same time; every renewal gives all of them. When the price drops, what the time left '
-        + 'is worth goes back to the balances that paid, less 1 cent for each credit already used above '
-        + 'what the plan keeps, and each balance keeps its own end date. A skill that comes off loses its '
-        + 'credits for the time left; the ones the time already passed paid for stay until the renewal. '
-        + 'On a card plan nothing is charged at once: the card subscription is updated to the new price, '
-        + 'a plan that renews by card shows the difference on its next invoice, and the added credits come '
-        + 'for the time left. A running agent restarts once when a skill turns on or off; a change of the '
-        + 'tier alone leaves it running. Newly enabled skills may still need credentials '
-        + '(set_agent_credentials, connect_agent_oauth, bind_agent_project for a Wiro project) and do not create scheduled tasks '
-        + '(manage_agent_custom_skill does). Find skill names with list_agent_skills and the '
-        + 'agent\'s current skills with get_my_agent. The agents playbook (get_playbook) has the '
-        + 'full setup walkthrough.',
+      description: 'Turn registry skills on or off for a deployed agent. Every plan includes every skill, so a '
+        + 'skill change costs nothing: the plan keeps its price and monthly credits, and no active plan is '
+        + 'needed. The change is applied on the first call, so tell the user what turns on or off and get '
+        + 'their yes first. The tool checks the names and turns on the skills they depend on '
+        + '(add_dependencies); the result lists them, the credentials the new skills still need and the '
+        + 'scheduled tasks the change paused. A running agent restarts once when a skill turns on or off. '
+        + 'A skill\'s work uses the agent\'s credits, and model runs it starts are billed to the wallet of the '
+        + 'workspace that owns the Wiro project connected to the agent. Newly enabled skills may still need '
+        + 'credentials (set_agent_credentials, connect_agent_oauth, bind_agent_project for a Wiro project) and do '
+        + 'not create scheduled tasks (manage_agent_custom_skill does). On a team agent only a team admin or the '
+        + 'person who deployed the agent can change its skills; other members are refused and nothing changes. '
+        + 'Every result gives an idempotency_key: if an answer does not arrive, repeat the same change with it, '
+        + 'which never applies the change twice. To change the plan, use manage_agent_billing (change_plan). '
+        + 'Find skill names with list_agent_skills and the agent\'s current skills with get_my_agent. The agents '
+        + 'playbook (get_playbook) has the full setup walkthrough.',
       inputSchema: strictInput({
         agent_guid: z.string().min(1).describe('The deployed agent\'s guid, from list_my_agents.'),
         skills: z.record(z.string(), z.boolean())
           .describe('Skills to change, as name: true to turn on or name: false to turn off, for example {"int-instagram-post": true}. Registry names only (list_agent_skills). Custom skills and scheduled tasks (cs-...) are managed with manage_agent_custom_skill; channels such as Telegram turn on through set_agent_credentials.'),
-        tier: z.enum(['starter', 'pro']).optional()
-          .describe('Optional: also move from Starter to Pro in this billed change. To upgrade without a skill change, use manage_agent_billing (upgrade_to_pro).'),
         add_dependencies: z.boolean().default(true)
           .describe('Also turn on the skills that the enabled skills depend on (default true). Without them the change is refused.'),
-        confirm: z.boolean().default(false)
-          .describe('false (default) only returns the quote. true applies the change and charges it; it needs the idempotency_key from the quote.'),
         idempotency_key: z.string().min(8).max(128).optional()
-          .describe('With confirm: true, the key from the quote the user approved. It ties the approval to the quoted prices and, on a prepaid plan, the billing period, and repeating the call with it after a timeout never applies the change twice. Omit it to get a quote.'),
-      }),
+          .describe('Only to repeat a change whose answer did not arrive: the idempotency_key that change returned or its error names. Repeating it never applies the change twice. Leave it out for a new change.'),
+      }, 'A skill change applies on the first call and takes no confirm; manage_agent_billing with action change_plan changes the plan.'),
       outputSchema,
       annotations: {
         readOnlyHint: false,
@@ -594,10 +186,10 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
         openWorldHint: true,
       },
     },
-    async ({ agent_guid, skills, tier, add_dependencies, confirm, idempotency_key }, extra) => {
+    async ({ agent_guid, skills, add_dependencies, idempotency_key }, extra) => {
       try {
-        if (Object.keys(skills).length === 0 && !tier) {
-          return errorResult(new Error('Nothing to change: pass at least one skill or a tier.'));
+        if (Object.keys(skills).length === 0) {
+          return errorResult(new Error('Nothing to change: pass at least one skill.'));
         }
         const registry = await loadSkillRegistry(client, extra.signal);
         const titles = registryTitles(registry);
@@ -608,15 +200,10 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
 
         const row = await readUserAgent(client, agent_guid, extra.signal);
         const status = agentStatusOf(row);
-        const currentTier = asString(row.tier) ?? null;
-        if (tier === 'starter' && currentTier === 'pro') {
-          return errorResult(new Error('A Pro plan cannot be moved back to Starter here. Cancel the plan with manage_agent_billing and subscribe again at Starter once it ends.'));
-        }
-        const tierChange = tier && tier !== currentTier ? tier : undefined;
-        const digest = skillChangeDigest(agent_guid, plan.requested, tier);
+        const digest = skillChangeDigest(agent_guid, plan.requested);
         const givenKey = idempotency_key ? parseSkillChangeKey(idempotency_key) : null;
         if (givenKey && givenKey.digest !== digest) {
-          return errorResult(new Error('This idempotency_key belongs to a different skill change. Omit idempotency_key to start a new change, or repeat the exact change it was issued for.'));
+          return errorResult(new Error('This idempotency_key belongs to a different skill change. Omit idempotency_key to make a new change, or repeat the exact change it was issued for.'));
         }
 
         const enabledNow = enabledSkillNames(row);
@@ -634,7 +221,6 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
           ];
           return errorResult(new Error(`The change was not sent:\n\n- ${[...new Set(problems)].join('\n- ')}`));
         }
-        const billing = planBilling(row);
         const running = isAgentRunning(status);
         const changes = {
           enable: diff.enable,
@@ -646,51 +232,41 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
         const serviceTitles = await credentialTitles(client, credentialsNeeded.flatMap(entry => entry.credentials), extra.signal);
         // A running agent restarts only for a skill that turns on or off.
         const skillsMove = Object.keys(diff.changes).length > 0;
-        const nothingToDo = !skillsMove && !tierChange;
         const base = {
           agentGuid: agent_guid,
           changes,
-          tier: { current: currentTier, next: tierChange ?? currentTier },
           credentialsNeeded,
           agentStatus: agentStatusLabel(status),
         };
-        const billingBase = { plan: billing.plan, subscriptionStatus: billing.status, wallet: billing.wallet };
 
-        // An empty change cannot charge anything. With a key issued for this
-        // same change it is still sent, so a repeated confirm gets the result
-        // of the earlier call with that key.
-        if (nothingToDo && !(confirm && givenKey)) {
+        // An empty change does nothing. With a key issued for this same change it is still sent, so a repeat
+        // gets the result of the earlier call with that key.
+        if (!skillsMove && !idempotency_key) {
           return {
-            content: [{ type: 'text' as const, text: `## No change needed\n\nThe skills${tier ? ' and tier' : ''} are already as requested on agent \`${agent_guid}\`.` }],
+            content: [{ type: 'text' as const, text: `## No change needed\n\nThe skills are already as requested on agent \`${agent_guid}\`. Nothing changed.` }],
             structuredContent: {
               ...base,
               status: 'no_change' as const,
-              billing: { ...billingBase, note: 'Nothing is charged.' },
+              note: FREE_NOTE,
               restart: UNCHANGED_RESTART,
             },
           };
         }
 
-        const currentPrice = toNumber(row.monthlypriceusd);
-        // The plan's monthly figure is what each renewal grants. This period's can differ after a change inside it.
-        const currentCredits = toNumber(row.renewalcredits) ?? toNumber(row.monthlycredits);
-        const key = idempotency_key?.trim() ?? '';
-
-        // Every team member can read a team agent and price a change, but only a
-        // team admin or the person who deployed it can apply one. The credit
-        // history check refuses the other members up front; the organization's
-        // owner passes it and gets Wiro's answer on confirm.
-        if (!nothingToDo && await isPlainTeamMember(client, row, extra.signal)
+        // Every team member can read a team agent, but only a team admin or the person who deployed it can
+        // change its skills. The credit history check refuses the other members up front; the organization's
+        // owner passes it and gets Wiro's own answer.
+        if (skillsMove && await isPlainTeamMember(client, row, extra.signal)
           && await teamAgentBillingRefused(client, agent_guid, extra.signal)) {
           const message = 'Only a team admin or the person who deployed this agent can change its skills, and this '
-            + 'connection acts as a team member without those rights. Nothing was quoted, changed or charged. Ask a '
-            + 'team admin or the person who deployed the agent to make the change.';
+            + 'connection acts as a team member without those rights. Nothing was changed. Ask a team admin or the '
+            + 'person who deployed the agent to make the change.';
           return {
             content: [{ type: 'text' as const, text: `## Skill change not possible\n\n${message}` }],
             structuredContent: {
               ...base,
               status: 'refused' as const,
-              billing: { ...billingBase, note: message },
+              note: FREE_NOTE,
               restart: UNCHANGED_RESTART,
               error: { code: 97, message },
             },
@@ -698,126 +274,8 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
           };
         }
 
-        // The tasks Wiro says this change stops: null until it says, and when it could not tell.
-        let stops: string[] | null = null;
-        if (!nothingToDo) {
-          const preview = requireApiSuccess(
-            await client.post<PricingPreviewBody>('/UserAgent/PricingPreview', {
-              useragentguid: agent_guid,
-              skillOverrides: diff.changes,
-              ...(tierChange ? { tier: tierChange } : {}),
-              withScheduledTasks: true,
-            }, extra.signal),
-            'Could not price this change.',
-          );
-          const moved = scheduledTasksOf(preview.scheduledTasks);
-          stops = moved === null ? null : moved?.stop ?? [];
-          const newPrice = toNumber(preview.totalPriceUsd);
-          if (newPrice === null) {
-            throw new Error('Wiro did not return the new monthly price of this change, so it cannot be quoted. Try again later.');
-          }
-          const priceTag = skillPriceTag(currentPrice, newPrice, billing.plan === 'prepaid' ? billing.periodEnd : null);
-          const approved = confirm && givenKey !== null && givenKey.priceTag === priceTag;
-          if (!approved) {
-            const newCredits = toNumber(preview.totalMonthlyCredits);
-            const delta = difference(newPrice, currentPrice);
-            // What Wiro works out for this change on the plan as it is now. Only an active plan has one.
-            const change = billing.plan !== 'none' && billing.status === 'active' ? readPlanChange(preview.planChange) : null;
-            const note = quoteBillingNote(billing, delta, change, newPrice, changes.disable.length);
-            const walletDrop = change !== null && change.wallet && delta !== null && delta < 0;
-            const quoteKey = givenKey?.priceTag === priceTag ? key : newSkillChangeKey(digest, priceTag);
-            const priceChanged = confirm && givenKey !== null;
-            const blocked = billing.plan !== 'none' && billing.status !== 'active';
-            const restart = skillsMove ? restartNote(status, 'skill change') : TIER_ONLY_RESTART;
-            const priceNote = todayPriceNote(row, billing, currentPrice, currentCredits, tierChange);
-            const pricing = {
-              currentMonthlyUsd: currentPrice,
-              newMonthlyUsd: newPrice,
-              deltaMonthlyUsd: delta,
-              currentMonthlyCredits: currentCredits,
-              newMonthlyCredits: newCredits,
-              deltaMonthlyCredits: difference(newCredits, currentCredits),
-              ...periodFields(change),
-              ...(priceNote ? { note: priceNote } : {}),
-            };
-            const nextAction = blocked
-              ? {
-                tool: 'manage_agent_billing',
-                arguments: { agent_guid, action: renewsBack(billing) ? 'renew' : 'subscribe' },
-                reason: 'The subscription must be active before skills can change.',
-              }
-              : {
-                tool: 'apply_agent_skills',
-                arguments: {
-                  agent_guid,
-                  skills,
-                  ...(tier ? { tier } : {}),
-                  add_dependencies,
-                  confirm: true,
-                  idempotency_key: quoteKey,
-                },
-                reason: delta === null || delta > 0
-                  ? 'Ask the user to approve this charge first.'
-                  : 'Ask the user to confirm this change first.',
-              };
-            const lead = !confirm
-              ? null
-              : priceChanged
-                ? 'The price or the billing period changed since the quote, so nothing was applied or charged. This is the new quote with a new idempotency_key; show it to the user and ask again.'
-                : 'Nothing was applied: confirming needs the idempotency_key of a quote, which ties the approval to the price. This is the quote; show it to the user first.';
-            const lines = [
-              '## Skill change quote',
-              '',
-              ...(lead ? [lead, ''] : []),
-              `**Agent:** \`${agent_guid}\` (${agentStatusLabel(status)})`,
-              listLine('Turn on', changes.enable, titles),
-              listLine('Added because other skills need them', changes.addedDependencies, titles),
-              listLine('Turn off', changes.disable, titles),
-              listLine('Already as requested', changes.alreadySet, titles),
-              tierChange ? `**Plan:** ${currentTier ?? 'unknown'} to ${tierChange}` : null,
-              `**Monthly price:** ${currentPrice !== null ? formatUsd(currentPrice) : 'unknown'} now, ${formatUsd(newPrice)} after the change${delta !== null ? ` (${delta >= 0 ? '+' : ''}${formatUsd(delta)})` : ''}`,
-              priceNote ? `**Price update:** ${priceNote}` : null,
-              change?.creditsFromRenewal !== null && change?.creditsFromRenewal !== undefined
-                ? `**Monthly credits:** ${currentCredits !== null ? formatCredits(currentCredits) : 'unknown'} now, ${formatCredits(change.creditsFromRenewal)} ${renewalWhen(billing)}`
-                : newCredits !== null ? `**Monthly credits:** ${currentCredits !== null ? formatCredits(currentCredits) : 'unknown'} now, ${formatCredits(newCredits)} ${creditsWhen(billing)}` : null,
-              change && change.creditsNow !== null && change.creditsThisPeriod !== null
-                ? `**This period:** ${signedCredits(change.creditsNow)} credits now, ${formatCredits(change.creditsThisPeriod)} in all until ${unixToIso(change.periodEnd) ?? 'the period ends'}`
-                : null,
-              `**Billing:** ${note}`,
-              `**Restart:** ${restart}`,
-              ...movedTaskLines(moved, row, running),
-              credentialsNeeded.length > 0
-                ? `**Credentials the new skills need:** ${neededText(credentialsNeeded, row, titles, serviceTitles)}.${bindProjectNote(credentialsNeeded)}`
-                : null,
-              '',
-              blocked
-                ? `${renewsBack(billing) ? 'Renew the subscription' : 'Start a new plan'} with manage_agent_billing before applying this change.`
-                : `Nothing has changed yet. After the user approves, call apply_agent_skills again with confirm: true and idempotency_key \`${quoteKey}\`.`,
-            ].filter((line): line is string => line !== null);
-            return {
-              content: [{ type: 'text' as const, text: lines.join('\n') }],
-              structuredContent: {
-                ...base,
-                status: 'quote' as const,
-                idempotencyKey: quoteKey,
-                ...(priceChanged ? { priceChanged: true } : {}),
-                pricing,
-                billing: {
-                  ...billingBase,
-                  estimatedChargeNowUsd: change ? change.chargeNowUsd : null,
-                  ...(walletDrop ? { creditNowUsd: change.creditNowUsd, usedCreditsUsd: change.usedCreditsUsd } : {}),
-                  note,
-                },
-                ...(Array.isArray(preview.enabledSkills) ? { enabledSkills: preview.enabledSkills.map(String) } : {}),
-                ...(moved !== undefined ? { scheduledTasks: moved } : {}),
-                restart,
-                nextAction,
-              },
-            };
-          }
-        }
-
-        const sentEmpty = nothingToDo;
+        const key = idempotency_key?.trim() || newSkillChangeKey(digest);
+        const sentEmpty = !skillsMove;
         let applied: SkillsApplyBody;
         try {
           applied = requireApiSuccess(
@@ -825,20 +283,19 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
               useragentguid: agent_guid,
               skills: diff.changes,
               idempotencyKey: key,
-              ...(tierChange ? { tier: tierChange } : {}),
             }, extra.signal),
             'The skill change was refused.',
           );
         } catch (error) {
           if (extra.signal.aborted) throw error;
           if (!outcomeUnknown(error)) {
-            const failure = describeSkillsApplyError(error, billing.plan, titles);
+            const failure = describeSkillsApplyError(error, titles);
             // Code 110 is the whole outcome: the next step reads the agent, and the call is not repeated.
             const failedChange = failure.code === 110;
             const nextAction = failedChange
-              ? { tool: 'get_my_agent', arguments: { agent_guid }, reason: 'Check the agent\'s skills and monthly price. Do not repeat the change.' }
+              ? { tool: 'get_my_agent', arguments: { agent_guid }, reason: 'Check the agent\'s skills. Do not repeat the change.' }
               : failure.code === 107
-                ? { tool: 'apply_agent_skills', arguments: { agent_guid, skills, ...(tier ? { tier } : {}), add_dependencies }, reason: 'Get a new quote for this change, with a new key.' }
+                ? { tool: 'apply_agent_skills', arguments: { agent_guid, skills, add_dependencies }, reason: 'Make the change again with a new key.' }
                 : undefined;
             const text = [
               failedChange ? '## Skill change failed' : '## Skill change not applied',
@@ -853,15 +310,13 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
                 ...base,
                 status: 'refused' as const,
                 idempotencyKey: key,
-                billing: { ...billingBase, note: failure.guidance || failure.message },
+                note: failure.guidance || failure.message,
                 restart: failedChange ? 'The agent does not restart for this change.' : UNCHANGED_RESTART,
                 error: {
                   code: failure.code,
                   message: failure.message,
                   ...(failure.deps ? { deps: failure.deps } : {}),
                   ...(failure.conflicts ? { conflicts: failure.conflicts } : {}),
-                  ...(failure.requiredUsd !== undefined ? { requiredUsd: failure.requiredUsd } : {}),
-                  ...(failure.availableUsd !== undefined ? { availableUsd: failure.availableUsd } : {}),
                 },
                 ...(nextAction ? { nextAction } : {}),
               },
@@ -871,28 +326,24 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
 
           const message = errorText(error);
           if (sentEmpty) {
-            const note = 'The agent\'s skills already match the request, so the change is in place. Do not repeat it. '
-              + (billing.plan === 'prepaid'
-                ? `What the earlier call with this idempotency_key took from, or credited to, ${walletName(billing)} is not shown here; get_account with recent_transactions shows it.`
-                : 'Any price difference follows the plan\'s usual billing.');
+            const note = 'The agent\'s skills already match the request, so the change is in place. Do not repeat it.';
             return {
               content: [{ type: 'text' as const, text: `## No change needed\n\n${note}` }],
               structuredContent: {
                 ...base,
                 status: 'no_change' as const,
                 idempotencyKey: key,
-                billing: { ...billingBase, note },
+                note: `${note} ${FREE_NOTE}`,
                 restart: UNCHANGED_RESTART,
               },
             };
           }
 
-          // The agent is read again to see whether the change is in place
-          // before anything is reported.
-          const { holds, live } = await readAfterChange(client, agent_guid, plan.requested, tierChange, extra.signal);
+          // The agent is read again to see whether the change is in place before anything is reported.
+          const { holds, live } = await readAfterChange(client, agent_guid, plan.requested, extra.signal);
           if (holds === true) {
-            const paused = newlyPaused(row, live, stops);
-            const note = `The agent's skills now match the request, so the change is in place. Do not repeat it. ${billing.plan === 'prepaid' && billing.status === 'active' ? `The difference for the rest of this period was probably taken from, or credited to, ${walletName(billing)}; a credit goes back to the balances that paid. get_account with recent_transactions shows the amount, and get_agent_activity with kind usage the credits it moved.` : 'Any price difference follows the plan\'s usual billing.'}`;
+            const paused = newlyPaused(row, live);
+            const note = `The agent's skills now match the request, so the change is in place. Do not repeat it. ${FREE_NOTE}`;
             return {
               content: [{ type: 'text' as const, text: [
                 '## Skills updated',
@@ -900,16 +351,16 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
                 `**Agent:** \`${agent_guid}\``,
                 listLine('Turned on', changes.enable, titles),
                 listLine('Turned off', changes.disable, titles),
-                `**Billing:** ${note}`,
-                `**Restart:** ${skillsMove ? restartNote(status, 'skill change') : TIER_ONLY_RESTART}`,
+                note,
+                `**Restart:** ${restartNote(status, 'skill change')}`,
                 await pausedLine(client, paused, extra.signal),
               ].filter((line): line is string => line !== null).join('\n') }],
               structuredContent: {
                 ...base,
                 status: 'applied' as const,
                 idempotencyKey: key,
-                billing: { ...billingBase, chargedNowUsd: null, note },
-                restart: skillsMove ? restartNote(status, 'skill change') : TIER_ONLY_RESTART,
+                note,
+                restart: restartNote(status, 'skill change'),
                 ...(paused.length > 0 ? { pausedTasks: paused.map(entry => entry.key) } : {}),
               },
             };
@@ -924,71 +375,51 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
               ...base,
               status: 'refused' as const,
               idempotencyKey: key,
-              billing: { ...billingBase, note },
-              restart: !unverified ? UNCHANGED_RESTART : skillsMove ? 'The agent restarts if the change was saved.' : TIER_ONLY_RESTART,
+              note,
+              restart: unverified ? 'The agent restarts if the change was saved.' : UNCHANGED_RESTART,
               error: { code: null, message },
             },
             isError: true,
           };
         }
 
-        // The live agent is checked against this change before it is reported
-        // as applied.
-        const { holds, live } = await readAfterChange(client, agent_guid, plan.requested, tierChange, extra.signal);
+        // The live agent is checked against this change before it is reported as applied.
+        const { holds, live } = await readAfterChange(client, agent_guid, plan.requested, extra.signal);
         if (holds === false) {
           const note = 'The agent\'s skills do not match this change, so it is not in place. Check get_my_agent; if they '
-            + 'still do not match the request, call apply_agent_skills again without idempotency_key to get a new quote.';
+            + 'still do not match the request, call apply_agent_skills again without idempotency_key.';
           return {
             content: [{ type: 'text' as const, text: `## Skill change not applied\n\n${note}` }],
             structuredContent: {
               ...base,
               status: 'refused' as const,
               idempotencyKey: key,
-              billing: { ...billingBase, note },
+              note,
               restart: UNCHANGED_RESTART,
               error: { code: null, message: note },
               nextAction: {
                 tool: 'apply_agent_skills',
-                arguments: { agent_guid, skills, ...(tier ? { tier } : {}), add_dependencies },
-                reason: 'Get a new quote for this change.',
+                arguments: { agent_guid, skills, add_dependencies },
+                reason: 'Make the change again with a new key.',
               },
             },
             isError: true,
           };
         }
 
-        // An empty request that comes back as a real change is the saved
-        // result of the earlier call with this key, not a new charge.
+        // An empty request that comes back as a real change is the saved result of the earlier call with this
+        // key, not a new change.
         const replayed = sentEmpty && !applied.noOp;
-        const serverPricing = applied.pricing ?? {};
-        // An agent with no plan has no period and no renewal yet, as its quote says.
-        const appliedChange = billing.plan === 'none' ? null : readPlanChange({
-          creditsNow: serverPricing.creditsNow,
-          creditsThisPeriod: serverPricing.creditsThisPeriod,
-          creditsFromRenewal: serverPricing.creditsFromRenewal,
-          periodEnd: serverPricing.periodEnd,
-        });
-        const pricing = applied.noOp
-          ? undefined
-          : {
-            currentMonthlyUsd: toNumber(serverPricing.previousPriceUsd),
-            newMonthlyUsd: toNumber(serverPricing.newPriceUsd),
-            deltaMonthlyUsd: toNumber(serverPricing.deltaUsd),
-            currentMonthlyCredits: toNumber(serverPricing.previousMonthlyCredits),
-            newMonthlyCredits: toNumber(serverPricing.newMonthlyCredits),
-            deltaMonthlyCredits: toNumber(serverPricing.deltaCredits),
-            ...periodFields(appliedChange),
-          };
-        const charge = appliedBillingNote(billing, applied);
-        const usedCreditsUsd = toNumber(applied.usedCreditsUsd);
-        const billingNote = replayed
-          ? `This change was already applied by an earlier call with this idempotency_key, and nothing new was charged now. That call's billing: ${charge.note}`
-          : charge.note;
         // Wiro says whether this change restarts a running agent; an answer without it goes by the skills that move.
         const restarts = typeof applied.restartTriggered === 'boolean' ? applied.restartTriggered : skillsMove;
-        const restart = applied.noOp || replayed
+        const restart = applied.noOp || replayed || !skillsMove
           ? UNCHANGED_RESTART
-          : restarts ? restartNote(status, 'skill change') : TIER_ONLY_RESTART;
+          : running && !restarts
+            ? 'The agent keeps running: Wiro did not restart it for this change. control_agent with action restart loads it now.'
+            : restartNote(status, 'skill change');
+        const note = replayed
+          ? `This change was already applied by an earlier call with this idempotency_key. ${FREE_NOTE}`
+          : FREE_NOTE;
         const firstCredential = credentialsNeeded[0]?.credentials[0];
         const nextAction = applied.noOp || replayed
           ? undefined
@@ -1007,29 +438,28 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
                   reason: 'Check that the agent is running again with the new skills.',
                 }
                 : undefined;
-        // Read from the agent after the change: the tasks it paused, which the quote named among those that stop.
-        const paused = applied.noOp || replayed ? [] : newlyPaused(row, live, stops);
+        // Read from the agent after the change: the tasks it paused.
+        const paused = applied.noOp || replayed ? [] : newlyPaused(row, live);
+        const warnings = warningsOf(applied);
+        const enabledSkills = applied.pricing && Array.isArray(applied.pricing.enabledSkills)
+          ? applied.pricing.enabledSkills.map(String)
+          : undefined;
         const lines = [
           applied.noOp ? '## No change needed' : replayed ? '## Already applied' : '## Skills updated',
           '',
           `**Agent:** \`${agent_guid}\``,
           listLine('Turned on', changes.enable, titles),
+          listLine('Added because other skills need them', changes.addedDependencies, titles),
           listLine('Turned off', changes.disable, titles),
           applied.noOp || replayed ? listLine('Already as requested', changes.alreadySet, titles) : null,
-          tierChange && !applied.noOp ? `**Plan:** now ${asString(applied.tier) ?? tierChange}` : null,
-          pricing?.newMonthlyUsd !== undefined && pricing.newMonthlyUsd !== null
-            ? `**Monthly price:** ${formatUsd(pricing.newMonthlyUsd)}${pricing.currentMonthlyUsd !== null ? ` (was ${formatUsd(pricing.currentMonthlyUsd)})` : ''}`
-            : null,
-          pricing && appliedChange?.creditsNow !== null && appliedChange?.creditsNow !== undefined && appliedChange.creditsThisPeriod !== null
-            ? `**This period:** ${signedCredits(appliedChange.creditsNow)} credits, ${formatCredits(appliedChange.creditsThisPeriod)} in all until ${unixToIso(appliedChange.periodEnd) ?? 'the period ends'}${appliedChange.creditsFromRenewal !== null ? `; ${renewalGives(billing, appliedChange.creditsFromRenewal)}` : ''}`
-            : null,
-          `**Billing:** ${billingNote}`,
+          `**Cost:** ${note}${changes.enable.length > 0 && !applied.noOp && !replayed ? ` ${WORK_NOTE}` : ''}`,
           `**Restart:** ${restart}`,
           holds === null ? 'The agent could not be read afterwards to confirm the new skills; get_my_agent shows them.' : null,
           await pausedLine(client, paused, extra.signal),
-          credentialsNeeded.length > 0
+          credentialsNeeded.length > 0 && !applied.noOp && !replayed
             ? `**Still needed:** credentials for ${neededText(credentialsNeeded, row, titles, serviceTitles)}. ${stillNeededSteps(credentialsNeeded)}`
             : null,
+          warnings.length > 0 ? `**From Wiro:** ${warnings.join(' ')}` : null,
         ].filter((line): line is string => line !== null);
         return {
           content: [{ type: 'text' as const, text: lines.join('\n') }],
@@ -1037,15 +467,8 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
             ...base,
             status: applied.noOp ? 'no_change' as const : 'applied' as const,
             idempotencyKey: key,
-            ...(pricing ? { pricing } : {}),
-            // The saved answer of an earlier call: its charge is in the note, and this call charged nothing.
-            billing: {
-              ...billingBase,
-              chargedNowUsd: replayed ? 0 : charge.charged,
-              ...(usedCreditsUsd !== null && usedCreditsUsd > 0 ? { usedCreditsUsd } : {}),
-              note: billingNote,
-            },
-            ...(Array.isArray(serverPricing.enabledSkills) ? { enabledSkills: serverPricing.enabledSkills.map(String) } : {}),
+            note,
+            ...(enabledSkills ? { enabledSkills } : {}),
             restart,
             ...(paused.length > 0 ? { pausedTasks: paused.map(entry => entry.key) } : {}),
             ...(nextAction ? { nextAction } : {}),

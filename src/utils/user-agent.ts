@@ -113,22 +113,47 @@ export function isTransitionalStatus(status: number | null | undefined): boolean
 // Prices, plans and credits
 // ---------------------------------------------------------------------------
 
-export const AGENT_TIERS = ['starter', 'pro'] as const;
-export type AgentTier = typeof AGENT_TIERS[number];
+/**
+ * The plans an agent can have, smallest first. Every plan includes every skill,
+ * and each has a fixed monthly price and monthly credits, the same for every
+ * template and custom build. The numbers come from Wiro, never from here.
+ */
+export const AGENT_PLANS = ['starter', 'pro', 'max'] as const;
+export type AgentPlan = typeof AGENT_PLANS[number];
 
-export const tierPriceSchema = z.object({
+const PLAN_NAMES: Record<AgentPlan, string> = { starter: 'Starter', pro: 'Pro', max: 'Max' };
+
+export function asPlan(value: unknown): AgentPlan | undefined {
+  return typeof value === 'string' && (AGENT_PLANS as readonly string[]).includes(value) ? value as AgentPlan : undefined;
+}
+
+/** A plan as people read it: Starter, Pro or Max. Another value is shown as it is. */
+export function planName(plan: string | null | undefined): string {
+  const known = asPlan(plan);
+  return known ? PLAN_NAMES[known] : (plan ?? '');
+}
+
+/** Below 0 when a is a smaller plan than b, 0 for the same plan and above 0 for a larger one. */
+export function comparePlans(a: AgentPlan, b: AgentPlan): number {
+  return AGENT_PLANS.indexOf(a) - AGENT_PLANS.indexOf(b);
+}
+
+export const planPriceSchema = z.object({
   priceUsd: z.number(),
   monthlyCredits: z.number(),
 });
 
-export const tierPricingSchema = z.object({
-  starter: tierPriceSchema,
-  pro: tierPriceSchema,
+export type PlanPrice = z.infer<typeof planPriceSchema>;
+
+export const planPricingSchema = z.object({
+  starter: planPriceSchema.optional(),
+  pro: planPriceSchema.optional(),
+  max: planPriceSchema.optional(),
 });
 
-export type TierPricing = z.infer<typeof tierPricingSchema>;
+export type PlanPricing = z.infer<typeof planPricingSchema>;
 
-function toTierPrice(value: unknown): z.infer<typeof tierPriceSchema> | null {
+function toPlanPrice(value: unknown): PlanPrice | null {
   if (!isPlainObject(value)) return null;
   const priceUsd = toNumber(value.priceUsd);
   const credits = toNumber(value.credits);
@@ -136,16 +161,37 @@ function toTierPrice(value: unknown): z.infer<typeof tierPriceSchema> | null {
   return { priceUsd, monthlyCredits: credits };
 }
 
-/** Starter and Pro prices, or null when Wiro could not price the agent. */
-export function toTierPricing(value: unknown): TierPricing | null {
+/** Each plan's price and monthly credits as Wiro lists them (its tiers), or null when it lists none. */
+export function toPlanPricing(value: unknown): PlanPricing | null {
   if (!isPlainObject(value)) return null;
-  const starter = toTierPrice(value.starter);
-  const pro = toTierPrice(value.pro);
-  return starter && pro ? { starter, pro } : null;
+  const pricing: PlanPricing = {};
+  for (const plan of AGENT_PLANS) {
+    const price = toPlanPrice(value[plan]);
+    if (price) pricing[plan] = price;
+  }
+  return Object.keys(pricing).length > 0 ? pricing : null;
 }
 
-export function asTier(value: unknown): AgentTier | undefined {
-  return value === 'starter' || value === 'pro' ? value : undefined;
+/** A plan's monthly price in a list: whole dollars without cents, such as $5, and other amounts with them. */
+export function formatPlanUsd(value: number): string {
+  return Number.isInteger(value) ? `$${value}` : `$${value.toFixed(2)}`;
+}
+
+/** One plan with its price and credits: "Pro $30 (3,000 credits)". */
+export function planPriceText(plan: AgentPlan, price: PlanPrice): string {
+  return `${PLAN_NAMES[plan]} ${formatPlanUsd(price.priceUsd)} (${formatCredits(price.monthlyCredits)} credits)`;
+}
+
+/**
+ * The plans Wiro lists, smallest first, as one line: "Starter $5 (500 credits), Pro $30 (3,000 credits),
+ * Max $100 (10,000 credits) per month". except leaves one plan out, such as the one a quote is for.
+ */
+export function planLineText(pricing: PlanPricing, except?: AgentPlan): string {
+  const listed = AGENT_PLANS.flatMap(plan => {
+    const price = pricing[plan];
+    return price && plan !== except ? [planPriceText(plan, price)] : [];
+  });
+  return listed.length > 0 ? `${listed.join(', ')} per month` : '';
 }
 
 export function formatUsd(value: number | null | undefined): string {
@@ -175,7 +221,7 @@ export const subscriptionSchema = z.object({
   billing: z.enum(['wallet', 'card']),
   switchingToWallet: z.boolean(),
   amountUsd: z.number().nullable()
-    .describe('What the plan costs every 30 days. For a plan that has ended, the agent\'s monthly price, which is what a renew charges.'),
+    .describe('What the plan costs every 30 days. For a plan that has ended, what a new period costs: the price of its plan today.'),
   periodEndsAt: z.string().optional(),
   daysRemaining: z.number().nullable(),
   cancelAtPeriodEnd: z.boolean(),
@@ -486,7 +532,10 @@ export const agentSummarySchema = z.object({
     .describe('Whether the agent waits for setup. list_my_agents goes by the status (6). get_my_agent also checks each required credential and names what is missing.'),
   workspace: z.enum(['personal', 'team']),
   template: agentTemplateRefSchema,
-  tier: z.string().optional(),
+  tier: z.string().optional()
+    .describe('The agent\'s plan: starter, pro or max.'),
+  nextPlan: z.string().nullable().optional()
+    .describe('The plan the agent moves to at its next renewal, when a move is set: another plan, or its own plan at today\'s price. null when none is set; left out when Wiro does not say.'),
   monthlyPriceUsd: z.number().nullable(),
   credits: creditsSchema,
   subscription: subscriptionSchema.nullable(),
@@ -505,9 +554,10 @@ export const agentDetailSchema = agentSummarySchema.extend({
   description: z.string().optional(),
   cover: z.string().optional(),
   categories: z.array(z.string()),
-  pricing: tierPricingSchema.nullable(),
+  pricing: planPricingSchema.nullable()
+    .describe('Each plan\'s price and monthly credits, the same for every agent. null when Wiro could not list them.'),
   extraCreditPacks: z.array(extraCreditPackSchema)
-    .describe('The extra credit packs this plan can buy. Only an active Pro plan can buy them, so any other plan lists none.'),
+    .describe('The extra credit packs this agent can buy, the same on every plan. Only an agent with an active plan can buy them, so any other agent lists none.'),
   models: modelSettingsSchema.optional(),
   selectableModels: z.array(selectableModelSchema).optional(),
   enabledCommands: z.array(z.string()).nullable(),
@@ -568,19 +618,40 @@ function timestamps<K extends string>(row: Record<string, unknown>, map: Record<
 }
 
 /**
- * The plan as it is shown. A plan that has ended renews at the agent's monthly
- * price, not at the amount of its last period, so that is its one price.
+ * The plan a move is set for at the next renewal: null when none is set, undefined when Wiro does not say.
+ * It can be the agent's own plan, which then renews at that plan's price today.
+ */
+export function readNextPlan(row: Record<string, unknown>): AgentPlan | null | undefined {
+  const value = row.nextplan !== undefined ? row.nextplan : row.nextPlan;
+  if (value === null || value === '') return null;
+  return asPlan(value);
+}
+
+/** The plans' prices on an agent row (its agent's tiers), or null when it lists none. */
+export function rowPlanPricing(row: Record<string, unknown>): PlanPricing | null {
+  return toPlanPricing(isPlainObject(row.agent) ? row.agent.tiers : undefined);
+}
+
+/**
+ * The plan as it is shown. A plan that has ended costs a whole new period at the price its plan has today,
+ * not the amount of its last period, so that is its one price. Without the plans' prices on the row, the
+ * agent's monthly price stands in for it.
  */
 function planOf(row: Record<string, unknown>): AgentSubscription | null {
   const plan = toSubscription(row.subscription, row.stripecancelatperiodend);
-  const price = toNumber(row.monthlypriceusd);
-  return plan && plan.status !== 'active' && price !== null && price > 0 ? { ...plan, amountUsd: price } : plan;
+  if (!plan || plan.status === 'active') return plan;
+  const key = readNextPlan(row) ?? asPlan(row.tier);
+  const today = key ? rowPlanPricing(row)?.[key]?.priceUsd : undefined;
+  const own = toNumber(row.monthlypriceusd);
+  const price = today ?? (own !== null && own > 0 ? own : null);
+  return price !== null ? { ...plan, amountUsd: price } : plan;
 }
 
 /** The compact row used by list_my_agents. */
 export function toAgentSummary(row: Record<string, unknown>): AgentSummary {
   const status = readAgentStatus(row);
   const tier = asString(row.tier);
+  const nextPlan = readNextPlan(row);
   const timezone = row.timezone === null ? null : asString(row.timezone);
   const sessionMode = asString(row.teamsessionmode);
   return {
@@ -592,6 +663,7 @@ export function toAgentSummary(row: Record<string, unknown>): AgentSummary {
     workspace: row.teamguid ? 'team' : 'personal',
     template: templateRef(row),
     ...(tier ? { tier } : {}),
+    ...(nextPlan !== undefined ? { nextPlan } : {}),
     monthlyPriceUsd: toNumber(row.monthlypriceusd),
     credits: toCredits(row),
     subscription: planOf(row),
@@ -674,8 +746,8 @@ export function toAgentDetail(row: Record<string, unknown>): AgentDetail {
   const agentModel = isPlainObject(row.agentModel) ? row.agentModel : undefined;
   const models = selectableModels(row.tokenRates);
   const chatSetup = readChatSetupMode(row.chatSetup);
-  // Packs are bought only on an active Pro plan, so only that plan lists them.
-  const canBuyPacks = summary.tier === 'pro' && summary.subscription?.status === 'active';
+  // Every plan can buy packs, but only while it is active, so only an active plan lists them.
+  const canBuyPacks = summary.subscription?.status === 'active';
   const packs = canBuyPacks && Array.isArray(agent.extracreditpacks)
     ? agent.extracreditpacks.filter(isPlainObject).filter(pack => pack.enabled !== false)
     : [];
@@ -685,7 +757,7 @@ export function toAgentDetail(row: Record<string, unknown>): AgentDetail {
     ...(description ? { description: truncate(description, 2_000) } : {}),
     ...(cover ? { cover } : {}),
     categories: toStringArray(row.categories),
-    pricing: toTierPricing(agent.tiers),
+    pricing: toPlanPricing(agent.tiers),
     extraCreditPacks: packs.flatMap(pack => {
       const name = asString(pack.packkey);
       const credits = toNumber(pack.credits);
@@ -732,7 +804,7 @@ export function formatSubscriptionLine(subscription: AgentSubscription | null, p
   const parts = [`${subscription.status}, billed ${subscription.billing === 'wallet' ? 'from the wallet' : 'by card'}`];
   if (subscription.amountUsd !== null) {
     parts.push(subscription.status === 'expired' && subscription.billing === 'wallet'
-      ? `a renew charges ${formatUsd(subscription.amountUsd)} per 30 days`
+      ? `a new period costs ${formatUsd(subscription.amountUsd)} per 30 days`
       : `${formatUsd(subscription.amountUsd)} per 30 days`);
   }
   if (subscription.periodEndsAt) {
@@ -774,6 +846,27 @@ export function agentTitleSpan(title: string): string {
   return title.trim() ? quotedSpan(title) : 'Untitled agent';
 }
 
+/**
+ * The move set for the next renewal, as a clause after the plan: "moves to Starter from the renewal after
+ * <date>", or for the agent's own plan "from the renewal after <date> it is billed at today's Starter
+ * price". Empty when none is set, or when the plan ends with its period instead of renewing.
+ */
+export function nextPlanText(agent: Pick<AgentSummary, 'tier' | 'nextPlan' | 'subscription'>): string {
+  const next = agent.nextPlan;
+  const subscription = agent.subscription;
+  if (!next || subscription?.status !== 'active' || subscription.atPeriodEnd === 'ends') return '';
+  const when = subscription.periodEndsAt ? `the renewal after ${subscription.periodEndsAt}` : 'the next renewal';
+  return next === agent.tier
+    ? `from ${when} it is billed at today's ${planName(next)} price`
+    : `moves to ${planName(next)} from ${when}`;
+}
+
+/** The plan by name, with the move set for its next renewal: "Max, moves to Starter from the renewal after ...". */
+export function planSummaryText(agent: Pick<AgentSummary, 'tier' | 'nextPlan' | 'subscription'>): string {
+  const next = nextPlanText(agent);
+  return `${agent.tier ? planName(agent.tier) : 'no plan'}${next ? `, ${next}` : ''}`;
+}
+
 export function formatAgentSummaryLines(agent: AgentSummary, plainMember = false): string[] {
   const template = agent.template.custom
     ? 'custom build'
@@ -781,10 +874,11 @@ export function formatAgentSummaryLines(agent: AgentSummary, plainMember = false
   const hint = !plainMember && (agent.status === 0 || agent.status === 5) && startNeedsPlan(agent)
     ? `${agent.status === 5 ? 'The start failed or the agent stopped unexpectedly.' : 'It is not running.'} ${noPlanStartHint(agent)}`
     : agentStatusHint(agent.status, plainMember);
+  const next = nextPlanText(agent);
   return [
     `**Agent:** ${agentTitleSpan(agent.title)} (\`${agent.guid}\`), ${template}, ${agent.workspace} workspace`,
     `**Status:** ${describeAgentStatus(agent.status)}. ${hint}`,
-    `**Plan:** ${agent.tier ?? 'no tier'}; ${formatSubscriptionLine(agent.subscription, plainMember)}`,
+    `**Plan:** ${agent.tier ? planName(agent.tier) : 'no plan'}; ${formatSubscriptionLine(agent.subscription, plainMember)}${next ? `; ${next}` : ''}`,
     `**Credits:** ${formatCredits(agent.credits.remaining)} left (${monthlyCreditsText(agent.credits)}, extra ${formatCredits(agent.credits.extra)}, used ${formatCredits(agent.credits.used)})`,
   ];
 }
@@ -969,11 +1063,11 @@ function formatModelsLine(agent: AgentDetail): string | null {
 export function formatAgentDetail(agent: AgentDetail, plainMember = false, titles?: ReadonlyMap<string, string>): string {
   const lines = formatAgentSummaryLines(agent, plainMember);
   if (agent.lastActivityAt) lines.push(`**Last activity:** ${agent.lastActivityAt}`);
-  if (agent.pricing) {
-    // Today's Starter and Pro prices for this agent's own skills, which can
-    // differ from its template's and from the price its plan pays.
-    const { starter, pro } = agent.pricing;
-    lines.push(`**Prices now:** Starter ${formatUsd(starter.priceUsd)} per 30 days with ${formatCredits(starter.monthlyCredits)} credits per month; Pro ${formatUsd(pro.priceUsd)} per 30 days with ${formatCredits(pro.monthlyCredits)} credits per month. A new plan or an upgrade uses these, and a skill change moves the plan to today's prices for all its skills.`);
+  const plans = agent.pricing ? planLineText(agent.pricing) : '';
+  if (plans) {
+    // The plans' prices today, the same for every agent. A plan that started at
+    // another price keeps it until a change or a renewal moves it.
+    lines.push(`**Plans:** ${plans}. Every plan includes every skill. A move to a larger plan starts now, and a move to a smaller one at the next renewal.`);
   }
   const models = formatModelsLine(agent);
   if (models) lines.push(models);
@@ -1215,12 +1309,12 @@ const PRE_CHARGE_REFUSALS: RegExp[] = [
   WALLET_NOT_READ,
   /wallet deduction failed/i,
   /subscription (is )?already active/i,
-  /already on (the )?(pro|starter) tier/i,
+  /already on (the )?(starter|pro|max) (tier|plan)/i,
   /no active subscription|active subscription required|no expired subscription found/i,
   /stripe subscriptions must be/i,
   /extra credit pack|pack key required|purchase request id/i,
   /could not (initialize|resume) prepaid credit purchase|prepaid credit purchase cannot be resumed/i,
-  /downgrading to starter is not supported|targettier must be|tier must be 'starter' or 'pro'/i,
+  /downgrading to starter is not supported|targettier must be|tier must be 'starter'|change the plan with upgradetier/i,
   /failed to compute (target-tier )?pricing|must be greater than \$0|failed to apply pricing snapshot/i,
   /failed to create subscription record|subscription record returned invalid id/i,
   /payment for this agent is already being processed|checkout for this agent is already being opened/i,
@@ -1230,7 +1324,10 @@ const PRE_CHARGE_REFUSALS: RegExp[] = [
   /^request parameter \[/i,
   /mutually exclusive|agent terms acceptance|customskills must be|skill key may only contain/i,
   /^unknown skill: /i,
-  /^the tier change could not be saved\./i,
+  /is not in the skill registry\./i,
+  /^the (tier|plan) change could not be saved\./i,
+  /^no active plan\.|plan changed while this was asked for|no renewal to change/i,
+  /^the (scheduled )?plan change could not be (scheduled|cancelled)\./i,
   /^we couldn't (schedule|undo) the cancellation\./i,
   /enabledchannels is not accepted|credentials must be an object|credential field|is missing required fields/i,
   /chat mode is not accepted|is managed by (wiro|the connection flow)|^agent-[a-z-]+$/i,
@@ -1245,7 +1342,7 @@ export function isPreChargeRefusal(error: unknown): boolean {
 }
 
 const CHARGED_START = 'The wallet was charged ';
-const CHARGED_END = /, but the (tier change|renewal) did not finish\. Please contact support and do not try again\.$/;
+const CHARGED_END = /, but the (tier change|plan change|renewal) did not finish\. Please contact support and do not try again\.$/;
 
 /**
  * Whether a result:false answer says what the wallet paid. Its sentence is the

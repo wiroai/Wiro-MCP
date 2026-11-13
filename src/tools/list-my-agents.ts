@@ -8,6 +8,7 @@ import {
   describeAgentStatus,
   formatCredits,
   formatSubscriptionLine,
+  planSummaryText,
   toAgentSummary,
 } from '../utils/user-agent.js';
 import { isPlainTeamMember } from '../utils/workspace.js';
@@ -83,7 +84,7 @@ export function registerListMyAgents(server: McpServer, client: WiroClient): voi
         for (const agent of agents) {
           lines.push(
             `- ${agentTitleSpan(agent.title)} (\`${agent.guid}\`): ${describeAgentStatus(agent.status)}${agent.setupRequired ? ', setup required' : ''}; `
-            + `${agent.tier ?? 'no tier'}; ${formatCredits(agent.credits.remaining)} credits left; ${formatSubscriptionLine(agent.subscription, plainMember)}`
+            + `${planSummaryText(agent)}; ${formatCredits(agent.credits.remaining)} credits left; ${formatSubscriptionLine(agent.subscription, plainMember)}`
             + `${agent.lastActivityAt ? `; last activity ${agent.lastActivityAt}` : ''}`,
           );
         }

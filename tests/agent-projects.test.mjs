@@ -1304,15 +1304,10 @@ test('apply_agent_skills and connect_agent_oauth point a Wiro project to bind_ag
   await withTools(routes({
     '/UserAgent/Detail': afterApply,
     '/UserAgent/TransactionList': { result: true, errors: [] },
-    '/UserAgent/PricingPreview': { result: true, errors: [], totalPriceUsd: 5, totalMonthlyCredits: 500, enabledSkills: ['int-wiro-aimodels'] },
-    '/UserAgent/SkillsApply': { result: true, errors: [], pricing: { previousPriceUsd: 4, newPriceUsd: 5 }, prepaidWalletDelta: 1 },
+    '/UserAgent/SkillsApply': { result: true, errors: [], restartTriggered: true },
     '/Credentials/Detail': { result: true, errors: [], credential: WIRO_CREDENTIAL },
   }), async ({ call }) => {
-    const quote = await call('apply_agent_skills', { agent_guid: AGENT, skills: { 'int-wiro-aimodels': true } });
-    assert.notEqual(quote.isError, true, text(quote));
-    assert.match(text(quote), /\*\*Credentials the new skills need:\*\* Wiro AI Models \(`int-wiro-aimodels`\): Wiro AI Models \(`wiro`\)\. bind_agent_project connects a Wiro project, with no key to paste\./);
-
-    const applied = await call('apply_agent_skills', quote.structuredContent.nextAction.arguments);
+    const applied = await call('apply_agent_skills', { agent_guid: AGENT, skills: { 'int-wiro-aimodels': true } });
     assert.notEqual(applied.isError, true, text(applied));
     assert.equal(applied.structuredContent.nextAction.tool, 'bind_agent_project');
     assert.deepEqual(applied.structuredContent.nextAction.arguments, { agent_guid: AGENT });
@@ -1339,11 +1334,9 @@ test('the still-needed line of apply_agent_skills names the tool each kind of cr
         : { ...NO_WIRO_SKILL, credentials: {} }),
       '/Skills/List': { ...SKILL_LIST, skills },
       '/UserAgent/TransactionList': { result: true, errors: [] },
-      '/UserAgent/PricingPreview': { result: true, errors: [], totalPriceUsd: 5, totalMonthlyCredits: 500, enabledSkills: Object.keys(change) },
-      '/UserAgent/SkillsApply': { result: true, errors: [], pricing: { previousPriceUsd: 4, newPriceUsd: 5 }, prepaidWalletDelta: 1 },
+      '/UserAgent/SkillsApply': { result: true, errors: [], restartTriggered: true },
     }), async ({ call }) => {
-      const quote = await call('apply_agent_skills', { agent_guid: AGENT, skills: change });
-      const applied = await call('apply_agent_skills', quote.structuredContent.nextAction.arguments);
+      const applied = await call('apply_agent_skills', { agent_guid: AGENT, skills: change });
       assert.ok(text(applied).includes(`**Still needed:** credentials for ${expected}`), text(applied));
     });
   }

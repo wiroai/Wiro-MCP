@@ -32,16 +32,16 @@ export const AGENT_NOT_FOUND_TEXT = 'Agent not found. Check the guid with list_m
 
 const AGENT_NOT_FOUND_ANSWER = /^(user agent not found|agent not found or access denied)\.?$/i;
 
-// Wiro's answer when a skill it has to price is not in the registry. The skill's name is the part to act on.
+// Wiro's answer when a skill it has to read is not in the registry. The skill's name is the part to act on.
 const UNLISTED_SKILL_ANSWER = /^[a-z-]+: skill '([\w.-]+)' .*not found in registry\.?$/i;
 
-/** Wiro's sentence as a person reads it: an agent that cannot be reached, or a skill that cannot be priced, gets its next step. */
+/** Wiro's sentence as a person reads it: an agent that cannot be reached, or a skill that is not in the registry, gets its next step. */
 export function readableApiMessage(message: string): string {
   const text = message.trim();
   if (AGENT_NOT_FOUND_ANSWER.test(text)) return AGENT_NOT_FOUND_TEXT;
   const skill = UNLISTED_SKILL_ANSWER.exec(text)?.[1];
   return skill
-    ? `The price could not be computed because the skill ${skill} is not in the skill registry. list_agent_skills shows the current names. If the request did not name this skill, the agent already has it on, and Wiro support can take it off.`
+    ? `Wiro could not work this out because the skill ${skill} is not in the skill registry. list_agent_skills shows the current names. If the request did not name this skill, the agent already has it on, and Wiro support can take it off.`
     : message;
 }
 

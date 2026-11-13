@@ -308,19 +308,19 @@ your wallet after each reply. Your own agents run on a monthly plan with credits
 | `list_agent_templates` | Browse ready-made agent templates and their monthly prices |
 | `get_agent_template` | Read a template's skills, plans, and the accounts and keys it needs |
 | `list_agent_skills` | Browse the skills an agent can have, and what each one needs to work |
-| `deploy_agent` | Deploy an agent from a template or build one from skills; shows the price, the wallet it charges and the other tier's price, and asks before charging |
+| `deploy_agent` | Deploy an agent from a template or build one from skills, on the Starter, Pro or Max plan; shows the plan's price, the wallet it charges and the other plans' prices, and asks before charging |
 | `list_my_agents` | List your agents with their status, plan and credits |
 | `get_my_agent` | Read one agent's setup, plan and credits; can wait until it is running |
 | `control_agent` | Start, stop or restart an agent |
 | `update_agent` | Change an agent's name, description, time zone, models, chat commands and setup from chat |
-| `apply_agent_skills` | Turn skills on or off; shows the price change and asks before charging |
+| `apply_agent_skills` | Turn skills on or off; every plan includes every skill, so a change costs nothing |
 | `set_agent_credentials` | Save the keys, tokens and settings an agent's skills and channels need, such as a Telegram bot token or a Gmail app password |
 | `connect_agent_oauth` | Connect sign-in accounts such as HubSpot or X for the services an agent's skills use; you approve the connection in your browser. Some services need your own app keys or a token first |
 | `disconnect_agent_oauth` | Disconnect a connected account, after your confirmation |
 | `list_projects` | List the projects of the connected project's workspace, to pick one for an agent; no keys are shown |
 | `bind_agent_project` | Connect an agent to a Wiro project so it can run models, with no key in the chat; shows the project first, then asks for your confirmation |
 | `manage_agent_custom_skill` | Add, edit, schedule, restore or remove an agent's own instructions and scheduled tasks; turning off its approval policy or changing its rules needs your confirmation |
-| `manage_agent_billing` | Subscribe, upgrade to Pro, cancel, renew or buy extra credits from your wallet, after your confirmation |
+| `manage_agent_billing` | Subscribe, move to another plan, cancel, renew or buy extra credits from your wallet, after your confirmation |
 | `get_agent_activity` | Read an agent's credit usage and activity logs, including who changed what on it |
 | `delete_agent` | Delete an agent, after your confirmation |
 
@@ -358,20 +358,22 @@ group that is not loaded, the server instructions tell the assistant to say so.
 
 Running a model or workflow, sending a message to Studio or the Workflow Agent,
 and messages to your own agents (which use the agent's credits) cost money. Agent
-plans, plan changes, credit packs and skill changes are charged to your wallet,
-so those tools first return the price (for a change inside a billing period,
-the amount Wiro works out for the time left) and only act when called again
-with `confirm: true` and the quote's reference (`confirm_charge_usd` with the
-approved amount, or the quote's `idempotency_key` for skill changes) after you
-agree. If the price changed in between, nothing is charged and you get a new
-quote. Deleting a workflow, an
-agent, a conversation or an account connection also waits for `confirm: true`,
+plans, moves to a larger plan and credit packs are charged to your wallet, so
+those tools first return the price (for a move inside a billing period, the
+amount Wiro works out for the time left) and only act when called again with
+`confirm: true` and `confirm_charge_usd`, the approved amount, after you agree.
+If the price changed in between, nothing is charged and you get a new quote.
+Turning an agent's skills on or off costs nothing, since every plan includes
+every skill. A move to a smaller plan starts with the next renewal, with
+nothing charged or refunded, and waits for `confirm: true` too. Deleting a
+workflow, an agent, a conversation or an account connection also waits for
+`confirm: true`,
 and so do connecting an agent to a Wiro project with `bind_agent_project` and
 replacing a workflow's steps with `update_workflow` or
 `save_workflow_from_agent`: you see a summary of the change first, with the old
 and new value of each step input that changes. No tool adds
 funds or takes a card payment: funds are added in the Wiro dashboard, and an
-agent plan paid by card is upgraded or topped up there. The connected project
+agent plan paid by card moves to a larger plan or is topped up there. The connected project
 decides the workspace: a personal project uses your personal wallet, a team
 project uses the team wallet.
 

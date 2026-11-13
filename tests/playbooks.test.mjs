@@ -33,7 +33,7 @@ const PLANNED_TOOLS = new Set([
 // names rather than tools.
 const NON_TOOL_IDENTIFIERS = new Set([
   'timeout_seconds', 'wait_seconds', 'call_id', 'function_call', 'custom_tool_call',
-  'upgrade_to_pro', 'buy_credits', 'select_accounts', 'confirm_charge_usd', 'idempotency_key', 'redirect_url',
+  'change_plan', 'buy_credits', 'select_accounts', 'confirm_charge_usd', 'idempotency_key', 'redirect_url',
   'session_id', 'debug_node_id', 'custom_skills', 'team_session_mode', 'recent_transactions', 'project_id',
   'chat_setup',
   // An example Start field key, and an input name the Workflow Agent hides.
@@ -374,10 +374,10 @@ test('the instructions say what to do when a toolset leaves out a tool they name
   assert.match(PLAYBOOKS['getting-started'], /or in a `nextAction` is not in your tool list, its group is not loaded: tell the user/);
 });
 
-// deploy_agent and manage_agent_billing confirm with confirm_charge_usd, but
-// apply_agent_skills confirms with the quote's idempotency_key. General money
-// guidance must give both, or it sends a skill change down the wrong path.
-test('the general money guidance never gives confirm_charge_usd as the only quote reference', () => {
+// deploy_agent and manage_agent_billing confirm a charge with confirm_charge_usd.
+// A skill change costs nothing and takes no quote, so the general money guidance
+// says so and never sends it through a quote reference.
+test('the general money guidance confirms charges with confirm_charge_usd and calls a skill change free', () => {
   const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
   const sectionOf = (markdown, heading) => markdown.split(heading)[1].split(/\n#{2,3} /)[0];
   const passages = [
@@ -387,14 +387,14 @@ test('the general money guidance never gives confirm_charge_usd as the only quot
     ['README paid actions', sectionOf(readme, '### Paid and irreversible actions')],
   ];
   for (const [label, text] of passages) {
-    const sentences = text.replace(/\s+/g, ' ').split(/(?<=\.) (?=\S)/)
-      .filter(sentence => sentence.includes('confirm_charge_usd'));
-    assert.ok(sentences.some(sentence => sentence.includes('idempotency_key')), `${label} does not name both quote references`);
+    const flat = text.replace(/\s+/g, ' ');
+    const sentences = flat.split(/(?<=\.) (?=\S)/).filter(sentence => sentence.includes('confirm_charge_usd'));
+    assert.ok(sentences.length > 0, `${label} does not name confirm_charge_usd`);
     for (const sentence of sentences) {
-      // A sentence only about a deploy or a billing action such as the Pro upgrade may name confirm_charge_usd alone.
-      if (/deploy|manage_agent_billing|upgrade/i.test(sentence) && !/skill/i.test(sentence)) continue;
-      assert.ok(sentence.includes('idempotency_key'), `${label} gives confirm_charge_usd alone: "${sentence}"`);
+      assert.doesNotMatch(sentence, /skill|idempotency_key/i, `${label} ties a skill change to a charge: "${sentence}"`);
     }
+    assert.doesNotMatch(flat, /idempotency_key/, `${label} still names a quote key for skill changes`);
+    assert.match(flat, /skill[^.]* costs nothing/, `${label} does not say a skill change costs nothing`);
   }
 });
 
@@ -545,9 +545,9 @@ test('the agents playbook says the same as the tools about a Wiro project key, a
 
 test('the playbooks say what a deploy quote holds and how to read wallet rows', () => {
   const { agents, billing } = PLAYBOOKS;
-  assert.match(agents, /The quote gives the amount charged now, the monthly credits, the paying wallet with its balance and the other tier's price\./);
+  assert.match(agents, /The quote gives the amount charged now, the monthly credits, the paying wallet with its balance and the other plans' prices\./);
   assert.match(agents, /In a team workspace the agent starts with collaborative chats, which every team member sees, and the quote says so: tell the user\. `update_agent` \(`team_session_mode`\) changes that after the deploy\./);
-  assert.match(agents, /`get_my_agent` lists them only on an active Pro plan/);
+  assert.match(agents, /`buy_credits` works on any active plan; without a pack it lists them, and `get_my_agent` lists them for an active plan\. The small, medium and large packs are the same on every plan\./);
   assert.match(agents, /A required field cannot be left empty, but saving a new value replaces the old one\./);
   assert.match(billing, /`get_account` with `recent_transactions` lists the wallet's latest rows/);
 });
@@ -566,7 +566,20 @@ test('the agents playbook says when pack credits end', () => {
   assert.match(PLAYBOOKS.agents, /Pack credits are added at once, are used after the monthly pool, do not reset each month and end 6 months \(180 days\) after purchase;/);
 });
 
-test('the agents playbook says what an upgrade does at each renewal, not when its credits arrive', () => {
-  assert.match(PLAYBOOKS.agents, /renewals charge the Pro price and refill the Pro credit pool/);
+test('the agents playbook says what a plan change does at each renewal, not when its credits arrive', () => {
+  assert.match(PLAYBOOKS.agents, /renewals charge the new plan's price and refill its credit pool/);
+  assert.match(PLAYBOOKS.agents, /A smaller plan starts with the next renewal: nothing is charged or refunded, the agent keeps its plan and credits until the period ends, and `confirm: true` alone sets it\./);
+  assert.match(PLAYBOOKS.agents, /Asking for the plan the agent is on undoes a move set for the next renewal/);
   assert.doesNotMatch(PLAYBOOKS.agents, /pool applies at once/);
+});
+
+test('the playbooks name the three plans and say skills do not change the price', () => {
+  assert.match(PLAYBOOKS.agents, /Every agent has one of three monthly plans, smallest first: Starter, Pro or Max\./);
+  assert.match(PLAYBOOKS.agents, /every plan includes every skill/);
+  assert.match(PLAYBOOKS.agents, /turning a skill on or off costs nothing and keeps the plan's price and monthly credits/);
+  assert.match(PLAYBOOKS.billing, /\| Agent move to a smaller plan \| Nothing now; the smaller plan's price from then on \| At the next renewal \|/);
+  for (const [topic, markdown] of Object.entries(PLAYBOOKS)) {
+    // The skills set no price, and no plan is limited to some skills or packs.
+    assert.doesNotMatch(markdown, /upgrade_to_pro|Starter or Pro|sum of its skills|tier's price|\$4\b|5, 10 or 20 times|Pro plans|Pro only/, topic);
+  }
 });

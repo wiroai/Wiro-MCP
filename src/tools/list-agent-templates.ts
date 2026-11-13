@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { WiroClient } from '../client.js';
 import { errorResult, isPlainObject, requireApiSuccess, toNumber, type ApiEnvelope } from '../utils/api.js';
 import { templateSummarySchema, toTemplateSummary, type TemplateSummary } from '../utils/agent-catalog.js';
-import { formatCredits, formatUsd } from '../utils/user-agent.js';
+import { planLineText } from '../utils/user-agent.js';
 import { nextActionSchema, strictInput } from './schemas.js';
 
 const SORTS = {
@@ -12,11 +12,9 @@ const SORTS = {
   title: { sort: 'title', order: 'ASC' },
 } as const;
 
+/** A template's plans with their prices, or the mark for one that cannot be priced right now. */
 function priceLine(template: TemplateSummary): string {
-  if (!template.pricing) return 'pricing unavailable';
-  const { starter, pro } = template.pricing;
-  return `Starter ${formatUsd(starter.priceUsd)} (${formatCredits(starter.monthlyCredits)} credits), `
-    + `Pro ${formatUsd(pro.priceUsd)} (${formatCredits(pro.monthlyCredits)} credits) per 30 days`;
+  return (template.pricing ? planLineText(template.pricing) : '') || 'pricing unavailable';
 }
 
 export function registerListAgentTemplates(server: McpServer, client: WiroClient): void {
@@ -25,8 +23,10 @@ export function registerListAgentTemplates(server: McpServer, client: WiroClient
     {
       title: 'List Wiro agent templates',
       description: 'Browse the catalog of ready-made Wiro agents (templates) that deploy_agent can deploy. '
-        + 'Each template shows its Starter and Pro price in USD per 30 days and the monthly credit pool '
-        + 'that pays for the agent\'s chat and scheduled tasks (100 credits = 1 USD); model runs it starts, for '
+        + 'Every template is deployed on one of the plans, Starter, Pro or Max, each with a fixed price in USD '
+        + 'per month and a monthly credit pool that pays for the agent\'s chat and scheduled tasks (100 credits = '
+        + '1 USD), the same for every template, and every plan includes all of a template\'s skills. The list shows '
+        + 'the plans once when every template has the same. Model runs an agent starts, for '
         + 'images, videos or voice calls, are billed to the wallet of the workspace that owns the Wiro project connected to the agent. '
         + 'A template whose pricing is null '
         + 'cannot be priced right now: do not quote or deploy it. Call get_agent_template next for the '
@@ -83,8 +83,14 @@ export function registerListAgentTemplates(server: McpServer, client: WiroClient
         const range = rows.length > 0 ? `${start + 1}-${start + rows.length} of ${total}` : `none of ${total}`;
         const lines = [`## Agent templates (${range})`, ''];
         if (templates.length === 0) lines.push('No templates matched.');
-        for (const template of templates) {
-          lines.push(`- **${template.title}** (\`${template.slug}\`): ${priceLine(template)}`);
+        // The plans are the same for every template, so a page where every template has them names them once.
+        const priceLines = templates.map(priceLine);
+        const shared = priceLines.length > 0 && templates.every(template => template.pricing) && new Set(priceLines).size === 1
+          ? priceLines[0]
+          : null;
+        if (shared) lines.push(`Plans for every template: ${shared}. Every plan includes every skill of the template.`, '');
+        for (const [index, template] of templates.entries()) {
+          lines.push(`- **${template.title}** (\`${template.slug}\`)${shared ? '' : `: ${priceLines[index]}`}`);
           if (template.summary) lines.push(`  ${template.summary}`);
         }
         if (nextStart !== null) lines.push('', `More templates: call list_agent_templates with start ${nextStart}.`);

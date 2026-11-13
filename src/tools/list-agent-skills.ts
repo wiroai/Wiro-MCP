@@ -26,12 +26,13 @@ import {
   registryTitles,
   type ModeRequirement,
 } from '../utils/agent-config.js';
-import { formatUsd, skillLabel, toStringArray } from '../utils/user-agent.js';
+import { skillLabel, toStringArray } from '../utils/user-agent.js';
 import { nextActionSchema, strictInput } from './schemas.js';
 
-const PRICING_NOTE = 'A custom build costs the sum of its skills\' monthly prices, including the skills they '
-  + 'depend on, and Starter has a minimum monthly price. Pro is a fixed multiple of Starter. deploy_agent '
-  + 'returns the exact quote before anything is charged.';
+const PRICING_NOTE = 'Every plan (Starter, Pro or Max) includes every skill, so skills do not change an agent\'s '
+  + 'price: a custom build costs its plan\'s price, and turning a skill on or off later costs nothing. A skill\'s '
+  + 'work uses the agent\'s credits, and model runs it starts are billed to the wallet of the workspace that owns '
+  + 'the Wiro project connected to the agent. deploy_agent returns the exact quote before anything is charged.';
 
 const channelSchema = z.object({
   id: z.string(),
@@ -67,10 +68,13 @@ function toChannels(value: unknown): Channel[] {
 }
 
 function skillLine(skill: SkillSummary): string {
-  const price = skill.monthlyPriceUsd > 0 ? `${formatUsd(skill.monthlyPriceUsd)} per month` : 'free';
-  const credential = skill.requiresCredentials && skill.credentialKey ? `, needs \`${skill.credentialKey}\`` : '';
-  const deprecated = skill.deprecated ? `, deprecated${skill.replacement ? ` (use ${skill.replacement})` : ''}` : '';
-  return `- **${skill.title}** (\`${skill.name}\`): ${price}${credential}${deprecated}${skill.description ? `. ${skill.description}` : ''}`;
+  const notes = [
+    skill.requiresCredentials && skill.credentialKey ? `needs \`${skill.credentialKey}\`` : null,
+    skill.deprecated ? `deprecated${skill.replacement ? ` (use ${skill.replacement})` : ''}` : null,
+  ].filter(Boolean).join(', ');
+  const description = skill.description ?? '';
+  const details = [notes, description].filter(Boolean).join('. ');
+  return `- **${skill.title}** (\`${skill.name}\`)${details ? `: ${details}` : ''}`;
 }
 
 interface CredentialEntry {
@@ -135,9 +139,10 @@ export function registerListAgentSkills(server: McpServer, client: WiroClient): 
     'list_agent_skills',
     {
       title: 'List Wiro agent skills',
-      description: 'List the skills a Wiro agent can have, with their monthly price, the skills they depend '
-        + 'on and the credential each one needs. Use it to plan a custom build for deploy_agent or a skill '
-        + 'change for apply_agent_skills. Without `name` it lists every skill with its title and price: look '
+      description: 'List the skills a Wiro agent can have, the skills they depend on and the credential each '
+        + 'one needs. Every plan includes every skill, so a skill has no price of its own. Use it to plan a custom '
+        + 'build for deploy_agent or a skill change for apply_agent_skills. Without `name` it lists every skill with '
+        + 'its title: look '
         + 'there for the service the user named (apply_agent_skills also answers an unknown name with close '
         + 'matches). Pass `name` with a skill name (or a credential or channel key such '
         + 'as "telegram") to get the exact fields the user must provide, with their labels, formats and setup '
@@ -145,7 +150,7 @@ export function registerListAgentSkills(server: McpServer, client: WiroClient): 
         + 'A Wiro project (credential "wiro") is connected with bind_agent_project, with no key to paste.',
       inputSchema: strictInput({
         name: z.string().min(1).max(100).optional()
-          .describe('A skill name (for example "int-gmail-check") returns its price and the setup fields of every credential it needs. A credential or channel key (for example "telegram") returns that credential\'s setup and the ways it can connect.'),
+          .describe('A skill name (for example "int-gmail-check") returns the skill and the setup fields of every credential it needs. A credential or channel key (for example "telegram") returns that credential\'s setup and the ways it can connect.'),
         category: z.enum(['int', 'util']).optional()
           .describe('"int" for skills that connect to an outside service, "util" for helper skills.'),
         capability: z.string().max(100).optional()

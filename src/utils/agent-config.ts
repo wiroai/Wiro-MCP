@@ -16,13 +16,10 @@ import {
 import { oneLine, quotedSpan } from './quoted-text.js';
 import {
   credentialKeysSetupWaitsFor,
-  isWalletNotRead,
   nameList,
-  planEndsWithPeriod,
   skillLabel,
   STARTER_TASK_KEY,
   toSkillGroups,
-  WALLET_NOT_READ_NOTE,
   WIRO_PROJECT_CREDENTIAL,
   wordsFromKey,
 } from './user-agent.js';
@@ -209,7 +206,6 @@ export interface RegistrySkill {
   replacement?: string;
   requiresCredentials: boolean;
   credentialKeys: string[];
-  monthlyPriceUsd: number | null;
 }
 
 export interface RegistryChannel {
@@ -229,7 +225,6 @@ export function parseSkillRegistry(body: Row): SkillRegistry {
     if (!isPlainObject(raw)) continue;
     const name = asString(raw.name);
     if (!name) continue;
-    const pricing = isPlainObject(raw.pricing) ? raw.pricing : {};
     const primary = asString(raw.credential_key);
     skills.set(name, {
       name,
@@ -240,7 +235,6 @@ export function parseSkillRegistry(body: Row): SkillRegistry {
       ...(asString(raw.replacement) ? { replacement: asString(raw.replacement) } : {}),
       requiresCredentials: raw.requires_credentials === true,
       credentialKeys: [...(primary ? [primary] : []), ...stringList(raw.additional_credential_keys)],
-      monthlyPriceUsd: toNumber(pricing.monthly_price_weight_usd ?? raw.monthly_price_weight_usd),
     });
   }
   const channels = new Map<string, RegistryChannel>();
@@ -529,46 +523,30 @@ export async function unusedCredentialNote(
   }
 }
 
-const IDEMPOTENCY_KEY_RE = /^mcp-[0-9a-f]{16}-([0-9a-f]{10})-([0-9a-f]{8})$/;
+// A key minted by this package: mcp-<random>-<change digest>. Keys from earlier versions also carry a price fingerprint at the end.
+const IDEMPOTENCY_KEY_RE = /^mcp-[0-9a-f]{16}-([0-9a-f]{10})(?:-[0-9a-f]{8})?$/;
 
 /** Fingerprint of one logical skill change, independent of the agent's current state. */
 export function skillChangeDigest(
   agentGuid: string,
   requested: Record<string, boolean>,
-  tier?: string,
 ): string {
   const entries = Object.keys(requested).sort().map(name => `${name}=${requested[name] ? 1 : 0}`);
   return crypto.createHash('sha256')
-    .update([agentGuid, tier ?? '', ...entries].join('\n'))
+    .update([agentGuid, '', ...entries].join('\n'))
     .digest('hex')
     .slice(0, 10);
 }
 
-function cents(value: number | null): string {
-  return value === null || !Number.isFinite(value) ? 'none' : String(Math.round(value * 100));
+/** A new key for one skill change. Repeating the change with it never applies it twice. */
+export function newSkillChangeKey(digest: string): string {
+  return `mcp-${crypto.randomBytes(8).toString('hex')}-${digest}`;
 }
 
-/**
- * Fingerprint of what a quoted charge rests on: the monthly price before and after
- * a change and, for a plan paid from the wallet, the period it is charged in. A
- * renewal keeps the prices and starts a new period, which changes the charge.
- */
-export function skillPriceTag(currentUsd: number | null, newUsd: number | null, periodEndUnix: number | null = null): string {
-  const prices = `${cents(currentUsd)}:${cents(newUsd)}`;
-  return crypto.createHash('sha256')
-    .update(periodEndUnix === null ? prices : `${prices}:${periodEndUnix}`)
-    .digest('hex')
-    .slice(0, 8);
-}
-
-export function newSkillChangeKey(digest: string, priceTag: string): string {
-  return `mcp-${crypto.randomBytes(8).toString('hex')}-${digest}-${priceTag}`;
-}
-
-/** The change and price fingerprints of a key minted by this package, or null for any other key. */
-export function parseSkillChangeKey(key: string): { digest: string; priceTag: string } | null {
+/** The change fingerprint of a key minted by this package, or null for any other key. */
+export function parseSkillChangeKey(key: string): { digest: string } | null {
   const match = IDEMPOTENCY_KEY_RE.exec(key.trim());
-  return match ? { digest: match[1] as string, priceTag: match[2] as string } : null;
+  return match ? { digest: match[1] as string } : null;
 }
 
 /**
@@ -581,41 +559,12 @@ export function idempotencyKeyMismatch(key: string, digest: string): boolean {
   return parsed !== null && parsed.digest !== digest;
 }
 
-export interface PlanBilling {
-  plan: 'prepaid' | 'card' | 'none';
-  status: string | null;
-  periodEnd: number | null;
-  wallet: 'team' | 'personal';
-  /** true: the plan ends with this period; false: it renews; null: not known, for a card plan without its card state. */
-  cancelAtPeriodEnd: boolean | null;
-  /** A card plan that moves to wallet billing when this period ends. */
-  switchingToWallet: boolean;
-}
-
-export function planBilling(row: Row): PlanBilling {
-  const wallet = asString(row.teamguid) ? 'team' : 'personal';
-  const subscription = isPlainObject(row.subscription) ? row.subscription : null;
-  if (!subscription) {
-    return { plan: 'none', status: null, periodEnd: null, wallet, cancelAtPeriodEnd: false, switchingToWallet: false };
-  }
-  const plan = asString(subscription.provider) === 'prepaid' ? 'prepaid' : 'card';
-  return {
-    plan,
-    status: asString(subscription.status) ?? null,
-    periodEnd: toNumber(subscription.currentperiodend),
-    wallet,
-    cancelAtPeriodEnd: planEndsWithPeriod(subscription, row.stripecancelatperiodend),
-    switchingToWallet: plan === 'card' && subscription.nextprovider === 'prepaid',
-  };
-}
-
 const DAY_SECONDS = 86400;
 
 /**
- * What a plan change does today, as Wiro works it out on the plan the agent has
- * now (PricingPreview with the agent's guid answers it as planChange). The money
- * moves only on a wallet plan: a card plan's difference goes to the card
- * subscription instead.
+ * What a move to a larger plan does today, as Wiro works it out on the plan the
+ * agent has now (PricingPreview with the agent's guid and the new plan answers
+ * it as planChange). The money moves now only on a wallet plan.
  */
 export interface PlanChange {
   /** Who pays the plan: the wallet, or a card. */
@@ -672,29 +621,13 @@ export interface SkillsApplyFailure {
   retrySameKey: boolean;
   deps?: Array<{ skill: string; requires: string }>;
   conflicts?: Array<{ a: string; b: string }>;
-  requiredUsd?: number | null;
-  availableUsd?: number | null;
-}
-
-const SKILL_PAYMENT_FAILED = 'The payment for this change did not go through, so the change was undone and nothing was charged.';
-const DEPOSIT_PAGE = 'https://wiro.ai/panel/wallet/deposit/credit-card (for a team project, select that team in the dashboard first)';
-
-/**
- * What to do after a skill change whose payment failed, for the agent's plan
- * when it is known. A wallet that does not cover the charge is refused before
- * any payment (code 103), so a wallet plan needs no funds added here.
- */
-function skillPaymentGuidance(plan?: PlanBilling['plan']): string {
-  if (plan === 'prepaid') return `${SKILL_PAYMENT_FAILED} The balance is not the cause, so no funds need to be added. Ask for a new quote and confirm it once the user approves.`;
-  if (plan === 'card') return `${SKILL_PAYMENT_FAILED} Update the card in the Wiro dashboard, then ask for a new quote.`;
-  return `${SKILL_PAYMENT_FAILED} For a plan paid by card, update the card in the Wiro dashboard first. Then ask for a new quote.`;
 }
 
 /**
- * Turns a refused SkillsApply into an explanation and the step that fixes it.
- * With the agent's plan, a payment failure names only the fix for that plan.
+ * Turns a refused SkillsApply into an explanation and the step that fixes it. A skill change moves no money,
+ * so none of these is about the wallet.
  */
-export function describeSkillsApplyError(error: unknown, plan?: PlanBilling['plan'], titles?: ReadonlyMap<string, string>): SkillsApplyFailure {
+export function describeSkillsApplyError(error: unknown, titles?: ReadonlyMap<string, string>): SkillsApplyFailure {
   const message = error instanceof Error ? error.message : String(error);
   const body = error instanceof ApiResultError ? error.body : {};
   const codes = error instanceof ApiResultError ? error.codes.map(code => toNumber(code)) : [];
@@ -721,58 +654,28 @@ export function describeSkillsApplyError(error: unknown, plan?: PlanBilling['pla
         guidance: `These skills cannot be on together: ${conflicts.map(pair => `${skillLabel(pair.a, titles)} and ${skillLabel(pair.b, titles)}`).join('; ')}. Keep only one of each pair.`,
       };
     }
-    case 103: {
-      const requiredUsd = toNumber(body.requiredUsd);
-      const availableUsd = toNumber(body.availableUsd);
-      return {
-        ...base,
-        requiredUsd,
-        availableUsd,
-        guidance: `The wallet does not cover the charge for the rest of this period${requiredUsd !== null ? `: it needs ${formatUsd(requiredUsd)}` : ''}${availableUsd !== null ? ` and has ${formatUsd(availableUsd)}` : ''}. Nothing was changed. Funds are added at ${DEPOSIT_PAGE}; once the user has added them and says yes, confirm again.`,
-      };
-    }
     case 104:
-      // Two refusals share the code: another change to the agent's plan, or another payment from its wallet.
-      // Skill changes, an upgrade to Pro and a wallet plan's renewal take turns on an agent.
+      // Changes to an agent's skills or plan take turns, such as a plan change or a renewal.
       return {
         ...base,
         retrySameKey: true,
-        guidance: /wallet/i.test(message)
-          ? 'Another payment from the same wallet was going through, so this change was not made and nothing was charged. It is not a low balance, and no funds need to be added. Offer to try again in a minute: repeat the call with the same idempotency_key.'
-          : 'Another change to this agent\'s skills or plan, such as an upgrade or a renewal, is still going through, and one runs at a time. Nothing was changed or charged by this call. Wait a few seconds, then repeat the call with the same idempotency_key. If it keeps saying so, it clears within 15 minutes.',
-      };
-    case 105:
-      return {
-        ...base,
-        guidance: 'A Pro plan cannot be moved back to Starter here. Cancel the plan with manage_agent_billing and subscribe again at Starter once it ends.',
-      };
-    case 106:
-      return {
-        ...base,
-        guidance: 'The agent\'s subscription is not active, so its skills cannot change. Renew it with manage_agent_billing first.',
+        guidance: 'Another change to this agent\'s skills or plan, such as a plan change or a renewal, is still going through, and one runs at a time. Nothing was changed by this call. Wait a few seconds, then repeat the call with the same idempotency_key. If it keeps saying so, it clears within 15 minutes.',
       };
     case 107:
       return {
         ...base,
-        guidance: 'This idempotency_key cannot be used for this call, and nothing was changed or charged by it. Get a new quote: repeat the call without idempotency_key, show the quote to the user, and confirm with the key it gives.',
+        guidance: 'This idempotency_key cannot be used for this call, and nothing was changed by it. Repeat the call without idempotency_key: it then gets a new key.',
       };
     case 108:
       return {
         ...base,
         retrySameKey: true,
-        guidance: 'Wiro could not read or save what this change needs just now, and the wallet balance can be part of that. It is not a low balance, so no funds need to be added. Nothing was changed or charged. Try again: repeat the call with the same idempotency_key.',
-      };
-    case 109:
-      // Wiro's sentence covers cards and wallets alike. The guidance names the fix for this plan.
-      return {
-        ...base,
-        message: 'Payment processing failed for this skill change.',
-        guidance: skillPaymentGuidance(plan),
+        guidance: 'Wiro could not read or save what this change needs just now. Nothing was changed. Try again: repeat the call with the same idempotency_key.',
       };
     case 110:
       return {
         ...base,
-        guidance: 'Do not repeat this change. Check the agent\'s skills and monthly price with get_my_agent and the wallet with get_account (recent_transactions) before changing anything, and contact Wiro support if they are not what you expect.',
+        guidance: 'Do not repeat this change. Check the agent\'s skills with get_my_agent before changing anything, and contact Wiro support if they are not what you expect.',
       };
     case 95:
     case 96:
@@ -784,19 +687,24 @@ export function describeSkillsApplyError(error: unknown, plan?: PlanBilling['pla
     default:
       break;
   }
-  if (/pricing snapshot|not found in registry/i.test(message)) {
+  if (/pricing snapshot|not found in registry|not in the skill registry/i.test(message)) {
     return {
       ...base,
-      guidance: 'The new price could not be computed, so nothing was changed. Check the skill names with list_agent_skills.',
+      guidance: 'Wiro could not read one of the skills, so nothing was changed. Check the skill names with list_agent_skills.',
     };
   }
   if (/^unknown skill: /i.test(message)) {
     return {
       ...base,
-      guidance: 'Nothing was changed or charged. Use names from list_agent_skills.',
+      guidance: 'Nothing was changed. Use names from list_agent_skills.',
     };
   }
-  if (isWalletNotRead(error)) return { ...base, guidance: WALLET_NOT_READ_NOTE };
+  if (/change the plan with upgradetier/i.test(message)) {
+    return {
+      ...base,
+      guidance: 'A skill change does not change the plan. manage_agent_billing with action change_plan does.',
+    };
+  }
   return { ...base, guidance: workspaceHint(message) ?? '' };
 }
 

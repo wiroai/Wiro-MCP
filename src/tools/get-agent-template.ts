@@ -10,11 +10,11 @@ import {
   type TemplateDetail,
 } from '../utils/agent-catalog.js';
 import {
-  formatCredits,
+  AGENT_PLANS,
   formatCustomInstructionLine,
   formatModelRates,
   formatScheduledTaskLine,
-  formatUsd,
+  planLineText,
   skillLabel,
   WIRO_PROJECT_CREDENTIAL,
 } from '../utils/user-agent.js';
@@ -34,11 +34,10 @@ function credentialLine(credential: CredentialRequirement): string {
 function formatTemplate(template: TemplateDetail): string {
   const lines = [`## ${template.title} (\`${template.slug}\`)`, ''];
   if (template.summary) lines.push(template.summary, '');
-  if (template.pricing) {
-    const { starter, pro } = template.pricing;
+  const plans = template.pricing ? planLineText(template.pricing) : '';
+  if (plans) {
     lines.push(
-      `**Starter:** ${formatUsd(starter.priceUsd)} per 30 days, ${formatCredits(starter.monthlyCredits)} credits per month`,
-      `**Pro:** ${formatUsd(pro.priceUsd)} per 30 days, ${formatCredits(pro.monthlyCredits)} credits per month`,
+      `**Plans:** ${plans}. Every plan includes all of this template's skills, and any plan can buy extra credit packs.`,
       'Prices are paid from the Wiro wallet when deploying and renew every 30 days until the plan is cancelled. Credits pay for the agent\'s chat and scheduled tasks (100 credits = 1 USD). Model runs it starts, for images, videos or voice calls, are billed to the wallet of the workspace that owns the Wiro project connected to the agent.',
     );
   } else {
@@ -93,9 +92,9 @@ export function registerGetAgentTemplate(server: McpServer, client: WiroClient):
       title: 'Get a Wiro agent template',
       description: 'Read one agent template before deploying it: its skills, the credentials the user must '
         + 'provide (with the field labels to ask for), the optional chat channels, the selectable chat models '
-        + 'with their token rates in credits per 1M tokens, and the exact Starter and Pro prices that '
-        + 'deploy_agent charges. Required credentials can be added after deployment, but skills that need '
-        + 'them do not work until they are set.',
+        + 'with their token rates in credits per 1M tokens, and the plans (Starter, Pro and Max) with the '
+        + 'exact prices and monthly credits that deploy_agent charges. Every plan includes every skill. Required '
+        + 'credentials can be added after deployment, but skills that need them do not work until they are set.',
       inputSchema: strictInput({
         template: z.string().min(1).max(200)
           .describe('Template slug or guid from list_agent_templates.'),
@@ -116,16 +115,18 @@ export function registerGetAgentTemplate(server: McpServer, client: WiroClient):
     async ({ template, include_tasks }, extra) => {
       try {
         const detail = toTemplateDetail(await readTemplateRow(client, template.trim(), include_tasks, extra.signal));
+        // The quote starts from the smallest plan Wiro prices; the user can pick another.
+        const firstPlan = AGENT_PLANS.find(plan => detail.pricing?.[plan]);
 
         return {
           content: [{ type: 'text' as const, text: formatTemplate(detail) }],
           structuredContent: {
             template: detail,
-            ...(detail.pricing
+            ...(firstPlan
               ? {
                 nextAction: {
                   tool: 'deploy_agent',
-                  arguments: { template: detail.slug || detail.guid, tier: 'starter' },
+                  arguments: { template: detail.slug || detail.guid, tier: firstPlan },
                   reason: 'Get the exact deployment quote. Nothing is charged until the user approves and the call is repeated with confirm: true.',
                 },
               }

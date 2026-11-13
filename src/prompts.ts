@@ -50,7 +50,7 @@ function deployAgentText(goal: string | undefined): string {
     '',
     'Plan:',
     '1. Look for a template with `list_agent_templates` and read the best matches with `get_agent_template`. If none fits, suggest a custom build from `list_agent_skills`.',
-    '2. Show me the options: tier, monthly price, monthly credits, the credentials and accounts it needs, and its chat channels. Let me choose.',
+    '2. Show me the options: the plan (Starter, Pro or Max) with its monthly price and monthly credits, the credentials and accounts it needs, and its chat channels. Every plan includes every skill. Let me choose.',
     '3. Call `get_account` to check the balance and which wallet will pay.',
     '4. Call `deploy_agent` without confirm to get the quote. Show me the amount, the wallet, and that the plan renews every 30 days until it is cancelled. Only after I say yes, repeat the call as the quote\'s `nextAction` shows: `confirm: true` with `confirm_charge_usd` set to the quoted amount. If the price changed in between, nothing is charged: show me the new quote.',
     '5. Wait with `get_my_agent` until the agent is running (status 4). It starts even while credentials are missing.',
