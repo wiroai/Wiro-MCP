@@ -31,6 +31,8 @@ import {
   loadCredentialMeta,
   loadSkillRegistry,
   ownAppRedirectUri,
+  ownCandidates,
+  ownFailedFlow,
   parseDiscoveredGroups,
   pausedSkillTitles,
   readOAuthStatus,
@@ -469,17 +471,31 @@ function statusMessage(state: ConnectionState, meta: CredentialMeta, snapshot: O
       return `${meta.title} is connected${snapshot.accounts.length > 0 ? ` for ${accountsLine(snapshot.accounts)}` : ''}.${optionalStep}`;
     }
     case 'pick_accounts':
-      return 'The user approved access. The accounts to use are chosen on the agent\'s page in the Wiro dashboard that opened after the sign-in. If that page was closed, connect again, or save account IDs the user gives you with action select_accounts.';
+      if (ownCandidates(snapshot).length > 0) {
+        return 'The user approved access. Ask which of these accounts the agent should use, then save them with '
+          + 'select_accounts within 15 minutes. If the agent\'s page in the Wiro dashboard is open, it offers the same list.';
+      }
+      // Wiro keeps the list 15 minutes, only for the person who started the sign-in, so here it is gone or someone else's.
+      return snapshot.flow && !snapshot.flow.mine
+        ? `The ${meta.title} sign-in finished, but another admin of this agent's team started a newer one, so the account list goes only to them. Connect again to choose the accounts yourself.`
+        : `The ${meta.title} sign-in finished, but its account list is no longer kept: Wiro keeps it 15 minutes, only for the person who started the sign-in. Connect again to choose the accounts.`;
     case 'pick_child_items':
       return `Access is approved, but ${next?.label ?? 'the second step'} still has to be chosen for each account. Call select_accounts with picker "${next?.key ?? ''}" to list them.`;
     case 'waiting_for_user':
       return `The ${meta.title} sign-in has not finished yet. The link from connect works for ${OAUTH_LINK_TTL_SECONDS / 60} minutes; after that, connect again.`;
     case 'token_expired':
       return `The saved ${meta.title} access has expired.${saved ? ` The connection is still saved, so get_my_agent lists ${meta.title} as connected.` : ''} ${unusedNote ?? expiredAdvice(row)}`;
-    default:
+    default: {
+      const failed = ownFailedFlow(snapshot);
+      if (failed) {
+        return `The latest ${meta.title} connection attempt did not finish${failed.errorCode ? ` (${failed.errorCode})` : ''}.`
+          + `${saved ? ` The ${meta.title} connection saved before it is still there, so get_my_agent lists it as connected.` : ''}`
+          + ` ${unusedNote ?? 'Connect again with action connect.'}`;
+      }
       return saved
         ? `This check found no current ${meta.title} sign-in, but a ${meta.title} connection is saved on this agent, so get_my_agent lists it as connected. ${unusedNote ?? 'If the agent cannot use it, connect again: that replaces the saved connection and asks for confirm: true.'}`
         : `${meta.title} is not connected. ${unusedNote ?? 'Start with action connect.'}`;
+    }
   }
 }
 
@@ -493,7 +509,8 @@ async function status(
   const stateOf = (snapshot: OAuthStatusSnapshot) => connectionState(snapshot, { hasPicker: picker !== null, since: input.since });
   const polled = await pollUntil({
     read: readSignal => readOAuthStatus(client, agentGuid, credential, picker, readSignal),
-    isDone: snapshot => DONE_STATES.has(stateOf(snapshot)),
+    // A failed sign-in or token check of this person ends the wait: nothing more comes from it.
+    isDone: snapshot => DONE_STATES.has(stateOf(snapshot)) || ownFailedFlow(snapshot) !== null,
     timeoutMs: input.waitSeconds * 1000,
     signal,
     interval: () => 5_000,
@@ -502,10 +519,25 @@ async function status(
   const snapshot = polled.value;
   if (!snapshot) throw new Error(`Could not read the ${meta.title} connection status.`);
   const state = stateOf(snapshot);
+  const candidates = state === 'pick_accounts' ? ownCandidates(snapshot) : [];
   let nextAction;
   let unusedNote: string | null = null;
   let row: Record<string, unknown> | null = null;
-  if (state === 'waiting_for_user') {
+  if (state === 'pick_accounts') {
+    nextAction = candidates.length > 0
+      ? {
+        tool: 'connect_agent_oauth',
+        arguments: { action: 'select_accounts', agent_guid: agentGuid, credential, accounts: candidates },
+        reason: candidates.length === 1
+          ? 'Save the only available account.'
+          : 'Ask the user which accounts to use, then save only those.',
+      }
+      : {
+        tool: 'connect_agent_oauth',
+        arguments: { action: 'connect', agent_guid: agentGuid, credential },
+        reason: `Connect ${meta.title} again for a new account list.`,
+      };
+  } else if (state === 'waiting_for_user') {
     nextAction = {
       tool: 'connect_agent_oauth',
       arguments: {
@@ -554,9 +586,10 @@ async function status(
     ...(snapshot.connectedAt ? { connectedAt: snapshot.connectedAt } : {}),
     ...(snapshot.tokenExpiresAt ? { tokenExpiresAt: snapshot.tokenExpiresAt } : {}),
     accounts: snapshot.accounts,
+    ...(candidates.length > 0 ? { candidates } : {}),
     ...(childStep ? { childStep } : {}),
     ...(nextAction ? { nextAction } : {}),
-  });
+  }, candidates.length > 0 ? ['', ...candidates.map(account => `- ${accountLabel(account)}`)] : []);
 }
 
 async function selectAccounts(
