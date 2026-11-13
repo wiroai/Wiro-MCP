@@ -313,6 +313,12 @@ const DEPLOYED_STATUS_HELP: Record<number, string> = {
     + 'and only the person who deployed it can use connect_agent_oauth.',
 };
 
+// Status 1 is also an agent that stops only to start again, to load a change (a setup change, a key, a skill).
+// Wiro then says it is restarting, and it needs no start.
+const RESTARTING_HELP = 'Your agent is restarting to load a change and starts again by itself, in about a minute. '
+  + 'Wait until get_my_agent shows it running, then send the message again.';
+const RESTARTING_PATTERN = /\brestarting\b/i;
+
 export interface SelectableModels {
   models: string[];
   defaultModel?: string;
@@ -417,6 +423,7 @@ export async function explainSendRefusal(
         + 'On a team agent, paying needs a team admin, the organization\'s owner or the person who deployed it.';
     }
     const status = toNumber(response.agentstatus);
+    if (status === 1 && RESTARTING_PATTERN.test(message)) return RESTARTING_HELP;
     if (status !== null) {
       return DEPLOYED_STATUS_HELP[status] ?? `${message} Check the agent with get_my_agent.`;
     }

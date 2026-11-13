@@ -32,8 +32,11 @@ import {
   type AgentTarget,
 } from './agent-targets.js';
 import {
+  SETUP_KEY_RULE,
+  SETUP_LISTING_KEY_RULE,
   SETUP_LISTING_RULE,
   SETUP_REPLY_WINDOW_SECONDS,
+  asksKeyAsReply,
   formatSetupChanges,
   isApprovableByReply,
   setupResultActed,
@@ -652,17 +655,25 @@ export async function collectTurn(options: CollectTurnOptions): Promise<AgentTur
     if (result.message.kind === 'setup_result') {
       notes.push('Wiro answered this message itself as the user\'s answer to a setup change the agent proposed, so the '
         + 'agent took no turn and no credits were used.');
+      // Wiro words its answer for a person typing in the chat, who may paste a key as the reply.
+      const keyAsked = asksKeyAsReply(result.message.reply);
       if (result.message.listedSetupChanges) {
         notes.push('Nothing is applied yet. A "yes" sent with an API key, such as from this server, first gets Wiro\'s '
           + `own listing of the exact change, written from the stored proposal. ${SETUP_LISTING_RULE}`);
-      } else if (result.setupResult && !setupResultActed(result.setupResult)) {
-        // Send's answer alone does not say whether it is a listing; the stored row does, when it can be read.
-        notes.push('Nothing was applied. If Wiro\'s answer lists a setup change, show it to the user, and send "yes" '
-          + '(or "yes N" for change N) again only after the user agrees to exactly that change. Never send yes on '
-          + 'your own.');
+        if (keyAsked) notes.push(SETUP_LISTING_KEY_RULE);
+      } else {
+        if (result.setupResult && !setupResultActed(result.setupResult)) {
+          // Send's answer alone does not say whether it is a listing; the stored row does, when it can be read.
+          notes.push('Nothing was applied. If Wiro\'s answer lists a setup change, show it to the user, and send "yes" '
+            + '(or "yes N" for change N) again only after the user agrees to exactly that change. Never send yes on '
+            + 'your own.');
+        }
+        if (keyAsked) notes.push(`Wiro's answer asks for a key as the next reply. ${SETUP_KEY_RULE}`);
       }
       if (result.setupResult?.restarting) {
-        notes.push('The agent restarts to load the change. Send the next message once it is running again, in about a minute.');
+        notes.push('The agent restarts to load the change, which takes about a minute. Wiro still answers a reply to '
+          + 'its setup proposals, such as "yes 2", during the restart; send any other message once the agent is '
+          + 'running again.');
       }
     }
 
@@ -832,16 +843,23 @@ function chooseNextAction(
  * asks for a key: a disconnect removes the saved one and is approved with a
  * reply like the other changes. An add and a remove are approved with a reply
  * too; an add that brings a connector connected with a key needs that key
- * saved once it is applied.
+ * saved right after it is applied, so the restart it started loads the key
+ * too. Wiro answers such replies whatever the agent's status, restarts
+ * included.
  */
 function setupNextAction(target: AgentTarget, result: AgentTurnResult): NextAction | undefined {
   const guid = target.agentGuid;
   if (target.kind !== 'deployed' || !guid || result.message.state !== 'completed') return undefined;
+  const keyAsked = result.message.kind === 'setup_result' && asksKeyAsReply(result.message.reply);
   if (result.setupResult?.restarting) {
+    // The key Wiro asks for next is saved now (the note says how), so it loads with this restart: waiting for the
+    // agent first would restart it a second time.
+    if (keyAsked) return undefined;
     return {
       tool: 'get_my_agent',
       arguments: { agent_guid: guid, wait_seconds: DEFAULT_WAIT_SECONDS },
-      reason: 'The agent restarts to load the change. Wait until it is running again before the next message.',
+      reason: 'The agent restarts to load the change. Wait until it is running again before a message other than a '
+        + 'reply to its setup proposals.',
     };
   }
   const listed = result.message.listedSetupChanges ?? 0;
@@ -857,14 +875,19 @@ function setupNextAction(target: AgentTarget, result: AgentTurnResult): NextActi
       tool: 'send_agent_message',
       arguments: { agent: target.agent, session: result.session, message: listed === 1 ? 'yes' : 'yes 1' },
       reason: `Wiro listed the exact setup change${listed === 1 ? '' : 's'} the agent proposed; nothing is applied `
-        + `yet. ${SETUP_LISTING_RULE}${several}`,
+        + `yet. ${SETUP_LISTING_RULE}${several}${keyAsked ? ` ${SETUP_LISTING_KEY_RULE}` : ''}`,
     };
   }
   const open = (result.message.setupChanges ?? []).filter(change => isApprovableByReply(change));
   if (open.length === 0) return undefined;
-  const key = open.some(change => change.kind === 'connect' || change.needs?.some(need => need.mode === 'key'))
-    ? ' For a key, use set_agent_credentials instead of a chat message.'
-    : '';
+  // An add that brings a connector's key: the key is saved once the add is applied, while its restart runs.
+  const addWithKey = open.some(change => change.kind === 'add' && change.needs?.some(need => need.mode === 'key'));
+  const key = addWithKey
+    ? ' For a key, use set_agent_credentials instead of a chat message, right after the change that brings its '
+      + 'connector is applied, so one restart loads both.'
+    : open.some(change => change.kind === 'connect')
+      ? ' For a key, use set_agent_credentials instead of a chat message.'
+      : '';
   if (open.some(change => change.kind !== 'connect')) {
     return {
       tool: 'send_agent_message',
