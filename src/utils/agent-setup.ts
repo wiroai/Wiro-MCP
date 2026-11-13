@@ -33,9 +33,11 @@ import {
 // the scheduled tasks that pause or run again, and for an add the connectors it
 // brings that are not connected yet (needs). The agent cannot set those. An add
 // whose connector takes a key comes with that connector's connect card on the
-// same reply. From here its key is saved with set_agent_credentials right after
-// the add is applied: saved while the agent is still stopping or queued for the
-// restart the add started, it loads with that same restart.
+// same reply. From here the user gives that key together with their yes, before
+// the yes that applies the add is sent, and it is saved with
+// set_agent_credentials as the very next step: the agent stays stopping or
+// queued for the restart the add started only for seconds, and a key saved then
+// loads with that same restart.
 
 /** A pending proposal older than this cannot be approved with a typed reply. */
 export const SETUP_REPLY_WINDOW_SECONDS = 30 * 60;
@@ -334,8 +336,9 @@ export const SETUP_KEY_RULE = 'Never send a key in a chat message: save it right
 
 /** The same for a listing that offers to take the key in place of the yes. */
 export const SETUP_LISTING_KEY_RULE = 'The listing offers to take a key as the reply. Never send a key in a chat '
-  + 'message: once the user agrees, send "yes" to apply the change, then save the key with set_agent_credentials '
-  + 'right away, so it loads with the same restart.';
+  + 'message: ask the user for the key together with their yes, before you send that yes. Then send "yes" to apply '
+  + 'the change and save the key with set_agent_credentials as the very next step, so it loads with the same restart; '
+  + 'a key saved later restarts the agent again.';
 
 /** Whether a pending proposal can still be approved with a typed reply. */
 export function isApprovableByReply(change: SetupChange, nowMs = Date.now()): boolean {
@@ -408,8 +411,8 @@ function showsBeforeAndAfter(change: SetupChange): boolean {
 
 // How each connector an add brings is connected once the add is applied.
 const NEED_HOW: Record<SetupNeedMode, string> = {
-  key: 'its key, saved with set_agent_credentials right after this change is applied (one restart then loads both), '
-    + 'never sent in a chat message',
+  key: 'its key. Ask the user for it together with their yes to this change, and save it with set_agent_credentials '
+    + 'as soon as this change is applied (one restart then loads both), never in a chat message',
   signin: 'sign in on the agent page, or with connect_agent_oauth',
   page: 'set up on the agent page',
 };
@@ -461,8 +464,9 @@ function pendingChangeLines(change: SetupChange, index: number, nowMs: number, p
   }
   const pairedAdd = pairedAddNumber(change, pending);
   if (pairedAdd !== undefined) {
-    lines.push(`- Connects what proposed change ${pairedAdd} adds. Once change ${pairedAdd} is applied, save the key `
-      + 'with set_agent_credentials right away, never in a chat message: one restart then loads both.');
+    lines.push(`- Connects what proposed change ${pairedAdd} adds. Ask the user for the key together with their yes to `
+      + `change ${pairedAdd}. Once change ${pairedAdd} is applied, save the key with set_agent_credentials at once, `
+      + 'never in a chat message: one restart then loads both.');
   } else if (change.kind === 'connect') {
     lines.push('- The user provides the key or sign-in for it. A key is saved with set_agent_credentials, never sent '
       + 'in a chat message.');

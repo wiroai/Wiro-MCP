@@ -842,10 +842,10 @@ function chooseNextAction(
  * "yes N") applies it. A key never goes in a chat message. Only a connect
  * asks for a key: a disconnect removes the saved one and is approved with a
  * reply like the other changes. An add and a remove are approved with a reply
- * too; an add that brings a connector connected with a key needs that key
- * saved right after it is applied, so the restart it started loads the key
- * too. Wiro answers such replies whatever the agent's status, restarts
- * included.
+ * too; for an add that brings a connector connected with a key, the user gives
+ * that key together with their yes, so it is saved as the very next step once
+ * the add is applied and the restart the add started loads the key too. Wiro
+ * answers such replies whatever the agent's status, restarts included.
  */
 function setupNextAction(target: AgentTarget, result: AgentTurnResult): NextAction | undefined {
   const guid = target.agentGuid;
@@ -880,11 +880,13 @@ function setupNextAction(target: AgentTarget, result: AgentTurnResult): NextActi
   }
   const open = (result.message.setupChanges ?? []).filter(change => isApprovableByReply(change));
   if (open.length === 0) return undefined;
-  // An add that brings a connector's key: the key is saved once the add is applied, while its restart runs.
+  // An add that brings a connector's key: the key comes with the user's yes and is saved once the add is applied,
+  // while the agent is still stopping or queued for its restart, which lasts only seconds.
   const addWithKey = open.some(change => change.kind === 'add' && change.needs?.some(need => need.mode === 'key'));
   const key = addWithKey
-    ? ' For a key, use set_agent_credentials instead of a chat message, right after the change that brings its '
-      + 'connector is applied, so one restart loads both.'
+    ? ' For a key, use set_agent_credentials instead of a chat message: ask the user for it together with their yes, '
+      + 'and save it as soon as the change that brings its connector is applied, with no wait in between, so one '
+      + 'restart loads both.'
     : open.some(change => change.kind === 'connect')
       ? ' For a key, use set_agent_credentials instead of a chat message.'
       : '';
