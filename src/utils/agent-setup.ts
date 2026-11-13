@@ -14,8 +14,9 @@ import {
 } from './quoted-text.js';
 
 // Setup changes a deployed agent proposes in chat: connect a connector or
-// disconnect one, add or change a scheduled task or a custom skill, add to a
-// custom skill or undo its last change, or set its time zone. Wiro stores
+// disconnect one, add or remove a Connector or a Skill, add or change a
+// scheduled task or a custom skill, add to a custom skill or undo its last
+// change, or set its time zone. Wiro stores
 // each proposal on the agent's reply as a timeline block of type "setup", and
 // nothing changes until a person approves it. The agent never applies its own
 // proposal and never sees a key: a key goes in with set_agent_credentials, and
@@ -26,7 +27,11 @@ import {
 // custom skill's text also carries the text the skill had when the change was
 // proposed (before), which Wiro adds to the card, so an applied change still
 // shows what it replaced. That text, like the earlier version an undo restores,
-// can hold text the agent wrote in an earlier change: it is content too.
+// can hold text the agent wrote in an earlier change: it is content too. An add
+// or remove names one Connector (int-*) or Skill (util-*), and Wiro adds what
+// the change also does to the card: the other names it turns on or off (with),
+// the scheduled tasks that pause or run again, and for an add the connectors it
+// brings that are not connected yet (needs). The agent cannot set those.
 
 /** A pending proposal older than this cannot be approved with a typed reply. */
 export const SETUP_REPLY_WINDOW_SECONDS = 30 * 60;
@@ -39,27 +44,54 @@ const MAX_INSTRUCTIONS_LENGTH = 20_000;
 const MAX_SKILL_TEXT_LENGTH = 100_000;
 const MAX_LINE_LENGTH = 300;
 
-export const SETUP_CHANGE_KINDS = ['connect', 'schedule', 'skill', 'timezone', 'disconnect'] as const;
+export const SETUP_CHANGE_KINDS = ['connect', 'schedule', 'skill', 'timezone', 'disconnect', 'add', 'remove'] as const;
 export const SETUP_CHANGE_STATUSES = ['pending', 'applied', 'dismissed', 'failed'] as const;
 // The custom skill actions that change its text and carry the text from before the change.
 const SKILL_TEXT_ACTIONS: readonly string[] = ['update', 'append', 'revert'];
+
+// The kinds that turn a Connector (int-*) or a Skill (util-*) on or off, by its name.
+const REGISTRY_KINDS: readonly string[] = ['add', 'remove'];
+const REGISTRY_NAME = /^(?:int|util)-[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const SCHEDULED_TASK_KEY = /^cs-cron-[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const CONNECTOR_KEY = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const MAX_NAME_LENGTH = 64;
+// What Wiro writes on an add or remove card, at most: the other names it turns on or off, the
+// scheduled tasks that pause or run again, and the connectors still to connect.
+const MAX_WITH = 12;
+const MAX_TASKS = 20;
+const MAX_NEEDS = 3;
+// How a connector an add brings is connected: its key, a sign-in, or a setup on the agent page
+// (files, service accounts, a Wiro project).
+export const SETUP_NEED_MODES = ['key', 'signin', 'page'] as const;
+type SetupNeedMode = typeof SETUP_NEED_MODES[number];
 
 export const CHAT_SETUP_MODES = ['off', 'webchat', 'all'] as const;
 export type ChatSetupMode = typeof CHAT_SETUP_MODES[number];
 
 /** What each chat_setup value allows, said the same way by every tool that sets or shows it. */
-export const CHAT_SETUP_DESCRIPTION = 'Setup from chat lets the agent propose connector, scheduled task, custom skill '
-  + 'and time zone changes in its chat; nothing changes until an agent admin approves the proposal. "all" (the '
+export const CHAT_SETUP_DESCRIPTION = 'Setup from chat lets the agent propose setup changes in its chat (connect or '
+  + 'disconnect a service, add or remove a Connector or Skill, scheduled tasks, custom skills and its time zone); '
+  + 'nothing changes until an agent admin approves the proposal. "all" (the '
   + 'default) allows it in the Wiro web chat and in messages sent with an API key, such as from this MCP server; '
   + '"webchat" only in the Wiro web chat; "off" turns it off. Messages sent with an API key act with the key '
   + 'owner\'s rights, so an agent shared with customers or many people usually uses "webchat" or "off".';
+
+const setupNeedSchema = z.object({
+  connector: z.string(),
+  title: z.string().optional(),
+  mode: z.enum(SETUP_NEED_MODES).optional(),
+});
+
+export type SetupNeed = z.infer<typeof setupNeedSchema>;
 
 export const setupChangeSchema = z.object({
   id: z.string(),
   kind: z.enum(SETUP_CHANGE_KINDS),
   action: z.string().optional(),
   connector: z.string().optional(),
-  key: z.string().optional(),
+  key: z.string().optional()
+    .describe('Schedule and skill: the scheduled task\'s or custom skill\'s key. Add and remove: the name of the '
+      + 'Connector (int-*) or Skill (util-*) the change turns on or off.'),
   title: z.string().optional(),
   cron: z.string().optional(),
   instructions: z.string().optional()
@@ -71,6 +103,17 @@ export const setupChangeSchema = z.object({
       + 'to the proposal; the agent cannot set it. It stays as it is once the change is applied, so it shows what '
       + 'the change replaced.'),
   timezone: z.string().optional(),
+  with: z.array(z.string()).optional()
+    .describe('Add and remove: the other Connectors and Skills, by name, that the change also turns on (add) or '
+      + 'off (remove). Wiro adds it to the proposal; the agent cannot set it.'),
+  pauses: z.array(z.string()).optional()
+    .describe('Add and remove: the scheduled tasks, by key, that pause with the change. Wiro adds it.'),
+  resumes: z.array(z.string()).optional()
+    .describe('Add and remove: the scheduled tasks, by key, that run again with the change. Wiro adds it.'),
+  needs: z.array(setupNeedSchema).optional()
+    .describe('Add: the connectors the change brings that are not connected yet, and how each one connects: key '
+      + '(its key, saved with set_agent_credentials, never in a chat message), signin (a sign-in on the agent page) '
+      + 'or page (set up on the agent page). Wiro adds it.'),
   note: z.string().optional(),
   status: z.enum(SETUP_CHANGE_STATUSES),
   proposedAt: z.string().optional(),
@@ -94,6 +137,72 @@ function shortLine(value: unknown): string | undefined {
   return text ? truncate(text, MAX_LINE_LENGTH) : undefined;
 }
 
+/** The distinct names of a list Wiro writes on an add or remove, at most max; anything else in it is left out. */
+function nameList(value: unknown, pattern: RegExp, max: number, except?: string): string[] {
+  if (!Array.isArray(value)) return [];
+  const names: string[] = [];
+  for (const item of value) {
+    if (names.length === max) break;
+    const name = typeof item === 'string' ? item.trim() : '';
+    if (name && name.length <= MAX_NAME_LENGTH && pattern.test(name) && name !== except && !names.includes(name)) names.push(name);
+  }
+  return names;
+}
+
+/** The connectors an add brings that are not connected yet, as Wiro wrote them. A mode this version does not know is left out. */
+function needList(value: unknown): SetupNeed[] {
+  if (!Array.isArray(value)) return [];
+  const needs: SetupNeed[] = [];
+  for (const item of value) {
+    if (needs.length === MAX_NEEDS) break;
+    if (!isPlainObject(item)) continue;
+    const connector = asString(item.connector)?.trim();
+    if (!connector || connector.length > MAX_NAME_LENGTH || !CONNECTOR_KEY.test(connector) || connector.startsWith('sys-')
+      || needs.some(need => need.connector === connector)) continue;
+    const title = shortLine(item.title);
+    const mode = asString(item.mode);
+    needs.push({
+      connector,
+      ...(title ? { title } : {}),
+      ...((SETUP_NEED_MODES as readonly string[]).includes(mode ?? '') ? { mode: mode as SetupNeedMode } : {}),
+    });
+  }
+  return needs;
+}
+
+/**
+ * An add or a remove: one Connector or Skill by its name, with what Wiro wrote on the proposal about what
+ * the change also does. The proposal has no title for the name, so the name is what is shown, and fields of
+ * other kinds are left out. A name that is not a Connector's or a Skill's is a shape this version does not know.
+ */
+function toRegistryChange(value: Record<string, unknown>, id: string, kind: SetupChange['kind'], status: SetupChange['status']): SetupChange | undefined {
+  const key = asString(value.key)?.trim();
+  if (!key || key.length > MAX_NAME_LENGTH || !REGISTRY_NAME.test(key)) return undefined;
+  const withNames = nameList(value.with, REGISTRY_NAME, MAX_WITH, key);
+  const pauses = nameList(value.pauses, SCHEDULED_TASK_KEY, MAX_TASKS);
+  const resumes = nameList(value.resumes, SCHEDULED_TASK_KEY, MAX_TASKS);
+  // Only an add brings connectors.
+  const needs = kind === 'add' ? needList(value.needs) : [];
+  const note = shortLine(value.note);
+  const proposedAt = unixToIso(value.createdat);
+  const actedAt = unixToIso(value.actedat);
+  const error = status === 'failed' ? shortLine(value.error) : undefined;
+  return {
+    id,
+    kind,
+    status,
+    key,
+    ...(withNames.length > 0 ? { with: withNames } : {}),
+    ...(pauses.length > 0 ? { pauses } : {}),
+    ...(resumes.length > 0 ? { resumes } : {}),
+    ...(needs.length > 0 ? { needs } : {}),
+    ...(note ? { note } : {}),
+    ...(proposedAt ? { proposedAt } : {}),
+    ...(actedAt ? { actedAt } : {}),
+    ...(error ? { error } : {}),
+  };
+}
+
 /**
  * The public part of one stored proposal, or undefined for a shape this
  * version does not know. Who proposed or approved it is left out.
@@ -109,6 +218,7 @@ export function toSetupChange(value: unknown): SetupChange | undefined {
     ? 'pending'
     : (SETUP_CHANGE_STATUSES as readonly string[]).includes(rawStatus) ? rawStatus as SetupChange['status'] : undefined;
   if (!status) return undefined;
+  if (REGISTRY_KINDS.includes(kind ?? '')) return toRegistryChange(value, id, kind as SetupChange['kind'], status);
   const action = shortLine(value.action);
   const skillText = kind === 'skill' && SKILL_TEXT_ACTIONS.includes(action ?? '');
   const instructions = asString(value.instructions);
@@ -220,6 +330,11 @@ const SKILL_VERBS: Record<string, string> = {
   revert: 'Undo the last change to the custom skill',
 };
 
+/** What an add or a remove turns on or off: a Connector for an int-* name, else a Skill. */
+function registryWord(key: string | undefined): string {
+  return key?.startsWith('int-') ? 'Connector' : 'Skill';
+}
+
 /** One line that names the change, such as "Create the scheduled task `cs-cron-weekly-report`". */
 export function setupChangeHeadline(change: SetupChange): string {
   switch (change.kind) {
@@ -227,6 +342,10 @@ export function setupChangeHeadline(change: SetupChange): string {
       return `Connect ${quotedSpan(change.connector ?? '')}`;
     case 'disconnect':
       return `Disconnect ${quotedSpan(change.connector ?? '')}`;
+    case 'add':
+      return `Add ${registryWord(change.key)} ${quotedSpan(change.key ?? '')}`;
+    case 'remove':
+      return `Remove ${registryWord(change.key)} ${quotedSpan(change.key ?? '')}`;
     case 'schedule':
       return `${SCHEDULE_VERBS[change.action ?? ''] ?? 'Change the scheduled task'} ${quotedSpan(change.key ?? '')}`;
     case 'skill':
@@ -255,6 +374,40 @@ function showsBeforeAndAfter(change: SetupChange): boolean {
   return change.status === 'applied' && change.before !== undefined && change.instructions !== undefined;
 }
 
+// How each connector an add brings is connected once the add is applied.
+const NEED_HOW: Record<SetupNeedMode, string> = {
+  key: 'its key, saved with set_agent_credentials, never sent in a chat message',
+  signin: 'sign in on the agent page, or with connect_agent_oauth',
+  page: 'set up on the agent page',
+};
+
+function needLine(need: SetupNeed): string {
+  const name = need.title ? `${quotedSpan(need.title)} (${quotedSpan(need.connector)})` : quotedSpan(need.connector);
+  return need.mode ? `${name}: ${NEED_HOW[need.mode]}` : name;
+}
+
+/**
+ * What an add or a remove also does, as Wiro wrote it on the proposal: the other names it turns on or off,
+ * the scheduled tasks that run again or pause, the connectors an add still needs connected, and for a
+ * Connector's remove that its saved key stays.
+ */
+function registryChangeLines(change: SetupChange): string[] {
+  if (change.kind !== 'add' && change.kind !== 'remove') return [];
+  const add = change.kind === 'add';
+  const names = (list: readonly string[]) => list.map(name => quotedSpan(name)).join(', ');
+  const lines: string[] = [];
+  if (change.with) lines.push(`- Also turns ${add ? 'on' : 'off'}: ${names(change.with)}`);
+  const resumes = change.resumes ? [`- Scheduled tasks that run again: ${names(change.resumes)}`] : [];
+  const pauses = change.pauses ? [`- Scheduled tasks that pause: ${names(change.pauses)}`] : [];
+  lines.push(...(add ? [...resumes, ...pauses] : [...pauses, ...resumes]));
+  if (change.needs) lines.push('- Still to connect once it is on:', ...change.needs.map(need => `  - ${needLine(need)}`));
+  if (!add && change.key?.startsWith('int-')) {
+    lines.push('- Its saved key stays saved, if it has one: adding it back needs no new key. Only a disconnect '
+      + 'removes a key.');
+  }
+  return lines;
+}
+
 function pendingChangeLines(change: SetupChange, index: number, nowMs: number): string[] {
   const lines = [`#### Proposed change ${index + 1}: ${setupChangeHeadline(change)}`, ''];
   if (change.title) lines.push(`- Title: ${quotedSpan(change.title)}`);
@@ -270,6 +423,7 @@ function pendingChangeLines(change: SetupChange, index: number, nowMs: number): 
     lines.push('- Its saved key is removed, and skills that use it stop until it is connected again. Approving it '
       + 'needs no key.');
   }
+  lines.push(...registryChangeLines(change));
   if (isSkillAction(change, 'append')) {
     lines.push('- Adds the proposal\'s text at the end of the skill, after a blank line. The rest of the skill stays as '
       + 'it is.');
