@@ -23,6 +23,7 @@ import {
   normalizeBase64FileValue,
   normalizeCustomSkillKey,
   parseCredentialMeta,
+  parseOAuthStatus,
   parseSkillChangeKey,
   parseSkillRegistry,
   planSkillChanges,
@@ -3876,6 +3877,78 @@ test('connection states follow the picker and expiry rules', () => {
     childStep: { picker: 'locations', optional: false, configured: false, groups: [] },
   }, { hasPicker: true }), 'pick_child_items');
   assert.equal(connectionState(base, { hasPicker: false }), 'not_connected');
+});
+
+// Wiro keeps the latest sign-in or token check of a connection for 15 minutes, with the accounts it found, and
+// shows them only to the person who started it.
+const OAUTH_STATUS_BEFORE = { result: true, errors: [], connected: false, accounts: [], connectedat: '', tokenexpiresat: '' };
+
+test('OAuthStatus gives the account list and the sign-in Wiro keeps for 15 minutes', () => {
+  const snapshot = parseOAuthStatus({
+    ...OAUTH_STATUS_BEFORE,
+    authmethod: 'own',
+    redirecturi: 'https://api.wiro.ai/v1/UserAgentOAuth/FacebookCallback',
+    appkeyssaved: true,
+    tokensaved: false,
+    flow: {
+      flowid: '4b1f0c7a9e2d4c1b8a7f6e5d4c3b2a19',
+      mine: true,
+      mode: 'own',
+      status: 'candidates',
+      account: '  Acme\nAdmin  ',
+      errorcode: '',
+      errordetail: '',
+      restart: 'none',
+      expiresat: NOW + 900,
+    },
+    candidates: [{ id: '111', name: 'Acme Page' }, { id: '222', name: 'Beta Page' }, { name: 'No id' }],
+  }, null);
+  assert.deepEqual(snapshot.candidates, [{ id: '111', name: 'Acme Page' }, { id: '222', name: 'Beta Page' }]);
+  assert.deepEqual(snapshot.flow, { status: 'candidates', mine: true, errorCode: '', account: 'Acme Admin' });
+  assert.equal(snapshot.redirectUri, 'https://api.wiro.ai/v1/UserAgentOAuth/FacebookCallback');
+  assert.equal(snapshot.appKeysSaved, true);
+  assert.equal(snapshot.tokenSaved, false);
+
+  // Another admin's sign-in shows only that it is there.
+  assert.deepEqual(parseOAuthStatus({ ...OAUTH_STATUS_BEFORE, flow: { mine: false, status: 'waiting', expiresat: NOW + 600 } }, null).flow,
+    { status: 'waiting', mine: false, errorCode: '', account: '' });
+  // A status this version does not know, or a code that is not Wiro's shape, is left out.
+  assert.equal(parseOAuthStatus({ ...OAUTH_STATUS_BEFORE, flow: { mine: true, status: 'paused' } }, null).flow, null);
+  assert.equal(parseOAuthStatus({ ...OAUTH_STATUS_BEFORE, flow: { mine: true, status: 'failed', errorcode: 'Bad <b>code</b>' } }, null).flow.errorCode, '');
+
+  // An answer from before keeps reading as it did.
+  const before = parseOAuthStatus(OAUTH_STATUS_BEFORE, null);
+  assert.deepEqual(before.candidates, []);
+  assert.equal(before.flow, null);
+  assert.equal('redirectUri' in before, false);
+  assert.equal('appKeysSaved' in before, false);
+  assert.equal('tokenSaved' in before, false);
+});
+
+test('connection states follow the latest sign-in of the person who started it first', () => {
+  const read = (flow, extra = {}) => parseOAuthStatus({ ...OAUTH_STATUS_BEFORE, flow, ...extra }, null);
+  const pages = [{ id: '111', name: 'Acme Page' }];
+
+  // A Facebook own-app sign-in keeps its Pages on the server and writes no connectedat until they are chosen.
+  const facebook = read({ mine: true, status: 'candidates' }, { candidates: pages });
+  assert.equal(connectionState(facebook, { hasPicker: true, since: '' }), 'pick_accounts');
+  assert.equal(connectionState(facebook, { hasPicker: true }), 'pick_accounts');
+  // A list that is not there reads by the rules from before.
+  assert.equal(connectionState(read({ mine: true, status: 'candidates' }), { hasPicker: true, since: '' }), 'waiting_for_user');
+
+  // Still open in the browser, even once an earlier sign-in of the same person wrote a new connectedat.
+  assert.equal(connectionState(read({ mine: true, status: 'waiting' }, { connectedat: 't1' }), { hasPicker: true, since: 't0' }), 'waiting_for_user');
+
+  // A failed one ends the wait, also while a connection from before is still saved.
+  assert.equal(connectionState(read({ mine: true, status: 'failed', errorcode: 'authorization_denied' }), { hasPicker: true, since: '' }), 'not_connected');
+  assert.equal(connectionState(read({ mine: true, status: 'failed', errorcode: 'token_exchange_failed' }, { connected: true, connectedat: 't0' }), { hasPicker: false, since: 't0' }), 'not_connected');
+
+  // Done, or someone else's: the rules from before.
+  assert.equal(connectionState(read({ mine: true, status: 'connected' }, { connected: true, connectedat: 't1' }), { hasPicker: false, since: 't0' }), 'connected');
+  assert.equal(connectionState(read({ mine: true, status: 'saved' }, { connected: true, connectedat: 't1', accounts: pages }), { hasPicker: true, since: 't0' }), 'connected');
+  assert.equal(connectionState(read({ mine: false, status: 'candidates' }), { hasPicker: true, since: '' }), 'waiting_for_user');
+  assert.equal(connectionState(read({ mine: false, status: 'failed' }), { hasPicker: true }), 'not_connected');
+  assert.equal(connectionState(read({ mine: false, status: 'waiting' }, { connectedat: 't1' }), { hasPicker: true, since: 't0' }), 'pick_accounts');
 });
 
 // ---------------------------------------------------------------------------

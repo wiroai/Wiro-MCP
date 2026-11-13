@@ -1903,12 +1903,49 @@ export interface ChildStepStatus {
   groups: Array<{ parent: AccountRef; items: AccountRef[] }>;
 }
 
+/** Where the latest sign-in or token check for a connection stands, as Wiro keeps it for 15 minutes. */
+export const OAUTH_FLOW_STATUSES = ['waiting', 'candidates', 'connected', 'saved', 'failed'] as const;
+export type OAuthFlowStatus = typeof OAUTH_FLOW_STATUSES[number];
+
+export interface OAuthFlow {
+  status: OAuthFlowStatus;
+  /** Whether this connection's person started it. Wiro sends the account list and the details only to them. */
+  mine: boolean;
+  /** Why it failed, as Wiro names it, or empty. */
+  errorCode: string;
+  /** Who signed in, when the service says so, or empty. */
+  account: string;
+}
+
 export interface OAuthStatusSnapshot {
   connected: boolean;
   accounts: AccountRef[];
   connectedAt: string;
   tokenExpiresAt: string;
   childStep: ChildStepStatus | null;
+  /** The accounts the latest sign-in or token check found, while they wait to be chosen. Only for the person who started it. */
+  candidates: AccountRef[];
+  flow: OAuthFlow | null;
+  /** The redirect URI to register in the user's own app, as Wiro gives it. */
+  redirectUri?: string;
+  appKeysSaved?: boolean;
+  tokenSaved?: boolean;
+}
+
+const FLOW_ERROR_CODE = /^[a-z0-9_]{1,80}$/;
+const FLOW_ACCOUNT_MAX = 120;
+
+function parseOAuthFlow(value: unknown): OAuthFlow | null {
+  if (!isPlainObject(value)) return null;
+  const status = asString(value.status);
+  if (!(OAUTH_FLOW_STATUSES as readonly string[]).includes(status ?? '')) return null;
+  const errorCode = asString(value.errorcode)?.trim() ?? '';
+  return {
+    status: status as OAuthFlowStatus,
+    mine: value.mine === true,
+    errorCode: FLOW_ERROR_CODE.test(errorCode) ? errorCode : '',
+    account: oneLine(asString(value.account) ?? '').slice(0, FLOW_ACCOUNT_MAX),
+  };
 }
 
 export function parseOAuthStatus(body: Row, picker: PickerMeta | null): OAuthStatusSnapshot {
@@ -1924,12 +1961,18 @@ export function parseOAuthStatus(body: Row, picker: PickerMeta | null): OAuthSta
       groups: parseDiscoveredGroups(next, step.groups).map(group => ({ parent: group.parent, items: group.items })),
     };
   }
+  const redirectUri = asString(body.redirecturi)?.trim();
   return {
     connected: body.connected === true,
     accounts: toAccountRefs(body.accounts, picker),
     connectedAt: asString(body.connectedat) ?? '',
     tokenExpiresAt: asString(body.tokenexpiresat) ?? '',
     childStep,
+    candidates: toAccountRefs(body.candidates),
+    flow: parseOAuthFlow(body.flow),
+    ...(redirectUri ? { redirectUri } : {}),
+    ...(typeof body.appkeyssaved === 'boolean' ? { appKeysSaved: body.appkeyssaved } : {}),
+    ...(typeof body.tokensaved === 'boolean' ? { tokenSaved: body.tokensaved } : {}),
   };
 }
 
@@ -1959,14 +2002,31 @@ export type ConnectionState =
   | 'not_connected';
 
 /**
+ * The latest sign-in or token check this connection's person started decides first: a list of accounts to choose
+ * from, a sign-in still open in the browser, or one that failed. A sign-in that keeps its account list on the
+ * server writes no connectedat until the choice is saved, so only the flow tells it is done.
+ */
+function ownFlowState(status: OAuthStatusSnapshot): ConnectionState | null {
+  const flow = status.flow;
+  if (!flow?.mine) return null;
+  if (flow.status === 'candidates' && status.candidates.length > 0) return 'pick_accounts';
+  if (flow.status === 'waiting') return 'waiting_for_user';
+  if (flow.status === 'failed') return 'not_connected';
+  return null;
+}
+
+/**
  * Wiro reports a picker credential as not connected until an account is
  * saved, so a fresh connectedat with no accounts means "signed in, accounts
  * still to choose". since is the connectedat seen before the sign-in started.
+ * An answer without a flow of this connection's person reads by these rules alone.
  */
 export function connectionState(
   status: OAuthStatusSnapshot,
   options: { hasPicker: boolean; since?: string; nowMs?: number },
 ): ConnectionState {
+  const fromFlow = ownFlowState(status);
+  if (fromFlow) return fromFlow;
   if (options.since !== undefined && status.connectedAt === options.since) return 'waiting_for_user';
   if (status.connected) {
     return status.childStep && !status.childStep.optional && !status.childStep.configured
