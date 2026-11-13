@@ -64,7 +64,7 @@ const quoteSchema = z.object({
   creditsAdded: z.number().optional(),
   paidFrom: z.enum(['personal_wallet', 'team_wallet', 'card']),
   plan: z.enum(AGENT_PLANS).optional()
-    .describe('subscribe and change_plan: the plan this quote is for.'),
+    .describe('subscribe and change_plan: the plan this quote is for. renew: the plan it renews on.'),
   change: z.enum(['upgrade', 'downgrade', 'undo_downgrade']).optional()
     .describe('change_plan: upgrade (a larger plan, now), downgrade (a smaller plan, from the next renewal) or undo_downgrade (keep the plan, and undo the move set for the next renewal).'),
   startsAt: z.string().optional()
@@ -424,13 +424,22 @@ async function planFor(
         if (!cancelled) {
           return { outcome: 'not_needed', message: 'The plan is active and renews by itself. Nothing to do.' };
         }
-        // A renewal charges the plan set for it, or the agent's own, at today's price.
+        // A renewal charges the plan set for it, or the agent's own, at today's price. A wallet cancel keeps a
+        // move set for the renewal, so the plan is named: it can be another plan than the agent's.
         const next = renewalPlanPrice(agent);
+        const renewsOn = asPlan(agent.nextPlan) ?? asPlan(agent.tier);
         const amount = next?.priceUsd ?? (agent.monthlyPriceUsd || agent.subscription?.amountUsd);
         return {
           outcome: 'quote',
-          quote: { chargeNowUsd: 0, estimated: false, recurringUsd: amount, monthlyCredits: next?.monthlyCredits ?? agent.credits.renewal ?? agent.credits.monthly, paidFrom },
-          message: `Undo the cancellation: nothing is charged now. The plan then renews from ${wallet} for ${formatUsd(amount)} after ${periodEnd} and every 30 days after that until it is cancelled.`,
+          quote: {
+            chargeNowUsd: 0,
+            estimated: false,
+            recurringUsd: amount,
+            monthlyCredits: next?.monthlyCredits ?? agent.credits.renewal ?? agent.credits.monthly,
+            paidFrom,
+            ...(renewsOn ? { plan: renewsOn } : {}),
+          },
+          message: `Undo the cancellation: nothing is charged now. The plan then renews${renewsOn ? ` on ${planName(renewsOn)}` : ''} from ${wallet} for ${formatUsd(amount)} after ${periodEnd} and every 30 days after that until it is cancelled.`,
           confirmReason: 'Ask the user to confirm first: the plan will charge the wallet again at each renewal.',
           perform: async signal => {
             requireApiSuccess(
@@ -515,9 +524,12 @@ async function planFor(
         const open = unsettled('Only an active plan is cancelled here.');
         return open ? { outcome: 'refused', message: open } : { outcome: 'not_needed', message: 'There is no active plan to cancel.' };
       }
-      // A move set for the next renewal ends with the plan.
-      const dropsMove = asPlan(agent.nextPlan) && agent.nextPlan !== agent.tier
-        ? ` The move to ${planName(agent.nextPlan)} set for the next renewal is dropped with it.`
+      // A move set for the next renewal. A card plan's cancel drops it. A wallet cancel keeps it: an undo
+      // renews on it, and the plan's end shows the plan on it, so renew brings it back there.
+      const moveSet = asPlan(agent.nextPlan) && agent.nextPlan !== agent.tier ? agent.nextPlan : null;
+      const dropsMove = moveSet ? ` The move to ${planName(moveSet)} set for the next renewal is dropped with it.` : '';
+      const keepsMove = moveSet
+        ? ` The move to ${planName(moveSet)} set for the next renewal stays: if the cancellation is undone, the plan renews on ${planName(moveSet)}, and once it has ended, action renew brings it back on ${planName(moveSet)}.`
         : '';
       const performCancel = async (signal: AbortSignal): Promise<Performed> => {
         const body = requireApiSuccess(
@@ -562,7 +574,7 @@ async function planFor(
       return {
         outcome: 'quote',
         quote: { chargeNowUsd: 0, estimated: false, paidFrom },
-        message: `Cancel the plan: nothing is refunded and it stops renewing. The agent keeps its monthly credits until about a day after ${periodEnd}; then the monthly credits end and the agent stops unless it has extra credits left. Action renew undoes the cancellation before then.${dropsMove}`,
+        message: `Cancel the plan: nothing is refunded and it stops renewing. The agent keeps its monthly credits until about a day after ${periodEnd}; then the monthly credits end and the agent stops unless it has extra credits left. Action renew undoes the cancellation before then.${keepsMove}`,
         confirmReason: 'Ask the user to confirm the cancellation first.',
         perform: performCancel,
       };

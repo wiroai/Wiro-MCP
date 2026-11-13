@@ -580,6 +580,11 @@ test('the agents playbook says a card plan whose payment did not go through take
   assert.match(PLAYBOOKS.agents, /A card plan whose last payment did not go through \(past_due, then unpaid\) has not ended: `subscribe` starts no plan beside it, and no action here renews, changes or cancels it\. The user fixes the payment in the dashboard by paying the open invoice, with another card if needed, and the plan renews by itself/);
 });
 
+test('the agents playbook says a wallet cancel keeps the move set for its renewal', () => {
+  assert.match(PLAYBOOKS.agents, /`cancel` stops the next renewal, with no refund\. On a wallet plan a move set for that renewal stays: undoing the cancellation keeps it, and once the plan has ended, `renew` brings it back on that plan\. A team's card plan drops the move\./);
+  assert.doesNotMatch(PLAYBOOKS.agents, /and drops a move set for it/);
+});
+
 test('the playbooks name the three plans and say skills do not change the price', () => {
   assert.match(PLAYBOOKS.agents, /Every agent has one of three monthly plans, smallest first: Starter, Pro or Max\./);
   assert.match(PLAYBOOKS.agents, /every plan includes every skill/);
