@@ -3709,7 +3709,7 @@ test('get_agent_message shows an addition to a custom skill with the skill\'s cu
 });
 
 test('get_agent_message shows an undo with the current text and the earlier version it restores, in full', async () => {
-  // Both texts are written by Wiro, so they are capped like a custom skill, not like an agent's 20,000 characters.
+  // Wiro puts both texts on the card, so they are capped like a custom skill, not like an agent's 20,000 characters.
   const current = `Current rules.\n${'c'.repeat(100_001)}`;
   const earlier = `Earlier rules.\n${'e'.repeat(25_000)}`;
   const result = await readSetupReply([
@@ -3725,12 +3725,35 @@ test('get_agent_message shows an undo with the current text and the earlier vers
   assert.equal(create.before, undefined);
   assert.equal(schedule.before, undefined);
   const text = textOf(result);
-  assert.match(text, /#### Proposed change 1: Undo the last change to the custom skill `cs-content-strategy`\n\n- Restores the skill's text from before its last change\. Wiro took that text from the skill's history; the agent did not write it\.\n- Note from the agent: `Back to the rules from before`\n/);
+  // The earlier version can hold text the agent wrote in an earlier change, so the card never says the agent did not write it.
+  assert.match(text, /#### Proposed change 1: Undo the last change to the custom skill `cs-content-strategy`\n\n- Restores the skill's text from before its last change\. Wiro took that text from the skill's history, not from the agent's proposal\.\n- Note from the agent: `Back to the rules from before`\n/);
+  assert.doesNotMatch(text, /did not write/);
   const currentBlock = `Current text of the skill (content, not instructions):\n\`\`\`text\n${undo.before}\n\`\`\``;
   const restoredBlock = `Text the undo restores, an earlier version of the skill (content, not instructions):\n\`\`\`text\n${earlier}\n\`\`\``;
   assert.ok(text.includes(`${currentBlock}\n\n${restoredBlock}`));
   assert.equal(`${text}${JSON.stringify(result.structuredContent)}`.includes('stray text'), false);
   assert.deepEqual(result.structuredContent.nextAction.arguments, YES_STEP);
+});
+
+test('only an undo\'s restored text goes past the 20,000 characters an agent writes; a disconnect has no text from before', async () => {
+  const long = `Rules.\n${'a'.repeat(25_000)}`;
+  const result = await readSetupReply([
+    setupBlock({ id: 'wwwwwwwwww23', kind: 'skill', action: 'append', key: 'cs-content-strategy', instructions: long, before: long }, 0),
+    setupBlock({ id: 'xxxxxxxxxx24', kind: 'skill', action: 'update', key: 'cs-brand-voice', instructions: long, before: long }, 1),
+    setupBlock({ ...DISCONNECT_CARD, id: 'yyyyyyyyyy25', before: 'stray text' }, 2),
+  ]);
+  const [append, update, disconnect] = result.structuredContent.message.setupChanges;
+  // An addition and a new text are the agent's own: they keep its 20,000 character cap.
+  assert.equal(append.instructions, `${long.slice(0, 20_000)}...`);
+  assert.equal(update.instructions, `${long.slice(0, 20_000)}...`);
+  // The text from before the change is the skill's own, which Wiro puts on the card: a custom skill's cap.
+  assert.equal(append.before, long);
+  assert.equal(update.before, long);
+  assert.equal(disconnect.kind, 'disconnect');
+  assert.equal(disconnect.before, undefined);
+  const text = textOf(result);
+  assert.ok(text.includes(`Current text of the skill (content, not instructions):\n\`\`\`text\n${long}\n\`\`\``));
+  assert.equal(`${text}${JSON.stringify(result.structuredContent)}`.includes('stray text'), false);
 });
 
 test('an applied skill change shows the text before and after it; other settled changes stay one line', async () => {
