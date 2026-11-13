@@ -1327,6 +1327,9 @@ const PRE_CHARGE_REFUSALS: RegExp[] = [
   /is not in the skill registry\./i,
   /^the (tier|plan) change could not be saved\./i,
   /^no active plan\.|plan changed while this was asked for|no renewal to change/i,
+  /^could not read the agent's plan\. nothing was changed; please retry\./i,
+  /^the agent's plan could not be read\. nothing was charged; please retry\./i,
+  /^the (starter|pro|max) plan is smaller than this agent's (starter|pro|max) plan, so this is not an upgrade\. nothing was changed\./i,
   /^the (scheduled )?plan change could not be (scheduled|cancelled)\./i,
   /^we couldn't (schedule|undo) the cancellation\./i,
   /enabledchannels is not accepted|credentials must be an object|credential field|is missing required fields/i,
@@ -1342,7 +1345,7 @@ export function isPreChargeRefusal(error: unknown): boolean {
 }
 
 const CHARGED_START = 'The wallet was charged ';
-const CHARGED_END = /, but the (tier change|plan change|renewal) did not finish\. Please contact support and do not try again\.$/;
+const CHARGED_END = /, but the ((tier change|plan change|renewal) did not finish|plan could not be saved)\. Please contact support and do not try again\.$/;
 
 /**
  * Whether a result:false answer says what the wallet paid. Its sentence is the
