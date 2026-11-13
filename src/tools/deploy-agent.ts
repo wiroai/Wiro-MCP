@@ -14,6 +14,7 @@ import {
 } from '../utils/api.js';
 import { DEFAULT_WAIT_SECONDS } from '../utils/poll.js';
 import {
+  AGENT_PLANS,
   deployedAgentSchema,
   describeAgentStatus,
   formatCredits,
@@ -21,20 +22,21 @@ import {
   nextStepForAgent,
   isWalletNotRead,
   outcomeUnknown,
+  planLineText,
+  planName,
+  planPricingSchema,
   readAgentDetail,
   sameAmount,
   skillLabel,
   skillOffTasksNote,
   taskLabel,
   taskNamedByWiro,
-  tierPricingSchema,
   toAgentDetail,
   toDeployedAgent,
+  toPlanPricing,
   toStringArray,
-  toTierPricing,
   WIRO_PROJECT_CREDENTIAL,
   type AgentDetail,
-  type AgentTier,
 } from '../utils/user-agent.js';
 import { APPROVAL_POLICY_KEY, humanizeCustomSkillKey, isFilledValue, pausedSkillTitles, resolveDeployCustomSkills, type DeployCustomSkill, type TemplateCustomSkill } from '../utils/agent-config.js';
 import { readTemplateRow, toSkillSummary, toTemplateDetail, type SkillSummary } from '../utils/agent-catalog.js';
@@ -89,14 +91,15 @@ const quoteSchema = z.object({
   kind: z.enum(['template', 'custom']),
   template: z.object({ guid: z.string(), slug: z.string(), title: z.string() }).optional(),
   title: z.string(),
-  tier: z.enum(['starter', 'pro']),
+  tier: z.enum(AGENT_PLANS)
+    .describe('The plan this quote is for: starter, pro or max.'),
   priceUsd: z.number(),
   monthlyCredits: z.number(),
   paidFrom: z.string(),
   wallet: quoteWalletSchema.optional()
     .describe('The wallet this charge comes from, as far as it can be read.'),
-  pricing: tierPricingSchema.optional()
-    .describe('What this agent costs on each tier, every 30 days.'),
+  pricing: planPricingSchema.optional()
+    .describe('What each plan costs every 30 days, with its monthly credits. Every plan includes every skill.'),
   teamSessionMode: z.string().optional()
     .describe('In a team workspace: the chat mode the new agent starts with.'),
   chatSetup: z.enum(CHAT_SETUP_MODES).optional()
@@ -197,13 +200,12 @@ function walletHoldsText(wallet: Quote['wallet']): string {
   return `It holds ${formatUsd(others)} in deposits and coupon credit, and ${formatUsd(wallet.storeRevenueUsd)} in store revenue.`;
 }
 
-/** The tier that was not asked for: its price and credits. */
-function otherTierLine(quote: Quote): string | null {
-  if (!quote.pricing) return null;
-  const { starter, pro } = quote.pricing;
-  return quote.tier === 'starter'
-    ? `- Pro instead: ${formatUsd(pro.priceUsd)} every 30 days with ${formatCredits(pro.monthlyCredits)} monthly credits. Only Pro can buy extra credit packs.`
-    : `- Starter instead: ${formatUsd(starter.priceUsd)} every 30 days with ${formatCredits(starter.monthlyCredits)} monthly credits.`;
+/** The plans that were not asked for, with their prices and credits. */
+function otherPlansLine(quote: Quote): string | null {
+  const others = quote.pricing ? planLineText(quote.pricing, quote.tier) : '';
+  return others
+    ? `- Other plans: ${others}. Every plan includes every skill, and any plan can buy extra credit packs.`
+    : null;
 }
 
 function credentialList(items: Array<{ key: string; title: string }>): string {
@@ -219,13 +221,13 @@ function quoteText(quote: Quote, credentials?: Record<string, unknown>, titles?:
     '## Deployment quote (nothing charged yet)',
     '',
     `- Agent: ${what}`,
-    `- Tier: ${quote.tier === 'pro' ? 'Pro' : 'Starter'}`,
+    `- Plan: ${planName(quote.tier)}`,
     `- Price: ${formatUsd(quote.priceUsd)} now, then ${formatUsd(quote.priceUsd)} every 30 days until the plan is cancelled`,
     `- Monthly credits: ${formatCredits(quote.monthlyCredits)}. They pay for the agent's chat and scheduled tasks (100 credits = $1). Model runs it starts, for images, videos or voice calls, are billed to the wallet of the workspace that owns the Wiro project connected to the agent.`,
     `- Paid from: ${quote.paidFrom} ${walletHoldsText(quote.wallet)}`,
   ];
-  const otherTier = otherTierLine(quote);
-  if (otherTier) lines.push(otherTier);
+  const otherPlans = otherPlansLine(quote);
+  if (otherPlans) lines.push(otherPlans);
   if (quote.teamSessionMode) lines.push(`- Chats: ${TEAM_CHATS_NOTE}`);
   if (quote.chatSetup) lines.push(`- Setup from chat: ${chatSetupLabel(quote.chatSetup)}`);
   if (quote.customSkills?.length) {
@@ -301,6 +303,7 @@ function deployedText(
     '',
     `- Agent: ${agent.title} (\`${agent.guid}\`)`,
     `- Status: ${describeAgentStatus(agent.status)}. It starts on its own; get_my_agent with wait_seconds follows it.`,
+    `- Plan: ${planName(agent.tier ?? quote.tier)}`,
     `- Charged: ${formatUsd(chargedUsd ?? quote.priceUsd)} from the wallet. The plan renews every 30 days until it is cancelled.`,
     `- Monthly credits: ${formatCredits(agent.credits.monthly || quote.monthlyCredits)}`,
   ];
@@ -348,7 +351,9 @@ export function registerDeployAgent(server: McpServer, client: WiroClient): void
         + 'connect_agent_oauth or, for a Wiro project, bind_agent_project, but skills that need them do not work until then. A custom build also gets '
         + 'the scheduled tasks its skills come with; the result names the ones that are on, and they can be changed or '
         + 'turned off. A build whose skills bring none gets a starter task, which stays off until it is written and turned '
-        + 'on with manage_agent_custom_skill. The quote names the wallet and the other tier\'s price. '
+        + 'on with manage_agent_custom_skill. The plan (tier) sets the price and the monthly credits, the same '
+        + 'for every template and custom build, and every plan includes every skill. The quote names the wallet '
+        + 'and the other plans\' prices. '
         + 'In a team workspace the agent starts with collaborative chats, which every team member sees; update_agent '
         + 'changes that after the deploy. To change a template\'s '
         + 'skills, deploy it first and then use apply_agent_skills. get_playbook describes the whole flow.',
@@ -358,11 +363,11 @@ export function registerDeployAgent(server: McpServer, client: WiroClient): void
         custom: z.boolean().default(false)
           .describe('true for a custom build from `skills` instead of a template.'),
         skills: z.array(z.string().min(1).max(100)).max(60).optional()
-          .describe('Custom build only: skill names from list_agent_skills. Skills they depend on are added and priced automatically. An empty list deploys an agent with no extra skills at the minimum price.'),
+          .describe('Custom build only: skill names from list_agent_skills. Skills they depend on are added automatically. Skills do not change the price: the plan sets it. An empty list deploys an agent with no extra skills.'),
         title: z.string().trim().min(1).max(200).optional()
           .describe('Name of the new agent. Required for a custom build. A template deploy defaults to the template title.'),
-        tier: z.enum(['starter', 'pro'])
-          .describe('Plan tier. Pro has a larger monthly credit pool and is the only tier that can buy extra credit packs.'),
+        tier: z.enum(AGENT_PLANS)
+          .describe('The plan: starter, pro or max, smallest first. Each has a fixed monthly price and a monthly credit pool, and a larger plan has more credits. Every plan includes every skill and can buy extra credit packs. get_agent_template and the quote show the prices.'),
         description: z.string().max(5_000).optional()
           .describe('Optional description of the agent.'),
         cover: z.url().max(2_048).optional()
@@ -441,12 +446,14 @@ export function registerDeployAgent(server: McpServer, client: WiroClient): void
           const detail = toTemplateDetail(
             await readTemplateRow(client, templateRef, requestedCustomSkills.length > 0, extra.signal),
           );
-          if (!detail.pricing) {
-            throw new Error('This template cannot be priced right now, so it cannot be deployed. Try again later.');
+          const price = detail.pricing?.[tier];
+          if (!detail.pricing || !price) {
+            throw new Error(detail.pricing
+              ? `The ${planName(tier)} plan cannot be priced right now, so it cannot be deployed. Try again later.`
+              : 'This template cannot be priced right now, so it cannot be deployed. Try again later.');
           }
           agentGuid = detail.guid;
           templateTasks = [...(detail.scheduledTasks ?? []), ...(detail.customInstructions ?? [])];
-          const price = detail.pricing[tier as AgentTier];
           quote = {
             kind: 'template',
             template: { guid: detail.guid, slug: detail.slug, title: detail.title },
@@ -496,8 +503,10 @@ export function registerDeployAgent(server: McpServer, client: WiroClient): void
           );
           const priceUsd = toNumber(preview.totalPriceUsd);
           const monthlyCredits = toNumber(preview.totalMonthlyCredits);
-          if (priceUsd === null || monthlyCredits === null) {
-            throw new Error('The price of this build could not be computed. Try again later.');
+          // The preview prices the plan it was asked for; an answer for another plan cannot be quoted.
+          const pricedPlan = asString(preview.tier);
+          if (priceUsd === null || monthlyCredits === null || (pricedPlan !== undefined && pricedPlan !== tier)) {
+            throw new Error(`The ${planName(tier)} plan of this build could not be priced. Try again later.`);
           }
           const enabled = toStringArray(preview.enabledSkills);
           const build = enabled.length > 0 ? enabled : skillNames;
@@ -513,8 +522,8 @@ export function registerDeployAgent(server: McpServer, client: WiroClient): void
               credentialsNeeded.set(skill.credentialKey, `${skill.title} credentials`);
             }
           }
-          // A draft preview prices both tiers at once.
-          const pricing = toTierPricing(preview.tiers);
+          // A draft preview lists every plan's price at once.
+          const pricing = toPlanPricing(preview.tiers);
           quote = {
             kind: 'custom',
             title: args.title ?? '',

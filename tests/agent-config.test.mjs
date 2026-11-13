@@ -28,7 +28,6 @@ import {
   planSkillChanges,
   resolveDeployCustomSkills,
   skillChangeDigest,
-  skillPriceTag,
   templateTaskTextError,
   upsertCustomSkillKey,
 } from '../dist/utils/agent-config.js';
@@ -383,271 +382,105 @@ test('agent configuration tools advertise output schemas, annotations and plain 
 // apply_agent_skills
 // ---------------------------------------------------------------------------
 
-/**
- * PricingPreview's planChange: what a change does today on the plan the agent has,
- * as Wiro works it out. The default is the default agent's wallet plan with 15 of
- * its 30 days left, moving from $42 and 4200 credits to $43 and 4300.
- */
-function planChange(overrides = {}) {
-  return {
-    provider: 'prepaid',
-    periodEnd: NOW + 15 * 86400,
-    secondsLeft: 15 * 86400,
-    creditsNow: 50,
-    creditsThisPeriod: 4250,
-    creditsFromRenewal: 4300,
-    chargeNowUsd: 0.5,
-    creditNowUsd: 0,
-    usedCreditsUsd: 0,
-    ...overrides,
-  };
-}
-
-/** A card plan's planChange: no wallet money, and a rise's credits for the time left. */
-function cardPlanChange(overrides = {}) {
-  return planChange({ provider: 'stripe', chargeNowUsd: 0, creditNowUsd: 0, usedCreditsUsd: 0, ...overrides });
-}
-
-function preview(change, overrides = {}) {
-  return { result: true, errors: [], tier: 'starter', totalPriceUsd: 43, totalMonthlyCredits: 4300, planChange: change, ...overrides };
-}
-
 function skillRoutes(extra = {}) {
   return {
     '/Skills/List': skillList,
     '/UserAgent/Detail': detail(),
-    '/UserAgent/PricingPreview': { result: true, errors: [], tier: 'starter', totalPriceUsd: 43, totalMonthlyCredits: 4300, enabledSkills: ['int-instagram-post', 'util-anti-ai-human-copy', 'util-chat-markdown-reporting', 'util-social-posting-common'], tokenRates: { huge: true }, planChange: planChange() },
     ...extra,
   };
 }
 
 const INSTAGRAM_SET = ['int-instagram-post', 'util-anti-ai-human-copy', 'util-chat-markdown-reporting', 'util-social-posting-common'];
+// What the Instagram change sends: the skill and the two it needs that are off.
+const INSTAGRAM_CHANGE = { 'int-instagram-post': true, 'util-social-posting-common': true, 'util-anti-ai-human-copy': true };
 
 /** Detail that shows the Instagram skills once SkillsApply was called, like the live agent would. */
 function detailAfterApply(overrides = {}) {
   return (_body, calls) => (calls.some(call => call.path === '/UserAgent/SkillsApply')
-    ? detail({ skills: INSTAGRAM_SET.map(name => ({ name, enabled: true })), monthlypriceusd: '43.00', ...overrides })
+    ? detail({ skills: INSTAGRAM_SET.map(name => ({ name, enabled: true })), ...overrides })
     : detail(overrides));
 }
 
-test('apply_agent_skills names the new monthly credits only for renewals the plan will have', async () => {
-  const wallet = { plan: 'agent', status: 'active', provider: 'prepaid', currentperiodend: NOW + 15 * 86400, daysremaining: 15 };
-  const card = { plan: 'agent', status: 'active', provider: 'stripe', currentperiodend: NOW + 15 * 86400, daysremaining: 15 };
-  // Wiro answers planChange only for an active plan.
-  const creditsLines = async (overrides, change) => {
-    let lines;
-    await withClient(fakeClient(skillRoutes({ '/UserAgent/Detail': detail(overrides), '/UserAgent/PricingPreview': preview(change) })), async client => {
-      const quote = await client.callTool({ name: 'apply_agent_skills', arguments: { agent_guid: AGENT, skills: { 'int-instagram-post': true } } });
-      lines = text(quote).split('\n').filter(entry => entry.startsWith('**Monthly credits:**') || entry.startsWith('**This period:**'));
-    });
-    return lines;
-  };
-  const thisPeriod = `**This period:** +50 credits now, 4,250 in all until ${new Date((NOW + 15 * 86400) * 1000).toISOString()}`;
-  assert.deepEqual(await creditsLines({ subscription: wallet }, planChange()), ['**Monthly credits:** 4,200 now, 4,300 from the next renewal', thisPeriod]);
-  // A cancelled plan renews only if the cancellation is undone, as its Billing line says.
-  assert.deepEqual(await creditsLines({ subscription: { ...wallet, pendingdowngrade: 'cancel' } }, planChange()), ['**Monthly credits:** 4,200 now, 4,300 from the next renewal, if the plan is kept', thisPeriod]);
-  assert.deepEqual(await creditsLines({ subscription: card, stripecancelatperiodend: true }, cardPlanChange()), ['**Monthly credits:** 4,200 now, 4,300 from the next renewal, if the plan is kept', thisPeriod]);
-  assert.deepEqual(await creditsLines({ subscription: card, stripecancelatperiodend: false }, cardPlanChange()), ['**Monthly credits:** 4,200 now, 4,300 from the next renewal', thisPeriod]);
-  // A card plan whose renewal is not known names the renewal as a condition.
-  assert.deepEqual(await creditsLines({ subscription: card }, cardPlanChange()), ['**Monthly credits:** 4,200 now, 4,300 from the next renewal, if the plan renews', thisPeriod]);
-  // A card plan moving to wallet billing renews from the wallet, even if a row carries the card subscription's end flag.
-  assert.deepEqual(await creditsLines({ subscription: { ...card, nextprovider: 'prepaid' }, stripecancelatperiodend: true }, cardPlanChange()), ['**Monthly credits:** 4,200 now, 4,300 from the next renewal', thisPeriod]);
-  // A plan that has ended is renewed first, as its Billing line says.
-  assert.deepEqual(await creditsLines({ subscription: { ...wallet, status: 'expired', currentperiodend: NOW - 86400, pendingdowngrade: 'cancel' } }, null), ['**Monthly credits:** 4,200 now, 4,300 at each renewal after the change']);
-  assert.deepEqual(await creditsLines({ subscription: null }, null), ['**Monthly credits:** 4,200 now, 4,300 a month once it is subscribed']);
-});
-
-test('apply_agent_skills reads the plan\'s monthly credits from what each renewal grants', async () => {
-  // An earlier drop in this period left it 4000 credits; each renewal grants 4200.
-  const fake = fakeClient(skillRoutes({
-    '/UserAgent/Detail': detail({ monthlycredits: 4000, renewalcredits: 4200 }),
-    '/UserAgent/PricingPreview': preview(planChange({ creditsThisPeriod: 4050 })),
-  }));
-  await withClient(fake, async client => {
-    const quote = await quoteInstagram(client);
-    const { pricing } = quote.structuredContent;
-    assert.equal(pricing.currentMonthlyCredits, 4200);
-    assert.equal(pricing.newMonthlyCredits, 4300);
-    assert.equal(pricing.deltaMonthlyCredits, 100);
-    assert.equal(pricing.creditsNow, 50);
-    assert.equal(pricing.creditsThisPeriod, 4050);
-    assert.equal(pricing.creditsFromRenewal, 4300);
-    assert.equal(pricing.periodEnd, new Date((NOW + 15 * 86400) * 1000).toISOString());
-    assert.match(text(quote), /^\*\*Monthly credits:\*\* 4,200 now, 4,300 from the next renewal$/m);
-    assert.match(text(quote), /^\*\*This period:\*\* \+50 credits now, 4,050 in all until /m);
-  });
-});
-
-test('apply_agent_skills names what renewals give after a change only for renewals the plan will have', async () => {
-  const end = NOW + 15 * 86400;
-  const wallet = { plan: 'agent', status: 'active', provider: 'prepaid', currentperiodend: end, daysremaining: 15 };
-  const card = { plan: 'agent', status: 'active', provider: 'stripe', currentperiodend: end, daysremaining: 15 };
-  const answer = (plan, credits = {}) => ({
-    result: true,
-    errors: [],
-    tier: 'starter',
-    pricing: { previousPriceUsd: 42, newPriceUsd: 43, deltaUsd: 1, previousMonthlyCredits: 4200, newMonthlyCredits: 4300, deltaCredits: 100, creditsNow: 50, creditsThisPeriod: 4250, creditsFromRenewal: 4300, periodEnd: end, ...credits },
-    stripeProrationApplied: plan === 'card',
-    prepaidWalletDelta: plan === 'wallet' ? 0.5 : null,
-    usedCreditsUsd: 0,
-    restartTriggered: true,
-  });
-  const apply = async (overrides, change, body) => {
-    let result;
-    const fake = fakeClient(skillRoutes({ '/UserAgent/Detail': detailAfterApply(overrides), '/UserAgent/PricingPreview': preview(change), '/UserAgent/SkillsApply': body }));
-    await withClient(fake, async client => {
-      const quote = await quoteInstagram(client);
-      result = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
-    });
-    assert.equal(result.structuredContent.status, 'applied', text(result));
-    return result;
-  };
-  const thisPeriod = result => text(result).split('\n').find(entry => entry.startsWith('**This period:**'));
-  const line = renewal => `**This period:** +50 credits, 4,250 in all until ${new Date(end * 1000).toISOString()}; ${renewal}`;
-
-  assert.equal(thisPeriod(await apply({ subscription: wallet }, planChange(), answer('wallet'))), line('every renewal gives 4,300'));
-  // A cancelled plan renews only if the cancellation is undone, as its quote and Billing line say.
-  assert.equal(thisPeriod(await apply({ subscription: { ...wallet, pendingdowngrade: 'cancel' } }, planChange(), answer('wallet'))), line('4,300 from the next renewal, if the plan is kept'));
-  assert.equal(thisPeriod(await apply({ subscription: card, stripecancelatperiodend: true }, cardPlanChange(), answer('card'))), line('4,300 from the next renewal, if the plan is kept'));
-  // A card plan whose renewal is not known names the renewal as a condition.
-  assert.equal(thisPeriod(await apply({ subscription: card }, cardPlanChange(), answer('card'))), line('4,300 from the next renewal, if the plan renews'));
-  // A card plan moving to wallet billing renews from the wallet.
-  assert.equal(thisPeriod(await apply({ subscription: { ...card, nextprovider: 'prepaid' }, stripecancelatperiodend: true }, cardPlanChange(), answer('card'))), line('every renewal gives 4,300'));
-
-  // An agent with no plan has no period and no renewal: Wiro still answers the credit fields, with periodEnd null.
-  const none = await apply({ subscription: null }, null, answer('none', { creditsNow: 100, creditsThisPeriod: 4300, periodEnd: null }));
-  assert.equal(thisPeriod(none), undefined, text(none));
-  assert.doesNotMatch(text(none), /renewal/);
-  for (const field of ['creditsNow', 'creditsThisPeriod', 'creditsFromRenewal', 'periodEnd']) {
-    assert.equal(field in none.structuredContent.pricing, false, field);
-  }
-});
-
-async function quoteInstagram(client) {
-  const quote = await client.callTool({
-    name: 'apply_agent_skills',
-    arguments: { agent_guid: AGENT, skills: { 'int-instagram-post': true } },
-  });
-  assert.equal(quote.structuredContent.status, 'quote', text(quote));
-  return quote;
+/** SkillsApply's answer for a change: no money moves, and Wiro says whether a running agent restarts. */
+function appliedAnswer(overrides = {}) {
+  return { result: true, errors: [], pricing: { enabledSkills: INSTAGRAM_SET }, tier: 'starter', restartTriggered: true, ...overrides };
 }
 
-test('apply_agent_skills quotes first, adds dependencies and returns a reusable key', async () => {
-  const fake = fakeClient(skillRoutes());
-  await withClient(fake, async client => {
-    const result = await client.callTool({
-      name: 'apply_agent_skills',
-      arguments: { agent_guid: AGENT, skills: { 'int-instagram-post': true } },
-    });
-    assert.notEqual(result.isError, true, text(result));
-    const out = result.structuredContent;
-    assert.equal(out.status, 'quote');
-    assert.deepEqual(out.changes.enable.sort(), ['int-instagram-post', 'util-anti-ai-human-copy', 'util-social-posting-common']);
-    assert.deepEqual(out.changes.addedDependencies.sort(), ['util-anti-ai-human-copy', 'util-social-posting-common']);
-    assert.deepEqual(out.changes.alreadySet, []);
-    assert.equal(out.pricing.currentMonthlyUsd, 42);
-    assert.equal(out.pricing.newMonthlyUsd, 43);
-    assert.equal(out.pricing.deltaMonthlyUsd, 1);
-    assert.equal(out.billing.plan, 'prepaid');
-    assert.equal(out.billing.wallet, 'personal');
-    assert.equal(out.billing.estimatedChargeNowUsd, 0.5);
-    assert.match(out.billing.note, /taken from your personal wallet now/);
-    assert.equal(out.billing.note, '$0.50 is taken from your personal wallet now for the rest of this period (15 days), and 50 credits come with it. The plan then renews at $43.00 a month.');
-    assert.equal(out.pricing.creditsNow, 50);
-    assert.equal(out.pricing.creditsThisPeriod, 4250);
-    assert.equal(out.pricing.creditsFromRenewal, 4300);
-    assert.equal('creditNowUsd' in out.billing, false, 'a rise has no credit');
-    assert.match(out.restart, /restarts/);
-    assert.deepEqual(out.credentialsNeeded, [{ skill: 'int-instagram-post', credentials: ['instagram'] }]);
-    assert.match(out.idempotencyKey, /^mcp-[0-9a-f]{16}-[0-9a-f]{10}-[0-9a-f]{8}$/);
-    assert.equal(parseSkillChangeKey(out.idempotencyKey).priceTag, skillPriceTag(42, 43, NOW + 15 * 86400));
-    assert.deepEqual(out.nextAction.arguments, {
-      agent_guid: AGENT,
-      skills: { 'int-instagram-post': true },
-      add_dependencies: true,
-      confirm: true,
-      idempotency_key: out.idempotencyKey,
-    });
-    assert.equal(out.nextAction.reason, 'Ask the user to approve this charge first.');
-    assert.doesNotMatch(JSON.stringify(out), /tokenRates|huge/);
+function applyInstagram(client, extra = {}) {
+  return client.callTool({ name: 'apply_agent_skills', arguments: { agent_guid: AGENT, skills: { 'int-instagram-post': true }, ...extra } });
+}
 
-    const preview = fake.calls.find(call => call.path === '/UserAgent/PricingPreview');
-    assert.deepEqual(preview.body, {
-      useragentguid: AGENT,
-      skillOverrides: { 'int-instagram-post': true, 'util-social-posting-common': true, 'util-anti-ai-human-copy': true },
-      withScheduledTasks: true,
-    });
-    for (const value of Object.values(preview.body.skillOverrides)) assert.equal(typeof value, 'boolean');
-    assert.equal(fake.paths().includes('/UserAgent/SkillsApply'), false);
-  });
-});
+const FREE_NOTE = 'A skill change costs nothing: the plan keeps its price and monthly credits.';
 
-test('apply_agent_skills applies with the quoted key and reports the wallet charge', async () => {
-  const fake = fakeClient(skillRoutes({
-    '/UserAgent/Detail': detailAfterApply(),
-    '/UserAgent/SkillsApply': {
-      result: true,
-      errors: [],
-      pricing: { previousPriceUsd: 42, newPriceUsd: 43, deltaUsd: 1, previousMonthlyCredits: 4200, newMonthlyCredits: 4300, deltaCredits: 100, enabledSkills: ['int-instagram-post'] },
-      tier: 'starter',
-      stripeProrationApplied: false,
-      prepaidWalletDelta: 0.5,
-      restartTriggered: true,
-      restartedAt: NOW,
-    },
-  }));
+test('apply_agent_skills applies on the first call, adds dependencies, costs nothing and returns a key', async () => {
+  const fake = fakeClient(skillRoutes({ '/UserAgent/Detail': detailAfterApply(), '/UserAgent/SkillsApply': appliedAnswer() }));
   await withClient(fake, async client => {
-    const quote = await client.callTool({
-      name: 'apply_agent_skills',
-      arguments: { agent_guid: AGENT, skills: { 'int-instagram-post': true } },
-    });
-    const result = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
+    const result = await applyInstagram(client);
     assert.notEqual(result.isError, true, text(result));
-    const apply = fake.calls.find(call => call.path === '/UserAgent/SkillsApply');
-    assert.deepEqual(apply.body, {
-      useragentguid: AGENT,
-      skills: { 'int-instagram-post': true, 'util-social-posting-common': true, 'util-anti-ai-human-copy': true },
-      idempotencyKey: quote.structuredContent.idempotencyKey,
-    });
     const out = result.structuredContent;
     assert.equal(out.status, 'applied');
-    assert.equal(out.billing.chargedNowUsd, 0.5);
-    assert.match(out.billing.note, /\$0\.50 was taken from your personal wallet/);
-    assert.equal(out.pricing.newMonthlyUsd, 43);
-    assert.equal(out.idempotencyKey, quote.structuredContent.idempotencyKey);
+    assert.deepEqual([...out.changes.enable].sort(), ['int-instagram-post', 'util-anti-ai-human-copy', 'util-social-posting-common']);
+    assert.deepEqual([...out.changes.addedDependencies].sort(), ['util-anti-ai-human-copy', 'util-social-posting-common']);
+    assert.deepEqual(out.changes.alreadySet, []);
+    assert.equal(out.note, FREE_NOTE);
+    assert.deepEqual(out.enabledSkills, INSTAGRAM_SET);
+    assert.match(out.restart, /^The agent restarts to load the skill change/);
+    assert.deepEqual(out.credentialsNeeded, [{ skill: 'int-instagram-post', credentials: ['instagram'] }]);
+    assert.match(out.idempotencyKey, /^mcp-[0-9a-f]{16}-[0-9a-f]{10}$/);
+    assert.equal(parseSkillChangeKey(out.idempotencyKey).digest, skillChangeDigest(AGENT, { ...INSTAGRAM_CHANGE, 'util-chat-markdown-reporting': true }));
     assert.deepEqual(out.nextAction, {
       tool: 'set_agent_credentials',
       arguments: { agent_guid: AGENT, credential: 'instagram' },
       reason: 'See what instagram needs before asking the user for it.',
     });
-    assert.doesNotMatch(JSON.stringify(out), /restartTriggered|restartedAt/);
+    // No price, plan or billing comes with a skill change, and nothing is quoted first.
+    for (const field of ['pricing', 'billing', 'tier']) assert.equal(field in out, false, field);
+    assert.ok(text(result).split('\n').includes(`**Cost:** ${FREE_NOTE} The skills' work uses the agent's credits, and model runs they start are billed to the wallet of the workspace that owns the Wiro project connected to the agent.`), text(result));
+    assert.doesNotMatch(text(result), /\$\d|charged|prorat|confirm/i);
+    assert.deepEqual(fake.paths().filter(path => path !== '/Credentials/Detail'), ['/Skills/List', '/UserAgent/Detail', '/UserAgent/SkillsApply', '/UserAgent/Detail']);
+    const [apply] = fake.called('/UserAgent/SkillsApply');
+    assert.deepEqual(apply.body, { useragentguid: AGENT, skills: INSTAGRAM_CHANGE, idempotencyKey: out.idempotencyKey });
+    for (const value of Object.values(apply.body.skills)) assert.equal(typeof value, 'boolean');
   });
 });
 
-test('apply_agent_skills names each skill by its title, with the name it takes, in the quote and the result', async () => {
-  const fake = fakeClient(skillRoutes({
-    '/UserAgent/Detail': detailAfterApply(),
-    '/UserAgent/SkillsApply': { result: true, errors: [], pricing: { previousPriceUsd: 42, newPriceUsd: 43, deltaUsd: 1 }, tier: 'starter', stripeProrationApplied: false, prepaidWalletDelta: 0.5, restartTriggered: true },
-  }));
+test('apply_agent_skills takes no confirm and no tier, and points a plan change to manage_agent_billing', async () => {
+  const fake = fakeClient(skillRoutes());
   await withClient(fake, async client => {
-    const quote = await quoteInstagram(client);
-    const lines = text(quote).split('\n');
-    // A skill the catalog gives no title reads as words made from its name.
-    assert.ok(lines.includes('**Turn on:** Instagram (`int-instagram-post`), Social Posting Common (`util-social-posting-common`), Anti AI Human Copy (`util-anti-ai-human-copy`)'), text(quote));
-    assert.ok(lines.includes('**Added because other skills need them:** Social Posting Common (`util-social-posting-common`), Anti AI Human Copy (`util-anti-ai-human-copy`)'), text(quote));
-    assert.ok(lines.some(line => line.startsWith('**Credentials the new skills need:** Instagram (`int-instagram-post`): Instagram (`instagram`).')), text(quote));
+    for (const extra of [{ confirm: true }, { tier: 'pro' }]) {
+      const result = await applyInstagram(client, extra);
+      assert.equal(result.isError, true, JSON.stringify(extra));
+      assert.match(text(result), /Unknown argument/);
+      assert.match(text(result), /A skill change applies on the first call and takes no confirm; manage_agent_billing with action change_plan changes the plan\./);
+    }
+    assert.equal(fake.calls.length, 0);
+    const { tools } = await client.listTools();
+    const tool = tools.find(candidate => candidate.name === 'apply_agent_skills');
+    assert.deepEqual(Object.keys(tool.inputSchema.properties).sort(), ['add_dependencies', 'agent_guid', 'idempotency_key', 'skills']);
+    assert.match(tool.description, /Every plan includes every skill, so a skill change costs nothing: the plan keeps its price and monthly credits, and no active plan is needed\./);
+    assert.match(tool.description, /The change is applied on the first call, so tell the user what turns on or off and get their yes first\./);
+    assert.match(tool.description, /A running agent restarts once when a skill turns on or off\./);
+    assert.match(tool.description, /To change the plan, use manage_agent_billing \(change_plan\)\./);
+    assert.doesNotMatch(tool.description, /quote|prorat|wallet at once|Starter to Pro/i);
+  });
+});
 
-    const applied = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
-    const after = text(applied).split('\n');
-    assert.ok(after.includes('**Turned on:** Instagram (`int-instagram-post`), Social Posting Common (`util-social-posting-common`), Anti AI Human Copy (`util-anti-ai-human-copy`)'), text(applied));
-    assert.ok(after.includes('**Still needed:** credentials for Instagram (`int-instagram-post`): Instagram (`instagram`). Set them with set_agent_credentials or connect_agent_oauth.'), text(applied));
+test('apply_agent_skills names each skill by its title, with the name it takes', async () => {
+  const fake = fakeClient(skillRoutes({ '/UserAgent/Detail': detailAfterApply(), '/UserAgent/SkillsApply': appliedAnswer() }));
+  await withClient(fake, async client => {
+    const applied = await applyInstagram(client);
+    const lines = text(applied).split('\n');
+    // A skill the catalog gives no title reads as words made from its name.
+    assert.ok(lines.includes('**Turned on:** Instagram (`int-instagram-post`), Social Posting Common (`util-social-posting-common`), Anti AI Human Copy (`util-anti-ai-human-copy`)'), text(applied));
+    assert.ok(lines.includes('**Added because other skills need them:** Social Posting Common (`util-social-posting-common`), Anti AI Human Copy (`util-anti-ai-human-copy`)'), text(applied));
+    assert.ok(lines.includes('**Still needed:** credentials for Instagram (`int-instagram-post`): Instagram (`instagram`). Set them with set_agent_credentials or connect_agent_oauth.'), text(applied));
     // The structured lists keep the names the tools take.
     assert.deepEqual(applied.structuredContent.changes.enable, ['int-instagram-post', 'util-social-posting-common', 'util-anti-ai-human-copy']);
   });
 });
 
 test('apply_agent_skills names a credential by the title of its card, or of the catalog when the agent has no card', async () => {
-  const reviews = { name: 'int-appstore-reviews', title: 'App Store Reviews', depends_on: [], conflicts_with: [], credential_key: 'apple-appstore', requires_credentials: true, pricing: { monthly_price_weight_usd: 1, monthly_credits_weight: 100 } };
+  const reviews = { name: 'int-appstore-reviews', title: 'App Store Reviews', depends_on: [], conflicts_with: [], credential_key: 'apple-appstore', requires_credentials: true, pricing: { monthly_price_weight_usd: 0, monthly_credits_weight: 0 } };
   const card = { optional: false, _connected: false, _filled: false, _required_missing: true, _schema: { title: 'App Store Connect', oauth_provider: null } };
   for (const [source, credentials, catalog] of [
     ['catalog', detailRow().credentials, credentialDetail],
@@ -659,15 +492,12 @@ test('apply_agent_skills names a credential by the title of its card, or of the 
       '/UserAgent/Detail': (_body, calls) => detail(calls.some(call => call.path === '/UserAgent/SkillsApply')
         ? { credentials, skills: [...detailRow().skills, { name: 'int-appstore-reviews', enabled: true }] }
         : { credentials }),
-      '/UserAgent/PricingPreview': { result: true, errors: [], tier: 'starter', totalPriceUsd: 43, totalMonthlyCredits: 4300, enabledSkills: ['int-appstore-reviews', 'util-chat-markdown-reporting'], planChange: planChange() },
-      '/UserAgent/SkillsApply': { result: true, errors: [], pricing: { previousPriceUsd: 42, newPriceUsd: 43, deltaUsd: 1 }, tier: 'starter', stripeProrationApplied: false, prepaidWalletDelta: 0.5, restartTriggered: true },
+      '/UserAgent/SkillsApply': appliedAnswer(),
     }));
     await withClient(fake, async client => {
-      const quote = await client.callTool({ name: 'apply_agent_skills', arguments: { agent_guid: AGENT, skills: { 'int-appstore-reviews': true } } });
-      assert.equal(quote.structuredContent.status, 'quote', `${source}: ${text(quote)}`);
+      const applied = await client.callTool({ name: 'apply_agent_skills', arguments: { agent_guid: AGENT, skills: { 'int-appstore-reviews': true } } });
+      assert.equal(applied.structuredContent.status, 'applied', `${source}: ${text(applied)}`);
       // The title, not the words made from the key (Apple App Store).
-      assert.ok(text(quote).split('\n').some(line => line.startsWith('**Credentials the new skills need:** App Store Reviews (`int-appstore-reviews`): App Store Connect (`apple-appstore`).')), `${source}: ${text(quote)}`);
-      const applied = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
       assert.ok(text(applied).split('\n').includes('**Still needed:** credentials for App Store Reviews (`int-appstore-reviews`): App Store Connect (`apple-appstore`). Set them with set_agent_credentials or connect_agent_oauth.'), `${source}: ${text(applied)}`);
     });
   }
@@ -681,254 +511,142 @@ test('apply_agent_skills says when the skill change takes effect on an agent tha
   ]) {
     const fake = fakeClient(skillRoutes({
       '/UserAgent/Detail': detailAfterApply({ status }),
-      '/UserAgent/SkillsApply': {
-        result: true,
-        errors: [],
-        pricing: { previousPriceUsd: 42, newPriceUsd: 43, deltaUsd: 1, previousMonthlyCredits: 4200, newMonthlyCredits: 4300, deltaCredits: 100 },
-        tier: 'starter',
-        prepaidWalletDelta: 0.5,
-      },
+      // Wiro restarts no agent that is not running.
+      '/UserAgent/SkillsApply': appliedAnswer({ restartTriggered: false }),
     }));
     await withClient(fake, async client => {
-      const quote = await quoteInstagram(client);
-      assert.equal(quote.structuredContent.restart, restart, `status ${status}`);
-      const result = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
+      const result = await applyInstagram(client);
       assert.notEqual(result.isError, true, text(result));
       assert.equal(result.structuredContent.restart, restart, `status ${status}`);
       assert.ok(text(result).includes(`**Restart:** ${restart}`), `status ${status}`);
     });
   }
-});
 
-test('apply_agent_skills refuses a key that was issued for a different change', async () => {
-  const fake = fakeClient(skillRoutes({ '/UserAgent/SkillsApply': { result: true } }));
-  await withClient(fake, async client => {
-    const quote = await client.callTool({
-      name: 'apply_agent_skills',
-      arguments: { agent_guid: AGENT, skills: { 'int-instagram-post': true } },
-    });
-    const result = await client.callTool({
-      name: 'apply_agent_skills',
-      arguments: { agent_guid: AGENT, skills: { 'int-googleads-manage': true }, confirm: true, idempotency_key: quote.structuredContent.idempotencyKey },
-    });
-    assert.equal(result.isError, true);
-    assert.match(text(result), /belongs to a different skill change/);
-    assert.equal(fake.paths().includes('/UserAgent/SkillsApply'), false);
+  // A running agent that Wiro did not restart says so instead of a restart that did not happen.
+  const kept = fakeClient(skillRoutes({ '/UserAgent/Detail': detailAfterApply(), '/UserAgent/SkillsApply': appliedAnswer({ restartTriggered: false }) }));
+  await withClient(kept, async client => {
+    const result = await applyInstagram(client);
+    assert.equal(result.structuredContent.restart, 'The agent keeps running: Wiro did not restart it for this change. control_agent with action restart loads it now.');
+    assert.equal(result.structuredContent.nextAction.tool, 'set_agent_credentials');
   });
 });
 
-test('apply_agent_skills explains refusals with the server details', async () => {
-  const fake = fakeClient(skillRoutes({
-    '/UserAgent/SkillsApply': {
-      result: false,
-      errors: [{ code: 103, message: 'Insufficient wallet balance to apply skill changes.' }],
-      requiredUsd: 3.2,
-      availableUsd: 1.1,
-    },
-  }));
-  await withClient(fake, async client => {
-    const quote = await quoteInstagram(client);
-    const result = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
-    assert.equal(result.isError, true);
-    assert.match(text(result), /needs \$3\.20 and has \$1\.10/);
-    assert.match(text(result), /Nothing was changed\. Funds are added at https:\/\/wiro\.ai\/panel\/wallet\/deposit\/credit-card \(for a team project, select that team in the dashboard first\); once the user has added them and says yes, confirm again\./);
-    assert.equal(result.structuredContent.status, 'refused');
-    assert.equal(result.structuredContent.error.code, 103);
-    assert.equal(result.structuredContent.restart, 'Nothing changed, so the agent does not restart.');
-  });
-
-  const busy = fakeClient(skillRoutes({
-    '/UserAgent/SkillsApply': { result: false, errors: [{ code: 104, message: 'A skill update is already in progress for this agent.' }] },
-  }));
-  await withClient(busy, async client => {
-    const quote = await quoteInstagram(client);
-    const result = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
-    assert.equal(result.isError, true);
-    assert.match(text(result), /same idempotency_key/);
-    assert.match(text(result), /idempotency_key: `mcp-/);
-    assert.match(text(result), /one runs at a time/);
-    assert.match(text(result), /If it keeps saying so, it clears within 15 minutes\./);
-    assert.equal(result.structuredContent.nextAction, undefined);
-    assert.equal(busy.called('/UserAgent/Detail').length, 2, 'no read to see whether it went through');
-  });
-});
-
-test('apply_agent_skills never reads code 108 as a low balance', async () => {
-  const fake = fakeClient(skillRoutes({
-    '/UserAgent/SkillsApply': { result: false, errors: [{ code: 108, message: 'Failed to apply skill changes, please retry.' }] },
-  }));
-  await withClient(fake, async client => {
-    const quote = await quoteInstagram(client);
-    const result = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
-    assert.equal(result.isError, true);
-    assert.equal(result.structuredContent.status, 'refused');
-    assert.equal(result.structuredContent.error.code, 108);
-    assert.match(result.structuredContent.billing.note, /It is not a low balance, so no funds need to be added\. Nothing was changed or charged\. Try again: repeat the call with the same idempotency_key\./);
-    assert.match(text(result), /idempotency_key: `mcp-/);
-    assert.doesNotMatch(text(result), /funds are added|deposit\/credit-card|top up/i);
-    assert.equal(fake.called('/UserAgent/SkillsApply').length, 1);
-  });
-  // A wallet that could not be read, should the answer say it in words.
-  const failure = describeSkillsApplyError(new ApiResultError('Could not retrieve wallet balance', [0], {}));
-  assert.match(failure.guidance, /could not read the balance just now\. That is not a low balance, and nothing was charged\. Try again/);
-  assert.equal(outcomeUnknown(new ApiResultError('Could not retrieve wallet balance', [0], {})), false);
-});
-
-test('apply_agent_skills leads a spent or reused key to a new quote', async () => {
-  for (const message of [
-    'This idempotencyKey was already used for a different skill change. Nothing was changed; send a new idempotencyKey.',
-    'This idempotencyKey was already used for an earlier skill change. Nothing was changed; send a new idempotencyKey.',
-    'Cached response corrupt, please retry with a new idempotency key.',
+test('apply_agent_skills works without an active plan: a skill change needs none', async () => {
+  for (const subscription of [
+    null,
+    { plan: 'agent', status: 'expired', provider: 'prepaid', currentperiodend: NOW - 86400, daysremaining: 0 },
+    { plan: 'agent', status: 'expired', provider: 'stripe', currentperiodend: NOW - 86400, daysremaining: 0 },
   ]) {
-    const fake = fakeClient(skillRoutes({
-      '/UserAgent/SkillsApply': { result: false, errors: [{ code: 107, message }] },
-    }));
+    const fake = fakeClient(skillRoutes({ '/UserAgent/Detail': detailAfterApply({ subscription, status: 0 }), '/UserAgent/SkillsApply': appliedAnswer({ restartTriggered: false }) }));
     await withClient(fake, async client => {
-      const quote = await quoteInstagram(client);
-      const result = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
-      assert.equal(result.isError, true);
-      assert.equal(result.structuredContent.error.code, 107);
-      assert.ok(text(result).includes(message), text(result));
-      assert.match(result.structuredContent.billing.note, /nothing was changed or charged by it\. Get a new quote: repeat the call without idempotency_key/);
-      assert.doesNotMatch(text(result), /^idempotency_key:/m, 'the spent key is not offered again');
-      // Following it gives a quote with another key, and sends nothing.
-      const { tool, arguments: args } = result.structuredContent.nextAction;
-      assert.equal(tool, 'apply_agent_skills');
-      assert.equal('idempotency_key' in args, false);
-      assert.equal('confirm' in args, false);
-      const fresh = await client.callTool({ name: tool, arguments: args });
-      assert.equal(fresh.structuredContent.status, 'quote', text(fresh));
-      assert.notEqual(fresh.structuredContent.idempotencyKey, quote.structuredContent.idempotencyKey);
+      const result = await applyInstagram(client);
+      assert.equal(result.structuredContent.status, 'applied', text(result));
+      assert.doesNotMatch(text(result), /manage_agent_billing|subscribe|renew/);
       assert.equal(fake.called('/UserAgent/SkillsApply').length, 1);
     });
   }
 });
 
-test('apply_agent_skills names a skill Wiro cannot price and gives the next step', async () => {
-  const fake = fakeClient(skillRoutes({
-    '/UserAgent/PricingPreview': { result: false, errors: [{ code: 0, message: "pricing-step: skill 'int-retired' is enabled but not found in registry" }] },
-  }));
+test('apply_agent_skills refuses a key that was issued for a different change', async () => {
+  const fake = fakeClient(skillRoutes({ '/UserAgent/SkillsApply': appliedAnswer() }));
   await withClient(fake, async client => {
-    const result = await client.callTool({ name: 'apply_agent_skills', arguments: { agent_guid: AGENT, skills: { 'int-instagram-post': true } } });
+    const key = newSkillChangeKey(skillChangeDigest(AGENT, { ...INSTAGRAM_CHANGE, 'util-chat-markdown-reporting': true }));
+    const result = await client.callTool({
+      name: 'apply_agent_skills',
+      arguments: { agent_guid: AGENT, skills: { 'int-googleads-manage': true }, idempotency_key: key },
+    });
     assert.equal(result.isError, true);
-    assert.equal(text(result), '## Error\n\nThe price could not be computed because the skill int-retired is not in the skill registry. list_agent_skills shows the current names. If the request did not name this skill, the agent already has it on, and Wiro support can take it off.');
+    assert.match(text(result), /belongs to a different skill change/);
+    assert.equal(fake.paths().includes('/UserAgent/SkillsApply'), false);
+    // A key from an earlier version, with a price fingerprint at its end, is bound to its change the same way.
+    const older = `${key}-0a1b2c3d`;
+    const refused = await client.callTool({ name: 'apply_agent_skills', arguments: { agent_guid: AGENT, skills: { 'int-googleads-manage': true }, idempotency_key: older } });
+    assert.match(text(refused), /belongs to a different skill change/);
   });
 });
 
-test('apply_agent_skills names only the fix for the agent\'s own plan when the payment fails', async () => {
-  const refused = {
-    result: false,
-    errors: [{ code: 109, message: 'Payment processing failed for this skill change. Your skills, tier, and pricing snapshot have been reverted to the previous state. Please update your card or top up your wallet, then retry.' }],
-  };
-  const failed = 'The payment for this change did not go through, so the change was undone and nothing was charged.';
-  // A short wallet is refused before any payment (code 103), so a wallet plan is not told to add funds.
-  const wallet = `${failed} The balance is not the cause, so no funds need to be added. Ask for a new quote and confirm it once the user approves.`;
-  const card = `${failed} Update the card in the Wiro dashboard, then ask for a new quote.`;
+test('apply_agent_skills explains a refusal with the server details and keeps the key for a retry', async () => {
+  const busy = fakeClient(skillRoutes({
+    '/UserAgent/SkillsApply': { result: false, errors: [{ code: 104, message: 'A skill update is already in progress for this agent, please retry shortly.' }] },
+  }));
+  await withClient(busy, async client => {
+    const result = await applyInstagram(client);
+    assert.equal(result.isError, true);
+    const out = result.structuredContent;
+    assert.equal(out.status, 'refused');
+    assert.equal(out.error.code, 104);
+    assert.match(out.note, /^Another change to this agent's skills or plan, such as a plan change or a renewal, is still going through, and one runs at a time\. Nothing was changed by this call\./);
+    assert.match(text(result), /^## Skill change not applied/);
+    assert.match(text(result), /If it keeps saying so, it clears within 15 minutes\./);
+    assert.match(text(result), new RegExp(`idempotency_key: \`${out.idempotencyKey}\``));
+    assert.doesNotMatch(text(result), /charged|funds|wallet|may have been/i);
+    assert.equal(out.nextAction, undefined);
+    // The answer settles it: the agent is not read again to guess.
+    assert.equal(busy.called('/UserAgent/Detail').length, 1);
 
-  const prepaid = fakeClient(skillRoutes({ '/UserAgent/SkillsApply': refused }));
-  await withClient(prepaid, async client => {
-    const quote = await quoteInstagram(client);
-    const result = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
+    // The retry with that key sends the same change under the same key.
+    await applyInstagram(client, { idempotency_key: out.idempotencyKey });
+    const [first, second] = busy.called('/UserAgent/SkillsApply');
+    assert.equal(second.body.idempotencyKey, first.body.idempotencyKey);
+    assert.deepEqual(second.body.skills, first.body.skills);
+  });
+
+  const retry = fakeClient(skillRoutes({ '/UserAgent/SkillsApply': { result: false, errors: [{ code: 108, message: 'Failed to apply skill changes, please retry.' }] } }));
+  await withClient(retry, async client => {
+    const result = await applyInstagram(client);
+    assert.equal(result.isError, true);
+    assert.equal(result.structuredContent.error.code, 108);
+    assert.equal(result.structuredContent.note, 'Wiro could not read or save what this change needs just now. Nothing was changed. Try again: repeat the call with the same idempotency_key.');
+    assert.match(text(result), /idempotency_key: `mcp-/);
+    assert.doesNotMatch(text(result), /funds|deposit|top up|balance/i);
+  });
+});
+
+test('apply_agent_skills leads a spent or reused key to the same change with a new key', async () => {
+  for (const message of [
+    'This idempotencyKey was already used for a different skill change. Nothing was changed; send a new idempotencyKey.',
+    'Cached response corrupt, please retry with a new idempotency key.',
+  ]) {
+    // The first key is refused and changes nothing; the second call, with a new key, makes the change.
+    const applies = calls => calls.filter(call => call.path === '/UserAgent/SkillsApply').length;
+    const fake = fakeClient(skillRoutes({
+      '/UserAgent/Detail': (_body, calls) => (applies(calls) >= 2
+        ? detail({ skills: INSTAGRAM_SET.map(name => ({ name, enabled: true })) })
+        : detail()),
+      '/UserAgent/SkillsApply': (_body, calls) => (applies(calls) === 1
+        ? { result: false, errors: [{ code: 107, message }] }
+        : appliedAnswer()),
+    }));
+    await withClient(fake, async client => {
+      const result = await applyInstagram(client);
+      assert.equal(result.isError, true);
+      assert.equal(result.structuredContent.error.code, 107);
+      assert.ok(text(result).includes(message), text(result));
+      assert.equal(result.structuredContent.note, 'This idempotency_key cannot be used for this call, and nothing was changed by it. Repeat the call without idempotency_key: it then gets a new key.');
+      assert.doesNotMatch(text(result), /^idempotency_key:/m, 'the spent key is not offered again');
+      const { tool, arguments: args } = result.structuredContent.nextAction;
+      assert.equal(tool, 'apply_agent_skills');
+      assert.deepEqual(args, { agent_guid: AGENT, skills: { 'int-instagram-post': true }, add_dependencies: true });
+      const again = await client.callTool({ name: tool, arguments: args });
+      assert.equal(again.structuredContent.status, 'applied', text(again));
+      const [first, second] = fake.called('/UserAgent/SkillsApply');
+      assert.notEqual(second.body.idempotencyKey, first.body.idempotencyKey);
+    });
+  }
+});
+
+test('apply_agent_skills names a skill Wiro cannot read and gives the next step', async () => {
+  const fake = fakeClient(skillRoutes({
+    '/UserAgent/SkillsApply': { result: false, errors: [{ code: 0, message: "pricing-step: skill 'int-retired' is enabled but not found in registry" }] },
+  }));
+  await withClient(fake, async client => {
+    const result = await applyInstagram(client);
     assert.equal(result.isError, true);
     assert.equal(result.structuredContent.status, 'refused');
-    assert.equal(result.structuredContent.error.code, 109);
-    assert.equal(result.structuredContent.billing.note, wallet);
-    assert.doesNotMatch(result.structuredContent.billing.note, /deposit|add funds/i);
-    assert.ok(text(result).includes(wallet), text(result));
-    assert.doesNotMatch(text(result), /update (the|your) card|top up/i);
-    assert.doesNotMatch(result.structuredContent.error.message, /update your card|top up/i);
-  });
-
-  const stripe = fakeClient(skillRoutes({
-    '/UserAgent/Detail': detail({ subscription: { status: 'active', provider: 'stripe', currentperiodend: NOW + 86400, daysremaining: 1 } }),
-    '/UserAgent/SkillsApply': refused,
-  }));
-  await withClient(stripe, async client => {
-    const quote = await quoteInstagram(client);
-    const result = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
-    assert.equal(result.structuredContent.billing.note, card);
-    assert.doesNotMatch(text(result), /add funds|top up/i);
-  });
-
-  // Without the plan, only the card fix is named: a wallet plan needs nothing added.
-  const failure = describeSkillsApplyError(new ApiResultError(refused.errors[0].message, [109], refused));
-  assert.equal(failure.guidance, `${failed} For a plan paid by card, update the card in the Wiro dashboard first. Then ask for a new quote.`);
-  assert.doesNotMatch(failure.guidance, /deposit|add funds/i);
-  assert.doesNotMatch(failure.message, /top up/i);
-  assert.equal(failure.retrySameKey, false);
-});
-
-test('apply_agent_skills applies only at the quoted price', async () => {
-  let newPrice = 43;
-  const fake = fakeClient(skillRoutes({
-    '/UserAgent/PricingPreview': () => ({ result: true, errors: [], totalPriceUsd: newPrice, totalMonthlyCredits: newPrice * 100 }),
-    '/UserAgent/SkillsApply': { result: true },
-  }));
-  await withClient(fake, async client => {
-    const unquoted = await client.callTool({
-      name: 'apply_agent_skills',
-      arguments: { agent_guid: AGENT, skills: { 'int-instagram-post': true }, confirm: true },
-    });
-    assert.equal(unquoted.structuredContent.status, 'quote');
-    assert.match(text(unquoted), /confirming needs the idempotency_key of a quote/);
-
-    const foreign = await client.callTool({
-      name: 'apply_agent_skills',
-      arguments: { agent_guid: AGENT, skills: { 'int-instagram-post': true }, confirm: true, idempotency_key: 'my-own-key-123' },
-    });
-    assert.equal(foreign.structuredContent.status, 'quote');
-
-    const quote = await quoteInstagram(client);
-    newPrice = 430;
-    const changed = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
-    assert.equal(changed.structuredContent.status, 'quote');
-    assert.equal(changed.structuredContent.priceChanged, true);
-    assert.equal(changed.structuredContent.pricing.newMonthlyUsd, 430);
-    assert.notEqual(changed.structuredContent.idempotencyKey, quote.structuredContent.idempotencyKey);
-    assert.match(text(changed), /The price or the billing period changed since the quote, so nothing was applied or charged/);
-    assert.equal(fake.paths().includes('/UserAgent/SkillsApply'), false);
-  });
-});
-
-test('apply_agent_skills asks again when a wallet plan started a new period after the quote', async () => {
-  const plan = { plan: 'agent', status: 'active', provider: 'prepaid', daysremaining: 1 };
-  let periodEnd = NOW + 3600;
-  const fake = fakeClient(skillRoutes({
-    '/UserAgent/Detail': () => detail({ subscription: { ...plan, currentperiodend: periodEnd } }),
-    // Wiro's own amount: the one-day minimum in the period's last hour, the whole difference in a new period.
-    '/UserAgent/PricingPreview': () => preview(periodEnd - NOW < 86400
-      ? planChange({ periodEnd, secondsLeft: periodEnd - NOW, chargeNowUsd: 0.04, creditsNow: 3, creditsThisPeriod: 4203 })
-      : planChange({ periodEnd, secondsLeft: periodEnd - NOW, chargeNowUsd: 1, creditsNow: 100, creditsThisPeriod: 4300 })),
-    '/UserAgent/SkillsApply': { result: true },
-  }));
-  await withClient(fake, async client => {
-    const quote = await quoteInstagram(client);
-    assert.match(quote.structuredContent.billing.note, /^\$0\.04 is taken from your personal wallet now at the one-day minimum, and 3 credits come with it\./);
-    periodEnd = NOW + 30 * 86400;
-    const renewed = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
-    assert.equal(renewed.structuredContent.status, 'quote');
-    assert.equal(renewed.structuredContent.priceChanged, true);
-    assert.equal(renewed.structuredContent.billing.estimatedChargeNowUsd, 1);
-    assert.notEqual(renewed.structuredContent.idempotencyKey, quote.structuredContent.idempotencyKey);
-    assert.match(text(renewed), /The price or the billing period changed since the quote, so nothing was applied or charged/);
-    assert.equal(fake.paths().includes('/UserAgent/SkillsApply'), false);
-  });
-});
-
-test('apply_agent_skills keeps the key of a card plan across its period: the invoice carries the difference', async () => {
-  const plan = { plan: 'agent', status: 'active', provider: 'stripe', daysremaining: 1 };
-  let periodEnd = NOW + 3600;
-  const fake = fakeClient(skillRoutes({
-    '/UserAgent/Detail': (_body, calls) => (calls.some(call => call.path === '/UserAgent/SkillsApply')
-      ? detail({ skills: INSTAGRAM_SET.map(name => ({ name, enabled: true })), monthlypriceusd: '43.00', subscription: { ...plan, currentperiodend: periodEnd } })
-      : detail({ subscription: { ...plan, currentperiodend: periodEnd } })),
-    '/UserAgent/SkillsApply': { result: true, stripeProrationApplied: true, pricing: { previousPriceUsd: 42, newPriceUsd: 43, deltaUsd: 1 } },
-  }));
-  await withClient(fake, async client => {
-    const quote = await quoteInstagram(client);
-    periodEnd = NOW + 30 * 86400;
-    const applied = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
-    assert.equal(applied.structuredContent.status, 'applied', text(applied));
+    assert.match(text(result), /^## Skill change not applied\n\nWiro could not work this out because the skill int-retired is not in the skill registry\. list_agent_skills shows the current names\. If the request did not name this skill, the agent already has it on, and Wiro support can take it off\./);
+    assert.equal(result.structuredContent.note, 'Wiro could not read one of the skills, so nothing was changed. Check the skill names with list_agent_skills.');
+    // A refusal like this settles the outcome, so the agent is not read again.
+    assert.equal(fake.called('/UserAgent/Detail').length, 1);
   });
 });
 
@@ -939,37 +657,18 @@ test('apply_agent_skills checks the live agent when Wiro answers with an error o
     '/UserAgent/SkillsApply': { result: false, errors: [{ code: 0, message: 'Connection reset while saving' }] },
   }));
   await withClient(saved, async client => {
-    const quote = await quoteInstagram(client);
-    const result = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
+    const result = await applyInstagram(client);
     assert.notEqual(result.isError, true, text(result));
     assert.equal(result.structuredContent.status, 'applied');
-    assert.match(result.structuredContent.billing.note, /^The agent's skills now match the request, so the change is in place\. Do not repeat it\./);
+    assert.equal(result.structuredContent.note, `The agent's skills now match the request, so the change is in place. Do not repeat it. ${FREE_NOTE}`);
     assert.match(text(result), /^## Skills updated$/m);
-    // The ledger shows the credits a change moved, and the wallet's rows the money.
-    assert.match(result.structuredContent.billing.note, /probably taken from, or credited to, your personal wallet; a credit goes back to the balances that paid\. get_account with recent_transactions shows the amount, and get_agent_activity with kind usage the credits it moved\.$/);
-    assert.doesNotMatch(text(result), /Nothing changed/);
+    assert.doesNotMatch(text(result), /Nothing changed|wallet|charged/);
 
-    // The repeat goes out with no skills and its answer is lost too: the amount is on the wallet's rows.
-    const repeat = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
+    // The repeat with its key goes out with no skills, and its answer is lost too: the change is in place.
+    const repeat = await applyInstagram(client, { idempotency_key: result.structuredContent.idempotencyKey });
     assert.deepEqual(saved.called('/UserAgent/SkillsApply').at(-1).body.skills, {});
     assert.equal(repeat.structuredContent.status, 'no_change');
-    assert.match(repeat.structuredContent.billing.note, /took from, or credited to, your personal wallet is not shown here; get_account with recent_transactions shows it\.$/);
-  });
-
-  // A card plan has no wallet row for the change, so its answer names none.
-  const onCard = { subscription: { status: 'active', provider: 'stripe', currentperiodend: NOW + 86400, daysremaining: 1 } };
-  const card = fakeClient(skillRoutes({
-    '/UserAgent/Detail': detailAfterApply(onCard),
-    '/UserAgent/SkillsApply': { result: false, errors: [{ code: 0, message: 'Connection reset while saving' }] },
-  }));
-  await withClient(card, async client => {
-    const quote = await quoteInstagram(client);
-    const first = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
-    assert.match(first.structuredContent.billing.note, /Any price difference follows the plan's usual billing\.$/);
-    const repeat = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
-    assert.equal(repeat.structuredContent.status, 'no_change');
-    assert.match(repeat.structuredContent.billing.note, /Any price difference follows the plan's usual billing\.$/);
-    assert.doesNotMatch(repeat.structuredContent.billing.note, /get_account|kind usage/);
+    assert.equal(repeat.structuredContent.note, `The agent's skills already match the request, so the change is in place. Do not repeat it. ${FREE_NOTE}`);
   });
 
   // An error before anything was written: the agent is unchanged.
@@ -977,12 +676,11 @@ test('apply_agent_skills checks the live agent when Wiro answers with an error o
     '/UserAgent/SkillsApply': { result: false, errors: [{ code: 0, message: 'Connection reset while saving' }] },
   }));
   await withClient(unchanged, async client => {
-    const quote = await quoteInstagram(client);
-    const result = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
+    const result = await applyInstagram(client);
     assert.equal(result.isError, true);
     assert.equal(result.structuredContent.status, 'refused');
-    assert.match(text(result), /^The agent's skills are unchanged, so the change was not applied \(Connection reset while saving\)\./m);
-    assert.doesNotMatch(text(result), /Wiro answered with an error/);
+    assert.match(text(result), /^The agent's skills are unchanged, so the change was not applied \(Connection reset while saving\)\. Repeating this call with the same idempotency_key is safe\./m);
+    assert.match(text(result), /^idempotency_key: `mcp-/m);
   });
 
   // The agent cannot be read afterwards: nothing is claimed either way.
@@ -993,125 +691,42 @@ test('apply_agent_skills checks the live agent when Wiro answers with an error o
     '/UserAgent/SkillsApply': () => { throw new Error('socket hang up'); },
   }));
   await withClient(unreadable, async client => {
-    const quote = await quoteInstagram(client);
-    const result = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
+    const result = await applyInstagram(client);
     assert.equal(result.isError, true);
     assert.match(text(result), /^The change could not be confirmed \(socket hang up\)\. Check get_my_agent to see whether the skills match the request before trying again;/m);
-    assert.doesNotMatch(text(result), /Wiro answered with an error/);
     assert.equal(result.structuredContent.restart, 'The agent restarts if the change was saved.');
   });
 
   // A success answer while the agent does not show the change.
-  const replayed = fakeClient(skillRoutes({
-    '/UserAgent/SkillsApply': { result: true, pricing: { previousPriceUsd: 42, newPriceUsd: 43, deltaUsd: 1 }, prepaidWalletDelta: 0.5 },
-  }));
-  await withClient(replayed, async client => {
-    const quote = await quoteInstagram(client);
-    const result = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
+  const missing = fakeClient(skillRoutes({ '/UserAgent/SkillsApply': appliedAnswer() }));
+  await withClient(missing, async client => {
+    const result = await applyInstagram(client);
     assert.equal(result.isError, true);
     assert.equal(result.structuredContent.status, 'refused');
     assert.match(text(result), /The agent's skills do not match this change, so it is not in place\. Check get_my_agent/);
     assert.deepEqual(result.structuredContent.nextAction.arguments, { agent_guid: AGENT, skills: { 'int-instagram-post': true }, add_dependencies: true });
   });
 
-  // A repeated confirm with the same key: the change is already on, and the answer is the earlier result.
+  // A repeat with the same key: the change is already on, and the answer is the earlier result.
   const retry = fakeClient(skillRoutes({
-    '/UserAgent/Detail': detail({ skills: INSTAGRAM_SET.map(name => ({ name, enabled: true })), monthlypriceusd: '43.00' }),
-    '/UserAgent/SkillsApply': { result: true, pricing: { previousPriceUsd: 42, newPriceUsd: 43, deltaUsd: 1 }, prepaidWalletDelta: 0.5 },
+    '/UserAgent/Detail': detail({ skills: INSTAGRAM_SET.map(name => ({ name, enabled: true })) }),
+    '/UserAgent/SkillsApply': appliedAnswer(),
   }));
   await withClient(retry, async client => {
-    const key = newSkillChangeKey(skillChangeDigest(AGENT, Object.fromEntries(['int-instagram-post', 'util-social-posting-common', 'util-anti-ai-human-copy', 'util-chat-markdown-reporting'].map(name => [name, true]))), skillPriceTag(42, 43));
-    const result = await client.callTool({
-      name: 'apply_agent_skills',
-      arguments: { agent_guid: AGENT, skills: { 'int-instagram-post': true }, confirm: true, idempotency_key: key },
-    });
+    const key = newSkillChangeKey(skillChangeDigest(AGENT, { ...INSTAGRAM_CHANGE, 'util-chat-markdown-reporting': true }));
+    const result = await applyInstagram(client, { idempotency_key: key });
     assert.notEqual(result.isError, true, text(result));
     assert.equal(result.structuredContent.status, 'applied');
-    assert.match(result.structuredContent.billing.note, /already applied by an earlier call with this idempotency_key, and nothing new was charged now\. That call's billing: \$0\.50 was taken from your personal wallet/);
+    assert.equal(result.structuredContent.note, `This change was already applied by an earlier call with this idempotency_key. ${FREE_NOTE}`);
     assert.match(text(result), /^## Already applied$/m);
-    assert.doesNotMatch(text(result), /^## Skills updated$/m);
-    assert.equal(result.structuredContent.billing.chargedNowUsd, 0, 'this call charged nothing');
-    assert.equal(retry.paths().includes('/UserAgent/PricingPreview'), false);
-    assert.deepEqual(retry.calls.find(call => call.path === '/UserAgent/SkillsApply').body.skills, {});
+    assert.equal(result.structuredContent.restart, 'Nothing changed, so the agent does not restart.');
+    assert.equal(result.structuredContent.nextAction, undefined);
+    assert.deepEqual(retry.called('/UserAgent/SkillsApply')[0].body, { useragentguid: AGENT, skills: {}, idempotencyKey: key });
   });
-});
-
-test('apply_agent_skills tells a cancelled plan that nothing renews at the new price', async () => {
-  const fake = fakeClient(skillRoutes({
-    '/UserAgent/Detail': detail({ subscription: { plan: 'agent', status: 'active', provider: 'prepaid', currentperiodend: NOW + 15 * 86400, daysremaining: 15, pendingdowngrade: 'cancel' } }),
-    '/UserAgent/PricingPreview': preview(planChange({ chargeNowUsd: 0, creditNowUsd: 1, creditsNow: -100, creditsThisPeriod: 4100, creditsFromRenewal: 4000 }), { totalPriceUsd: 40, totalMonthlyCredits: 4000 }),
-  }));
-  await withClient(fake, async client => {
-    const result = await client.callTool({
-      name: 'apply_agent_skills',
-      arguments: { agent_guid: AGENT, skills: { 'util-chat-markdown-reporting': false } },
-    });
-    const note = result.structuredContent.billing.note;
-    assert.match(note, /^\$1\.00 goes back to the balances that paid, and each keeps its own end date\. Its credits for the time left end now, and this period keeps 4,100\./);
-    assert.match(note, /The plan is cancelled and ends about a day after .*, so this covers only the time left/);
-    assert.doesNotMatch(note, /renews at|expire/);
-  });
-});
-
-test('apply_agent_skills says how much of the period Wiro\'s amount is for', async () => {
-  // Wiro's own amounts for a $40 rise in a 30-day period, by the time left.
-  const noteFor = async (daysLeft, chargeNowUsd) => {
-    const periodEnd = NOW + Math.round(daysLeft * 86400);
-    const fake = fakeClient(skillRoutes({
-      '/UserAgent/Detail': detail({
-        monthlypriceusd: '90.00',
-        subscription: { plan: 'agent', status: 'active', provider: 'prepaid', currentperiodend: periodEnd, daysremaining: Math.ceil(daysLeft) },
-      }),
-      '/UserAgent/PricingPreview': preview(planChange({ periodEnd, secondsLeft: Math.max(0, periodEnd - NOW), chargeNowUsd, creditsNow: Math.round(chargeNowUsd * 100) }), { totalPriceUsd: 130, totalMonthlyCredits: 13000 }),
-    }));
-    let result;
-    await withClient(fake, async client => {
-      result = await client.callTool({ name: 'apply_agent_skills', arguments: { agent_guid: AGENT, skills: { 'int-instagram-post': true } } });
-    });
-    assert.equal(result.structuredContent.billing.estimatedChargeNowUsd, chargeNowUsd);
-    return result.structuredContent.billing.note;
-  };
-  assert.match(await noteFor(5.45, 7.27), /^\$7\.27 is taken from your personal wallet now for the rest of this period \(5 days\), and 727 credits come with it\./);
-  assert.match(await noteFor(5.6, 7.47), /^\$7\.47 is taken from your personal wallet now for the rest of this period \(6 days\), and 747 credits come with it\./);
-  assert.match(await noteFor(1.2, 1.6), /^\$1\.60 is taken from your personal wallet now for the rest of this period \(1 day\), and 160 credits come with it\./);
-  assert.match(await noteFor(0.7, 1.34), /^\$1\.34 is taken from your personal wallet now at the one-day minimum, and 134 credits come with it\./);
-  assert.match(await noteFor(0.3, 1.34), /^\$1\.34 is taken from your personal wallet now at the one-day minimum/);
-  // In the day of grace after the period's end, nothing is left of it.
-  assert.match(await noteFor(-0.95, 1.34), /^\$1\.34 is taken from your personal wallet now at the one-day minimum/);
-});
-
-test('apply_agent_skills quotes Wiro\'s amount for a plan with no period end, and no credit when none comes back', async () => {
-  const quoteOf = async (subscription, skills, answer) => {
-    const fake = fakeClient(skillRoutes({
-      '/UserAgent/Detail': detail({ subscription }),
-      '/UserAgent/PricingPreview': answer,
-    }));
-    let quote;
-    await withClient(fake, async client => {
-      quote = await client.callTool({ name: 'apply_agent_skills', arguments: { agent_guid: AGENT, skills } });
-      assert.equal(quote.structuredContent.status, 'quote', text(quote));
-    });
-    return quote.structuredContent.billing;
-  };
-  const plan = { plan: 'agent', status: 'active', provider: 'prepaid' };
-  // A plan row with no period end: Wiro counts the period from now, so the whole difference is charged.
-  const noEnd = await quoteOf({ ...plan, currentperiodend: null }, { 'int-instagram-post': true },
-    preview(planChange({ periodEnd: NOW + 30 * 86400, secondsLeft: 30 * 86400, chargeNowUsd: 1, creditsNow: 100, creditsThisPeriod: 4300 })));
-  assert.equal(noEnd.estimatedChargeNowUsd, 1);
-  assert.match(noEnd.note, /^\$1\.00 is taken from your personal wallet now for the rest of this period \(30 days\), and 100 credits come with it\./);
-
-  // The day of grace after the period's end: nothing of it is left to credit.
-  const removal = { 'util-chat-markdown-reporting': false };
-  const ended = await quoteOf({ ...plan, currentperiodend: NOW - 3600 }, removal,
-    preview(planChange({ periodEnd: NOW - 3600, secondsLeft: 0, chargeNowUsd: 0, creditNowUsd: 0, usedCreditsUsd: 0, creditsNow: 0, creditsThisPeriod: 4200, creditsFromRenewal: 4000 }), { totalPriceUsd: 40, totalMonthlyCredits: 4000 }));
-  assert.equal(ended.estimatedChargeNowUsd, 0);
-  assert.equal(ended.creditNowUsd, 0);
-  assert.match(ended.note, /^Nothing comes back to the wallet now\. This period keeps its 4,200 credits\./);
-  assert.doesNotMatch(ended.note, /\$0\.00|goes back to the balances|credits already used/);
 });
 
 test('apply_agent_skills reports a code 110 as failed, and never as applied', async () => {
-  const message = "This skill change failed, and it could not be undone. Check the agent's skills and price.";
+  const message = "This skill change failed, and it could not be undone. Check the agent's skills.";
   const refused = { result: false, errors: [{ code: 110, message }] };
   // The agent reads as if the change were in place.
   const fake = fakeClient(skillRoutes({
@@ -1119,32 +734,24 @@ test('apply_agent_skills reports a code 110 as failed, and never as applied', as
     '/UserAgent/SkillsApply': refused,
   }));
   await withClient(fake, async client => {
-    const quote = await quoteInstagram(client);
-    const result = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
+    const result = await applyInstagram(client);
     assert.equal(result.isError, true, text(result));
     assert.equal(result.structuredContent.status, 'refused');
     assert.equal(result.structuredContent.error.code, 110);
     assert.ok(text(result).includes(message), text(result));
     assert.match(text(result), /^## Skill change failed/);
-    assert.match(result.structuredContent.billing.note, /get_my_agent/);
-    assert.match(result.structuredContent.billing.note, /get_account/);
-    assert.match(result.structuredContent.billing.note, /support/);
+    assert.equal(result.structuredContent.note, 'Do not repeat this change. Check the agent\'s skills with get_my_agent before changing anything, and contact Wiro support if they are not what you expect.');
     assert.doesNotMatch(text(result), /Skills updated|the change is in place|Nothing changed/);
-    // The answer makes no claim about what was charged.
-    assert.doesNotMatch(text(result), /nothing (was )?charged|with nothing|not charged/i);
     // A way to look at what happened, and no way to send it again.
     assert.doesNotMatch(text(result), /^idempotency_key:/m);
-    assert.deepEqual(result.structuredContent.nextAction.tool, 'get_my_agent');
-    assert.deepEqual(result.structuredContent.nextAction.arguments, { agent_guid: AGENT });
+    assert.deepEqual(result.structuredContent.nextAction, { tool: 'get_my_agent', arguments: { agent_guid: AGENT }, reason: 'Check the agent\'s skills. Do not repeat the change.' });
 
-    // The agent now shows the change, so the repeat goes out with no skills, and the key answers the same.
-    const repeat = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
+    // The agent now shows the change, so a repeat with the key goes out with no skills, and the key answers the same.
+    const repeat = await applyInstagram(client, { idempotency_key: result.structuredContent.idempotencyKey });
     assert.deepEqual(fake.called('/UserAgent/SkillsApply').at(-1).body.skills, {});
     assert.equal(fake.called('/UserAgent/SkillsApply').length, 2);
-    assert.equal(repeat.isError, true);
     assert.equal(repeat.structuredContent.status, 'refused');
     assert.equal(repeat.structuredContent.error.code, 110);
-    assert.match(text(repeat), /^## Skill change failed/);
     assert.doesNotMatch(text(repeat), /No change needed|Already applied|already match/);
   });
   const failure = describeSkillsApplyError(new ApiResultError(message, [110], refused));
@@ -1153,7 +760,7 @@ test('apply_agent_skills reports a code 110 as failed, and never as applied', as
 });
 
 test('a code 110 never counts as an open outcome, whatever the live agent shows', () => {
-  const failed = new ApiResultError("This skill change failed, and it could not be undone. Check the agent's skills and price.", [110], {});
+  const failed = new ApiResultError("This skill change failed, and it could not be undone. Check the agent's skills.", [110], {});
   assert.equal(outcomeUnknown(failed), false);
   assert.equal(isKnownFailedChange(failed), true);
   // It says nothing about the wallet, so it is no refusal known to leave the wallet untouched.
@@ -1162,283 +769,7 @@ test('a code 110 never counts as an open outcome, whatever the live agent shows'
   assert.equal(isKnownFailedChange(new Error('This skill change failed')), false);
 });
 
-test('apply_agent_skills says when the change counts from today\'s prices', async () => {
-  // A Pro plan bought at $90 a month, whose skills cost $110 a month on Pro
-  // today, turns on a skill that adds $20.
-  const apollo = { name: 'int-apollo-sales', title: 'Apollo Sales', depends_on: [], conflicts_with: [], credential_key: 'apollo', requires_credentials: true, pricing: { billing_model: 'tokens', monthly_price_weight_usd: 2, monthly_credits_weight: 200 } };
-  const quote = async detailOverrides => {
-    const fake = fakeClient(skillRoutes({
-      '/Skills/List': { ...skillList, skills: [...skillList.skills, apollo], total: skillList.total + 1 },
-      '/UserAgent/Detail': detail({
-        tier: 'pro',
-        tiermultiplier: 10,
-        monthlypriceusd: 90,
-        monthlycredits: 9000,
-        agent: { guid: 'tpl-1', custom: false, tiers: { starter: { priceUsd: 11, credits: 1100 }, pro: { priceUsd: 110, credits: 11000 } }, tiermultiplier: 10 },
-        ...detailOverrides,
-      }),
-      '/UserAgent/PricingPreview': { result: true, errors: [], tier: 'pro', tiermultiplier: 10, totalPriceUsd: 130, totalMonthlyCredits: 13000, tiers: { starter: { priceUsd: 13, credits: 1300 }, pro: { priceUsd: 130, credits: 13000 } }, starterFloorUsd: 4, planChange: planChange({ chargeNowUsd: 20, creditsNow: 2000, creditsThisPeriod: 11000, creditsFromRenewal: 13000 }) },
-    }));
-    let result;
-    await withClient(fake, async client => {
-      result = await client.callTool({ name: 'apply_agent_skills', arguments: { agent_guid: AGENT, skills: { 'int-apollo-sales': true } } });
-    });
-    assert.equal(result.structuredContent.status, 'quote', text(result));
-    return result;
-  };
-
-  const older = await quote({});
-  const lines = text(older).split('\n');
-  const price = lines.findIndex(line => line.startsWith('**Monthly price:**'));
-  assert.equal(lines[price], '**Monthly price:** $90.00 now, $130.00 after the change (+$40.00)');
-  const note = 'Today\'s Pro price for the skills this plan already has is $110.00 a month with 11,000 monthly credits, not its current $90.00 and 9,000. A skill change counts from today\'s price, and the new price in this quote already includes that.';
-  assert.equal(lines[price + 1], `**Price update:** ${note}`);
-  assert.equal(older.structuredContent.pricing.note, note);
-  assert.equal(older.structuredContent.pricing.deltaMonthlyUsd, 40);
-  assert.equal(lines[price + 2], '**Monthly credits:** 9,000 now, 13,000 from the next renewal');
-  assert.equal(lines[price + 3], `**This period:** +2,000 credits now, 11,000 in all until ${new Date((NOW + 15 * 86400) * 1000).toISOString()}`);
-
-  // A plan whose credits already match today's names only the price.
-  const sameCredits = await quote({ monthlycredits: 11000 });
-  assert.match(text(sameCredits), /\*\*Price update:\*\* Today's Pro price for the skills this plan already has is \$110\.00 a month, not its current \$90\.00\. A skill change counts from today's price, and the new price in this quote already includes that\.\n/);
-
-  // At today's prices there is nothing more to say.
-  const current = await quote({ monthlypriceusd: 110, monthlycredits: 11000 });
-  assert.match(text(current), /\*\*Monthly price:\*\* \$110\.00 now, \$130\.00 after the change \(\+\$20\.00\)/);
-  assert.doesNotMatch(text(current), /Price update|today's/);
-  assert.equal('note' in current.structuredContent.pricing, false);
-
-  // Without a plan there is no price of its own to move from.
-  const unsubscribed = await quote({ subscription: null });
-  assert.doesNotMatch(text(unsubscribed), /Price update/);
-
-  // A plan that has ended cannot take the change until it is renewed.
-  const ended = await quote({ monthlycredits: 0, subscription: { plan: 'agent', status: 'expired', provider: 'prepaid', currentperiodend: NOW - 86400 } });
-  assert.doesNotMatch(text(ended), /Price update/);
-  assert.equal('note' in ended.structuredContent.pricing, false);
-
-  assert.match(PLAYBOOKS.agents, /The plan price is set from the skills and the tier at today's prices when the plan starts, moves to Pro or its skills change, and renewals keep that price\./);
-  assert.doesNotMatch(PLAYBOOKS.agents, /depends only on the skills/);
-});
-
-test('apply_agent_skills adds no price update when the change also moves the plan to Pro', async () => {
-  // A Starter plan bought at $9 a month, whose skills cost $11 on Starter and
-  // $110 on Pro today, moves to Pro, alone and with a skill that adds $20.
-  const apollo = { name: 'int-apollo-sales', title: 'Apollo Sales', depends_on: [], conflicts_with: [], credential_key: 'apollo', requires_credentials: true, pricing: { billing_model: 'tokens', monthly_price_weight_usd: 2, monthly_credits_weight: 200 } };
-  const quote = async (skills, totalPriceUsd) => {
-    const fake = fakeClient(skillRoutes({
-      '/Skills/List': { ...skillList, skills: [...skillList.skills, apollo], total: skillList.total + 1 },
-      '/UserAgent/Detail': detail({ tier: 'starter', tiermultiplier: 10, monthlypriceusd: 9, monthlycredits: 900, agent: { guid: 'tpl-1', custom: false, tiers: { starter: { priceUsd: 11, credits: 1100 }, pro: { priceUsd: 110, credits: 11000 } }, tiermultiplier: 10 } }),
-      '/UserAgent/PricingPreview': { result: true, errors: [], tier: 'pro', tiermultiplier: 10, totalPriceUsd, totalMonthlyCredits: totalPriceUsd * 100 },
-    }));
-    let result;
-    await withClient(fake, async client => {
-      result = await client.callTool({ name: 'apply_agent_skills', arguments: { agent_guid: AGENT, skills, tier: 'pro' } });
-    });
-    assert.equal(result.structuredContent.status, 'quote', text(result));
-    assert.equal(fake.calls.find(call => call.path === '/UserAgent/PricingPreview').body.tier, 'pro');
-    return result;
-  };
-
-  const tierOnly = await quote({}, 110);
-  assert.match(text(tierOnly), /\*\*Plan:\*\* starter to pro\n\*\*Monthly price:\*\* \$9\.00 now, \$110\.00 after the change \(\+\$101\.00\)\n\*\*Monthly credits:\*\*/);
-  assert.doesNotMatch(text(tierOnly), /Price update|today's|\$11\.00/);
-  assert.equal('note' in tierOnly.structuredContent.pricing, false);
-
-  const withSkill = await quote({ 'int-apollo-sales': true }, 130);
-  assert.match(text(withSkill), /\*\*Monthly price:\*\* \$9\.00 now, \$130\.00 after the change \(\+\$121\.00\)\n\*\*Monthly credits:\*\*/);
-  assert.doesNotMatch(text(withSkill), /Price update|today's|\$11\.00/);
-  assert.equal('note' in withSkill.structuredContent.pricing, false);
-});
-
-test('apply_agent_skills says what a credit for skills turned off gives back, and how long it lasts', async () => {
-  // Turning the reporting skill off lowers the price from $42 to $40, with half of a 30-day period left.
-  const removal = { agent_guid: AGENT, skills: { 'util-chat-markdown-reporting': false } };
-  const periodEnd = NOW + 15 * 86400 + 3600;
-  const applied = (overrides = {}) => ({
-    result: true,
-    errors: [],
-    pricing: { previousPriceUsd: 42, newPriceUsd: 40, deltaUsd: -2, previousMonthlyCredits: 4200, newMonthlyCredits: 4000, deltaCredits: -200, creditsNow: -100, creditsThisPeriod: 4100, creditsFromRenewal: 4000, periodEnd },
-    tier: 'starter',
-    stripeProrationApplied: false,
-    usedCreditsUsd: 0,
-    ...overrides,
-  });
-  const subscription = { plan: 'agent', status: 'active', provider: 'prepaid', currentperiodend: periodEnd, daysremaining: 16 };
-  const drop = (overrides = {}) => preview(planChange({ periodEnd, secondsLeft: periodEnd - NOW, chargeNowUsd: 0, creditNowUsd: 1, usedCreditsUsd: 0, creditsNow: -100, creditsThisPeriod: 4100, creditsFromRenewal: 4000, ...overrides }), { totalPriceUsd: 40, totalMonthlyCredits: 4000 });
-  const routes = (detailOverrides, skillsApply, change = drop()) => skillRoutes({
-    '/UserAgent/Detail': (_body, calls) => detail({
-      subscription,
-      ...detailOverrides,
-      ...(calls.some(call => call.path === '/UserAgent/SkillsApply') ? { skills: [], monthlypriceusd: '40.00' } : {}),
-    }),
-    '/UserAgent/PricingPreview': change,
-    '/UserAgent/SkillsApply': skillsApply,
-  });
-  const ends = 'Its credits for the time left end now, and this period keeps 4,100.';
-
-  const personal = fakeClient(routes({}, applied({ prepaidWalletDelta: -1 })));
-  await withClient(personal, async client => {
-    const quote = await client.callTool({ name: 'apply_agent_skills', arguments: removal });
-    assert.equal(quote.structuredContent.status, 'quote', text(quote));
-    assert.equal(quote.structuredContent.billing.note, `$1.00 goes back to the balances that paid, and each keeps its own end date. ${ends} The plan then renews at $40.00 a month.`);
-    assert.equal(quote.structuredContent.billing.estimatedChargeNowUsd, 0);
-    assert.equal(quote.structuredContent.billing.creditNowUsd, 1);
-    assert.equal(quote.structuredContent.billing.usedCreditsUsd, 0);
-    assert.equal(quote.structuredContent.pricing.creditsNow, -100);
-    assert.match(text(quote), /^\*\*This period:\*\* -100 credits now, 4,100 in all until /m);
-    assert.equal(quote.structuredContent.nextAction.reason, 'Ask the user to confirm this change first.');
-
-    const result = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
-    assert.notEqual(result.isError, true, text(result));
-    assert.equal(result.structuredContent.status, 'applied');
-    assert.equal(result.structuredContent.billing.chargedNowUsd, -1);
-    assert.equal(result.structuredContent.billing.note, '$1.00 was credited to your personal wallet.', 'an answer that does not say how it split');
-    assert.equal(result.structuredContent.pricing.creditsThisPeriod, 4100);
-    assert.match(text(result), /^\*\*This period:\*\* -100 credits, 4,100 in all until \S+; every renewal gives 4,000$/m);
-  });
-
-  // The agent's team wallet is credited for a team agent.
-  const team = fakeClient(routes({ teamguid: 'team-1' }, applied({ prepaidWalletDelta: -1 })));
-  await withClient(team, async client => {
-    const quote = await client.callTool({ name: 'apply_agent_skills', arguments: removal });
-    const result = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
-    assert.equal(result.structuredContent.billing.note, '$1.00 was credited to the team wallet.');
-    assert.doesNotMatch(JSON.stringify(result), /team-1/);
-  });
-
-  // Credits already used above what the plan keeps come off the credit.
-  const used = fakeClient(routes({}, applied({ prepaidWalletDelta: -0.9, usedCreditsUsd: 0.1 }), drop({ creditNowUsd: 0.9, usedCreditsUsd: 0.1 })));
-  await withClient(used, async client => {
-    const quote = await client.callTool({ name: 'apply_agent_skills', arguments: removal });
-    assert.equal(quote.structuredContent.billing.note, `$0.90 goes back to the balances that paid, and each keeps its own end date. $0.10 comes off for credits already used above what the plan keeps. ${ends} The plan then renews at $40.00 a month.`);
-    assert.equal(quote.structuredContent.billing.usedCreditsUsd, 0.1);
-    const result = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
-    assert.equal(result.structuredContent.billing.note, '$0.90 was credited to your personal wallet. $0.10 came off for credits already used above what the plan keeps.');
-    assert.equal(result.structuredContent.billing.usedCreditsUsd, 0.1);
-  });
-
-  // Credits used worth more than the time left: no credit, and the change is applied all the same.
-  const allUsed = fakeClient(routes({}, applied({ prepaidWalletDelta: null, usedCreditsUsd: 1 }), drop({ creditNowUsd: 0, usedCreditsUsd: 1 })));
-  await withClient(allUsed, async client => {
-    const quote = await client.callTool({ name: 'apply_agent_skills', arguments: removal });
-    assert.equal(quote.structuredContent.billing.note, `Nothing comes back: the credits already used are worth more than the time left. ${ends} The plan then renews at $40.00 a month.`);
-    const result = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
-    assert.notEqual(result.isError, true, text(result));
-    assert.equal(result.structuredContent.status, 'applied');
-    assert.equal(result.structuredContent.billing.chargedNowUsd, null);
-    assert.equal(result.structuredContent.billing.usedCreditsUsd, 1);
-    assert.equal(result.structuredContent.billing.note, 'Nothing came back: the credits already used were worth more than the time left.');
-    assert.doesNotMatch(text(result), /failed|not added|support/i);
-  });
-
-  // Part of the credit went on credits already used and Wiro could not add the rest: its warning
-  // follows, and nothing says the credits used took it all.
-  const notAddedWarning = 'The $0.40 credit for the rest of this period was not added to the wallet. The skill change is saved and the lower monthly price applies from the next renewal. Contact support about the credit.';
-  const notAdded = fakeClient(routes({}, applied({ prepaidWalletDelta: null, usedCreditsUsd: 0.6, prepaidCreditFailedUsd: 0.4, warnings: [notAddedWarning] }), drop({ creditNowUsd: 0, usedCreditsUsd: 0.6 })));
-  await withClient(notAdded, async client => {
-    const quote = await client.callTool({ name: 'apply_agent_skills', arguments: removal });
-    const result = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
-    assert.notEqual(result.isError, true, text(result));
-    assert.equal(result.structuredContent.status, 'applied');
-    assert.equal(result.structuredContent.billing.chargedNowUsd, null);
-    assert.equal(result.structuredContent.billing.usedCreditsUsd, 0.6);
-    assert.equal(result.structuredContent.billing.note, `Nothing came back now. $0.60 came off for credits already used above what the plan keeps. ${notAddedWarning}`);
-    assert.doesNotMatch(text(result), /worth more than the time left/);
-  });
-
-  // What comes back is worked out only when the change is applied.
-  const later = fakeClient(routes({}, applied({ prepaidWalletDelta: -1 }), drop({ creditNowUsd: null, usedCreditsUsd: null })));
-  await withClient(later, async client => {
-    const quote = await client.callTool({ name: 'apply_agent_skills', arguments: removal });
-    assert.equal(quote.structuredContent.billing.note, `What comes back is worked out when the change is applied: what the time left is worth, less 1 cent for each credit already used above what the plan keeps. ${ends} The plan then renews at $40.00 a month.`);
-    assert.equal(quote.structuredContent.billing.creditNowUsd, null);
-  });
-
-  // A credit is reported only when Wiro reports one, and Wiro's own note on the billing is passed on.
-  const warning = 'The skill change is saved and the lower monthly price applies from the next renewal.';
-  const withNote = fakeClient(routes({}, applied({ prepaidWalletDelta: null, warnings: [warning] })));
-  await withClient(withNote, async client => {
-    const quote = await client.callTool({ name: 'apply_agent_skills', arguments: removal });
-    const result = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
-    assert.notEqual(result.isError, true, text(result));
-    assert.equal(result.structuredContent.billing.chargedNowUsd, null);
-    assert.equal(result.structuredContent.billing.note, `Nothing was charged now. ${warning}`);
-    assert.doesNotMatch(text(result), /was credited to/);
-  });
-
-  // With the current price unknown, the quote cannot tell a charge from a credit and says both once.
-  const unpriced = fakeClient(skillRoutes({ '/UserAgent/Detail': detail({ monthlypriceusd: null }) }));
-  await withClient(unpriced, async client => {
-    const quote = await client.callTool({ name: 'apply_agent_skills', arguments: { agent_guid: AGENT, skills: { 'int-instagram-post': true } } });
-    assert.equal(quote.structuredContent.status, 'quote', text(quote));
-    assert.equal(quote.structuredContent.pricing.deltaMonthlyUsd, null);
-    assert.equal(quote.structuredContent.billing.note, 'The difference for the rest of this period is taken from, or credited to, your personal wallet when the change is applied. A credit goes back to the balances that paid, and each keeps its own end date. The plan then renews at $43.00 a month.');
-  });
-
-  const billing = 'on a prepaid plan the monthly difference for the time left in the period is taken from the wallet at once, and the added credits come for that same time; every renewal gives all of them. When the price drops, what the time left is worth goes back to the balances that paid, less 1 cent for each credit already used above what the plan keeps, and each balance keeps its own end date. A skill that comes off loses its credits for the time left; the ones the time already passed paid for stay until the renewal.';
-  await withClient(fakeClient({}), async client => {
-    const { tools } = await client.listTools();
-    const description = tools.find(tool => tool.name === 'apply_agent_skills').description;
-    assert.ok(description.includes(`Billing: ${billing}`), description);
-    assert.match(description, /On a card plan nothing is charged at once: the card subscription is updated to the new price, a plan that renews by card shows the difference on its next invoice, and the added credits come for the time left\./);
-  });
-  const sentence = `O${billing.slice(1)}`;
-  assert.ok(PLAYBOOKS.agents.includes(sentence), 'the agents playbook says the same');
-  assert.ok(PLAYBOOKS.billing.includes(`Skill changes: ${billing}`), 'the billing playbook says the same');
-  const card = 'On a card plan the difference goes on the next invoice if the plan renews by card, and the added credits come for the time left.';
-  assert.ok(PLAYBOOKS.agents.includes(card), 'the agents playbook names the next invoice only for a plan that renews by card');
-  assert.ok(PLAYBOOKS.billing.includes(card), 'the billing playbook says the same');
-  assert.match(PLAYBOOKS.billing, /\| Agent skill change \| The price difference for the rest of the period, charged, or credited back to the balances that paid, less 1 cent for each credit already used above what the plan keeps \| When applied \|/);
-  for (const playbook of Object.values(PLAYBOOKS)) {
-    assert.doesNotMatch(playbook, /can be spent until|for use until the period ends|coupon's end date|other credit lasts|estimate with a maximum/);
-  }
-  assert.match(PLAYBOOKS.agents, /and a personal card plan is cancelled there\. A skill change on a card plan charges nothing at once: the card subscription is updated to the new price, and a plan that renews by card shows the prorated difference on its next invoice\. A card plan that is moving to wallet billing pays `upgrade_to_pro` and `buy_credits` from the wallet, renews from it when its period ends, and can be cancelled with `manage_agent_billing` once the wallet bills it\./);
-  assert.match(PLAYBOOKS.agents, /A card plan that is moving to wallet billing renews from the wallet when its period ends: cancel it with `manage_agent_billing` after that, then delete the agent\./);
-  assert.match(PLAYBOOKS.billing, /It goes by the second: a charge rounds up to the cent, a credit down, and a rise costs at least one day\./);
-  for (const playbook of Object.values(PLAYBOOKS)) assert.doesNotMatch(playbook, /days left|whole days/);
-});
-
-test('apply_agent_skills says how an applied credit split, each part with its own end', async () => {
-  const removal = { agent_guid: AGENT, skills: { 'util-chat-markdown-reporting': false } };
-  const noteFor = async (delta, parts, usedCreditsUsd = 0) => {
-    const fake = fakeClient(skillRoutes({
-      '/UserAgent/Detail': (_body, calls) => detail({ ...(calls.some(call => call.path === '/UserAgent/SkillsApply') ? { skills: [], monthlypriceusd: '40.00' } : {}) }),
-      '/UserAgent/PricingPreview': preview(planChange({ chargeNowUsd: 0, creditNowUsd: 1, creditsNow: -100, creditsThisPeriod: 4100, creditsFromRenewal: 4000 }), { totalPriceUsd: 40, totalMonthlyCredits: 4000 }),
-      '/UserAgent/SkillsApply': { result: true, errors: [], pricing: { previousPriceUsd: 42, newPriceUsd: 40, deltaUsd: -2 }, tier: 'starter', stripeProrationApplied: false, prepaidWalletDelta: delta, usedCreditsUsd, ...(parts ? { prepaidCreditParts: parts } : {}) },
-    }));
-    let note;
-    await withClient(fake, async client => {
-      const quote = await client.callTool({ name: 'apply_agent_skills', arguments: removal });
-      const result = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
-      assert.notEqual(result.isError, true, text(result));
-      note = result.structuredContent.billing.note;
-    });
-    return note;
-  };
-  const parts = overrides => ({ couponUsd: 0, couponUntilPeriodEndUsd: 0, storeUsd: 0, storeUntilPeriodEndUsd: 0, depositUsd: 0, depositUntilPeriodEndUsd: 0, ...overrides });
-  const keeps = 'It went back to the balances that paid and keeps their end dates.';
-  const ended = 'It lasts until this period ends, because the credit that paid it has ended.';
-  // Every balance keeps the end date of what paid it: coupon credit, store revenue and deposits alike.
-  assert.equal(await noteFor(-5, parts({ couponUsd: 5 })), `$5.00 was credited to your personal wallet. ${keeps}`);
-  assert.equal(await noteFor(-5, parts({ storeUsd: 1, depositUsd: 4 })), `$5.00 was credited to your personal wallet. ${keeps}`);
-  // A part whose source has ended since lasts until the period ends, whichever balance it is.
-  assert.equal(await noteFor(-5, parts({ couponUsd: 5, couponUntilPeriodEndUsd: 5 })), `$5.00 was credited to your personal wallet. ${ended}`);
-  assert.equal(await noteFor(-5, parts({ storeUsd: 1, storeUntilPeriodEndUsd: 1, depositUsd: 4, depositUntilPeriodEndUsd: 4 })), `$5.00 was credited to your personal wallet. ${ended}`);
-  assert.equal(await noteFor(-5, parts({ couponUsd: 3, couponUntilPeriodEndUsd: 1, depositUsd: 2 })), '$5.00 was credited to your personal wallet. $4.00 of it went back to the balances that paid and keeps their end dates, and $1.00 lasts until this period ends, because the credit that paid it has ended.');
-  assert.equal(await noteFor(-5, parts({ couponUsd: 1, couponUntilPeriodEndUsd: 0.5, storeUsd: 2, storeUntilPeriodEndUsd: 0.5, depositUsd: 2, depositUntilPeriodEndUsd: 1 })), '$5.00 was credited to your personal wallet. $3.00 of it went back to the balances that paid and keeps their end dates, and $2.00 lasts until this period ends, because the credit that paid it has ended.');
-  // Parts that come to nothing claim nothing, whatever the amount says, and so does an answer without them.
-  assert.equal(await noteFor(-5, parts({})), '$5.00 was credited to your personal wallet.');
-  assert.equal(await noteFor(-5, undefined), '$5.00 was credited to your personal wallet.');
-  // A balance can carry more digits than cents. The two amounts still add up to the credit.
-  assert.equal(await noteFor(-5, parts({ couponUsd: 5, couponUntilPeriodEndUsd: 1.245 })), '$5.00 was credited to your personal wallet. $3.75 of it went back to the balances that paid and keeps their end dates, and $1.25 lasts until this period ends, because the credit that paid it has ended.');
-  assert.equal(await noteFor(-5, parts({ couponUsd: 5, couponUntilPeriodEndUsd: 0.001 })), `$5.00 was credited to your personal wallet. ${keeps}`);
-  assert.equal(await noteFor(-5, parts({ couponUsd: '3.00', couponUntilPeriodEndUsd: '1.00', depositUsd: '2.00', depositUntilPeriodEndUsd: '0' })), '$5.00 was credited to your personal wallet. $4.00 of it went back to the balances that paid and keeps their end dates, and $1.00 lasts until this period ends, because the credit that paid it has ended.');
-  // The credits already used are named after the parts.
-  assert.equal(await noteFor(-4.5, parts({ depositUsd: 4.5 }), 0.5), `$4.50 was credited to your personal wallet. ${keeps} $0.50 came off for credits already used above what the plan keeps.`);
-});
-
-test('apply_agent_skills checks names before anything is priced or written', async () => {
+test('apply_agent_skills checks names before anything is written', async () => {
   const fake = fakeClient(skillRoutes());
   await withClient(fake, async client => {
     const result = await client.callTool({
@@ -1460,63 +791,7 @@ test('apply_agent_skills checks names before anything is priced or written', asy
 
 const NEWSLETTER_OFF = ['int-brevo-email', 'int-hubspot-crm', 'int-mailchimp-email', 'int-sendgrid-email'];
 
-test('apply_agent_skills quotes the scheduled tasks Wiro says the change stops or starts', async () => {
-  const quote = async scheduledTasks => {
-    let result;
-    await withClient(fakeClient(skillRoutes({
-      '/UserAgent/PricingPreview': preview(planChange(), scheduledTasks === undefined ? {} : { scheduledTasks }),
-    })), async client => {
-      result = await quoteInstagram(client);
-    });
-    return result;
-  };
-
-  const both = await quote({ stop: ['cs-cron-metaads-performance-reporter', 'cs-cron-ads-recommendation-cleanup'], resume: ['cs-cron-social-content-scanner'] });
-  assert.deepEqual(both.structuredContent.scheduledTasks, {
-    stop: ['cs-cron-metaads-performance-reporter', 'cs-cron-ads-recommendation-cleanup'],
-    resume: ['cs-cron-social-content-scanner'],
-  });
-  const lines = text(both).split('\n');
-  assert.ok(lines.includes('**Scheduled tasks that stop:** Meta Ads Performance Reporter (`cs-cron-metaads-performance-reporter`), Ads Recommendation Cleanup (`cs-cron-ads-recommendation-cleanup`). They run now and stop with this change. They keep their text, schedule and on/off state, and get_my_agent then shows what each waits for.'), text(both));
-  assert.ok(lines.includes('**Scheduled tasks that start running:** Social Content Scanner (`cs-cron-social-content-scanner`). It does not run now and runs once this change is applied.'), text(both));
-  // They follow the restart line, before the credentials the new skills need.
-  const at = prefix => lines.findIndex(line => line.startsWith(prefix));
-  assert.ok(at('**Restart:**') < at('**Scheduled tasks that stop:**'));
-  assert.ok(at('**Scheduled tasks that start running:**') < at('**Credentials the new skills need:**'));
-
-  const swapped = await quote({ stop: ['cs-cron-lead-reply-handler'], resume: ['cs-cron-newsletter-sender', 'cs-cron-newsletter-subscriber-scanner'] });
-  assert.match(text(swapped), /\*\*Scheduled tasks that stop:\*\* Lead Reply Handler \(`cs-cron-lead-reply-handler`\)\. It runs now and stops with this change\. It keeps its text, schedule and on\/off state, and get_my_agent then shows what it waits for\./);
-  assert.match(text(swapped), /\*\*Scheduled tasks that start running:\*\* Newsletter Sender \(`cs-cron-newsletter-sender`\), Newsletter Subscriber Scanner \(`cs-cron-newsletter-subscriber-scanner`\)\. They do not run now and run once this change is applied\./);
-
-  // Wiro could not tell, by null or by sending nothing: the quote says so, and the result of the change names
-  // the tasks it paused.
-  for (const scheduledTasks of [null, undefined]) {
-    const unknown = await quote(scheduledTasks);
-    assert.equal(unknown.structuredContent.scheduledTasks, null);
-    assert.ok(text(unknown).split('\n').includes('**Scheduled tasks:** Wiro could not tell which scheduled tasks this change stops or starts. Once it is applied, the result names the tasks it paused.'), text(unknown));
-  }
-
-  // Nothing to say when Wiro names no task.
-  const none = await quote({ stop: [], resume: [] });
-  assert.equal('scheduledTasks' in none.structuredContent, false);
-  assert.doesNotMatch(text(none), /Scheduled tasks/);
-
-  // On an agent that is not running, a task Wiro counts as running would run once the agent starts.
-  const stopped = async scheduledTasks => {
-    let result;
-    await withClient(fakeClient(skillRoutes({
-      '/UserAgent/Detail': detail({ status: 0 }),
-      '/UserAgent/PricingPreview': preview(planChange(), { scheduledTasks }),
-    })), async client => {
-      result = await quoteInstagram(client);
-    });
-    return text(result);
-  };
-  assert.match(await stopped({ stop: ['cs-cron-lead-reply-handler'], resume: [] }), /\*\*Scheduled tasks that stop:\*\* Lead Reply Handler \(`cs-cron-lead-reply-handler`\)\. It would run once the agent starts, and this change stops it\./);
-  assert.match(await stopped({ stop: [], resume: ['cs-cron-newsletter-sender', 'cs-cron-newsletter-subscriber-scanner'] }), /They do not run now and run once this change is applied and the agent starts\./);
-});
-
-test('apply_agent_skills names the scheduled tasks a confirmed change paused', async () => {
+test('apply_agent_skills names the scheduled tasks a change paused', async () => {
   // Detail before and after turning Meta Ads Manager off. The holiday planner was paused already.
   const task = (key, paused) => ({
     key, description: key, value: 'Report on Meta Ads.', interval: '0 9 * * 1', enabled: true, requires_credentials: ['meta-ads'], _source: 'skill-bundle', _editable: true,
@@ -1527,47 +802,34 @@ test('apply_agent_skills names the scheduled tasks a confirmed change paused', a
   const fake = fakeClient(skillRoutes({
     '/Skills/List': connectSkillList,
     '/UserAgent/Detail': (_body, calls) => structuredClone(calls.some(call => call.path === '/UserAgent/SkillsApply') ? after : before),
-    '/UserAgent/SkillsApply': { result: true, errors: [], pricing: { previousPriceUsd: 42, newPriceUsd: 43, deltaUsd: 1, previousMonthlyCredits: 4200, newMonthlyCredits: 4300, deltaCredits: 100 }, tier: 'starter', stripeProrationApplied: false, prepaidWalletDelta: 0.5, restartTriggered: true },
+    '/UserAgent/SkillsApply': appliedAnswer(),
   }));
   await withClient(fake, async client => {
-    const quote = await client.callTool({ name: 'apply_agent_skills', arguments: { agent_guid: AGENT, skills: { 'int-metaads-manage': false } } });
-    assert.equal(quote.structuredContent.status, 'quote', text(quote));
-    const result = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
+    const result = await client.callTool({ name: 'apply_agent_skills', arguments: { agent_guid: AGENT, skills: { 'int-metaads-manage': false } } });
     assert.equal(result.structuredContent.status, 'applied', text(result));
     assert.deepEqual(result.structuredContent.pausedTasks, ['cs-cron-metaads-performance-reporter']);
     assert.match(text(result), /\*\*Paused by this change:\*\* Meta Ads Performance Reporter \(`cs-cron-metaads-performance-reporter`\) is paused until Meta Ads \(`int-metaads-manage`\) is on\./);
     assert.doesNotMatch(text(result), /holiday-planner/);
+    // Turning a skill off adds no work, so the cost line says only that it is free.
+    assert.ok(text(result).split('\n').includes(`**Cost:** ${FREE_NOTE}`), text(result));
+    assert.equal(fake.paths().includes('/UserAgent/PricingPreview'), false);
   });
-
-  // When Wiro said which tasks the change stops, a task paused after it that Wiro did not name, such as one
-  // that was not running, is not called paused by it.
-  for (const [stop, named] of [[[], false], [['cs-cron-metaads-performance-reporter'], true]]) {
-    const told = fakeClient(skillRoutes({
-      '/Skills/List': connectSkillList,
-      '/UserAgent/Detail': (_body, calls) => structuredClone(calls.some(call => call.path === '/UserAgent/SkillsApply') ? after : before),
-      '/UserAgent/PricingPreview': preview(planChange(), { scheduledTasks: { stop, resume: [] } }),
-      '/UserAgent/SkillsApply': { result: true, errors: [], pricing: { previousPriceUsd: 42, newPriceUsd: 43, deltaUsd: 1 }, tier: 'starter', stripeProrationApplied: false, prepaidWalletDelta: 0.5, restartTriggered: true },
-    }));
-    await withClient(told, async client => {
-      const quote = await client.callTool({ name: 'apply_agent_skills', arguments: { agent_guid: AGENT, skills: { 'int-metaads-manage': false } } });
-      const result = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
-      assert.equal(result.structuredContent.status, 'applied', text(result));
-      assert.equal(/Paused by this change/.test(text(result)), named, JSON.stringify(stop));
-      assert.equal('pausedTasks' in result.structuredContent, named);
-    });
-  }
 });
 
 test('a skill change Wiro refuses for a dependency or a conflict names the skills by title', () => {
   const titles = new Map([['int-instagram-post', 'Instagram Post'], ['util-social-posting-common', 'Social Posting Common Rules']]);
-  const deps = describeSkillsApplyError(new ApiResultError('Missing dependencies', [101], { deps: [{ skill: 'int-instagram-post', requires: 'util-social-posting-common' }] }), 'prepaid', titles);
+  const deps = describeSkillsApplyError(new ApiResultError('Missing dependencies', [101], { deps: [{ skill: 'int-instagram-post', requires: 'util-social-posting-common' }] }), titles);
   assert.match(deps.guidance, /Some skills need others that would be off: Instagram Post \(`int-instagram-post`\) needs Social Posting Common Rules \(`util-social-posting-common`\)\./);
   assert.deepEqual(deps.deps, [{ skill: 'int-instagram-post', requires: 'util-social-posting-common' }]);
-  const conflicts = describeSkillsApplyError(new ApiResultError('Conflicting skills', [102], { conflicts: [{ a: 'int-instagram-post', b: 'int-old-poster' }] }), 'prepaid', titles);
+  const conflicts = describeSkillsApplyError(new ApiResultError('Conflicting skills', [102], { conflicts: [{ a: 'int-instagram-post', b: 'int-old-poster' }] }), titles);
   assert.match(conflicts.guidance, /These skills cannot be on together: Instagram Post \(`int-instagram-post`\) and Old Poster \(`int-old-poster`\)\./);
+  // A plan change sent here is refused by Wiro with a sentence that points to the plan tool.
+  const plan = describeSkillsApplyError(new ApiResultError('Change the plan with UpgradeTier.', [0], {}));
+  assert.equal(plan.guidance, 'A skill change does not change the plan. manage_agent_billing with action change_plan does.');
+  assert.equal(isPreChargeRefusal(new ApiResultError('Change the plan with UpgradeTier.', [0], {})), true);
 });
 
-test('apply_agent_skills reports a no-op, a dependency turned off and a tier downgrade', async () => {
+test('apply_agent_skills reports a no-op and a dependency turned off without writing', async () => {
   const fake = fakeClient(skillRoutes());
   await withClient(fake, async client => {
     const noop = await client.callTool({
@@ -1575,6 +837,8 @@ test('apply_agent_skills reports a no-op, a dependency turned off and a tier dow
       arguments: { agent_guid: AGENT, skills: { 'util-chat-markdown-reporting': true, 'int-googleads-manage': false } },
     });
     assert.equal(noop.structuredContent.status, 'no_change');
+    assert.equal(noop.structuredContent.restart, 'Nothing changed, so the agent does not restart.');
+    assert.match(text(noop), /^## No change needed\n\nThe skills are already as requested on agent `ua-0001`\. Nothing changed\.$/);
 
     const conflict = await client.callTool({
       name: 'apply_agent_skills',
@@ -1582,17 +846,7 @@ test('apply_agent_skills reports a no-op, a dependency turned off and a tier dow
     });
     assert.equal(conflict.isError, true);
     assert.match(text(conflict), /Instagram \(`int-instagram-post`\) needs Social Posting Common \(`util-social-posting-common`\), which this change turns off/);
-    assert.equal(fake.paths().includes('/UserAgent/PricingPreview'), false);
-  });
-
-  const pro = fakeClient(skillRoutes({ '/UserAgent/Detail': detail({ tier: 'pro' }) }));
-  await withClient(pro, async client => {
-    const result = await client.callTool({
-      name: 'apply_agent_skills',
-      arguments: { agent_guid: AGENT, skills: {}, tier: 'starter' },
-    });
-    assert.equal(result.isError, true);
-    assert.match(text(result), /cannot be moved back to Starter/);
+    assert.equal(fake.paths().includes('/UserAgent/SkillsApply'), false);
   });
 });
 
@@ -1617,192 +871,8 @@ test('apply_agent_skills runs the server\'s dependency check against the whole s
     });
     assert.equal(withoutDependencies.isError, true);
     assert.match(text(withoutDependencies), /Video Creator \(`util-video-creator`\) needs Motion Effects \(`util-motion-effects`\), which is off\. Turn Motion Effects \(`util-motion-effects`\) on in the same change\./);
-    assert.equal(fake.paths().includes('/UserAgent/PricingPreview'), false);
+    assert.equal(fake.paths().includes('/UserAgent/SkillsApply'), false);
   });
-});
-
-test('apply_agent_skills tells a card plan that nothing is charged now', async () => {
-  const fake = fakeClient(skillRoutes({
-    '/UserAgent/Detail': detail({ teamguid: 'team-1', subscription: { status: 'active', provider: 'stripe', currentperiodend: NOW + 86400, daysremaining: 1 } }),
-    '/UserAgent/PricingPreview': preview(cardPlanChange({ periodEnd: NOW + 86400, secondsLeft: 86400, creditsNow: 3, creditsThisPeriod: 4203 })),
-  }));
-  await withClient(fake, async client => {
-    const result = await client.callTool({
-      name: 'apply_agent_skills',
-      arguments: { agent_guid: AGENT, skills: { 'int-instagram-post': true } },
-    });
-    assert.equal(result.structuredContent.billing.plan, 'card');
-    assert.equal(result.structuredContent.billing.wallet, 'team');
-    assert.equal(result.structuredContent.billing.estimatedChargeNowUsd, 0);
-    assert.match(result.structuredContent.billing.note, /Nothing is charged now.*next invoice/);
-    assert.equal(result.structuredContent.billing.note, 'Nothing is charged now. The card subscription is updated to the new price, and a plan that renews by card shows the prorated difference on its next invoice. 3 credits come now for the rest of this period. The new monthly price is $43.00.');
-    // The Detail row carries no card state here, so the note does not say the plan renews.
-    assert.match(result.structuredContent.billing.note, /The new monthly price is \$\d/);
-    assert.doesNotMatch(result.structuredContent.billing.note, /plan then renews|renews at/);
-    assert.doesNotMatch(JSON.stringify(result.structuredContent), /team-1/);
-  });
-});
-
-test('apply_agent_skills says a card plan whose price did not move was not charged', async () => {
-  const card = { status: 'active', provider: 'stripe', currentperiodend: NOW + 86400, daysremaining: 1 };
-  const applied = deltaUsd => ({
-    result: true,
-    errors: [],
-    pricing: { previousPriceUsd: 42, newPriceUsd: 42 + deltaUsd, deltaUsd, previousMonthlyCredits: 4200, newMonthlyCredits: 4200, deltaCredits: 0 },
-    tier: 'starter',
-    stripeProrationApplied: true,
-    prepaidWalletDelta: null,
-  });
-  const routes = (deltaUsd, overrides = {}) => skillRoutes({
-    '/UserAgent/Detail': detailAfterApply({ subscription: card, ...overrides }),
-    '/UserAgent/PricingPreview': { result: true, errors: [], totalPriceUsd: 42 + deltaUsd, totalMonthlyCredits: 4200 },
-    '/UserAgent/SkillsApply': applied(deltaUsd),
-  });
-
-  await withClient(fakeClient(routes(0)), async client => {
-    const quote = await quoteInstagram(client);
-    assert.equal(quote.structuredContent.billing.note, 'The monthly price does not change, so nothing is charged.');
-    const result = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
-    assert.equal(result.structuredContent.status, 'applied', text(result));
-    assert.equal(result.structuredContent.billing.note, 'The monthly price did not change, so nothing was charged.');
-    assert.equal(result.structuredContent.billing.chargedNowUsd, null);
-    assert.doesNotMatch(text(result), /next invoice|card subscription was updated/);
-
-    // The saved answer of the same change says the same of that call.
-    const repeat = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
-    assert.match(repeat.structuredContent.billing.note, /That call's billing: The monthly price did not change, so nothing was charged\.$/);
-  });
-
-  // A plan set to end still says so.
-  await withClient(fakeClient(routes(0, { stripecancelatperiodend: true })), async client => {
-    const quote = await quoteInstagram(client);
-    const result = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
-    assert.match(result.structuredContent.billing.note, /^The monthly price did not change, so nothing was charged\. The plan is set to end after .* and does not renew\.$/);
-  });
-
-  // A real move on a plan whose renewal is not known names the invoice only for a plan that renews by card, both ways.
-  for (const deltaUsd of [1, -1, 0.01, -0.01]) {
-    await withClient(fakeClient(routes(deltaUsd)), async client => {
-      const quote = await quoteInstagram(client);
-      const result = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
-      assert.equal(result.structuredContent.billing.note, 'Nothing was charged now. The card subscription was updated to the new price, and a plan that renews by card shows the prorated difference on its next invoice.', String(deltaUsd));
-    });
-  }
-
-  // An answer without the amount cannot show the price stood still, so it keeps the general sentence.
-  await withClient(fakeClient({ ...routes(0), '/UserAgent/SkillsApply': { result: true, errors: [], tier: 'starter', stripeProrationApplied: true, prepaidWalletDelta: null } }), async client => {
-    const quote = await quoteInstagram(client);
-    const result = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
-    assert.equal(result.structuredContent.billing.note, 'Nothing was charged now. The card subscription was updated to the new price, and a plan that renews by card shows the prorated difference on its next invoice.');
-  });
-});
-
-test('apply_agent_skills points a card plan to its next invoice only while it renews by card', async () => {
-  const card = { plan: 'agent', status: 'active', provider: 'stripe', currentperiodend: NOW + 15 * 86400, daysremaining: 15 };
-  const notes = async overrides => {
-    let quote;
-    let result;
-    await withClient(fakeClient(skillRoutes({
-      '/UserAgent/Detail': detailAfterApply(overrides),
-      '/UserAgent/PricingPreview': preview(cardPlanChange()),
-      '/UserAgent/SkillsApply': {
-        result: true,
-        errors: [],
-        pricing: { previousPriceUsd: 42, newPriceUsd: 43, deltaUsd: 1, previousMonthlyCredits: 4200, newMonthlyCredits: 4300, deltaCredits: 100, creditsNow: 50, creditsThisPeriod: 4250, creditsFromRenewal: 4300, periodEnd: NOW + 15 * 86400 },
-        tier: 'starter',
-        stripeProrationApplied: true,
-        prepaidWalletDelta: null,
-        usedCreditsUsd: 0,
-      },
-    })), async client => {
-      quote = await quoteInstagram(client);
-      result = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
-      assert.equal(result.structuredContent.status, 'applied', text(result));
-      assert.equal(result.structuredContent.billing.chargedNowUsd, null);
-      assert.equal(quote.structuredContent.billing.estimatedChargeNowUsd, 0);
-    });
-    return [quote.structuredContent.billing.note, result.structuredContent.billing.note];
-  };
-  const comes = '50 credits come now for the rest of this period.';
-  const came = '50 credits came now for the rest of this period.';
-
-  // A plan that renews by card keeps the invoice sentence. One whose renewal is not known may also end, so the invoice is named only for a plan that renews by card.
-  assert.deepEqual(await notes({ subscription: card, stripecancelatperiodend: false }), [
-    'Nothing is charged now. The prorated difference appears on the next invoice, and 50 credits come now for the rest of this period. The plan then renews at $43.00 a month.',
-    `The card subscription was updated; any prorated difference appears on the next invoice. ${came}`,
-  ]);
-  assert.deepEqual(await notes({ subscription: card }), [
-    `Nothing is charged now. The card subscription is updated to the new price, and a plan that renews by card shows the prorated difference on its next invoice. ${comes} The new monthly price is $43.00.`,
-    `Nothing was charged now. The card subscription was updated to the new price, and a plan that renews by card shows the prorated difference on its next invoice. ${came}`,
-  ]);
-
-  // A card plan moving to wallet billing renews from the wallet, also when a row carries the card subscription's end flag.
-  for (const [overrides, wallet] of [
-    [{ subscription: { ...card, nextprovider: 'prepaid' } }, 'your personal wallet'],
-    [{ subscription: { ...card, nextprovider: 'prepaid' }, stripecancelatperiodend: true, teamguid: 'team-1' }, 'the team wallet'],
-  ]) {
-    assert.deepEqual(await notes(overrides), [
-      `Nothing is charged now. The card subscription is updated to the new price for the rest of this period. ${comes} When this period ends, the plan moves to wallet billing and renews from ${wallet} at $43.00 a month.`,
-      `Nothing was charged now. The card subscription was updated to the new price for the rest of this period. ${came} When this period ends, the plan moves to wallet billing and renews from ${wallet} at $43.00 a month.`,
-    ]);
-  }
-
-  // A card plan set to end does not renew, so neither answer points to a next invoice.
-  const [quoteEnds, appliedEnds] = await notes({ subscription: card, stripecancelatperiodend: true });
-  assert.match(quoteEnds, /^Nothing is charged now\. The card subscription is updated to the new price for the rest of this period\. 50 credits come now for the rest of this period\. The plan is set to end after \S+ and does not renew\.$/);
-  assert.match(appliedEnds, /^Nothing was charged now\. The card subscription was updated to the new price for the rest of this period\. 50 credits came now for the rest of this period\. The plan is set to end after \S+ and does not renew\.$/);
-
-  // With the current price unknown, the quote of a card subscription that ends with this period says the same without the credits.
-  const [pricedSwitch] = await notes({ subscription: { ...card, nextprovider: 'prepaid' } });
-  const [unpricedSwitch] = await notes({ subscription: { ...card, nextprovider: 'prepaid' }, monthlypriceusd: null });
-  assert.equal(unpricedSwitch, pricedSwitch.replace(` ${comes}`, ''));
-  const [unpricedEnds] = await notes({ subscription: card, stripecancelatperiodend: true, monthlypriceusd: null });
-  assert.equal(unpricedEnds, quoteEnds.replace(` ${comes}`, ''));
-});
-
-test('apply_agent_skills tells a card plan what a drop does to the invoice and to this period', async () => {
-  const card = { plan: 'agent', status: 'active', provider: 'stripe', currentperiodend: NOW + 15 * 86400, daysremaining: 15 };
-  const quoteNote = async overrides => {
-    let note;
-    await withClient(fakeClient(skillRoutes({
-      '/UserAgent/Detail': detail(overrides),
-      '/UserAgent/PricingPreview': preview(cardPlanChange({ creditsNow: -100, creditsThisPeriod: 4100, creditsFromRenewal: 4000 }), { totalPriceUsd: 40, totalMonthlyCredits: 4000 }),
-    })), async client => {
-      const quote = await client.callTool({ name: 'apply_agent_skills', arguments: { agent_guid: AGENT, skills: { 'util-chat-markdown-reporting': false } } });
-      assert.equal(quote.structuredContent.status, 'quote', text(quote));
-      assert.equal(quote.structuredContent.billing.estimatedChargeNowUsd, 0);
-      assert.equal('creditNowUsd' in quote.structuredContent.billing, false, 'a card plan moves no wallet money');
-      note = quote.structuredContent.billing.note;
-    });
-    return note;
-  };
-  const ends = 'Its credits for the time left end now, and this period keeps 4,100.';
-  assert.equal(await quoteNote({ subscription: card, stripecancelatperiodend: false }), `The prorated difference comes off the next invoice. ${ends} The plan then renews at $40.00 a month.`);
-  assert.equal(await quoteNote({ subscription: card }), `Nothing is charged now. The card subscription is updated to the new price, and a plan that renews by card shows the prorated difference on its next invoice. ${ends} The new monthly price is $40.00.`);
-  assert.match(await quoteNote({ subscription: card, stripecancelatperiodend: true }), new RegExp(`^Nothing is charged now\\. The card subscription is updated to the new price for the rest of this period\\. ${ends.replace(/[.]/g, '\\.')} The plan is set to end after \\S+ and does not renew\\.$`));
-});
-
-test('apply_agent_skills sends a plan that renew cannot bring back to subscribe', async () => {
-  const quoteFor = async subscription => {
-    let quote;
-    await withClient(fakeClient(skillRoutes({ '/UserAgent/Detail': detail({ subscription }) })), async client => {
-      quote = await client.callTool({ name: 'apply_agent_skills', arguments: { agent_guid: AGENT, skills: { 'int-instagram-post': true } } });
-    });
-    return quote;
-  };
-  const ended = { plan: 'agent', status: 'expired', currentperiodend: NOW - 86400, daysremaining: 0 };
-  const card = await quoteFor({ ...ended, provider: 'stripe' });
-  assert.equal(card.structuredContent.nextAction.tool, 'manage_agent_billing', text(card));
-  assert.equal(card.structuredContent.nextAction.arguments.action, 'subscribe');
-  assert.match(text(card), /start a new plan with manage_agent_billing \(subscribe\) first/);
-  assert.match(text(card), /Start a new plan with manage_agent_billing before applying this change\./);
-  assert.doesNotMatch(text(card), /renew it|Renew the subscription/);
-  const pastDue = await quoteFor({ ...ended, status: 'past_due', provider: 'prepaid', currentperiodend: NOW + 86400 });
-  assert.equal(pastDue.structuredContent.nextAction.arguments.action, 'subscribe');
-  const wallet = await quoteFor({ ...ended, provider: 'prepaid' });
-  assert.equal(wallet.structuredContent.nextAction.arguments.action, 'renew');
-  assert.match(text(wallet), /so renew it with manage_agent_billing first/);
-  assert.match(text(wallet), /Renew the subscription with manage_agent_billing before applying this change\./);
 });
 
 // The connected project's creator in the team that owns the agent.
@@ -1816,56 +886,57 @@ function teamRole(role) {
 
 const TEAM_ADMIN_REQUIRED = { result: false, errors: [{ code: 97, message: 'Only a team admin can perform this action on a team-owned agent.' }] };
 
-test('apply_agent_skills stops a team member who cannot change the skills before the quote', async () => {
+test('apply_agent_skills stops a team member who cannot change the skills before anything changes', async () => {
   const member = fakeClient(skillRoutes({
     '/UserAgent/Detail': detail({ teamguid: 'team-1' }),
     '/Organization/List': teamRole('member'),
     '/UserAgent/TransactionList': TEAM_ADMIN_REQUIRED,
   }));
   await withClient(member, async client => {
-    const result = await client.callTool({ name: 'apply_agent_skills', arguments: { agent_guid: AGENT, skills: { 'int-instagram-post': true } } });
+    const result = await applyInstagram(client);
     assert.equal(result.isError, true);
     assert.equal(result.structuredContent.status, 'refused');
     assert.equal(result.structuredContent.error.code, 97);
     assert.equal(result.structuredContent.idempotencyKey, undefined);
     assert.equal(result.structuredContent.restart, 'Nothing changed, so the agent does not restart.');
-    assert.match(text(result), /^## Skill change not possible\n\nOnly a team admin or the person who deployed this agent can change its skills, and this connection acts as a team member without those rights\. Nothing was quoted, changed or charged\./);
-    assert.equal(member.paths().includes('/UserAgent/PricingPreview'), false);
+    assert.match(text(result), /^## Skill change not possible\n\nOnly a team admin or the person who deployed this agent can change its skills, and this connection acts as a team member without those rights\. Nothing was changed\./);
     assert.equal(member.paths().includes('/UserAgent/SkillsApply'), false);
     assert.doesNotMatch(JSON.stringify(result), /team-1/);
   });
 
-  // The member who deployed the agent, and a team admin, get the quote.
+  // The member who deployed the agent, and a team admin, make the change.
   const deployer = fakeClient(skillRoutes({
-    '/UserAgent/Detail': detail({ teamguid: 'team-1' }),
+    '/UserAgent/Detail': detailAfterApply({ teamguid: 'team-1' }),
     '/Organization/List': teamRole('member'),
     '/UserAgent/TransactionList': { result: true, errors: [], transactions: [], summary: null, total: 0 },
+    '/UserAgent/SkillsApply': appliedAnswer(),
   }));
   await withClient(deployer, async client => {
-    await quoteInstagram(client);
+    assert.equal((await applyInstagram(client)).structuredContent.status, 'applied');
   });
-  const admin = fakeClient(skillRoutes({ '/UserAgent/Detail': detail({ teamguid: 'team-1' }), '/Organization/List': teamRole('admin') }));
+  const admin = fakeClient(skillRoutes({ '/UserAgent/Detail': detailAfterApply({ teamguid: 'team-1' }), '/Organization/List': teamRole('admin'), '/UserAgent/SkillsApply': appliedAnswer() }));
   await withClient(admin, async client => {
-    await quoteInstagram(client);
+    assert.equal((await applyInstagram(client)).structuredContent.status, 'applied');
     assert.equal(admin.paths().includes('/UserAgent/TransactionList'), false);
   });
 
   // A personal agent needs no team lookup.
-  const personal = fakeClient(skillRoutes());
+  const personal = fakeClient(skillRoutes({ '/UserAgent/Detail': detailAfterApply(), '/UserAgent/SkillsApply': appliedAnswer() }));
   await withClient(personal, async client => {
-    await quoteInstagram(client);
+    await applyInstagram(client);
     assert.equal(personal.paths().includes('/Organization/List'), false);
   });
 });
 
-test('apply_agent_skills keeps the quote for a team member when the change check fails for another reason', async () => {
+test('apply_agent_skills makes the change for a team member when the rights check fails for another reason', async () => {
   const member = fakeClient(skillRoutes({
-    '/UserAgent/Detail': detail({ teamguid: 'team-1' }),
+    '/UserAgent/Detail': detailAfterApply({ teamguid: 'team-1' }),
     '/Organization/List': teamRole('member'),
     '/UserAgent/TransactionList': { result: false, errors: [{ code: 0, message: 'Unexpected error' }] },
+    '/UserAgent/SkillsApply': appliedAnswer(),
   }));
   await withClient(member, async client => {
-    await quoteInstagram(client);
+    assert.equal((await applyInstagram(client)).structuredContent.status, 'applied');
     assert.equal(member.paths().filter(path => path === '/UserAgent/TransactionList').length, 1);
   });
 });
@@ -4696,20 +3767,20 @@ test('skill plans follow dependency cycles and keys are bound to their change', 
   assert.deepEqual(plan.errors, []);
   assert.deepEqual(plan.requested, { 'util-video-creator': true, 'util-motion-effects': true });
 
-  const digest = skillChangeDigest(AGENT, plan.requested, undefined);
+  const digest = skillChangeDigest(AGENT, plan.requested);
   assert.equal(digest, skillChangeDigest(AGENT, { 'util-motion-effects': true, 'util-video-creator': true }));
-  const key = newSkillChangeKey(digest, skillPriceTag(12, 15));
+  assert.notEqual(digest, skillChangeDigest(AGENT, { 'util-motion-effects': true, 'util-video-creator': false }));
+  assert.notEqual(digest, skillChangeDigest('ua-other', plan.requested));
+  const key = newSkillChangeKey(digest);
+  assert.match(key, /^mcp-[0-9a-f]{16}-[0-9a-f]{10}$/);
+  assert.notEqual(newSkillChangeKey(digest), key, 'every key is new');
   assert.equal(idempotencyKeyMismatch(key, digest), false);
-  assert.equal(idempotencyKeyMismatch(key, skillChangeDigest(AGENT, plan.requested, 'pro')), true);
+  assert.equal(idempotencyKeyMismatch(key, skillChangeDigest(AGENT, { 'util-video-creator': true })), true);
   assert.equal(idempotencyKeyMismatch('my-own-key-123', digest), false);
-  assert.deepEqual(parseSkillChangeKey(key), { digest, priceTag: skillPriceTag(12, 15) });
+  assert.deepEqual(parseSkillChangeKey(key), { digest });
+  // A key an earlier version minted, with a price fingerprint at its end, still names its change.
+  assert.deepEqual(parseSkillChangeKey(`${key}-0a1b2c3d`), { digest });
   assert.equal(parseSkillChangeKey('my-own-key-123'), null);
-  assert.notEqual(skillPriceTag(12, 15), skillPriceTag(120, 150));
-  assert.notEqual(skillPriceTag(12, 15), skillPriceTag(13, 15));
-  assert.equal(skillPriceTag(12, 15), skillPriceTag(12.001, 15));
-  assert.equal(skillPriceTag(12, 15), skillPriceTag(12, 15, null));
-  assert.notEqual(skillPriceTag(12, 15, 1000), skillPriceTag(12, 15, 2000));
-  assert.notEqual(skillPriceTag(12, 15), skillPriceTag(12, 15, 1000));
 });
 
 test('deploy custom skills resolve bare keys against the template and need text when new', () => {
@@ -4944,83 +4015,6 @@ test('connect_agent_oauth tells a guid it cannot reach from a project that may n
   });
 });
 
-test('apply_agent_skills shows a 104 as a refusal with nothing charged: another payment from the wallet, or another skill change', async () => {
-  const walletBusy = 'Another payment from this wallet is still going through, so this skill change was undone and nothing was charged. Please try again in a minute.';
-  const inProgress = 'A skill update is already in progress for this agent, please retry shortly.';
-  for (const [message, guidance] of [
-    [walletBusy, /^Another payment from the same wallet was going through, so this change was not made and nothing was charged\. It is not a low balance, and no funds need to be added\. Offer to try again in a minute: repeat the call with the same idempotency_key\.$/],
-    [inProgress, /^Another change to this agent's skills or plan, such as an upgrade or a renewal, is still going through, and one runs at a time\. Nothing was changed or charged by this call\./],
-  ]) {
-    const fake = fakeClient(skillRoutes({ '/UserAgent/SkillsApply': { result: false, errors: [{ code: 104, message }] } }));
-    await withClient(fake, async client => {
-      const quote = await quoteInstagram(client);
-      const result = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
-      assert.equal(result.isError, true);
-      const out = result.structuredContent;
-      assert.equal(out.status, 'refused');
-      assert.equal(out.error.code, 104);
-      assert.equal(out.error.message, message);
-      assert.match(out.billing.note, guidance);
-      assert.match(text(result), /^## Skill change not applied/);
-      assert.ok(text(result).includes(message));
-      assert.match(text(result), new RegExp(`idempotency_key: \`${quote.structuredContent.idempotencyKey}\``));
-      assert.doesNotMatch(text(result), /may have been charged|funds are added|does not show whether/i);
-      // The answer settles it: the agent is not read again to guess, beyond the read each call starts with.
-      assert.equal(fake.called('/UserAgent/Detail').length, 2);
-    });
-  }
-});
-
-test('apply_agent_skills says a change of the tier alone does not restart the agent', async () => {
-  const tierOnly = 'No skill turns on or off, so a change of the tier alone does not restart the agent.';
-  const fake = fakeClient(skillRoutes({
-    '/UserAgent/Detail': (_body, calls) => detail(calls.some(call => call.path === '/UserAgent/SkillsApply') ? { tier: 'pro' } : {}),
-    '/UserAgent/PricingPreview': preview(planChange({ chargeNowUsd: 189, creditsNow: 18900, creditsThisPeriod: 23100, creditsFromRenewal: 42000 }), { tier: 'pro', totalPriceUsd: 420, totalMonthlyCredits: 42000 }),
-    '/UserAgent/SkillsApply': {
-      result: true,
-      errors: [],
-      pricing: { previousPriceUsd: 42, newPriceUsd: 420, deltaUsd: 378, previousMonthlyCredits: 4200, newMonthlyCredits: 42000, deltaCredits: 37800, creditsNow: 18900, creditsThisPeriod: 23100, creditsFromRenewal: 42000, periodEnd: NOW + 15 * 86400 },
-      tier: 'pro',
-      stripeProrationApplied: false,
-      prepaidWalletDelta: 189,
-      usedCreditsUsd: 0,
-      restartTriggered: false,
-      restartedAt: null,
-    },
-  }));
-  await withClient(fake, async client => {
-    const quote = await client.callTool({ name: 'apply_agent_skills', arguments: { agent_guid: AGENT, skills: {}, tier: 'pro' } });
-    assert.equal(quote.structuredContent.status, 'quote', text(quote));
-    assert.equal(quote.structuredContent.restart, tierOnly);
-    const result = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
-    assert.notEqual(result.isError, true, text(result));
-    assert.equal(result.structuredContent.status, 'applied');
-    assert.equal(result.structuredContent.restart, tierOnly);
-    assert.ok(text(result).includes(`**Restart:** ${tierOnly}`));
-    assert.equal(result.structuredContent.nextAction, undefined, 'no restart to wait for');
-    assert.match(result.structuredContent.billing.note, /^\$189\.00 was taken from your personal wallet for the rest of this period, and 18,900 credits came with it\./);
-  });
-
-  // A skill that turns on restarts it, and Wiro says so.
-  const withSkill = fakeClient(skillRoutes({
-    '/UserAgent/Detail': detailAfterApply(),
-    '/UserAgent/SkillsApply': { result: true, errors: [], pricing: { previousPriceUsd: 42, newPriceUsd: 43, deltaUsd: 1 }, tier: 'starter', prepaidWalletDelta: 0.5, restartTriggered: true, restartedAt: NOW },
-  }));
-  await withClient(withSkill, async client => {
-    const quote = await quoteInstagram(client);
-    assert.match(quote.structuredContent.restart, /^The agent restarts to load the skill change/);
-    const result = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
-    assert.match(result.structuredContent.restart, /^The agent restarts to load the skill change/);
-  });
-
-  await withClient(fakeClient({}), async client => {
-    const { tools } = await client.listTools();
-    const description = tools.find(tool => tool.name === 'apply_agent_skills').description;
-    assert.match(description, /A running agent restarts once when a skill turns on or off; a change of the tier alone leaves it running\./);
-    assert.doesNotMatch(description, /restarts once to load the skills/);
-  });
-});
-
 test('set_agent_credentials counts a field the template fills as set', async () => {
   // Twilio's account id comes from the template and is not shown, and the card reads filled.
   const fake = fakeClient({
@@ -5126,73 +4120,5 @@ test('set_agent_credentials does not count a list row that holds only a select a
       assert.match(text(result), line);
       assert.equal(result.structuredContent.credential.status.filled, filled);
     });
-  }
-});
-
-test('apply_agent_skills words a change whose credits move against its price', async () => {
-  // A plan priced again at today's rates can keep credits that are not what its price buys today,
-  // so its credits can fall while the price rises, or stay or rise while the price drops.
-  const periodEnd = NOW + 15 * 86400;
-  const wallet = { plan: 'agent', status: 'active', provider: 'prepaid', currentperiodend: periodEnd, daysremaining: 15 };
-  const card = { plan: 'agent', status: 'active', provider: 'stripe', currentperiodend: periodEnd, daysremaining: 15 };
-  const today = { totalPriceUsd: 150, totalMonthlyCredits: 15000 };
-  const answer = (pricing, overrides = {}) => ({
-    result: true,
-    errors: [],
-    pricing: { newPriceUsd: 150, newMonthlyCredits: 15000, creditsFromRenewal: 15000, periodEnd, ...pricing },
-    tier: 'starter',
-    stripeProrationApplied: false,
-    usedCreditsUsd: 0,
-    ...overrides,
-  });
-  const run = async (row, change, applied) => {
-    const fake = fakeClient(skillRoutes({
-      '/UserAgent/Detail': (_body, calls) => detail({
-        ...row,
-        ...(calls.some(call => call.path === '/UserAgent/SkillsApply') ? { skills: INSTAGRAM_SET.map(name => ({ name, enabled: true })) } : {}),
-      }),
-      '/UserAgent/PricingPreview': preview(planChange({ periodEnd, secondsLeft: 15 * 86400, ...change }), today),
-      ...(applied ? { '/UserAgent/SkillsApply': applied } : {}),
-    }));
-    let quote;
-    let result;
-    await withClient(fake, async client => {
-      quote = await quoteInstagram(client);
-      if (applied) result = await client.callTool({ name: 'apply_agent_skills', arguments: quote.structuredContent.nextAction.arguments });
-    });
-    if (result) assert.notEqual(result.isError, true, text(result));
-    return { quote: quote.structuredContent.billing.note, applied: result?.structuredContent.billing.note };
-  };
-
-  // The price rises and the credits fall: no credits come with the charge.
-  const rise = await run({ subscription: wallet, monthlypriceusd: '140.00', monthlycredits: 25000 },
-    { chargeNowUsd: 5, creditsNow: -5000, creditsThisPeriod: 20000, creditsFromRenewal: 15000 },
-    answer({ previousPriceUsd: 140, deltaUsd: 10, previousMonthlyCredits: 25000, deltaCredits: -10000, creditsNow: -5000, creditsThisPeriod: 20000 }, { prepaidWalletDelta: 5 }));
-  assert.equal(rise.quote, '$5.00 is taken from your personal wallet now for the rest of this period (15 days). The credits the change takes away end now for the time left, and this period keeps 20,000. The plan then renews at $150.00 a month.');
-  assert.equal(rise.applied, '$5.00 was taken from your personal wallet for the rest of this period.');
-
-  // The price drops and the credits rise: a change that takes no credits away gives nothing back, and nothing was used.
-  const gain = await run({ subscription: wallet, monthlypriceusd: '190.00', monthlycredits: 10000 },
-    { chargeNowUsd: 0, creditNowUsd: 0, usedCreditsUsd: 20, creditsNow: 2500, creditsThisPeriod: 12500, creditsFromRenewal: 15000 },
-    answer({ previousPriceUsd: 190, deltaUsd: -40, previousMonthlyCredits: 10000, deltaCredits: 5000, creditsNow: 2500, creditsThisPeriod: 12500 }, { prepaidWalletDelta: null, usedCreditsUsd: 20 }));
-  assert.equal(gain.quote, 'Nothing comes back: the change takes no credits away. This period gains 2,500 credits for the time left, 12,500 in all. The plan then renews at $150.00 a month.');
-  assert.equal(gain.applied, 'Nothing came back: the change took no credits away.');
-
-  // The price drops and the credits stay.
-  const same = await run({ subscription: wallet, monthlypriceusd: '190.00', monthlycredits: 15000 },
-    { chargeNowUsd: 0, creditNowUsd: 0, usedCreditsUsd: 20, creditsNow: 0, creditsThisPeriod: 15000, creditsFromRenewal: 15000 },
-    answer({ previousPriceUsd: 190, deltaUsd: -40, previousMonthlyCredits: 15000, deltaCredits: 0, creditsNow: 0, creditsThisPeriod: 15000 }, { prepaidWalletDelta: null, usedCreditsUsd: 20 }));
-  assert.equal(same.quote, 'Nothing comes back: the change takes no credits away. This period keeps its 15,000 credits. The plan then renews at $150.00 a month.');
-  assert.equal(same.applied, 'Nothing came back: the change took no credits away.');
-
-  // A card plan, both ways.
-  const cardRise = await run({ subscription: card, stripecancelatperiodend: false, monthlypriceusd: '140.00', monthlycredits: 25000 },
-    { provider: 'stripe', chargeNowUsd: 0, creditsNow: -5000, creditsThisPeriod: 20000, creditsFromRenewal: 15000 });
-  assert.equal(cardRise.quote, 'Nothing is charged now. The prorated difference appears on the next invoice. The credits the change takes away end now for the time left, and this period keeps 20,000. The plan then renews at $150.00 a month.');
-  const cardGain = await run({ subscription: card, stripecancelatperiodend: false, monthlypriceusd: '190.00', monthlycredits: 10000 },
-    { provider: 'stripe', chargeNowUsd: 0, creditNowUsd: 0, usedCreditsUsd: 0, creditsNow: 2500, creditsThisPeriod: 12500, creditsFromRenewal: 15000 });
-  assert.equal(cardGain.quote, 'The prorated difference comes off the next invoice. This period gains 2,500 credits for the time left, 12,500 in all. The plan then renews at $150.00 a month.');
-  for (const note of [rise.quote, rise.applied, gain.quote, gain.applied, same.quote, same.applied, cardRise.quote, cardGain.quote]) {
-    assert.doesNotMatch(note, /-[\d,]+ credits|credits already used/);
   }
 });

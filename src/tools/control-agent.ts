@@ -4,8 +4,10 @@ import type { WiroClient } from '../client.js';
 import { ApiResultError, errorResult, requireApiSuccess, type ApiEnvelope } from '../utils/api.js';
 import { DEFAULT_WAIT_SECONDS, MAX_WAIT_SECONDS } from '../utils/poll.js';
 import {
+  AGENT_PLANS,
   agentStatusLabel,
   agentStatusLabelSchema,
+  asPlan,
   agentSummarySchema,
   describeAgentStatus,
   isTransitionalStatus,
@@ -141,19 +143,19 @@ function interpretRefusal(message: string, agent: AgentDetail): Decision | null 
     };
   }
   if (/no credits available/i.test(message)) {
-    const pro = agent.tier === 'pro';
+    // Every plan can buy packs; a larger plan, where there is one, also gives more credits each month.
+    const current = asPlan(agent.tier);
+    const largest = current === AGENT_PLANS[AGENT_PLANS.length - 1];
     return {
       outcome: 'refused',
       message: 'Wiro refused the start: the agent has used all of its credits for this period. '
-        + (pro
+        + (largest
           ? 'Buy an extra credit pack, or wait for the plan to renew.'
-          : 'Upgrade to Pro for a larger monthly pool (Pro can also buy extra packs), or wait for the plan to renew.'),
+          : 'Buy an extra credit pack, move to a larger plan for more credits each month (manage_agent_billing with action change_plan), or wait for the plan to renew.'),
       nextAction: {
         tool: 'manage_agent_billing',
-        arguments: pro
-          ? { agent_guid: agent.guid, action: 'buy_credits', pack: 'small' }
-          : { agent_guid: agent.guid, action: 'upgrade_to_pro' },
-        reason: 'This returns the price first; nothing is charged without confirm: true.',
+        arguments: { agent_guid: agent.guid, action: 'buy_credits' },
+        reason: 'This lists the credit packs with their prices; nothing is charged without confirm: true.',
       },
     };
   }

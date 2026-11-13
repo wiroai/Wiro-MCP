@@ -89,7 +89,7 @@ function agentRow(overrides = {}) {
     remainingcredits: 1000,
     setuprequired: false,
     subscription: { plan: 'agent', status: 'active', amount: 12, currentperiodend: NOW + 15 * 86_400, provider: 'prepaid', nextprovider: null },
-    agent: { custom: true, tiers: { starter: { priceUsd: 12, credits: 1200 }, pro: { priceUsd: 120, credits: 12000 } } },
+    agent: { custom: true, tiers: { starter: { priceUsd: 5, credits: 500 }, pro: { priceUsd: 30, credits: 3000 }, max: { priceUsd: 100, credits: 10000 } } },
     skills: [],
     skillsmeta: {},
     credentials: {},
@@ -297,7 +297,7 @@ test('update_agent and the playbook say which changes restart a running agent', 
 
   const line = PLAYBOOKS.agents.split('\n').find(item => item.startsWith('- Some changes restart'));
   assert.match(line, /`update_agent` with a new title or a setting that changes/);
-  assert.match(line, /These leave it running: a new description, cover or categories with `update_agent`, a change of the tier alone, a new plan, upgrades, credit packs and renewals, and a save that changes nothing\./);
+  assert.match(line, /These leave it running: a new description, cover or categories with `update_agent`, a new plan, plan changes, credit packs and renewals, and a save that changes nothing\./);
   assert.match(line, /`apply_agent_skills` when a skill turns on or off/);
   assert.match(line, /A text or description edit of a custom skill or scheduled task usually reaches a running agent without a restart, though an edit of `cs-approval-policy` restarts it; the result says which happened\./);
   assert.doesNotMatch(PLAYBOOKS.agents, /Many changes restart|credit packs and upgrades\./);
@@ -942,6 +942,9 @@ test('the refusals that come before any charge settle the outcome', () => {
     'Unknown skill: util-gone',
     'Unknown skill: a, b',
     'The tier change could not be saved. Please try again in a minute.',
+    'The plan change could not be saved. Please try again in a minute.',
+    'Change the plan with UpgradeTier.',
+    'Already on the max plan.',
     "We couldn't schedule the cancellation. Please try again in a minute.",
     "We couldn't undo the cancellation. Please try again in a minute.",
   ]) {
@@ -957,6 +960,7 @@ test('an answer that says what the wallet paid settles the outcome on the fixed 
   const sentences = [
     'The wallet was charged $98.00, but the tier change did not finish. Please contact support and do not try again.',
     'The wallet was charged $4.25, but the tier change did not finish. Please contact support and do not try again.',
+    'The wallet was charged $25.00, but the plan change did not finish. Please contact support and do not try again.',
     'The wallet was charged $40.00, but the renewal did not finish. Please contact support and do not try again.',
   ];
   for (const message of sentences) {
@@ -976,26 +980,23 @@ test('an answer that says what the wallet paid settles the outcome on the fixed 
 });
 
 test('apply_agent_skills: an unknown skill is a clean refusal, not an open outcome', async () => {
-  const skills = [{ name: 'util-gone', title: 'Gone', depends_on: [], conflicts_with: [], requires_credentials: false, pricing: { monthly_price_weight_usd: 1 } }];
+  const skills = [{ name: 'util-gone', title: 'Gone', depends_on: [], conflicts_with: [], requires_credentials: false, pricing: { monthly_price_weight_usd: 0, monthly_credits_weight: 0 } }];
   const fake = fakeClient({
     '/Skills/List': { result: true, errors: [], skills, channels: [] },
-    '/UserAgent/Detail': detail({ monthlypriceusd: 12 }),
-    '/UserAgent/PricingPreview': { result: true, errors: [], totalPriceUsd: 13, totalMonthlyCredits: 1300, enabledSkills: ['util-gone'] },
+    '/UserAgent/Detail': detail(),
     '/UserAgent/SkillsApply': refused('Unknown skill: util-gone'),
   });
   await withClient(fake, async client => {
-    const quote = await call(client, 'apply_agent_skills', { agent_guid: GUID, skills: { 'util-gone': true } });
-    const reads = fake.called('/UserAgent/Detail').length;
-    const result = await call(client, 'apply_agent_skills', quote.structuredContent.nextAction.arguments);
+    const result = await call(client, 'apply_agent_skills', { agent_guid: GUID, skills: { 'util-gone': true } });
     assert.equal(result.isError, true);
     const output = result.structuredContent;
     assert.equal(output.status, 'refused');
     assert.equal(output.error.message, 'Unknown skill: util-gone');
-    assert.match(output.billing.note, /Nothing was changed or charged\. Use names from list_agent_skills\./);
+    assert.match(output.note, /^Nothing was changed\. Use names from list_agent_skills\.$/);
     assert.match(textOf(result), /^## Skill change not applied\n\nUnknown skill: util-gone/);
-    assert.doesNotMatch(textOf(result), /could not be confirmed|not confirmed/);
+    assert.doesNotMatch(textOf(result), /could not be confirmed|not confirmed|charged/);
     assert.equal(output.restart, 'Nothing changed, so the agent does not restart.');
-    assert.equal(fake.called('/UserAgent/Detail').length, reads + 1, 'read once for the confirm, and not again to check the outcome');
+    assert.equal(fake.called('/UserAgent/Detail').length, 1, 'read once before the change, and not again to check the outcome');
   });
   assert.equal(describeSkillsApplyError(apiError('Unknown skill: x')).retrySameKey, false);
 });
@@ -1106,12 +1107,12 @@ async function confirmBilling(routes, args) {
   return { fake, result };
 }
 
-test('manage_agent_billing: an upgrade answer that says what the wallet paid shows the sentence as it is, with no open-outcome read', async () => {
-  const sentence = 'The wallet was charged $98.00, but the tier change did not finish. Please contact support and do not try again.';
+test('manage_agent_billing: a plan change answer that says what the wallet paid shows the sentence as it is, with no open-outcome read', async () => {
+  const sentence = 'The wallet was charged $18.00, but the plan change did not finish. Please contact support and do not try again.';
   const { fake, result } = await confirmBilling({
     '/UserAgent/Detail': detail(),
     '/UserAgent/UpgradeTier': refused(sentence),
-  }, { action: 'upgrade_to_pro', confirm_charge_usd: 108 });
+  }, { action: 'change_plan', plan: 'pro', confirm_charge_usd: 18 });
   assert.equal(result.isError, true);
   assert.equal(textOf(result), `## Error\n\n${sentence}`);
   assert.equal(fake.called('/UserAgent/Detail').length, 1, 'no read to observe the outcome');
@@ -1121,27 +1122,27 @@ test('manage_agent_billing: an upgrade answer that says what the wallet paid sho
 });
 
 test('manage_agent_billing: a renewal answer that says what the wallet paid shows the sentence as it is', async () => {
-  const sentence = 'The wallet was charged $40.00, but the renewal did not finish. Please contact support and do not try again.';
+  const sentence = 'The wallet was charged $5.00, but the renewal did not finish. Please contact support and do not try again.';
   const { fake, result } = await confirmBilling({
     '/UserAgent/Detail': detail({
       status: 0,
-      monthlypriceusd: 40,
-      subscription: { plan: 'agent', status: 'expired', amount: 40, currentperiodend: NOW - 86_400, provider: 'prepaid', nextprovider: null },
+      monthlypriceusd: 5,
+      subscription: { plan: 'agent', status: 'expired', amount: 5, currentperiodend: NOW - 86_400, provider: 'prepaid', nextprovider: null },
     }),
     '/UserAgent/RenewSubscription': refused(sentence),
-  }, { action: 'renew', confirm_charge_usd: 40 });
+  }, { action: 'renew', confirm_charge_usd: 5 });
   assert.equal(result.isError, true);
   assert.equal(textOf(result), `## Error\n\n${sentence}`);
   assert.equal(fake.called('/UserAgent/Detail').length, 1);
   assert.equal(result.structuredContent, undefined);
 });
 
-test('manage_agent_billing: a tier change that could not be saved is a refusal, with nothing to check', async () => {
-  const sentence = 'The tier change could not be saved. Please try again in a minute.';
+test('manage_agent_billing: a plan change that could not be saved is a refusal, with nothing to check', async () => {
+  const sentence = 'The plan change could not be saved. Please try again in a minute.';
   const { fake, result } = await confirmBilling({
     '/UserAgent/Detail': detail(),
     '/UserAgent/UpgradeTier': refused(sentence),
-  }, { action: 'upgrade_to_pro', confirm_charge_usd: 108 });
+  }, { action: 'change_plan', plan: 'pro', confirm_charge_usd: 18 });
   assert.equal(result.isError, true);
   assert.equal(textOf(result), `## Error\n\n${sentence}`);
   assert.equal(fake.called('/UserAgent/Detail').length, 1);

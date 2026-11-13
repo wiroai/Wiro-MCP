@@ -5,10 +5,10 @@ import {
   agentTaskSchema,
   htmlToText,
   isGuid,
+  planPricingSchema,
   summarizeTasks,
-  tierPricingSchema,
+  toPlanPricing,
   toStringArray,
-  toTierPricing,
   WIRO_PROJECT_CREDENTIAL,
   type AgentApiClient,
 } from './user-agent.js';
@@ -24,8 +24,8 @@ export const templateSummarySchema = z.object({
   summary: z.string().optional(),
   categories: z.array(z.string()),
   cover: z.string().optional(),
-  pricing: tierPricingSchema.nullable(),
-  tierMultiplier: z.number().optional(),
+  pricing: planPricingSchema.nullable()
+    .describe('Each plan\'s price and monthly credits, the same for every template. null when it cannot be priced right now.'),
 });
 
 export type TemplateSummary = z.infer<typeof templateSummarySchema>;
@@ -33,7 +33,6 @@ export type TemplateSummary = z.infer<typeof templateSummarySchema>;
 export function toTemplateSummary(row: Record<string, unknown>): TemplateSummary {
   const summary = asString(row.headline)?.trim() || htmlToText(row.description, 300);
   const cover = asString(row.cover);
-  const tierMultiplier = toNumber(row.tiermultiplier);
   return {
     guid: asString(row.guid) ?? '',
     slug: asString(row.slug) ?? '',
@@ -41,8 +40,7 @@ export function toTemplateSummary(row: Record<string, unknown>): TemplateSummary
     ...(summary ? { summary } : {}),
     categories: toStringArray(row.categories),
     ...(cover ? { cover } : {}),
-    pricing: toTierPricing(row.tiers),
-    ...(tierMultiplier !== null ? { tierMultiplier } : {}),
+    pricing: toPlanPricing(row.tiers),
   };
 }
 
@@ -274,14 +272,11 @@ export const skillSummarySchema = z.object({
   userInvocable: z.boolean().optional(),
   deprecated: z.boolean(),
   replacement: z.string().optional(),
-  monthlyPriceUsd: z.number(),
-  monthlyCredits: z.number(),
 });
 
 export type SkillSummary = z.infer<typeof skillSummarySchema>;
 
 export function toSkillSummary(skill: Record<string, unknown>): SkillSummary {
-  const pricing = isPlainObject(skill.pricing) ? skill.pricing : {};
   const description = asString(skill.description);
   const category = asString(skill.category);
   const credentialKey = asString(skill.credential_key);
@@ -301,8 +296,6 @@ export function toSkillSummary(skill: Record<string, unknown>): SkillSummary {
     ...(typeof skill.user_invocable === 'boolean' ? { userInvocable: skill.user_invocable } : {}),
     deprecated: skill.deprecated === true,
     ...(replacement ? { replacement } : {}),
-    monthlyPriceUsd: toNumber(pricing.monthly_price_weight_usd) ?? 0,
-    monthlyCredits: toNumber(pricing.monthly_credits_weight) ?? 0,
   };
 }
 
