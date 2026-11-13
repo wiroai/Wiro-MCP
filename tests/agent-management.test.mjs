@@ -955,10 +955,22 @@ test('the refusals that come before any charge settle the outcome', () => {
     // An undo refused because the move already started with this billing period changes nothing.
     'The move to the Pro plan started with this billing period, and its payment moves the agent there, so it can no longer be undone. Nothing was changed. Once the agent shows the Pro plan, change the plan again.',
     'The move to the Starter plan started with this billing period, and its payment moves the agent there, so it can no longer be undone. Nothing was changed. Once the agent shows the Starter plan, change the plan again.',
+    // A wallet plan whose pick could not be written stops before the wallet is charged.
+    'The plan could not be saved. Nothing was charged; please try again in a minute.',
+    // A move down asked for on what is a move up by now changes nothing.
+    'This agent is on the Starter plan now, so Pro is an upgrade. Nothing was changed.',
+    'This agent is on the Pro plan now, so Max is an upgrade. Nothing was changed.',
   ]) {
     assert.equal(isPreChargeRefusal(apiError(message)), true, message);
     assert.equal(outcomeUnknown(apiError(message)), false, message);
   }
+  // The wallet paid for this one, so it stays a paid outcome.
+  assert.equal(
+    isPreChargeRefusal(apiError('The wallet was charged $5.00, but the plan could not be saved. Please contact support and do not try again.')),
+    false,
+  );
+  assert.equal(isPreChargeRefusal(apiError('The plan could not be saved.')), false, 'only the sentence that says nothing was charged');
+  assert.equal(isPreChargeRefusal(apiError('This agent is on the Starter plan now, so Pro is an upgrade.')), false, 'only the sentence that says nothing was changed');
   assert.equal(
     isPreChargeRefusal(apiError('The move to the Pro plan started with this billing period, and its payment moves the agent there, so it can no longer be undone.')),
     false,
@@ -1231,6 +1243,19 @@ test('manage_agent_billing: a new plan the wallet paid for but that was not save
   assert.equal(fake.called('/UserAgent/Detail').length, 1, 'no read to observe the outcome');
   assert.equal(fake.called('/UserAgent/CreateSubscriptionCheckout').length, 1);
   assert.doesNotMatch(textOf(result), /may have taken effect|before trying again|Do not repeat the call until/);
+});
+
+test('manage_agent_billing: a new wallet plan that could not be saved before the charge is a refusal, with nothing to check', async () => {
+  const sentence = 'The plan could not be saved. Nothing was charged; please try again in a minute.';
+  const { fake, result } = await confirmBilling({
+    '/UserAgent/Detail': detail({ status: 6, subscription: null }),
+    '/UserAgent/CreateSubscriptionCheckout': refused(sentence),
+  }, { action: 'subscribe', plan: 'starter', confirm_charge_usd: 5 });
+  assert.equal(result.isError, true);
+  assert.equal(textOf(result), `## Error\n\n${sentence}`);
+  assert.equal(fake.called('/UserAgent/Detail').length, 1, 'no read to observe the outcome');
+  assert.equal(fake.called('/UserAgent/CreateSubscriptionCheckout').length, 1);
+  assert.doesNotMatch(textOf(result), /may have taken effect|before trying again|Do not repeat the call until|went through/);
 });
 
 test('manage_agent_billing: a move up that Wiro answers as a move down, after the plan moved, says nothing was charged', async () => {
