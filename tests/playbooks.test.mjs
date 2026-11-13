@@ -577,7 +577,8 @@ test('the agents playbook says what a plan change does at each renewal, not when
 
 test('the agents playbook says a card plan whose payment did not go through takes no new plan', () => {
   assert.match(PLAYBOOKS.agents, /`subscribe` starts a plan for an agent whose plan has ended or that never had one/);
-  assert.match(PLAYBOOKS.agents, /A card plan whose last payment did not go through \(past_due, then unpaid\) has not ended: `subscribe` starts no plan beside it, and no action here renews, changes or cancels it\. The user fixes the payment in the dashboard by paying the open invoice, with another card if needed, and the plan renews by itself/);
+  assert.match(PLAYBOOKS.agents, /A card plan whose last payment did not go through \(past_due, then unpaid\) has not ended: `subscribe` starts no plan beside it, and no action here renews, changes or cancels it\. The user fixes the payment from Billing in the personal workspace of the dashboard, not on the agent's page: its Open Billing Portal button leads to the open invoice, paid there with another card if needed, and the plan then renews by itself; the plan can also be cancelled in that portal\. On a team agent, the member whose card pays for it does this from their own personal workspace\./);
+  assert.doesNotMatch(PLAYBOOKS.agents, /fixes the payment in the dashboard by paying/);
 });
 
 test('the agents playbook says a wallet cancel keeps the move set for its renewal', () => {
