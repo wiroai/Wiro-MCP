@@ -38,6 +38,8 @@ const NON_TOOL_IDENTIFIERS = new Set([
   'chat_setup',
   // An example Start field key, and an input name the Workflow Agent hides.
   'product_photo', 'api_key',
+  // A plan status get_my_agent shows: a card plan whose last payment did not go through.
+  'past_due',
 ]);
 
 const PROMPT_ARGUMENTS = {
@@ -571,6 +573,11 @@ test('the agents playbook says what a plan change does at each renewal, not when
   assert.match(PLAYBOOKS.agents, /A smaller plan starts with the next renewal: nothing is charged or refunded, the agent keeps its plan and credits until the period ends, and `confirm: true` alone sets it\./);
   assert.match(PLAYBOOKS.agents, /Asking for the plan the agent is on undoes a move set for the next renewal/);
   assert.doesNotMatch(PLAYBOOKS.agents, /pool applies at once/);
+});
+
+test('the agents playbook says a card plan whose payment did not go through takes no new plan', () => {
+  assert.match(PLAYBOOKS.agents, /`subscribe` starts a plan for an agent whose plan has ended or that never had one/);
+  assert.match(PLAYBOOKS.agents, /A card plan whose last payment did not go through \(past_due, then unpaid\) has not ended: `subscribe` starts no plan beside it, and no action here renews, changes or cancels it\. The user fixes the payment in the dashboard by paying the open invoice, with another card if needed, and the plan renews by itself/);
 });
 
 test('the playbooks name the three plans and say skills do not change the price', () => {
