@@ -305,7 +305,7 @@ test('update_agent and the playbook say which changes restart a running agent', 
   // A change saved while a restart has not started the agent yet rides on it.
   assert.match(line, /A change saved while the agent is still stopping or queued for a restart loads with that restart; saved once it is starting again, it restarts the agent a second time\./);
   assert.doesNotMatch(PLAYBOOKS.agents, /Many changes restart|credit packs and upgrades\./);
-  assert.match(PLAYBOOKS.agents, /\| 1 \| Stopping, or restarting to load a change \| Wait\. A restart starts it again by itself, in about a minute\. \|/);
+  assert.match(PLAYBOOKS.agents, /\| 1 \| Stopping, or restarting \| Wait\. A restart starts it again by itself, in about a minute\. \|/);
 });
 
 // ---------------------------------------------------------------------------

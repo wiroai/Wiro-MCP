@@ -510,7 +510,7 @@ A Wiro agent is an assistant that keeps running on Wiro with a set of skills, su
 | Status | Meaning | What to do |
 | --- | --- | --- |
 | 0 | Stopped | Start it with \`control_agent\` (start). Right after a deploy, start or renewal, 0 means the plan is not active and no credits are left. |
-| 1 | Stopping, or restarting to load a change | Wait. A restart starts it again by itself, in about a minute. |
+| 1 | Stopping, or restarting | Wait. A restart starts it again by itself, in about a minute. |
 | 2 | Queued | Wait. It can take a while; check again with \`get_my_agent\`. |
 | 3 | Starting | Wait. An agent that is not healthy after about 2 minutes moves to 5. |
 | 4 | Running | Ready for messages. |
