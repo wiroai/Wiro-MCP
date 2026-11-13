@@ -41,8 +41,8 @@ export function registerGetMyAgent(server: McpServer, client: WiroClient): void 
         + 'state of each credential. Credential values are never returned, only whether each one is filled, '
         + 'connected or missing. With wait_seconds it keeps reading until the agent is no longer stopping, '
         + 'queued or starting; when the wait runs out, follow the returned nextAction instead of repeating '
-        + 'the action that started it. Statuses: 0 stopped, 1 stopping, 2 queued, 3 starting, 4 running, '
-        + '5 error, 6 setup required.',
+        + 'the action that started it. Statuses: 0 stopped, 1 stopping (also on a restart to load a change, '
+        + 'which starts it again by itself), 2 queued, 3 starting, 4 running, 5 error, 6 setup required.',
       inputSchema: strictInput({
         agent_guid: z.string().min(1).max(100)
           .describe('The deployed agent\'s guid, from list_my_agents or deploy_agent.'),
