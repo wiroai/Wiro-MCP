@@ -3230,6 +3230,38 @@ test('control_agent says a start refused on a card plan whose payment did not go
   });
 });
 
+test('manage_agent_billing: a wallet cancel keeps the move set for the renewal, and its undo names the plan it renews on', async () => {
+  // A Pro plan with the move to Max set for its renewal.
+  const row = overrides => agentRow({ tier: 'pro', nextplan: 'max', monthlypriceusd: 30, subscription: subscription({ amount: 30, ...overrides }) });
+  const active = fakeClient({ '/UserAgent/Detail': detailResponse(row()) });
+  await withClient(active, async client => {
+    const cancel = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'cancel' });
+    assert.equal(cancel.structuredContent.outcome, 'quote', textOf(cancel));
+    assert.match(cancel.structuredContent.message, /Action renew undoes the cancellation before then\. The move to Max set for the next renewal stays: if the cancellation is undone, the plan renews on Max, and once it has ended, action renew brings it back on Max\.\n\nNothing has been done yet\./);
+    assert.doesNotMatch(cancel.structuredContent.message, /dropped/);
+  });
+  const cancelled = fakeClient({ '/UserAgent/Detail': detailResponse(row({ pendingdowngrade: 'cancel' })) });
+  await withClient(cancelled, async client => {
+    const undo = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'renew' });
+    assert.equal(undo.structuredContent.outcome, 'quote', textOf(undo));
+    assert.equal(undo.structuredContent.quote.plan, 'max');
+    assert.equal(undo.structuredContent.quote.recurringUsd, 100);
+    assert.match(undo.structuredContent.message, /^Undo the cancellation: nothing is charged now\. The plan then renews on Max from the personal wallet for \$100\.00 after /);
+    assert.deepEqual(undo.structuredContent.nextAction.arguments, { agent_guid: 'ua-1', action: 'renew', confirm: true });
+  });
+
+  // A team's card plan drops the move with its cancel.
+  const card = fakeClient({
+    '/UserAgent/Detail': detailResponse(teamAgentRow({ tier: 'pro', nextplan: 'starter', subscription: subscription({ provider: 'stripe', amount: 30 }), stripecancelatperiodend: false })),
+    '/Organization/List': organizations('admin'),
+  });
+  await withClient(card, async client => {
+    const cancel = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'cancel' });
+    assert.equal(cancel.structuredContent.outcome, 'quote', textOf(cancel));
+    assert.match(cancel.structuredContent.message, /Nothing is refunded\. The move to Starter set for the next renewal is dropped with it\.\n\nNothing has been done yet\./);
+  });
+});
+
 test('manage_agent_billing: a renewal Wiro refuses above the price the agent showed is read and quoted again, never renewed on its own', async () => {
   const sentence = 'This plan now renews on the Max plan at $100.00 a month, not the $70.00 it showed. Nothing was charged. Renew again to pay the new price.';
   const endedAt = NOW - 86_400;
