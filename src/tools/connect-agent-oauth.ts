@@ -2,6 +2,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { WiroClient } from '../client.js';
 import {
+  ApiResultError,
   apiErrorMessage,
   asString,
   errorResult,
@@ -16,7 +17,6 @@ import {
   accountLabel,
   agentStatusOf,
   buildChainedSelections,
-  buildPickerAccounts,
   chooseConnectionMode,
   connectionModeRequirements,
   connectionRefusalText,
@@ -35,6 +35,7 @@ import {
   ownFailedFlow,
   parseDiscoveredGroups,
   pausedSkillTitles,
+  pickedAccountIds,
   readOAuthStatus,
   readUserAgent,
   skillTitles,
@@ -126,7 +127,15 @@ interface Context {
 
 const DONE_STATES = new Set<ConnectionState>(['connected', 'pick_accounts', 'pick_child_items']);
 
-function oauthHint(message: string, meta: CredentialMeta): string | undefined {
+// Wiro keeps the accounts a sign-in or token check found for 15 minutes, only for the person who started it, and
+// saves only accounts from that list. These codes say the list is gone or someone else's.
+const FLOW_GONE_CODES = new Set(['flow_expired', 'flow_other_person', 'flow_replaced']);
+
+function oauthHint(message: string, meta: CredentialMeta, code?: string): string | undefined {
+  if (code === 'not_listed') return 'Save only accounts from the list connect_agent_oauth status gave after the sign-in.';
+  if (code && FLOW_GONE_CODES.has(code)) return 'Connect again: the list is kept 15 minutes and only for the person who signed in.';
+  if (code === 'flow_failed') return 'Connect again with action connect.';
+  if (code === 'next_expired') return 'Call select_accounts again; it lists the items afresh before saving.';
   if (/credentials not configured/i.test(message)) {
     return `Save your own ${meta.title} app keys with set_agent_credentials first (call it with credential "${meta.key}" to see the fields).`;
   }
@@ -144,7 +153,8 @@ function oauthHint(message: string, meta: CredentialMeta): string | undefined {
 /** Wiro's message, then the hint as a paragraph of its own, so the two read as separate sentences. */
 function withHint(error: unknown, meta?: CredentialMeta): Error {
   const message = errorText(error);
-  const hint = meta ? oauthHint(message, meta) : undefined;
+  const code = error instanceof ApiResultError ? asString(error.body.errorcode) : undefined;
+  const hint = meta ? oauthHint(message, meta, code) : undefined;
   return new Error(hint ? `${message}\n\n${hint}` : message);
 }
 
@@ -365,9 +375,9 @@ async function connect(
     }
     const candidates = toAccountRefs(body.accounts, oauth.picker);
     if (oauth.picker && candidates.length > 0) {
-      const pending = oauth.picker.pendingCache ? ' Save the choice within 15 minutes; after that, connect again.' : '';
+      // Wiro keeps this list 15 minutes, only for the person who ran the check, and saves only accounts from it.
       return result('connect', context, 'pick_accounts',
-        `${meta.title} accepted the ${oauth.directProbe.label ?? 'credentials'}. Choose which of these accounts the agent should use.${pending}`,
+        `${meta.title} accepted the ${oauth.directProbe.label ?? 'credentials'}. Choose which of these accounts the agent should use. Save the choice within 15 minutes; after that, connect again.`,
         {
           mode,
           candidates,
@@ -676,13 +686,13 @@ async function selectAccounts(
   if (!input.accounts || input.accounts.length === 0) {
     return errorResult(new Error('Pass accounts (each {id, name}) to save, or picker to run the extra step.'));
   }
-  const built = buildPickerAccounts(picker, input.accounts);
-  if (built.error || !built.accounts) return errorResult(new Error(built.error ?? 'Nothing to save.'));
+  const picked = pickedAccountIds(picker, input.accounts);
+  if (picked.error || !picked.ids) return errorResult(new Error(picked.error ?? 'Nothing to save.'));
   const saved = requireApiSuccess(
     await client.post<PickerBody>('/UserAgentOAuth/SetPickerAccounts', {
       useragentguid: agentGuid,
       credentialkey: credential,
-      accounts: built.accounts,
+      accountids: picked.ids,
     }, signal),
     'Could not save the accounts.',
   );
@@ -722,8 +732,8 @@ export function registerConnectAgentOauth(server: McpServer, client: WiroClient)
         + 'the accounts it can use, with no browser. Without mode the tool picks the one that '
         + 'works; when a provider needs the user\'s own app keys or a token first, it says which to '
         + 'save. action status: whether the sign-in finished (wait_seconds waits for '
-        + 'the user). action select_accounts: saves which accounts the agent uses ({id, name} from '
-        + 'connect), and with picker runs the extra step some providers have (Meta Ads pages, '
+        + 'the user) and, once it did, lists the accounts to choose from. action select_accounts: saves which accounts the agent uses ({id, name} from '
+        + 'the list connect or status gave), and with picker runs the extra step some providers have (Meta Ads pages, '
         + 'Google Business locations). Connecting again replaces an existing connection, and a sign-in removes a token saved for another mode; both need '
         + 'confirm: true. A running agent restarts when a connection or selection is saved. Connecting a service '
         + 'turns on the scheduled tasks that need it, and the result names any that stay paused until a skill they need is on; '
@@ -748,7 +758,7 @@ export function registerConnectAgentOauth(server: McpServer, client: WiroClient)
         wait_seconds: z.number().int().min(0).max(MAX_WAIT_SECONDS).default(0)
           .describe(`status: how long to wait for the sign-in to finish, 0 to ${MAX_WAIT_SECONDS} seconds (default 0, a single check).`),
         accounts: z.array(z.record(z.string(), z.union([z.string(), z.number()]))).optional()
-          .describe('select_accounts: the accounts to use, each {id, name}, as returned by connect.'),
+          .describe('select_accounts: the accounts to use, each {id, name}, from the list connect or status gave. Wiro saves only accounts from that list, for 15 minutes after the sign-in or token check.'),
         picker: z.string().optional()
           .describe('select_accounts: the extra step\'s key ("pages" for Meta Ads, "locations" for Google Business). Without selections it lists the choices.'),
         selections: z.array(z.object({

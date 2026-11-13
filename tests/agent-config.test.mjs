@@ -14,7 +14,6 @@ import {
   buildChainedSelections,
   credentialsNeededFor,
   describeSkillsApplyError,
-  buildPickerAccounts,
   connectionState,
   credentialsUsedBySkills,
   idempotencyKeyMismatch,
@@ -26,6 +25,7 @@ import {
   parseOAuthStatus,
   parseSkillChangeKey,
   parseSkillRegistry,
+  pickedAccountIds,
   planSkillChanges,
   resolveDeployCustomSkills,
   skillChangeDigest,
@@ -2406,6 +2406,7 @@ test('connect_agent_oauth checks a saved token without a browser and lists the a
     assert.deepEqual(connect.body, { useragentguid: AGENT, credentialkey: 'meta-ads', authmethod: 'api_key' });
     const out = result.structuredContent;
     assert.equal(out.state, 'pick_accounts');
+    assert.equal(out.message, 'Meta Ads accepted the System User Token. Choose which of these accounts the agent should use. Save the choice within 15 minutes; after that, connect again.');
     assert.deepEqual(out.candidates, [{ id: '1234', name: 'Acme Ads' }, { id: '5678', name: 'Beta Ads' }]);
     assert.equal(out.nextAction.arguments.action, 'select_accounts');
     assert.doesNotMatch(JSON.stringify(result), /EAAB-system-user-token/);
@@ -2619,7 +2620,7 @@ test('connect_agent_oauth saves accounts and runs the chained page step', async 
     assert.deepEqual(fake.calls.find(call => call.path === '/UserAgentOAuth/SetPickerAccounts').body, {
       useragentguid: AGENT,
       credentialkey: 'meta-ads',
-      accounts: [{ adaccountid: '1234', adaccountname: 'Acme Ads' }, { adaccountid: '5678', adaccountname: 'Beta Ads' }],
+      accountids: ['1234', '5678'],
     });
     assert.equal(saved.structuredContent.state, 'connected');
     assert.match(saved.structuredContent.message, /^Saved 2 accounts: .* A running agent restarts to use the accounts\.$/);
@@ -2657,6 +2658,55 @@ test('connect_agent_oauth saves accounts and runs the chained page step', async 
     });
     assert.equal(unknown.isError, true);
     assert.match(text(unknown), /"999" is not available under `Acme Ads` \(`1234`\)\. Available: `Acme Page` \(`555`\), `Acme Two` \(`556`\)\./);
+  });
+});
+
+test('connect_agent_oauth saves accounts by id and says why Wiro refuses ones not from its list', async () => {
+  const saved = fakeClient({
+    '/Credentials/Detail': credentialDetail,
+    '/UserAgentOAuth/SetPickerAccounts': { result: true, accounts: [{ id: '111', name: 'Acme Page' }] },
+  });
+  await withClient(saved, async client => {
+    // The name the user gave is not sent: Wiro saves the name from its own list.
+    const result = await client.callTool({
+      name: 'connect_agent_oauth',
+      arguments: { action: 'select_accounts', agent_guid: AGENT, credential: 'facebook-pages', accounts: [{ id: ' 111 ', name: 'Renamed by the user' }] },
+    });
+    assert.notEqual(result.isError, true, text(result));
+    assert.deepEqual(saved.called('/UserAgentOAuth/SetPickerAccounts')[0].body, { useragentguid: AGENT, credentialkey: 'facebook-pages', accountids: ['111'] });
+    assert.deepEqual(result.structuredContent.accounts, [{ id: '111', name: 'Acme Page' }]);
+  });
+
+  const refusal = (errorcode, message) => ({ result: false, errorcode, errors: [{ code: 0, message }] });
+  const cases = [
+    [refusal('not_listed', 'Choose accounts from the list Wiro gave after the sign-in.'), 'Choose accounts from the list Wiro gave after the sign-in.\n\nSave only accounts from the list connect_agent_oauth status gave after the sign-in.'],
+    [refusal('flow_expired', 'The sign-in expired. Sign in again to choose the accounts.'), 'The sign-in expired. Sign in again to choose the accounts.\n\nConnect again: the list is kept 15 minutes and only for the person who signed in.'],
+    [refusal('flow_other_person', 'Another admin started this sign-in. Sign in again to choose the accounts yourself.'), 'Another admin started this sign-in. Sign in again to choose the accounts yourself.\n\nConnect again: the list is kept 15 minutes and only for the person who signed in.'],
+    [refusal('flow_replaced', 'A newer sign-in replaced this one. Sign in again.'), 'A newer sign-in replaced this one. Sign in again.\n\nConnect again: the list is kept 15 minutes and only for the person who signed in.'],
+    [refusal('flow_failed', 'The sign-in did not finish. Sign in again.'), 'The sign-in did not finish. Sign in again.\n\nConnect again with action connect.'],
+  ];
+  for (const [answer, expected] of cases) {
+    const fake = fakeClient({ '/Credentials/Detail': credentialDetail, '/UserAgentOAuth/SetPickerAccounts': answer });
+    await withClient(fake, async client => {
+      const result = await client.callTool({
+        name: 'connect_agent_oauth',
+        arguments: { action: 'select_accounts', agent_guid: AGENT, credential: 'facebook-pages', accounts: [{ id: '999', name: 'Not listed' }] },
+      });
+      assert.equal(result.isError, true);
+      assert.equal(text(result), `## Error\n\n${expected}`);
+    });
+  }
+
+  // Ids are checked here first, as before.
+  const local = fakeClient({ '/Credentials/Detail': credentialDetail });
+  await withClient(local, async client => {
+    const twice = await client.callTool({
+      name: 'connect_agent_oauth',
+      arguments: { action: 'select_accounts', agent_guid: AGENT, credential: 'facebook-pages', accounts: [{ id: '111' }, { id: 111 }] },
+    });
+    assert.equal(twice.isError, true);
+    assert.match(text(twice), /Account 111 is listed twice\./);
+    assert.equal(local.paths().includes('/UserAgentOAuth/SetPickerAccounts'), false);
   });
 });
 
@@ -3975,10 +4025,11 @@ test('base64 values and picker payloads match the API', () => {
       account_picker: { multi_select: true, item_value_field: 'channelid', item_label_field: 'channeltitle', item_fields_to_save: ['channelid', 'channeltitle'], url_item_fields: { channelid: 'id', channeltitle: 'title' } },
     },
   });
-  assert.deepEqual(buildPickerAccounts(youtube.oauth.picker, [{ id: 'UC1', title: 'My channel' }]), {
-    accounts: [{ channelid: 'UC1', channeltitle: 'My channel' }],
-  });
-  assert.match(buildPickerAccounts(youtube.oauth.picker, [{ id: 'UC1' }, { id: 'UC1' }]).error, /listed twice/);
+  assert.deepEqual(pickedAccountIds(youtube.oauth.picker, [{ id: 'UC1', title: 'My channel' }, { channelid: ' UC2 ' }]), { ids: ['UC1', 'UC2'] });
+  assert.match(pickedAccountIds(youtube.oauth.picker, [{ id: 'UC1' }, { id: 'UC1' }]).error, /listed twice/);
+  assert.equal(pickedAccountIds(youtube.oauth.picker, [{ name: 'No id' }]).error, 'Every account needs an id.');
+  const single = parseCredentialMeta({ ...credentials['meta-ads'], oauth_provider: { ...credentials['meta-ads'].oauth_provider, account_picker: { ...credentials['meta-ads'].oauth_provider.account_picker, multi_select: false } } });
+  assert.equal(pickedAccountIds(single.oauth.picker, [{ id: '1' }, { id: '2' }]).error, 'This connection uses exactly one account.');
 
   const next = parseCredentialMeta(credentials['meta-ads']).oauth.picker.next;
   const groups = [{ parent: { id: '1234', name: 'Acme' }, items: [{ id: '555', name: 'Page' }] }, { parent: { id: '9', name: 'Broken' }, items: [], errorCode: 'provider_error' }];

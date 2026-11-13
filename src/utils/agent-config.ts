@@ -1780,35 +1780,24 @@ export function toAccountRefs(list: unknown, picker?: PickerMeta | null): Accoun
   }).filter(account => account.id);
 }
 
-/** Maps {id, name} selections onto the fields the picker saves. */
-export function buildPickerAccounts(
+/**
+ * The ids of the chosen accounts. Wiro saves only accounts from the list its sign-in or token check gave, under the
+ * names in that list, so an id is all it takes.
+ */
+export function pickedAccountIds(
   picker: PickerMeta,
   accounts: Array<Record<string, unknown>>,
-): { accounts?: Array<Record<string, string>>; error?: string } {
+): { ids?: string[]; error?: string } {
   if (accounts.length === 0) return { error: 'Pass at least one account.' };
   if (!picker.multiSelect && accounts.length !== 1) return { error: 'This connection uses exactly one account.' };
-  const seen = new Set<string>();
-  const out: Array<Record<string, string>> = [];
+  const ids: string[] = [];
   for (const account of accounts) {
-    const id = asString(account.id) ?? asString(account[picker.valueField]) ?? '';
-    const name = asString(account.name)
-      ?? (picker.labelField ? asString(account[picker.labelField]) : undefined)
-      ?? asString(account.title)
-      ?? asString(account.displayName)
-      ?? '';
-    if (!id.trim()) return { error: 'Every account needs an id.' };
-    if (seen.has(id.trim())) return { error: `Account ${id} is listed twice.` };
-    seen.add(id.trim());
-    const mapped: Record<string, string> = {};
-    for (const field of picker.fieldsToSave) {
-      if (field === picker.valueField) mapped[field] = id.trim();
-      else if (field === picker.labelField) mapped[field] = name;
-      else if (asString(account[field]) !== undefined) mapped[field] = asString(account[field]) as string;
-      else mapped[field] = picker.urlItemFields[field] === 'id' ? id.trim() : name;
-    }
-    out.push(mapped);
+    const id = (asString(account.id) ?? asString(account[picker.valueField]) ?? '').trim();
+    if (!id) return { error: 'Every account needs an id.' };
+    if (ids.includes(id)) return { error: `Account ${id} is listed twice.` };
+    ids.push(id);
   }
-  return { accounts: out };
+  return { ids };
 }
 
 export interface DiscoveredGroup {
