@@ -886,12 +886,15 @@ test('get_agent_activity and the playbook say what the log holds now', async () 
   assert.match(description, /the agent's own turns, tool calls, scheduled runs and errors, plus who changed what on the agent, in names and amounts/);
   assert.match(description, /never a credential value or an instruction's text/);
   assert.match(description, /Who changed what can be read while the agent is stopped/);
+  // Wiro writes rows for the plan events no one asked for: renewals, card payments, portal cancellations and ends.
+  assert.match(description, /Plan events Wiro records by itself show there too, without a person's name, such as a renewal with the amount charged, a card payment, a cancellation in the billing portal or a plan that ended and why\./);
   assert.doesNotMatch(description, /for a stopped agent the call says so/);
   assert.doesNotMatch(description, /Names and emails of the people who acted are never returned/);
   assert.match(description, /emails and user ids are never returned/);
 
   const step = PLAYBOOKS.agents.split('\n').find(line => line.startsWith('2. `get_agent_activity` (logs)'));
   assert.match(step, /who changed what on it, in names and amounts, never a credential value or an instruction's text/);
+  assert.match(step, /Plan events Wiro records by itself show there too, without a person's name, such as a renewal with the amount charged or a plan that ended and why\./);
   assert.match(step, /Who changed what can be read at any status/);
   assert.doesNotMatch(step, /A stopped agent's \(0\) log can be read once it runs again/);
 });
