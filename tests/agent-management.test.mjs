@@ -957,9 +957,10 @@ test('the refusals that come before any charge settle the outcome', () => {
     'The move to the Starter plan started with this billing period, and its payment moves the agent there, so it can no longer be undone. Nothing was changed. Once the agent shows the Starter plan, change the plan again.',
     // A wallet plan whose pick could not be written stops before the wallet is charged.
     'The plan could not be saved. Nothing was charged; please try again in a minute.',
-    // A move down asked for on what is a move up by now changes nothing.
-    'This agent is on the Starter plan now, so Pro is an upgrade. Nothing was changed.',
-    'This agent is on the Pro plan now, so Max is an upgrade. Nothing was changed.',
+    // A move down asked for on what is a move up by now changes nothing, for each move up there is.
+    'This agent is on the Starter plan now, so Pro is an upgrade. Nothing was changed. Reload the plan and ask again.',
+    'This agent is on the Starter plan now, so Max is an upgrade. Nothing was changed. Reload the plan and ask again.',
+    'This agent is on the Pro plan now, so Max is an upgrade. Nothing was changed. Reload the plan and ask again.',
   ]) {
     assert.equal(isPreChargeRefusal(apiError(message)), true, message);
     assert.equal(outcomeUnknown(apiError(message)), false, message);
@@ -1269,6 +1270,20 @@ test('manage_agent_billing: a move up that Wiro answers as a move down, after th
   assert.equal(fake.called('/UserAgent/Detail').length, 1, 'no read to observe the outcome');
   // A move up never asks for a move down.
   assert.deepEqual(fake.called('/UserAgent/UpgradeTier')[0].body, { guid: GUID, targetTier: 'pro' });
+});
+
+test('manage_agent_billing: a move down that Wiro answers as a move up, after the plan moved, is a refusal with nothing to check', async () => {
+  const sentence = 'This agent is on the Starter plan now, so Pro is an upgrade. Nothing was changed. Reload the plan and ask again.';
+  const { fake, result } = await confirmBilling({
+    '/UserAgent/Detail': detail({ tier: 'max', monthlypriceusd: 100, subscription: { ...agentRow().subscription, amount: 100 } }),
+    '/UserAgent/UpgradeTier': refused(sentence),
+  }, { action: 'change_plan', plan: 'pro' });
+  assert.equal(result.isError, true);
+  assert.equal(textOf(result), `## Error\n\n${sentence}`);
+  assert.equal(fake.called('/UserAgent/Detail').length, 1, 'no read to observe the outcome');
+  // A move down always asks for one, so a plan that moved below it is refused, not upgraded.
+  assert.deepEqual(fake.called('/UserAgent/UpgradeTier')[0].body, { guid: GUID, targetTier: 'pro', allowDowngrade: true });
+  assert.doesNotMatch(textOf(result), /may have taken effect|before trying again|Do not repeat the call until|went through/);
 });
 
 // ---------------------------------------------------------------------------
