@@ -293,14 +293,19 @@ test('update_agent and the playbook say which changes restart a running agent', 
   const description = await toolDescription('update_agent');
   assert.doesNotMatch(description, /A running or starting agent restarts to apply the change/);
   assert.match(description, /a new name or a setting that changes restarts it/);
-  assert.match(description, /a new description, cover or categories, or a setting it already has, leaves it running/);
+  // The runtime knows setup from chat only as on or off, so a move between "all" and "webchat" restarts nothing.
+  assert.match(description, /a new description, cover or categories, a setting it already has, or chat_setup moved between "all" and "webchat" leaves it running/);
 
   const line = PLAYBOOKS.agents.split('\n').find(item => item.startsWith('- Some changes restart'));
-  assert.match(line, /`update_agent` with a new title or a setting that changes/);
-  assert.match(line, /These leave it running: a new description, cover or categories with `update_agent`, a new plan, plan changes, credit packs and renewals, and a save that changes nothing\./);
+  assert.match(line, /`update_agent` with a new title or a setting that changes \(time zone, session sharing, models, commands, setup from chat turned on or off\)/);
+  assert.match(line, /These leave it running: a new description, cover or categories with `update_agent`, setup from chat moved between "all" and "webchat", a new plan, plan changes, credit packs and renewals, and a save that changes nothing\./);
   assert.match(line, /`apply_agent_skills` when a skill turns on or off/);
+  assert.match(line, /and the same changes approved in the agent's chat\./);
   assert.match(line, /A text or description edit of a custom skill or scheduled task usually reaches a running agent without a restart, though an edit of `cs-approval-policy` restarts it; the result says which happened\./);
+  // A change saved while a restart has not started the agent yet rides on it.
+  assert.match(line, /A change saved while the agent is still stopping or queued for a restart loads with that restart; saved once it is starting again, it restarts the agent a second time\./);
   assert.doesNotMatch(PLAYBOOKS.agents, /Many changes restart|credit packs and upgrades\./);
+  assert.match(PLAYBOOKS.agents, /\| 1 \| Stopping, or restarting to load a change \| Wait\. A restart starts it again by itself, in about a minute\. \|/);
 });
 
 // ---------------------------------------------------------------------------
