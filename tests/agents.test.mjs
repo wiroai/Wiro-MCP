@@ -3095,6 +3095,141 @@ test('manage_agent_billing: on an ended wallet plan with a move set for its rene
   assert.equal(fake.calls.filter(item => item.path !== '/UserAgent/Detail').length, 0);
 });
 
+/**
+ * A card plan whose last renewal payment did not go through, as UserAgent/Detail shows it: Stripe's status on the
+ * plan row, the period Stripe moved on to and the amount the card is billed, here a $90 price from before the plans.
+ */
+function pastDue(overrides = {}) {
+  return subscription({ status: 'past_due', provider: 'stripe', amount: 90, currentperiodend: NOW + 25 * 86_400, renewaldate: null, daysremaining: 0, ...overrides });
+}
+
+const PAYMENT_FIX = 'Fix the payment in the Wiro dashboard: pay the open invoice, with another card if needed, and the plan renews by itself. '
+  + 'It can also be cancelled there.';
+
+test('manage_agent_billing subscribe starts no plan beside one that has not ended, and says to fix its payment instead', async () => {
+  // Wiro counts every status but expired, cancelled and refunded as a plan that has not ended.
+  for (const status of ['past_due', 'unpaid']) {
+    const fake = fakeClient({
+      '/UserAgent/Detail': detailResponse(agentRow({ tier: 'pro', monthlypriceusd: 90, subscription: pastDue({ status }) })),
+      '/UserAgent/CreateSubscriptionCheckout': { result: true, errors: [], tier: 'pro', monthlypriceusd: 30, chargedUsd: 30, monthlycredits: 3000 },
+    });
+    await withClient(fake, async client => {
+      for (const args of [{}, { plan: 'max' }, { plan: 'pro', confirm_charge_usd: 30, confirm: true }]) {
+        const result = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'subscribe', ...args });
+        assert.notEqual(result.isError, true, textOf(result));
+        const out = result.structuredContent;
+        assert.equal(out.outcome, 'refused', `${status} ${JSON.stringify(args)}`);
+        assert.equal(out.message, `The last payment for this card plan did not go through (${status}), so the plan has not ended. `
+          + `A new plan is not started beside it, since both would bill. Nothing was charged. ${PAYMENT_FIX} https://wiro.ai/panel/agents/ua-1`);
+        assert.equal(out.quote, undefined);
+        assert.equal(out.nextAction, undefined);
+        assert.match(textOf(result), /^## subscribe: Not possible\n/);
+      }
+    });
+    assert.equal(fake.called('/UserAgent/CreateSubscriptionCheckout').length, 0, status);
+  }
+
+  // Any other status that has not ended takes no second plan either; the dashboard manages it.
+  const other = fakeClient({ '/UserAgent/Detail': detailResponse(agentRow({ subscription: pastDue({ status: 'incomplete' }) })) });
+  await withClient(other, async client => {
+    const result = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'subscribe' });
+    assert.equal(result.structuredContent.outcome, 'refused');
+    assert.equal(result.structuredContent.message, 'This card plan is incomplete, so it has not ended. A new plan is not started beside it, since both would bill. '
+      + 'Nothing was charged. It is managed in the Wiro dashboard: https://wiro.ai/panel/agents/ua-1');
+  });
+
+  // On a team agent, the member whose card pays for the plan fixes it.
+  const team = fakeClient({
+    '/UserAgent/Detail': detailResponse(teamAgentRow({ subscription: pastDue() })),
+    '/Organization/List': organizations('admin'),
+  });
+  await withClient(team, async client => {
+    const result = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'subscribe' });
+    assert.equal(result.structuredContent.outcome, 'refused');
+    assert.match(result.structuredContent.message, /It can also be cancelled there\. On a team agent, the member whose card pays for the plan does this\. https:\/\/wiro\.ai\/panel\/agents\/ua-1$/);
+    assertNoSecrets(result);
+  });
+  assert.deepEqual(team.calls.map(item => item.path).filter(path => path !== '/UserAgent/Detail' && path !== '/Organization/List'), []);
+
+  // A plan that ended, by card or from the wallet, takes a new one.
+  for (const sub of [
+    subscription({ status: 'expired' }),
+    subscription({ status: 'expired', provider: 'stripe' }),
+    subscription({ status: 'cancelled', provider: 'stripe' }),
+    subscription({ status: 'refunded', provider: 'stripe' }),
+    null,
+  ]) {
+    const ended = fakeClient({ '/UserAgent/Detail': detailResponse(agentRow({ status: 0, subscription: sub })) });
+    await withClient(ended, async client => {
+      const result = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'subscribe', plan: 'pro' });
+      assert.equal(result.structuredContent.outcome, 'quote', JSON.stringify(sub));
+      assert.equal(result.structuredContent.quote.chargeNowUsd, 30);
+    });
+  }
+});
+
+test('manage_agent_billing sends every action on a card plan whose payment did not go through to the dashboard, never to subscribe', async () => {
+  const fake = fakeClient({ '/UserAgent/Detail': detailResponse(agentRow({ tier: 'pro', monthlypriceusd: 90, subscription: pastDue() })) });
+  const state = 'The last payment for this card plan did not go through (past_due), so the plan has not ended.';
+  await withClient(fake, async client => {
+    for (const [args, lead] of [
+      [{ action: 'renew' }, 'Action renew brings back only a plan that has ended.'],
+      [{ action: 'renew', confirm_charge_usd: 30, confirm: true }, 'Action renew brings back only a plan that has ended.'],
+      [{ action: 'change_plan', plan: 'max' }, 'A plan change needs an active plan.'],
+      [{ action: 'change_plan', plan: 'starter', confirm: true }, 'A plan change needs an active plan.'],
+      [{ action: 'buy_credits', pack: 'small' }, 'Extra credits need an active plan.'],
+      [{ action: 'cancel' }, 'Only an active plan is cancelled here.'],
+    ]) {
+      const result = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', ...args });
+      const out = result.structuredContent;
+      assert.equal(out.outcome, 'refused', JSON.stringify(args));
+      assert.equal(out.message, `${state} ${lead} ${PAYMENT_FIX} https://wiro.ai/panel/agents/ua-1`);
+      assert.equal(out.nextAction, undefined, JSON.stringify(args));
+    }
+  });
+  assert.deepEqual(fake.calls.map(item => item.path).filter(path => path !== '/UserAgent/Detail'), []);
+});
+
+test('get_my_agent shows a card plan whose payment did not go through as not ended, and sends no one to subscribe', async () => {
+  const stopped = { status: 0, monthlycredits: 0, extracredits: 0, usedcredits: 0, remainingcredits: 0, credentials: {} };
+  const row = agentRow({ tier: 'pro', monthlypriceusd: 90, subscription: pastDue(), ...stopped });
+  const fake = fakeClient({
+    '/UserAgent/Detail': detailResponse(row),
+    '/UserAgent/MyAgents': { result: true, errors: [], useragents: [row] },
+  });
+  await withClient(fake, async client => {
+    const detail = await call(client, 'get_my_agent', { agent_guid: 'ua-1' });
+    const text = textOf(detail);
+    // What the card is billed, not a new period at the Pro price today, and no period said to have ended.
+    assert.match(text, /\*\*Plan:\*\* Pro; past_due, billed by card, \$90\.00 per 30 days, its last payment did not go through\n/);
+    assert.doesNotMatch(text, /period ended|a new period costs|action subscribe|action renew/);
+    assert.equal(detail.structuredContent.agent.subscription.amountUsd, 90);
+    assert.equal(detail.structuredContent.nextAction, undefined);
+    assert.equal(detail.structuredContent.advice, 'The agent is stopped. The last payment for this card plan did not go through (past_due), so the plan has not ended. '
+      + `The agent cannot start until the plan is active again, since it has no extra credits left. ${PAYMENT_FIX} https://wiro.ai/panel/agents/ua-1`);
+
+    const list = await call(client, 'list_my_agents', {});
+    assert.match(textOf(list), /past_due, billed by card, \$90\.00 per 30 days, its last payment did not go through/);
+    assert.doesNotMatch(textOf(list), /period ended|action subscribe/);
+  });
+});
+
+test('control_agent says a start refused on a card plan whose payment did not go through waits for that payment', async () => {
+  const fake = fakeClient({
+    '/UserAgent/Detail': detailResponse(agentRow({ status: 0, subscription: pastDue(), extracredits: 0 })),
+    '/UserAgent/Start': { result: false, errors: [{ code: 0, message: 'Subscription required: please subscribe to this agent before starting it.' }] },
+  });
+  await withClient(fake, async client => {
+    const result = await call(client, 'control_agent', { agent_guid: 'ua-1', action: 'start' });
+    assert.notEqual(result.isError, true, textOf(result));
+    assert.equal(result.structuredContent.outcome, 'refused');
+    assert.equal(result.structuredContent.nextAction, undefined);
+    assert.ok(result.structuredContent.message.startsWith('The last payment for this card plan did not go through (past_due), so the plan has not ended. '
+      + `Wiro refused the start: the plan is not active, and the agent has no extra credits left. ${PAYMENT_FIX}`), result.structuredContent.message);
+    assert.doesNotMatch(textOf(result), /action subscribe/);
+  });
+});
+
 test('manage_agent_billing: a renewal Wiro refuses above the price the agent showed is read and quoted again, never renewed on its own', async () => {
   const sentence = 'This plan now renews on the Max plan at $100.00 a month, not the $70.00 it showed. Nothing was charged. Renew again to pay the new price.';
   const endedAt = NOW - 86_400;

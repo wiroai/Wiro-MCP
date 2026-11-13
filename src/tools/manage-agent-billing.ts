@@ -29,6 +29,7 @@ import {
   formatCredits,
   formatUsd,
   isTransitionalStatus,
+  isUnsettledPlan,
   isWalletNotRead,
   outcomeUnknown,
   planLineText,
@@ -38,6 +39,7 @@ import {
   sameAmount,
   toAgentDetail,
   toAgentSummary,
+  unsettledPlanText,
   type AgentDetail,
   type AgentPlan,
   type AgentSummary,
@@ -336,6 +338,13 @@ async function planFor(
   const wallet = agent.workspace === 'team' ? 'the team wallet' : 'the personal wallet';
   const periodEnd = agent.subscription?.periodEndsAt ?? 'the end of the current period';
   const cardPlan = (what: string) => `This plan is billed by card, and card payments are made in the Wiro dashboard. Nothing was charged here. To ${what}, open ${agent.dashboardUrl}`;
+  // A plan that has not ended and is not active, such as a card plan whose last payment did not go through
+  // (past_due, then unpaid). Wiro counts every status but expired, cancelled and refunded as a plan that has
+  // not ended: it starts no new plan beside one, and renews, changes, cancels and tops up only an active plan.
+  // lead says what this action cannot do; null for any other plan.
+  const unsettled = (lead: string): string | null => (agent.subscription && isUnsettledPlan(agent.subscription)
+    ? unsettledPlanText(agent.subscription, agent, lead)
+    : null);
 
   switch (action) {
     case 'subscribe': {
@@ -345,6 +354,9 @@ async function planFor(
           message: 'This agent already has an active plan. Use renew to undo a cancellation, change_plan to move to another plan, or buy_credits for more credits.',
         };
       }
+      // Its payment is fixed instead: a second plan would bill beside it.
+      const open = unsettled('A new plan is not started beside it, since both would bill. Nothing was charged.');
+      if (open) return { outcome: 'refused', message: open };
       const plan = input.plan ?? asPlan(agent.tier) ?? 'starter';
       const price = agent.pricing?.[plan];
       if (!price) throw new Error(`The ${planName(plan)} plan cannot be priced right now, so the agent cannot be subscribed. Try again later.`);
@@ -433,6 +445,8 @@ async function planFor(
           },
         };
       }
+      const open = unsettled('Action renew brings back only a plan that has ended.');
+      if (open) return { outcome: 'refused', message: open };
       if (raw.status !== 'expired') {
         return {
           outcome: 'refused',
@@ -497,7 +511,10 @@ async function planFor(
     }
 
     case 'cancel': {
-      if (!active) return { outcome: 'not_needed', message: 'There is no active plan to cancel.' };
+      if (!active) {
+        const open = unsettled('Only an active plan is cancelled here.');
+        return open ? { outcome: 'refused', message: open } : { outcome: 'not_needed', message: 'There is no active plan to cancel.' };
+      }
       // A move set for the next renewal ends with the plan.
       const dropsMove = asPlan(agent.nextPlan) && agent.nextPlan !== agent.tier
         ? ` The move to ${planName(agent.nextPlan)} set for the next renewal is dropped with it.`
@@ -567,6 +584,8 @@ async function planFor(
       const target = input.plan;
       const current = asPlan(agent.tier);
       if (!active) {
+        const open = unsettled('A plan change needs an active plan.');
+        if (open) return { outcome: 'refused', message: open };
         // A wallet plan that ended comes back with renew on the plan set for its renewal, else on its own
         // plan, so renew answers a target that is that plan; any other target takes a new plan.
         const renewsOn = asPlan(agent.nextPlan) ?? current;
@@ -790,7 +809,8 @@ async function planFor(
 
     case 'buy_credits': {
       if (!active) {
-        return { outcome: 'refused', message: 'Extra credits need an active plan. Use action subscribe or renew first.' };
+        const open = unsettled('Extra credits need an active plan.');
+        return { outcome: 'refused', message: open ?? 'Extra credits need an active plan. Use action subscribe or renew first.' };
       }
       if (route === 'card') return { outcome: 'refused', message: cardPlan('buy the pack') };
       const packs = agent.extraCreditPacks;
@@ -1052,7 +1072,9 @@ export function registerManageAgentBilling(server: McpServer, client: WiroClient
         + 'cancelled there; the tool returns the link and charges nothing. A personal card plan can move to a smaller '
         + 'plan here: the card pays the smaller plan from the next renewal; a team\'s card plan changes plans in the '
         + 'dashboard. A card plan that is moving to wallet billing '
-        + 'pays change_plan and buy_credits from the wallet, and cancel works once the wallet bills it. On a team '
+        + 'pays change_plan and buy_credits from the wallet, and cancel works once the wallet bills it. A card plan '
+        + 'whose last payment did not go through has not ended and takes no new plan: the payment is fixed in the '
+        + 'dashboard, and the plan then renews by itself. On a team '
         + 'agent only a team admin, the organization\'s owner or the person who deployed the agent can pay for it or '
         + 'change its plan; other members are refused and nothing is charged.',
       inputSchema: strictInput({

@@ -11,6 +11,7 @@ import {
   agentSummarySchema,
   describeAgentStatus,
   isTransitionalStatus,
+  isUnsettledPlan,
   MEMBER_SETUP_HELP,
   missingCredentialStep,
   nextStepForAgent,
@@ -19,6 +20,7 @@ import {
   settledStatusAdvice,
   toAgentDetail,
   toAgentSummary,
+  unsettledPlanText,
   waitForAgentToSettle,
   type AgentDetail,
   type AgentSubscription,
@@ -100,6 +102,10 @@ function setupRefusal(agent: AgentDetail, plainMember = false): Decision {
       message: `The agent cannot start until it has a paid plan and its setup is finished. ${MEMBER_SETUP_HELP}`,
     };
   }
+  if (agent.subscription && isUnsettledPlan(agent.subscription)) {
+    // A plan that has not ended takes no new one: its payment is settled in the dashboard.
+    return { outcome: 'refused', message: unsettledPlanText(agent.subscription, agent, 'The agent cannot start until the plan is active again.') };
+  }
   if (agent.subscription?.status !== 'active') {
     return {
       outcome: 'refused',
@@ -128,6 +134,12 @@ function setupRefusal(agent: AgentDetail, plainMember = false): Decision {
 /** Turns the known refusals of Start and Stop into advice. Anything else stays an error. */
 function interpretRefusal(message: string, agent: AgentDetail): Decision | null {
   if (/subscription required/i.test(message)) {
+    if (agent.subscription && isUnsettledPlan(agent.subscription)) {
+      return {
+        outcome: 'refused',
+        message: unsettledPlanText(agent.subscription, agent, 'Wiro refused the start: the plan is not active, and the agent has no extra credits left.'),
+      };
+    }
     const renewable = agent.subscription?.status === 'expired' && agent.subscription.billing === 'wallet';
     return {
       outcome: 'refused',
@@ -193,7 +205,8 @@ export function registerControlAgent(server: McpServer, client: WiroClient): voi
         + 'stop paying. The result says what happens with this agent\'s plan. '
         + 'A restart reloads the agent with its current settings. The change finishes in the background: pass '
         + 'wait_seconds, or follow the returned nextAction, to see the result. When a start is refused, the '
-        + 'result says what to do next (subscribe, renew, buy credits or finish setup). On a team agent this '
+        + 'result says what to do next (subscribe, renew, buy credits, fix a card payment in the dashboard or '
+        + 'finish setup). On a team agent this '
         + 'needs a team admin or the person who deployed it; other team members can read the agent with '
         + 'get_my_agent and message it.',
       inputSchema: strictInput({

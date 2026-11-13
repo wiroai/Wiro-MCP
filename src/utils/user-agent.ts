@@ -271,6 +271,46 @@ export function chargeRoute(subscription: unknown): 'wallet' | 'card' | null {
   return 'card';
 }
 
+// The plan statuses Wiro counts as ended. Every other status is a plan that has not ended, a card plan
+// whose renewal payment did not go through included, and Wiro starts no second plan beside it.
+const ENDED_PLAN_STATUSES: ReadonlySet<string> = new Set(['expired', 'cancelled', 'refunded']);
+
+// A card plan whose renewal payment did not go through: past_due while the card is tried again, unpaid after.
+const PAYMENT_FAILED_STATUSES: ReadonlySet<string> = new Set(['past_due', 'unpaid']);
+
+/** Whether a plan with this status has not ended, as Wiro reads it: any status but expired, cancelled and refunded. */
+function isLivePlanStatus(status: unknown): boolean {
+  return typeof status === 'string' && status.trim() !== '' && !ENDED_PLAN_STATUSES.has(status);
+}
+
+/** A plan that has not ended and is not active, such as a card plan whose last payment did not go through. */
+export function isUnsettledPlan(plan: Pick<AgentSubscription, 'status'> | null | undefined): boolean {
+  return Boolean(plan) && plan?.status !== 'active' && isLivePlanStatus(plan?.status);
+}
+
+/**
+ * What to do about a plan that has not ended and is not active. Wiro starts no new plan beside it, and renews,
+ * changes, cancels and adds packs only to an active plan, so the dashboard settles it: a card plan whose last
+ * payment did not go through renews by itself once its open invoice is paid. lead says
+ * what the call could not do, after the plan's state.
+ */
+export function unsettledPlanText(
+  plan: Pick<AgentSubscription, 'status' | 'billing'>,
+  agent: { guid: string; workspace: 'personal' | 'team' },
+  lead = '',
+): string {
+  const url = agentDashboardUrl(agent.guid);
+  const failed = plan.billing === 'card' && PAYMENT_FAILED_STATUSES.has(plan.status);
+  const state = failed
+    ? `The last payment for this card plan did not go through (${plan.status}), so the plan has not ended.`
+    : `This ${plan.billing === 'card' ? 'card ' : ''}plan is ${plan.status}, so it has not ended.`;
+  const fix = failed
+    ? 'Fix the payment in the Wiro dashboard: pay the open invoice, with another card if needed, and the plan renews by itself. '
+      + `It can also be cancelled there.${agent.workspace === 'team' ? ' On a team agent, the member whose card pays for the plan does this.' : ''} ${url}`
+    : `It is managed in the Wiro dashboard: ${url}`;
+  return [state, lead, fix].filter(Boolean).join(' ');
+}
+
 export const creditsSchema = z.object({
   monthly: z.number()
     .describe('The monthly credits this period grants. A plan change inside a period moves it for the time left, so it can differ from renewal.'),
@@ -635,11 +675,12 @@ export function rowPlanPricing(row: Record<string, unknown>): PlanPricing | null
 /**
  * The plan as it is shown. A plan that has ended costs a whole new period at the price its plan has today,
  * not the amount of its last period, so that is its one price. Without the plans' prices on the row, the
- * agent's monthly price stands in for it.
+ * agent's monthly price stands in for it. A plan that has not ended, such as a card plan whose last payment
+ * did not go through, keeps its own amount.
  */
 function planOf(row: Record<string, unknown>): AgentSubscription | null {
   const plan = toSubscription(row.subscription, row.stripecancelatperiodend);
-  if (!plan || plan.status === 'active') return plan;
+  if (!plan || isLivePlanStatus(plan.status)) return plan;
   const key = readNextPlan(row) ?? asPlan(row.tier);
   const today = key ? rowPlanPricing(row)?.[key]?.priceUsd : undefined;
   const own = toNumber(row.monthlypriceusd);
@@ -807,7 +848,12 @@ export function formatSubscriptionLine(subscription: AgentSubscription | null, p
       ? `a new period costs ${formatUsd(subscription.amountUsd)} per 30 days`
       : `${formatUsd(subscription.amountUsd)} per 30 days`);
   }
-  if (subscription.periodEndsAt) {
+  if (isUnsettledPlan(subscription)) {
+    // It has not ended, so no period is said to have ended; a payment that did not go through is named.
+    if (subscription.billing === 'card' && PAYMENT_FAILED_STATUSES.has(subscription.status)) {
+      parts.push('its last payment did not go through');
+    }
+  } else if (subscription.periodEndsAt) {
     const atPeriodEnd = subscription.atPeriodEnd ?? (subscription.cancelAtPeriodEnd ? 'ends' : 'renews');
     if (subscription.status !== 'active') {
       parts.push(`period ended ${subscription.periodEndsAt}`);
@@ -829,13 +875,22 @@ export function startNeedsPlan(agent: Pick<AgentSummary, 'subscription' | 'credi
   return agent.subscription?.status !== 'active' && agent.credits.extra <= 0;
 }
 
-/** renew brings back an expired wallet plan; any other agent without an active plan takes a new one. */
-function planActionForStart(agent: Pick<AgentSummary, 'subscription'>): 'renew' | 'subscribe' {
+/**
+ * renew brings back an expired wallet plan; any other agent without an active plan takes a new one. A plan that
+ * has not ended, such as a card plan whose last payment did not go through, takes neither: null.
+ */
+function planActionForStart(agent: Pick<AgentSummary, 'subscription'>): 'renew' | 'subscribe' | null {
+  if (isUnsettledPlan(agent.subscription)) return null;
   return agent.subscription?.status === 'expired' && agent.subscription.billing === 'wallet' ? 'renew' : 'subscribe';
 }
 
-function noPlanStartHint(agent: Pick<AgentSummary, 'subscription'>): string {
-  return 'It has no active plan and no extra credits left, so it cannot start. '
+const NO_PLAN_TO_START = 'It has no active plan and no extra credits left, so it cannot start.';
+
+function noPlanStartHint(agent: Pick<AgentSummary, 'guid' | 'workspace' | 'subscription'>): string {
+  if (agent.subscription && isUnsettledPlan(agent.subscription)) {
+    return unsettledPlanText(agent.subscription, agent, 'The agent cannot start until the plan is active again, since it has no extra credits left.');
+  }
+  return `${NO_PLAN_TO_START} `
     + (planActionForStart(agent) === 'renew'
       ? 'Its wallet plan has expired; manage_agent_billing with action renew restarts it.'
       : 'manage_agent_billing with action subscribe pays for a plan and starts the agent.');
@@ -1264,7 +1319,8 @@ export function nextStepForAgent(agent: AgentDetail, waitSeconds: number, plainM
     }
     : undefined;
   if (plainMember) return wait;
-  if (agent.status === 6 && agent.subscription?.status !== 'active') {
+  // A plan that has not ended takes no new one: its payment is settled in the dashboard.
+  if (agent.status === 6 && agent.subscription?.status !== 'active' && !isUnsettledPlan(agent.subscription)) {
     return {
       tool: 'manage_agent_billing',
       arguments: { agent_guid: agent.guid, action: 'subscribe' },
@@ -1275,11 +1331,14 @@ export function nextStepForAgent(agent: AgentDetail, waitSeconds: number, plainM
   if (missing) return missingCredentialStep(agent);
   if (wait) return wait;
   if ((agent.status === 0 || agent.status === 5) && startNeedsPlan(agent)) {
-    return {
-      tool: 'manage_agent_billing',
-      arguments: { agent_guid: agent.guid, action: planActionForStart(agent) },
-      reason: 'The agent has no active plan and no extra credits left, so it cannot start. This returns the price; nothing is charged without confirm: true.',
-    };
+    const action = planActionForStart(agent);
+    return action
+      ? {
+        tool: 'manage_agent_billing',
+        arguments: { agent_guid: agent.guid, action },
+        reason: 'The agent has no active plan and no extra credits left, so it cannot start. This returns the price; nothing is charged without confirm: true.',
+      }
+      : undefined;
   }
   if (agent.status === 0 || agent.status === 5) {
     return {
@@ -1385,7 +1444,7 @@ export function outcomeUnknown(error: unknown): boolean {
 }
 
 /** Advice for a status reached after a start, renew or deploy. With the agent, a failed agent without a plan or extra credits is sent to billing. */
-export function settledStatusAdvice(status: number | null, plainMember = false, agent?: Pick<AgentSummary, 'subscription' | 'credits'>): string {
+export function settledStatusAdvice(status: number | null, plainMember = false, agent?: Pick<AgentSummary, 'guid' | 'workspace' | 'subscription' | 'credits'>): string {
   if (!plainMember && agent && status === 5 && startNeedsPlan(agent)) {
     return `The agent failed to start. ${noPlanStartHint(agent)}`;
   }
@@ -1410,7 +1469,7 @@ export function settledStatusAdvice(status: number | null, plainMember = false, 
 }
 
 /** Advice for a read, which cannot tell whether a start came first: a stopped agent gets what holds now. */
-export function readStatusAdvice(agent: Pick<AgentSummary, 'status' | 'subscription' | 'credits'>, plainMember = false): string {
+export function readStatusAdvice(agent: Pick<AgentSummary, 'guid' | 'workspace' | 'status' | 'subscription' | 'credits'>, plainMember = false): string {
   if (agent.status !== 0) return settledStatusAdvice(agent.status, plainMember, agent);
   if (plainMember) return `The agent is stopped. On this team agent, ${TEAM_AGENT_MANAGERS} can start it.`;
   return startNeedsPlan(agent)
