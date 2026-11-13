@@ -31,7 +31,11 @@ import {
 // or remove names one Connector (int-*) or Skill (util-*), and Wiro adds what
 // the change also does to the card: the other names it turns on or off (with),
 // the scheduled tasks that pause or run again, and for an add the connectors it
-// brings that are not connected yet (needs). The agent cannot set those.
+// brings that are not connected yet (needs). The agent cannot set those. An add
+// whose connector takes a key comes with that connector's connect card on the
+// same reply. From here its key is saved with set_agent_credentials right after
+// the add is applied: saved while the agent is still stopping or queued for the
+// restart the add started, it loads with that same restart.
 
 /** A pending proposal older than this cannot be approved with a typed reply. */
 export const SETUP_REPLY_WINDOW_SECONDS = 30 * 60;
@@ -305,6 +309,27 @@ export function listedSetupCount(row: Record<string, unknown>): number {
 export const SETUP_LISTING_RULE = 'Show the listing to the user, and send "yes" (or "yes N" for change N) again '
   + 'only after the user agrees to exactly that change. Never send yes on your own.';
 
+// Wiro's own answer to a setup reply is written for a person typing in the chat, so it can ask for a key as the
+// next reply: "Next: paste your Serper key as your reply.", a listing that takes the key in place of the yes, or
+// connect cards that still need their keys. Lines quoting a proposal's text start with ">" and are left out.
+const KEY_AS_REPLY = /\b(?:paste|reply with) your .{1,100}? key\b|\bstill need their keys\b/i;
+
+/** Whether Wiro's answer to a setup reply asks for a key as the next chat reply. */
+export function asksKeyAsReply(answer: string | undefined): boolean {
+  return typeof answer === 'string'
+    && answer.split(/\r?\n/).some(line => !line.trimStart().startsWith('>') && KEY_AS_REPLY.test(line));
+}
+
+/** What to do when Wiro's answer asks for a key as the next reply, said the same way by the note and the Next line. */
+export const SETUP_KEY_RULE = 'Never send a key in a chat message: save it right away with set_agent_credentials, under '
+  + 'the connector the agent\'s proposal names. Saved while the agent is still stopping or queued for its restart, the '
+  + 'key loads with that same restart; saved once the agent is starting again, it restarts the agent a second time.';
+
+/** The same for a listing that offers to take the key in place of the yes. */
+export const SETUP_LISTING_KEY_RULE = 'The listing offers to take a key as the reply. Never send a key in a chat '
+  + 'message: once the user agrees, send "yes" to apply the change, then save the key with set_agent_credentials '
+  + 'right away, so it loads with the same restart.';
+
 /** Whether a pending proposal can still be approved with a typed reply. */
 export function isApprovableByReply(change: SetupChange, nowMs = Date.now()): boolean {
   if (change.status !== 'pending') return false;
@@ -376,7 +401,8 @@ function showsBeforeAndAfter(change: SetupChange): boolean {
 
 // How each connector an add brings is connected once the add is applied.
 const NEED_HOW: Record<SetupNeedMode, string> = {
-  key: 'its key, saved with set_agent_credentials, never sent in a chat message',
+  key: 'its key, saved with set_agent_credentials right after this change is applied (one restart then loads both), '
+    + 'never sent in a chat message',
   signin: 'sign in on the agent page, or with connect_agent_oauth',
   page: 'set up on the agent page',
 };
@@ -408,14 +434,29 @@ function registryChangeLines(change: SetupChange): string[] {
   return lines;
 }
 
-function pendingChangeLines(change: SetupChange, index: number, nowMs: number): string[] {
+/**
+ * The number of the pending add on the same reply that brings this connect card's connector with a key (the
+ * add-and-connect pair Wiro makes), or undefined.
+ */
+function pairedAddNumber(change: SetupChange, pending: readonly SetupChange[]): number | undefined {
+  if (change.kind !== 'connect' || !change.connector) return undefined;
+  const index = pending.findIndex(other => other.kind === 'add'
+    && other.needs?.some(need => need.connector === change.connector && need.mode === 'key'));
+  return index >= 0 ? index + 1 : undefined;
+}
+
+function pendingChangeLines(change: SetupChange, index: number, nowMs: number, pending: readonly SetupChange[]): string[] {
   const lines = [`#### Proposed change ${index + 1}: ${setupChangeHeadline(change)}`, ''];
   if (change.title) lines.push(`- Title: ${quotedSpan(change.title)}`);
   if (change.cron) {
     lines.push(`- Schedule: ${quotedSpan(change.cron)} (cron: minute, hour, day of month, month, weekday; in the `
       + 'agent\'s time zone)');
   }
-  if (change.kind === 'connect') {
+  const pairedAdd = pairedAddNumber(change, pending);
+  if (pairedAdd !== undefined) {
+    lines.push(`- Connects what proposed change ${pairedAdd} adds. Once change ${pairedAdd} is applied, save the key `
+      + 'with set_agent_credentials right away, never in a chat message: one restart then loads both.');
+  } else if (change.kind === 'connect') {
     lines.push('- The user provides the key or sign-in for it. A key is saved with set_agent_credentials, never sent '
       + 'in a chat message.');
   }
@@ -475,9 +516,9 @@ function appliedChangeLines(change: SetupChange): string[] {
 export function formatSetupChanges(changes: readonly SetupChange[], nowMs = Date.now()): string[] {
   if (changes.length === 0) return [];
   const lines = ['', '### Setup changes proposed in this reply', ''];
+  const pending = changes.filter(change => change.status === 'pending');
   const sections = [
-    ...changes.filter(change => change.status === 'pending')
-      .map((change, index) => pendingChangeLines(change, index, nowMs)),
+    ...pending.map((change, index) => pendingChangeLines(change, index, nowMs, pending)),
     ...changes.filter(showsBeforeAndAfter).map(appliedChangeLines),
   ];
   sections.forEach((section, index) => {
