@@ -616,8 +616,8 @@ test('the playbooks and send_agent_message say how setup replies, keys and the h
     const credentials = tools.find(tool => tool.name === 'set_agent_credentials').description;
     assert.match(credentials, /A running agent restarts to load values that change, and one still stopping or queued for a restart, such as after a setup change approved in its chat, loads them with that restart;/);
     assert.match(credentials, /A key the agent or Wiro asks for in its chat is saved here, never sent in a message\./);
-    assert.match(tools.find(tool => tool.name === 'get_my_agent').description, /1 stopping \(also on a restart to load a change, which starts it again by itself\)/);
+    assert.match(tools.find(tool => tool.name === 'get_my_agent').description, /1 stopping \(also during a restart, which starts it again by itself\)/);
     const prompt = await client.getPrompt({ name: 'talk_to_my_agent', arguments: PROMPT_ARGUMENTS.talk_to_my_agent });
-    assert.match(prompt.messages[0].content.text, /The agent must be running \(status 4\) and have credits left, unless my message answers its setup proposals \("yes", "yes N" or "no"\), which Wiro takes at any status\./);
+    assert.match(prompt.messages[0].content.text, /The agent must be running \(status 4\) and have credits left, unless my message is a "yes" or "yes N" to its setup proposals: Wiro answers those itself at any status and with no credits, and a "no" too while the agent is not running\./);
   });
 });

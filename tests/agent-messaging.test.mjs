@@ -4312,7 +4312,7 @@ test('an answer that counts several connect cards still waiting for their keys a
 
 test('a send refused while the agent restarts says it comes back by itself, not to start it', async () => {
   const cases = [
-    ['Agent is restarting. Please wait a moment and try again.', /^## Error\n\nYour agent is restarting to load a change and starts again by itself, in about a minute\. Wait until get_my_agent shows it running, then send the message again\.$/],
+    ['Agent is restarting. Please wait a moment and try again.', /^## Error\n\nYour agent is restarting and starts again by itself, in about a minute\. Wait until get_my_agent shows it running, then send the message again\.$/],
     ['Agent is stopping. Please wait a moment and try again.', /Your agent is stopping\. Wait a moment, check get_my_agent, and start it again with control_agent if you still need it\./],
   ];
   for (const [message, expected] of cases) {
