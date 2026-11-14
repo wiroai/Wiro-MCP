@@ -600,6 +600,149 @@ async function status(
   }, candidates.length > 0 ? ['', ...candidates.map(account => `- ${accountLabel(account)}`)] : []);
 }
 
+/** The child step's items as Wiro saved them, under each readable account. */
+function savedChildGroups(next: NonNullable<PickerMeta['next']>, groups: DiscoveredGroup[], saved: PickerBody) {
+  const mappings = Array.isArray(saved[next.persistField]) ? (saved[next.persistField] as unknown[]).filter(isPlainObject) : [];
+  const savedGroups = groups.filter(group => !group.errorCode).map(group => ({
+    ...group,
+    items: mappings
+      .filter(mapping => asString(mapping[next.parentValueField]) === group.parent.id)
+      .map(mapping => ({
+        id: asString(mapping[next.itemValueField]) ?? '',
+        name: asString(mapping[next.itemLabelField]) ?? '',
+      })),
+  }));
+  return { mappings, savedGroups };
+}
+
+function childStepLines(groups: DiscoveredGroup[]): string[] {
+  return ['', ...groups.flatMap(group => [
+    `- ${accountLabel(group.parent)}${group.errorCode ? `: could not be read (${group.errorCode})` : ''}`,
+    ...group.items.map(item => `  - ${accountLabel(item)}`),
+  ])];
+}
+
+function preselected(groups: DiscoveredGroup[]) {
+  return groups.filter(group => !group.errorCode).map(group => ({ parent: group.parent.id, items: group.items.map(item => item.id) }));
+}
+
+/** The extra step alone, for accounts saved before: it lists the items, or saves the ones chosen. */
+async function childStepAlone(
+  context: Context,
+  picker: PickerMeta,
+  next: NonNullable<PickerMeta['next']>,
+  selections: Array<{ parent: string; items: string[] }> | undefined,
+) {
+  const { client, agentGuid, credential, signal } = context;
+  // Discovery runs before every save: the API only accepts items, with their exact labels, from a fresh list.
+  const discovered = requireApiSuccess(
+    await client.post<PickerBody>('/UserAgentOAuth/DiscoverPickerItems', {
+      useragentguid: agentGuid,
+      credentialkey: credential,
+      pickerkey: next.key,
+    }, signal),
+    `Could not list the ${next.label}.`,
+  );
+  const groups = parseDiscoveredGroups(next, discovered.groups);
+  if (!selections) {
+    return result('select_accounts', context, 'pick_child_items',
+      `Choose the ${next.label} to use under each account.${next.optional ? ' This step is optional.' : ''} Then call select_accounts again with picker "${next.key}" and selections.`,
+      {
+        childStep: childStepOf(picker, groups),
+        nextAction: {
+          tool: 'connect_agent_oauth',
+          arguments: { action: 'select_accounts', agent_guid: agentGuid, credential, picker: next.key, selections: preselected(groups) },
+          reason: 'Ask the user which ones to keep; this preselects all of them.',
+        },
+      },
+      childStepLines(groups));
+  }
+  const built = buildChainedSelections(next, groups, selections);
+  if (built.error || !built.selections) return errorResult(new Error(built.error ?? 'Nothing to save.'));
+  const saved = requireApiSuccess(
+    await client.post<PickerBody>('/UserAgentOAuth/SetPickerAccounts', {
+      useragentguid: agentGuid,
+      credentialkey: credential,
+      pickerkey: next.key,
+      selections: built.selections,
+    }, signal),
+    `Could not save the ${next.label}.`,
+  );
+  const { mappings, savedGroups } = savedChildGroups(next, groups, saved);
+  const skipped = built.skippedParents.length > 0
+    ? ` Nothing was chosen for ${accountsLine(built.skippedParents)}.`
+    : '';
+  return result('select_accounts', context, 'connected',
+    `Saved the ${next.label} selection (${mappings.length} selected).${skipped} A running agent restarts to use it.`,
+    { childStep: { ...childStepOf(picker, savedGroups, mappings.length > 0) } });
+}
+
+/**
+ * Accounts from the list a sign-in or token check gave, with the extra step some providers have. Wiro lists that
+ * step for the chosen accounts before they are saved, so the accounts and the step are saved in one call and a
+ * running agent restarts once.
+ */
+async function accountsWithChildStep(
+  context: Context,
+  picker: PickerMeta,
+  next: NonNullable<PickerMeta['next']>,
+  accounts: Array<Record<string, string | number>>,
+  ids: string[],
+  selections: Array<{ parent: string; items: string[] }> | undefined,
+) {
+  const { client, agentGuid, credential, signal } = context;
+  if (next.maxParents !== undefined && ids.length > next.maxParents) {
+    const most = `${next.maxParents} account${next.maxParents === 1 ? '' : 's'}`;
+    return errorResult(new Error(`Choose at most ${most} to go on: Wiro lists the ${next.label} for at most ${most} at once.`));
+  }
+  const discovered = requireApiSuccess(
+    await client.post<PickerBody>('/UserAgentOAuth/DiscoverPickerItems', {
+      useragentguid: agentGuid,
+      credentialkey: credential,
+      pickerkey: next.key,
+      parents: ids,
+    }, signal),
+    `Could not list the ${next.label}.`,
+  );
+  const groups = parseDiscoveredGroups(next, discovered.groups);
+  if (!selections) {
+    return result('select_accounts', context, 'pick_child_items',
+      `Nothing is saved yet. Choose the ${next.label} to use under each account.${next.optional ? ` This step is optional: empty selections save the accounts without any ${next.label}.` : ''} Then call select_accounts again with these accounts, picker "${next.key}" and selections within 15 minutes of the sign-in or token check: it saves both at once, so a running agent restarts only once.`,
+      {
+        childStep: childStepOf(picker, groups),
+        nextAction: {
+          tool: 'connect_agent_oauth',
+          arguments: { action: 'select_accounts', agent_guid: agentGuid, credential, accounts, picker: next.key, selections: preselected(groups) },
+          reason: 'Ask the user which ones to keep; this preselects all of them.',
+        },
+      },
+      childStepLines(groups));
+  }
+  const built = buildChainedSelections(next, groups, selections);
+  if (built.error || !built.selections) return errorResult(new Error(built.error ?? 'Nothing to save.'));
+  const saved = requireApiSuccess(
+    await client.post<PickerBody>('/UserAgentOAuth/SetPickerAccounts', {
+      useragentguid: agentGuid,
+      credentialkey: credential,
+      accountids: ids,
+      pickerkey: next.key,
+      selections: built.selections.map(selection => ({
+        parentvalue: selection.parentvalue,
+        itemids: selection.items.map(item => item[next.itemValueField]),
+      })),
+    }, signal),
+    'Could not save the accounts.',
+  );
+  const savedAccounts = toAccountRefs(saved.accounts, picker);
+  const { mappings, savedGroups } = savedChildGroups(next, groups, saved);
+  const skipped = built.skippedParents.length > 0
+    ? ` Nothing was chosen for ${accountsLine(built.skippedParents)}.`
+    : '';
+  return result('select_accounts', context, 'connected',
+    `Saved ${savedAccounts.length} account${savedAccounts.length === 1 ? '' : 's'}: ${accountsLine(savedAccounts)}, and the ${next.label} selection (${mappings.length} selected).${skipped} A running agent restarts once to use them.`,
+    { accounts: savedAccounts, childStep: { ...childStepOf(picker, savedGroups, mappings.length > 0) } });
+}
+
 async function selectAccounts(
   context: Context,
   input: {
@@ -613,79 +756,18 @@ async function selectAccounts(
   if (!picker) {
     return errorResult(new Error(`${meta.title} has no account choice to make; its connection is complete once connected.`));
   }
-
-  if (input.picker) {
-    const next = picker.next;
-    if (!next || next.key !== input.picker) {
-      return errorResult(new Error(`${meta.title} has no step "${input.picker}".${next ? ` Its extra step is "${next.key}".` : ''}`));
-    }
-    // Discovery runs before every save: the API only accepts items, with their exact labels, from a fresh list.
-    const discovered = requireApiSuccess(
-      await client.post<PickerBody>('/UserAgentOAuth/DiscoverPickerItems', {
-        useragentguid: agentGuid,
-        credentialkey: credential,
-        pickerkey: next.key,
-      }, signal),
-      `Could not list the ${next.label}.`,
-    );
-    const groups = parseDiscoveredGroups(next, discovered.groups);
-    if (!input.selections) {
-      const readable = groups.filter(group => !group.errorCode);
-      return result('select_accounts', context, 'pick_child_items',
-        `Choose the ${next.label} to use under each account.${next.optional ? ' This step is optional.' : ''} Then call select_accounts again with picker "${next.key}" and selections.`,
-        {
-          childStep: childStepOf(picker, groups),
-          nextAction: {
-            tool: 'connect_agent_oauth',
-            arguments: {
-              action: 'select_accounts',
-              agent_guid: agentGuid,
-              credential,
-              picker: next.key,
-              selections: readable.map(group => ({ parent: group.parent.id, items: group.items.map(item => item.id) })),
-            },
-            reason: 'Ask the user which ones to keep; this preselects all of them.',
-          },
-        },
-        ['', ...groups.flatMap(group => [
-          `- ${accountLabel(group.parent)}${group.errorCode ? `: could not be read (${group.errorCode})` : ''}`,
-          ...group.items.map(item => `  - ${accountLabel(item)}`),
-        ])]);
-    }
-    const built = buildChainedSelections(next, groups, input.selections);
-    if (built.error || !built.selections) return errorResult(new Error(built.error ?? 'Nothing to save.'));
-    const saved = requireApiSuccess(
-      await client.post<PickerBody>('/UserAgentOAuth/SetPickerAccounts', {
-        useragentguid: agentGuid,
-        credentialkey: credential,
-        pickerkey: next.key,
-        selections: built.selections,
-      }, signal),
-      `Could not save the ${next.label}.`,
-    );
-    const mappings = Array.isArray(saved[next.persistField]) ? (saved[next.persistField] as unknown[]).filter(isPlainObject) : [];
-    const savedGroups = groups.filter(group => !group.errorCode).map(group => ({
-      ...group,
-      items: mappings
-        .filter(mapping => asString(mapping[next.parentValueField]) === group.parent.id)
-        .map(mapping => ({
-          id: asString(mapping[next.itemValueField]) ?? '',
-          name: asString(mapping[next.itemLabelField]) ?? '',
-        })),
-    }));
-    const skipped = built.skippedParents.length > 0
-      ? ` Nothing was chosen for ${accountsLine(built.skippedParents)}.`
-      : '';
-    return result('select_accounts', context, 'connected',
-      `Saved the ${next.label} selection (${mappings.length} selected).${skipped} A running agent restarts to use it.`,
-      { childStep: { ...childStepOf(picker, savedGroups, mappings.length > 0) } });
+  const next = picker.next;
+  if (input.picker && (!next || next.key !== input.picker)) {
+    return errorResult(new Error(`${meta.title} has no step "${input.picker}".${next ? ` Its extra step is "${next.key}".` : ''}`));
   }
-
-  if (!input.accounts || input.accounts.length === 0) {
+  const accounts = input.accounts ?? [];
+  if (next && input.picker && accounts.length === 0) return childStepAlone(context, picker, next, input.selections);
+  if (accounts.length === 0) {
     return errorResult(new Error('Pass accounts (each {id, name}) to save, or picker to run the extra step.'));
   }
-  const picked = pickedAccountIds(picker, input.accounts);
+  const picked = pickedAccountIds(picker, accounts);
   if (picked.error || !picked.ids) return errorResult(new Error(picked.error ?? 'Nothing to save.'));
+  if (next) return accountsWithChildStep(context, picker, next, accounts, picked.ids, input.selections);
   const saved = requireApiSuccess(
     await client.post<PickerBody>('/UserAgentOAuth/SetPickerAccounts', {
       useragentguid: agentGuid,
@@ -694,25 +776,10 @@ async function selectAccounts(
     }, signal),
     'Could not save the accounts.',
   );
-  const accounts = toAccountRefs(saved.accounts, picker);
-  const next = picker.next;
-  if (next) {
-    return result('select_accounts', context, next.optional ? 'connected' : 'pick_child_items',
-      `Saved ${accounts.length} account${accounts.length === 1 ? '' : 's'}: ${accountsLine(accounts)}. ${next.optional ? `Optionally, also choose ${next.label}.` : `Next, choose the ${next.label} for each account.`} A running agent restarts to use the account${accounts.length === 1 ? '' : 's'}.`,
-      {
-        accounts,
-        nextAction: {
-          tool: 'connect_agent_oauth',
-          arguments: { action: 'select_accounts', agent_guid: agentGuid, credential, picker: next.key },
-          reason: next.optional
-            ? `Optional: list the ${next.label} if the user wants to choose them.`
-            : `List the ${next.label} to choose from.`,
-        },
-      });
-  }
+  const savedAccounts = toAccountRefs(saved.accounts, picker);
   return result('select_accounts', context, 'connected',
-    `Saved ${accounts.length} account${accounts.length === 1 ? '' : 's'}: ${accountsLine(accounts)}. A running agent restarts to use the account${accounts.length === 1 ? '' : 's'}.`,
-    { accounts });
+    `Saved ${savedAccounts.length} account${savedAccounts.length === 1 ? '' : 's'}: ${accountsLine(savedAccounts)}. A running agent restarts to use the account${savedAccounts.length === 1 ? '' : 's'}.`,
+    { accounts: savedAccounts });
 }
 
 export function registerConnectAgentOauth(server: McpServer, client: WiroClient): void {
@@ -731,8 +798,10 @@ export function registerConnectAgentOauth(server: McpServer, client: WiroClient)
         + 'works; when a provider needs the user\'s own app keys or a token first, it says which to '
         + 'save. action status: whether the sign-in finished (wait_seconds waits for '
         + 'the user) and, once it did, lists the accounts to choose from. action select_accounts: saves which accounts the agent uses ({id, name} from '
-        + 'the list connect or status gave), and with picker runs the extra step some providers have (Meta Ads pages, '
-        + 'Google Business locations). Connecting again replaces an existing connection, and a sign-in removes a token saved for another mode; both need '
+        + 'the list connect or status gave). Where a provider has an extra step (Meta Ads pages, Google Business locations), '
+        + 'it first lists that step for the chosen accounts and saves nothing, then saves the accounts and the selections '
+        + 'in one call, so a running agent restarts once; picker without accounts changes the extra step of accounts saved '
+        + 'before. Connecting again replaces an existing connection, and a sign-in removes a token saved for another mode; both need '
         + 'confirm: true. A running agent restarts when a connection or selection is saved. Connecting a service '
         + 'turns on the scheduled tasks that need it, and the result names any that stay paused until a skill they need is on; '
         + 'turn off any you do not want. '
@@ -758,12 +827,12 @@ export function registerConnectAgentOauth(server: McpServer, client: WiroClient)
         accounts: z.array(z.record(z.string(), z.union([z.string(), z.number()]))).optional()
           .describe('select_accounts: the accounts to use, each {id, name}, from the list connect or status gave. Wiro saves only accounts from that list, for 15 minutes after the sign-in or token check.'),
         picker: z.string().optional()
-          .describe('select_accounts: the extra step\'s key ("pages" for Meta Ads, "locations" for Google Business). Without selections it lists the choices.'),
+          .describe('select_accounts: the extra step\'s key ("pages" for Meta Ads, "locations" for Google Business). With accounts it may be left out. Without accounts it works on the accounts saved before. Without selections it lists the choices.'),
         selections: z.array(z.object({
           parent: z.string().describe('An account id from the earlier step.'),
           items: z.array(z.string()).describe('The ids of the items to use under that account.'),
         })).optional()
-          .describe('select_accounts with picker: what to use under each account. Accounts left out get nothing.'),
+          .describe('select_accounts: what to use under each account in the extra step. With accounts, both are saved in one call. Accounts left out get nothing.'),
         confirm: z.boolean().default(false)
           .describe('connect: true to replace an existing connection or a token saved for another mode, after the user agreed.'),
       }),

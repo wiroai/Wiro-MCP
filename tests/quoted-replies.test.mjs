@@ -1215,8 +1215,11 @@ test('connect_agent_oauth and disconnect_agent_oauth show names from the outside
     assert.equal(unknown.isError, true);
     assert.ok(clean(unknown).includes(`"999" is not available under ${shown} (\`1234\`). Available: ${shown} (\`555\`).`), textOf(unknown));
 
-    const saved = await call('connect_agent_oauth', { action: 'select_accounts', accounts: [{ id: '1234', name }] });
-    assert.ok(clean(saved).includes(`Saved 1 account: ${shown} (\`1234\`).`), textOf(saved));
+    // The Pages are listed for the chosen account before anything is saved, then both are saved in one call.
+    const listedPages = await call('connect_agent_oauth', { action: 'select_accounts', accounts: [{ id: '1234', name }] });
+    assert.ok(clean(listedPages).includes(`- ${shown} (\`1234\`)\n  - ${shown} (\`555\`)`), textOf(listedPages));
+    const saved = await call('connect_agent_oauth', { action: 'select_accounts', accounts: [{ id: '1234', name }], selections: [{ parent: '1234', items: ['555'] }] });
+    assert.ok(clean(saved).includes(`Saved 1 account: ${shown} (\`1234\`), and the Facebook Pages selection`), textOf(saved));
 
     const status = await call('connect_agent_oauth', { action: 'status' });
     assert.ok(clean(status).includes(`is connected for ${shown}.`), textOf(status));
