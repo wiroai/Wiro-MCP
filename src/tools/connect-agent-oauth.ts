@@ -678,6 +678,15 @@ async function childStepAlone(
 }
 
 /**
+ * The id of this person's latest sign-in or token check, or empty. Wiro keeps the extra step it lists for the
+ * accounts of that flow, so the listing and the save both name it. Without it, Wiro goes by its current flow alone.
+ */
+async function ownFlowId({ client, agentGuid, credential, signal }: Context, picker: PickerMeta): Promise<string> {
+  const snapshot = await readOAuthStatus(client, agentGuid, credential, picker, signal).catch(() => null);
+  return snapshot?.flow?.mine ? snapshot.flow.flowId : '';
+}
+
+/**
  * Accounts from the list a sign-in or token check gave, with the extra step some providers have. Wiro lists that
  * step for the chosen accounts before they are saved, so the accounts and the step are saved in one call and a
  * running agent restarts once.
@@ -695,12 +704,15 @@ async function accountsWithChildStep(
     const most = `${next.maxParents} account${next.maxParents === 1 ? '' : 's'}`;
     return errorResult(new Error(`Choose at most ${most} to go on: Wiro lists the ${next.label} for at most ${most} at once.`));
   }
+  const flowId = await ownFlowId(context, picker);
+  const flow = flowId ? { flowid: flowId } : {};
   const discovered = requireApiSuccess(
     await client.post<PickerBody>('/UserAgentOAuth/DiscoverPickerItems', {
       useragentguid: agentGuid,
       credentialkey: credential,
       pickerkey: next.key,
       parents: ids,
+      ...flow,
     }, signal),
     `Could not list the ${next.label}.`,
   );
@@ -724,6 +736,7 @@ async function accountsWithChildStep(
     await client.post<PickerBody>('/UserAgentOAuth/SetPickerAccounts', {
       useragentguid: agentGuid,
       credentialkey: credential,
+      ...flow,
       accountids: ids,
       pickerkey: next.key,
       selections: built.selections.map(selection => ({

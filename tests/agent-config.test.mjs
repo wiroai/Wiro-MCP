@@ -2862,6 +2862,63 @@ test('connect_agent_oauth asks for fewer accounts than Wiro lists the extra step
   });
 });
 
+test('connect_agent_oauth names the person\'s own sign-in when it lists and saves the extra step', async () => {
+  const flowid = '4b1f0c7a9e2d4c1b8a7f6e5d4c3b2a19';
+  const candidates = [{ id: '1234', name: 'Acme Ads' }, { id: '5678', name: 'Beta Ads' }];
+  const routes = flow => ({
+    '/Credentials/Detail': credentialDetail,
+    '/UserAgentOAuth/OAuthStatus': { ...OAUTH_STATUS_BEFORE, flow, candidates },
+    '/UserAgentOAuth/DiscoverPickerItems': metaPagesOf,
+    '/UserAgentOAuth/SetPickerAccounts': body => ({
+      result: true,
+      accounts: body.accountids.map(id => candidates.find(candidate => candidate.id === id)),
+      pickerkey: 'pages',
+      pagemappings: [],
+    }),
+  });
+  // Wiro keeps the Pages it lists for the ad accounts of this flow, so both calls name it.
+  const mine = fakeClient(routes({ flowid, mine: true, mode: 'api_key', status: 'candidates', account: 'Wiro Agent', errorcode: '', errordetail: '', restart: 'none', expiresat: NOW + 900 }));
+  await withClient(mine, async client => {
+    const listed = await client.callTool({ name: 'connect_agent_oauth', arguments: { action: 'select_accounts', agent_guid: AGENT, credential: 'meta-ads', accounts: candidates } });
+    assert.notEqual(listed.isError, true, text(listed));
+    assert.equal(mine.called('/UserAgentOAuth/DiscoverPickerItems')[0].body.flowid, flowid);
+    const saved = await client.callTool({ name: 'connect_agent_oauth', arguments: listed.structuredContent.nextAction.arguments });
+    assert.notEqual(saved.isError, true, text(saved));
+    assert.equal(mine.called('/UserAgentOAuth/DiscoverPickerItems').at(-1).body.flowid, flowid);
+    assert.deepEqual(mine.called('/UserAgentOAuth/SetPickerAccounts')[0].body, {
+      useragentguid: AGENT,
+      credentialkey: 'meta-ads',
+      flowid,
+      accountids: ['1234', '5678'],
+      pickerkey: 'pages',
+      selections: [{ parentvalue: '1234', itemids: ['555', '556'] }, { parentvalue: '5678', itemids: ['777'] }],
+    });
+    // The id stays between this server and Wiro.
+    for (const result of [listed, saved]) assert.doesNotMatch(JSON.stringify(result), new RegExp(flowid));
+  });
+
+  // Another admin's flow, or a status that cannot be read, gives no id: Wiro then goes by its current flow alone.
+  const others = [
+    fakeClient(routes({ flowid, mine: false, status: 'candidates', expiresat: NOW + 600 })),
+    fakeClient({ ...routes(null), '/UserAgentOAuth/OAuthStatus': () => { throw new Error('socket hang up'); } }),
+  ];
+  for (const fake of others) {
+    await withClient(fake, async client => {
+      const listed = await client.callTool({ name: 'connect_agent_oauth', arguments: { action: 'select_accounts', agent_guid: AGENT, credential: 'meta-ads', accounts: candidates } });
+      assert.notEqual(listed.isError, true, text(listed));
+      assert.equal('flowid' in fake.called('/UserAgentOAuth/DiscoverPickerItems')[0].body, false);
+    });
+  }
+
+  // Accounts with no extra step are saved by Wiro's current flow, with no status read first.
+  const facebook = fakeClient({ '/Credentials/Detail': credentialDetail, '/UserAgentOAuth/SetPickerAccounts': { result: true, accounts: [{ id: '111', name: 'Acme Page' }] } });
+  await withClient(facebook, async client => {
+    const result = await client.callTool({ name: 'connect_agent_oauth', arguments: { action: 'select_accounts', agent_guid: AGENT, credential: 'facebook-pages', accounts: [{ id: '111' }] } });
+    assert.notEqual(result.isError, true, text(result));
+    assert.deepEqual(facebook.paths(), ['/Credentials/Detail', '/UserAgentOAuth/SetPickerAccounts']);
+  });
+});
+
 test('connect_agent_oauth saves accounts by id and says why Wiro refuses ones not from its list', async () => {
   const saved = fakeClient({
     '/Credentials/Detail': credentialDetail,
@@ -4285,17 +4342,21 @@ test('OAuthStatus gives the account list and the sign-in Wiro keeps for 15 minut
     candidates: [{ id: '111', name: 'Acme Page' }, { id: '222', name: 'Beta Page' }, { name: 'No id' }],
   }, null);
   assert.deepEqual(snapshot.candidates, [{ id: '111', name: 'Acme Page' }, { id: '222', name: 'Beta Page' }]);
-  assert.deepEqual(snapshot.flow, { status: 'candidates', mine: true, errorCode: '', account: 'Acme Admin' });
+  assert.deepEqual(snapshot.flow, { status: 'candidates', mine: true, flowId: '4b1f0c7a9e2d4c1b8a7f6e5d4c3b2a19', errorCode: '', account: 'Acme Admin' });
   assert.equal(snapshot.redirectUri, 'https://api.wiro.ai/v1/UserAgentOAuth/FacebookCallback');
   assert.equal(snapshot.appKeysSaved, true);
   assert.equal(snapshot.tokenSaved, false);
 
   // Another admin's sign-in shows only that it is there.
   assert.deepEqual(parseOAuthStatus({ ...OAUTH_STATUS_BEFORE, flow: { mine: false, status: 'waiting', expiresat: NOW + 600 } }, null).flow,
-    { status: 'waiting', mine: false, errorCode: '', account: '' });
-  // A status this version does not know, or a code that is not Wiro's shape, is left out.
+    { status: 'waiting', mine: false, flowId: '', errorCode: '', account: '' });
+  assert.equal(parseOAuthStatus({ ...OAUTH_STATUS_BEFORE, flow: { mine: false, status: 'waiting', flowid: '4b1f0c7a9e2d4c1b8a7f6e5d4c3b2a19' } }, null).flow.flowId, '');
+  // A status this version does not know, or a code or id that is not Wiro's shape, is left out.
   assert.equal(parseOAuthStatus({ ...OAUTH_STATUS_BEFORE, flow: { mine: true, status: 'paused' } }, null).flow, null);
   assert.equal(parseOAuthStatus({ ...OAUTH_STATUS_BEFORE, flow: { mine: true, status: 'failed', errorcode: 'Bad <b>code</b>' } }, null).flow.errorCode, '');
+  for (const flowid of ['4B1F0C7A9E2D4C1B8A7F6E5D4C3B2A19', '4b1f0c7a', 'state=4b1f0c7a9e2d4c1b8a7f6e5d4c3b2a19', 42]) {
+    assert.equal(parseOAuthStatus({ ...OAUTH_STATUS_BEFORE, flow: { mine: true, status: 'candidates', flowid } }, null).flow.flowId, '', String(flowid));
+  }
 
   // An answer from before keeps reading as it did.
   const before = parseOAuthStatus(OAUTH_STATUS_BEFORE, null);
