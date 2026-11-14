@@ -1921,6 +1921,8 @@ export interface OAuthFlow {
   status: OAuthFlowStatus;
   /** Whether this connection's person started it. Wiro sends the account list and the details only to them. */
   mine: boolean;
+  /** Its id, for the person who started it, or empty. A later step names it so Wiro can tell it was not replaced. */
+  flowId: string;
   /** Why it failed, as Wiro names it, or empty. */
   errorCode: string;
   /** Who signed in, when the service says so, or empty. */
@@ -1942,6 +1944,7 @@ export interface OAuthStatusSnapshot {
   tokenSaved?: boolean;
 }
 
+const FLOW_ID = /^[a-f0-9]{32}$/;
 const FLOW_ERROR_CODE = /^[a-z0-9_]{1,80}$/;
 const FLOW_ACCOUNT_MAX = 120;
 
@@ -1949,10 +1952,13 @@ function parseOAuthFlow(value: unknown): OAuthFlow | null {
   if (!isPlainObject(value)) return null;
   const status = asString(value.status);
   if (!(OAUTH_FLOW_STATUSES as readonly string[]).includes(status ?? '')) return null;
+  const mine = value.mine === true;
+  const flowId = asString(value.flowid) ?? '';
   const errorCode = asString(value.errorcode)?.trim() ?? '';
   return {
     status: status as OAuthFlowStatus,
-    mine: value.mine === true,
+    mine,
+    flowId: mine && FLOW_ID.test(flowId) ? flowId : '',
     errorCode: FLOW_ERROR_CODE.test(errorCode) ? errorCode : '',
     account: oneLine(asString(value.account) ?? '').slice(0, FLOW_ACCOUNT_MAX),
   };
