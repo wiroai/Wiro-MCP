@@ -37,11 +37,14 @@ import {
   SETUP_LISTING_RULE,
   SETUP_REPLY_WINDOW_SECONDS,
   asksKeyAsReply,
+  connectCardMode,
   formatSetupChanges,
   isApprovableByReply,
+  isSignInNeedMode,
   setupResultActed,
   setupResultSchema,
   type SetupResult,
+  type SignInNeedMode,
 } from './agent-setup.js';
 import { createMediaContent, guessMimeType, isWiroHostedUrl, type MediaItem } from './media.js';
 import { DEFAULT_WAIT_SECONDS, defaultInterval, pollUntil, reportProgress, type ToolCallContext } from './poll.js';
@@ -903,12 +906,42 @@ function setupNextAction(target: AgentTarget, result: AgentTurnResult): NextActi
         + 'is "all"; otherwise the user applies them in the agent\'s chat on wiro.ai.',
     };
   }
-  const connector = open.find(change => change.kind === 'connect')?.connector;
+  const card = open.find(change => change.kind === 'connect');
+  const connector = card?.connector;
+  // A connector that an applied add brought keeps connecting the way the add said; a reply never connects it.
+  const mode = card ? connectCardMode(card, result.message.setupChanges ?? []) : undefined;
+  if (connector && isSignInNeedMode(mode)) return signInConnectStep(guid, connector, mode);
   return {
     tool: 'set_agent_credentials',
     arguments: { agent_guid: guid, ...(connector ? { credential: connector } : {}) },
     reason: 'The agent asks for a key or sign-in. This call only lists the connector\'s fields: ask the user for the '
       + 'value and save it with set_agent_credentials, never in a chat message.',
+  };
+}
+
+/**
+ * The first step for a connect card's connector that connects with a sign-in, the user's own app keys or a token:
+ * a sign-in starts with connect_agent_oauth; app keys and a token are saved first, so their fields come first.
+ */
+function signInConnectStep(guid: string, connector: string, mode: SignInNeedMode): NextAction {
+  const pageNote = ' The user can also connect it on the agent page. Never ask for keys, tokens or passwords in a '
+    + 'chat message.';
+  if (mode === 'signin') {
+    return {
+      tool: 'connect_agent_oauth',
+      arguments: { action: 'connect', agent_guid: guid, credential: connector },
+      reason: 'This connector connects with a sign-in, and a reply does not connect it. This call returns the sign-in '
+        + `link for the user to open in their own browser.${pageNote}`,
+    };
+  }
+  const what = mode === 'appkeys'
+    ? { how: 'the user\'s own app keys, then a sign-in', shows: 'the app key fields, whether they are saved and the redirect URI the app allows', saved: 'the keys' }
+    : { how: 'its token, which Wiro checks', shows: 'the token field and whether it is saved', saved: 'the token' };
+  return {
+    tool: 'set_agent_credentials',
+    arguments: { agent_guid: guid, credential: connector },
+    reason: `This connector connects with ${what.how}, and a reply does not connect it. This call only shows `
+      + `${what.shows}: save ${what.saved} with set_agent_credentials, then connect with connect_agent_oauth.${pageNote}`,
   };
 }
 
