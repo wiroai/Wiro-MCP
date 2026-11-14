@@ -1136,6 +1136,21 @@ function isEmptyValue(value: unknown): boolean {
   return false;
 }
 
+// An agent's detail shows a saved secret, such as a key or a token, as a row of dots: it reads as set, and it is
+// never the value. A value that is only such dots was copied from there, so it is never sent back.
+const SECRET_MASK = /^\u2022+$/;
+
+/** Whether a value is that mask, or holds it as a list item or an entry's field. */
+export function holdsSecretMask(value: unknown): boolean {
+  if (typeof value === 'string') return SECRET_MASK.test(value.trim());
+  if (Array.isArray(value)) return value.some(holdsSecretMask);
+  if (isPlainObject(value)) return Object.values(value).some(holdsSecretMask);
+  return false;
+}
+
+/** What a value that holds the mask holds, for the sentence that refuses it. */
+export const SECRET_MASK_TEXT = 'the dots Wiro shows in place of a saved secret, not the secret itself';
+
 // Short values (select options, flags) are not secrets and would garble messages.
 function collectStrings(value: unknown, into: string[]): void {
   if (typeof value === 'string') {
@@ -1333,6 +1348,10 @@ export function prepareCredentialWrite(
     }
     if (CONNECTION_STATE_FIELDS.has(fieldName)) {
       prepared.errors.push(`${meta.title}: "${fieldName}" is filled by the connection itself. Use connect_agent_oauth.`);
+      continue;
+    }
+    if (holdsSecretMask(input.value)) {
+      prepared.errors.push(`${meta.title}: "${fieldName}" holds ${SECRET_MASK_TEXT}. Leave it out to keep the saved value, or send the new value.`);
       continue;
     }
 
