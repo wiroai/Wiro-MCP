@@ -131,8 +131,15 @@ const DONE_STATES = new Set<ConnectionState>(['connected', 'pick_accounts', 'pic
 // saves only accounts from that list. These codes say the list is gone or someone else's.
 const FLOW_GONE_CODES = new Set(['flow_expired', 'flow_other_person', 'flow_replaced']);
 
+// A sign-in still open in the browser has no list yet. A new connect would replace it, and that sign-in would then
+// save nothing, so the user finishes it instead.
+const FLOW_WAITING_HINT = 'The sign-in is still open: ask the user to finish it in the browser, then call select_accounts '
+  + 'again (connect_agent_oauth status with wait_seconds waits until it is done). Do not start a new connect, which '
+  + 'would replace the open sign-in.';
+
 function oauthHint(message: string, meta: CredentialMeta, code?: string): string | undefined {
   if (code === 'not_listed') return 'Save only accounts from the list connect_agent_oauth status gave after the sign-in.';
+  if (code === 'flow_waiting') return FLOW_WAITING_HINT;
   if (code && FLOW_GONE_CODES.has(code)) return 'Connect again: the list is kept 15 minutes and only for the person who signed in.';
   if (code === 'flow_failed') return 'Connect again with action connect.';
   if (code === 'next_expired') return 'Call select_accounts again; it lists the items afresh before saving.';

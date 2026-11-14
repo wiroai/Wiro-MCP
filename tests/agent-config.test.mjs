@@ -3081,6 +3081,35 @@ test('connect_agent_oauth saves accounts by id and says why Wiro refuses ones no
   });
 });
 
+// A sign-in still open in the browser has no account list yet. A new connect would replace it, so the user finishes
+// it and the choice is saved after that.
+test('connect_agent_oauth says a sign-in still open is finished in the browser, never replaced by a new connect', async () => {
+  const waiting = { result: false, errorcode: 'flow_waiting', errors: [{ code: 0, message: 'The sign-in is not finished yet. Finish it, then choose the accounts.' }] };
+  const expected = '## Error\n\nThe sign-in is not finished yet. Finish it, then choose the accounts.\n\nThe sign-in is still open: ask the '
+    + 'user to finish it in the browser, then call select_accounts again (connect_agent_oauth status with wait_seconds '
+    + 'waits until it is done). Do not start a new connect, which would replace the open sign-in.';
+  const flow = { flowid: '4b1f0c7a9e2d4c1b8a7f6e5d4c3b2a19', mine: true, mode: 'own', status: 'waiting', account: '', errorcode: '', errordetail: '', restart: 'none', expiresat: NOW + 600 };
+  // Saving the accounts, and listing the extra step for them before anything is saved.
+  const save = fakeClient({ '/Credentials/Detail': credentialDetail, '/UserAgentOAuth/SetPickerAccounts': waiting });
+  const list = fakeClient({
+    '/Credentials/Detail': credentialDetail,
+    '/UserAgentOAuth/OAuthStatus': { ...OAUTH_STATUS_BEFORE, flow },
+    '/UserAgentOAuth/DiscoverPickerItems': waiting,
+  });
+  for (const [fake, credential] of [[save, 'facebook-pages'], [list, 'meta-ads']]) {
+    await withClient(fake, async client => {
+      const result = await client.callTool({
+        name: 'connect_agent_oauth',
+        arguments: { action: 'select_accounts', agent_guid: AGENT, credential, accounts: [{ id: '1234', name: 'Acme' }] },
+      });
+      assert.equal(result.isError, true);
+      assert.equal(text(result), expected, credential);
+      assert.doesNotMatch(text(result), /connect again/i);
+    });
+  }
+  assert.equal(list.paths().includes('/UserAgentOAuth/SetPickerAccounts'), false);
+});
+
 test('connect_agent_oauth names one saved account in the singular', async () => {
   const fake = fakeClient({
     '/Credentials/Detail': credentialDetail,
