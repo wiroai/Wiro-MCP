@@ -72,9 +72,15 @@ const MAX_NEEDS = 3;
 // How a connector an add brings is connected: its key, a sign-in with Wiro's app, the user's own app keys and
 // then a sign-in, a token that Wiro checks, or a setup on the agent page (files, service accounts, a Wiro project).
 export const SETUP_NEED_MODES = ['key', 'signin', 'appkeys', 'token', 'page'] as const;
-type SetupNeedMode = typeof SETUP_NEED_MODES[number];
+export type SetupNeedMode = typeof SETUP_NEED_MODES[number];
 // The modes whose connect card a reply never connects.
 const SIGN_IN_NEED_MODES: readonly SetupNeedMode[] = ['signin', 'appkeys', 'token'];
+export type SignInNeedMode = 'signin' | 'appkeys' | 'token';
+
+/** Whether a connector connects with a sign-in, the user's own app keys or a token, which a reply never does. */
+export function isSignInNeedMode(mode: SetupNeedMode | undefined): mode is SignInNeedMode {
+  return mode !== undefined && SIGN_IN_NEED_MODES.includes(mode);
+}
 
 export const CHAT_SETUP_MODES = ['off', 'webchat', 'all'] as const;
 export type ChatSetupMode = typeof CHAT_SETUP_MODES[number];
@@ -463,14 +469,49 @@ function pairedAdd(change: SetupChange, pending: readonly SetupChange[]): { numb
   if (change.kind !== 'connect' || !change.connector) return undefined;
   for (const [index, other] of pending.entries()) {
     if (other.kind !== 'add') continue;
-    const need = other.needs?.find(candidate => candidate.connector === change.connector
-      && (candidate.mode === 'key' || SIGN_IN_NEED_MODES.includes(candidate.mode as SetupNeedMode)));
+    const need = connectNeed(other, change.connector);
     if (need?.mode) return { number: index + 1, mode: need.mode };
   }
   return undefined;
 }
 
-function pendingChangeLines(change: SetupChange, index: number, nowMs: number, pending: readonly SetupChange[]): string[] {
+/** The need of an add for this connector when a connect card connects it: by key, a sign-in, app keys or a token. */
+function connectNeed(add: SetupChange, connector: string): SetupNeed | undefined {
+  return add.needs?.find(candidate => candidate.connector === connector
+    && (candidate.mode === 'key' || isSignInNeedMode(candidate.mode)));
+}
+
+/**
+ * The add on the same reply that brought this connect card's connector and is applied already, with how the
+ * connector connects. Wiro keeps what the add needed on it, and its connect card waits until the connector is
+ * connected.
+ */
+function appliedPairedAdd(change: SetupChange, changes: readonly SetupChange[]): { add: SetupChange; mode: SetupNeedMode } | undefined {
+  if (change.kind !== 'connect' || !change.connector) return undefined;
+  for (const other of changes) {
+    if (other.kind !== 'add' || other.status !== 'applied') continue;
+    const need = connectNeed(other, change.connector);
+    if (need?.mode) return { add: other, mode: need.mode };
+  }
+  return undefined;
+}
+
+/**
+ * How a connect card's connector connects, as the add on its reply that brings it says, whether that add is still
+ * pending or applied already. Undefined when no add on the reply brings it.
+ */
+export function connectCardMode(change: SetupChange, changes: readonly SetupChange[]): SetupNeedMode | undefined {
+  const pending = changes.filter(other => other.status === 'pending');
+  return pairedAdd(change, pending)?.mode ?? appliedPairedAdd(change, changes)?.mode;
+}
+
+function pendingChangeLines(
+  change: SetupChange,
+  index: number,
+  nowMs: number,
+  pending: readonly SetupChange[],
+  changes: readonly SetupChange[],
+): string[] {
   const lines = [`#### Proposed change ${index + 1}: ${setupChangeHeadline(change)}`, ''];
   if (change.title) lines.push(`- Title: ${quotedSpan(change.title)}`);
   if (change.cron) {
@@ -478,12 +519,17 @@ function pendingChangeLines(change: SetupChange, index: number, nowMs: number, p
       + 'agent\'s time zone)');
   }
   const paired = pairedAdd(change, pending);
+  const applied = paired ? undefined : appliedPairedAdd(change, changes);
   if (paired?.mode === 'key') {
     lines.push(`- Connects what proposed change ${paired.number} adds. Ask the user for the key together with their yes to `
       + `change ${paired.number}. Once change ${paired.number} is applied, save the key with set_agent_credentials at once, `
       + 'never in a chat message: one restart then loads both.');
   } else if (paired) {
     lines.push(`- Connects what proposed change ${paired.number} adds, once it is applied: ${NEED_HOW[paired.mode]}. `
+      + 'A reply does not connect it.');
+  } else if (applied && isSignInNeedMode(applied.mode)) {
+    // The add is applied and its connector still waits: it connects the way the add said.
+    lines.push(`- Connects what the applied change, ${setupChangeHeadline(applied.add)}, added: ${NEED_HOW[applied.mode]}. `
       + 'A reply does not connect it.');
   } else if (change.kind === 'connect') {
     lines.push('- The user provides the key or sign-in for it. A key is saved with set_agent_credentials, never sent '
@@ -547,7 +593,7 @@ export function formatSetupChanges(changes: readonly SetupChange[], nowMs = Date
   const lines = ['', '### Setup changes proposed in this reply', ''];
   const pending = changes.filter(change => change.status === 'pending');
   const sections = [
-    ...pending.map((change, index) => pendingChangeLines(change, index, nowMs, pending)),
+    ...pending.map((change, index) => pendingChangeLines(change, index, nowMs, pending, changes)),
     ...changes.filter(showsBeforeAndAfter).map(appliedChangeLines),
   ];
   sections.forEach((section, index) => {

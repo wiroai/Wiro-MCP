@@ -3983,6 +3983,54 @@ test('get_agent_message says how an add\'s app keys, token or sign-in connector 
   assert.match(textOf(alone), /- The user provides the key or sign-in for it\. A key is saved with set_agent_credentials, never sent in a chat message\./);
 });
 
+// Once the add is applied, its connect card still waits until the connector is connected. The add keeps what it
+// needed, so the card keeps saying how that connector connects, and the next step starts that connection.
+test('get_agent_message keeps saying how an applied add\'s sign-in connector connects, and starts that connection', async () => {
+  const read = (connector, mode, status = 'applied') => readSetupReply([
+    setupBlock({ id: 'zzzzzzzzzz50', kind: 'add', key: 'int-youtube-manage', needs: [{ connector, title: 'The service', mode }], status, actedat: Math.floor(Date.now() / 1000) - 30 }, 0),
+    setupBlock({ id: 'zzzzzzzzzz51', kind: 'connect', connector }, 1),
+  ]);
+  const lineFor = how => `\n- Connects what the applied change, Add Connector \`int-youtube-manage\`, added: ${how}. A reply does not connect it.\n`;
+  const generic = /The user provides the key or sign-in|A key is saved with set_agent_credentials|asks for a key/;
+
+  const appKeys = await read('youtube', 'appkeys');
+  const appKeysText = textOf(appKeys);
+  assert.ok(appKeysText.includes(`#### Proposed change 1: Connect \`youtube\`\n${lineFor('the user\'s own app keys, then a sign-in, on the agent page or with set_agent_credentials and then connect_agent_oauth, never in a chat message')}`), appKeysText);
+  assert.match(appKeysText, /\n- Applied: Add Connector `int-youtube-manage` \(/);
+  assert.doesNotMatch(appKeysText, generic);
+  // The app keys come first: describe shows their fields, whether they are saved and the redirect URI.
+  const { nextAction } = appKeys.structuredContent;
+  assert.equal(nextAction.tool, 'set_agent_credentials');
+  assert.deepEqual(nextAction.arguments, { agent_guid: 'agent-guid-1', credential: 'youtube' });
+  assert.equal(nextAction.reason, 'This connector connects with the user\'s own app keys, then a sign-in, and a reply does not '
+    + 'connect it. This call only shows the app key fields, whether they are saved and the redirect URI the app allows: save '
+    + 'the keys with set_agent_credentials, then connect with connect_agent_oauth. The user can also connect it on the agent '
+    + 'page. Never ask for keys, tokens or passwords in a chat message.');
+
+  const token = await read('facebook-pages', 'token');
+  assert.ok(textOf(token).includes(lineFor('its token, which Wiro checks, on the agent page or with set_agent_credentials and then connect_agent_oauth, never in a chat message')), textOf(token));
+  assert.doesNotMatch(textOf(token), generic);
+  assert.deepEqual(token.structuredContent.nextAction.arguments, { agent_guid: 'agent-guid-1', credential: 'facebook-pages' });
+  assert.match(token.structuredContent.nextAction.reason, /^This connector connects with its token, which Wiro checks, and a reply does not connect it\. This call only shows the token field and whether it is saved: save the token with set_agent_credentials, then connect with connect_agent_oauth\./);
+
+  // A sign-in with Wiro's own app has nothing to save first: connect gives the link.
+  const signIn = await read('twitter', 'signin');
+  assert.ok(textOf(signIn).includes(lineFor('sign in on the agent page, or with connect_agent_oauth')), textOf(signIn));
+  assert.doesNotMatch(textOf(signIn), generic);
+  assert.equal(signIn.structuredContent.nextAction.tool, 'connect_agent_oauth');
+  assert.deepEqual(signIn.structuredContent.nextAction.arguments, { action: 'connect', agent_guid: 'agent-guid-1', credential: 'twitter' });
+  assert.match(signIn.structuredContent.nextAction.reason, /^This connector connects with a sign-in, and a reply does not connect it\. This call returns the sign-in link for the user to open in their own browser\./);
+
+  // A key connector of an applied add is saved with set_agent_credentials, as before; an add that did not apply
+  // brought nothing to connect.
+  for (const [connector, mode, status] of [['wordpress', 'key', 'applied'], ['youtube', 'appkeys', 'failed'], ['youtube', 'appkeys', 'dismissed']]) {
+    const other = await read(connector, mode, status);
+    assert.match(textOf(other), /- The user provides the key or sign-in for it\. A key is saved with set_agent_credentials, never sent in a chat message\./, `${mode} ${status}`);
+    assert.equal(other.structuredContent.nextAction.tool, 'set_agent_credentials');
+    assert.match(other.structuredContent.nextAction.reason, /^The agent asks for a key or sign-in\./);
+  }
+});
+
 test('get_agent_message shows a remove with what it also turns off, the tasks that pause, and that a Connector keeps its key', async () => {
   const result = await readSetupReply([
     setupBlock(REMOVE_CARD, 0),
