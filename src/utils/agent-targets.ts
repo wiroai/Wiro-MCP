@@ -309,8 +309,8 @@ const DEPLOYED_STATUS_HELP: Record<number, string> = {
   6: 'Your agent\'s setup is incomplete. get_my_agent lists the missing credentials or connections; '
     + 'complete them with set_agent_credentials, connect_agent_oauth or, for a Wiro project, bind_agent_project, then start the agent. If get_my_agent '
     + 'shows no active plan, pay for one with manage_agent_billing (action subscribe), which returns the price first. '
-    + 'On a team agent, a team admin or the person who deployed it saves credentials and pays for the plan, '
-    + 'and only the person who deployed it can use connect_agent_oauth.',
+    + 'On a team agent, a team admin or the person who deployed it saves credentials, connects accounts with '
+    + 'connect_agent_oauth and pays for the plan.',
 };
 
 // Status 1 is also an agent that stops only to start again, to load a change (a setup change, a key, a skill).
