@@ -1361,6 +1361,31 @@ test('deploy_agent explains a short wallet and a lost response', async () => {
   });
 });
 
+// Deploy refuses a channel field that Wiro fills before it creates or charges anything. Wiro's sentence names no
+// brand now ("is managed by the platform"); it said "is managed by Wiro" before.
+test('deploy_agent reads a channel field Wiro fills as refused before the charge, in either wording', async () => {
+  for (const message of ['Telegram Bot Token is managed by the platform', 'Telegram Bot Token is managed by Wiro']) {
+    const fake = fakeClient({
+      '/Agent/Detail': { result: true, errors: [], agents: [templateRow()] },
+      '/UserAgent/Deploy': { result: false, errors: [{ code: 0, message }] },
+    });
+    await withClient(fake, async client => {
+      const result = await call(client, 'deploy_agent', {
+        template: 'instagram-manager',
+        tier: 'starter',
+        credentials: { telegram: { bottoken: '000000:TEST-BOT-TOKEN', allowedusers: ['123456789'] } },
+        confirm_charge_usd: 5,
+        confirm: true,
+      });
+      assert.equal(result.isError, true);
+      assert.equal(textOf(result), `## Error\n\n${message}`);
+      assert.doesNotMatch(textOf(result), /may have been created|list_my_agents/);
+      assert.equal(fake.called('/UserAgent/Deploy').length, 1);
+      assertNoSecrets(result);
+    });
+  }
+});
+
 // ---------------------------------------------------------------------------
 // list_my_agents and get_my_agent
 // ---------------------------------------------------------------------------
