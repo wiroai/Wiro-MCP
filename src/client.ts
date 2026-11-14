@@ -42,7 +42,8 @@ export type {
   ToolParameterItem,
 } from './types.js';
 
-const DEFAULT_BASE_URL = 'https://api.wiro.ai/v1';
+/** The public Wiro API, where a client sends its requests unless it is given another base URL. */
+export const DEFAULT_BASE_URL = 'https://api.wiro.ai/v1';
 const DEFAULT_TIMEOUT = 120000;
 const FAST_POLL_INTERVAL = 2000;
 const NORMAL_POLL_INTERVAL = 5000;
@@ -281,6 +282,11 @@ export class WiroClient {
     this.requestHeaders = options.requestHeaders;
     this.missingSecretHint = options.missingSecretHint ?? DEFAULT_MISSING_SECRET_HINT;
     this.authType = apiSecret ? 'signature' : 'apikey-only';
+  }
+
+  /** The Wiro API base URL this client sends its requests to. */
+  get apiBaseUrl(): string {
+    return this.baseUrl;
   }
 
   /** A short, non-reversible id of this client's API key, for per-caller bookkeeping. */

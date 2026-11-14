@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import type { WiroClient } from '../client.js';
+import { DEFAULT_BASE_URL, type WiroClient } from '../client.js';
 import {
   AGENT_NOT_FOUND_TEXT,
   ApiResultError,
@@ -30,8 +30,6 @@ import {
 
 export const DEFAULT_CRON_INTERVAL = '0 10 * * 1';
 export const OAUTH_LINK_TTL_SECONDS = 900;
-const DASHBOARD_AGENT_URL = 'https://wiro.ai/panel/agents/';
-const OAUTH_CALLBACK_BASE = 'https://api.wiro.ai/v1';
 const REGISTRY_TTL_MS = 5 * 60_000;
 
 type Row = Record<string, unknown>;
@@ -70,10 +68,44 @@ export function isAgentRunning(status: number | null): boolean {
   return status === 3 || status === 4;
 }
 
+/** The API base URL a client sends its requests to, without a trailing slash; the public API for one that does not say. */
+export function apiBaseUrlOf(client: WiroClient): string {
+  const base = (client as { apiBaseUrl?: unknown }).apiBaseUrl;
+  return typeof base === 'string' && base.trim() !== '' ? base.trim().replace(/\/+$/, '') : DEFAULT_BASE_URL;
+}
+
+/**
+ * The base URL when users and sign-in providers can reach it: https on a domain name. A server that calls the API
+ * on its own machine or network (plain http, an IP address or a local name) sends people to the public addresses.
+ */
+function reachableApiUrl(apiBase: string): URL | null {
+  let url: URL;
+  try {
+    url = new URL(apiBase.trim());
+  } catch {
+    return null;
+  }
+  const host = url.hostname.replace(/\.$/, '');
+  const local = host.startsWith('[') || /^[\d.]+$/.test(host) || !host.includes('.') || host.endsWith('.localhost');
+  return url.protocol === 'https:' && !url.username && !url.password && !local ? url : null;
+}
+
+/**
+ * Where the sign-in callbacks and the dashboard's agent pages are for an API base URL: the callbacks under the base
+ * URL itself, the dashboard on the API's host without a leading "api." label. The public API gives the public ones.
+ */
+function wiroAddresses(apiBase: string): { callbackBase: string; dashboardAgents: string } {
+  const url = reachableApiUrl(apiBase) ?? new URL(DEFAULT_BASE_URL);
+  return {
+    callbackBase: `${url.origin}${url.pathname.replace(/\/+$/, '')}`,
+    dashboardAgents: `https://${url.host.replace(/^api\./, '')}/panel/agents/`,
+  };
+}
+
 /** The agent's page in the Wiro dashboard, in the form the dashboard itself uses as an OAuth return address. */
-export function dashboardAgentUrl(agentGuid: string): string {
+export function dashboardAgentUrl(agentGuid: string, apiBase: string = DEFAULT_BASE_URL): string {
   const guid = encodeURIComponent(agentGuid);
-  return `${DASHBOARD_AGENT_URL}${guid}?id=${guid}`;
+  return `${wiroAddresses(apiBase).dashboardAgents}${guid}?id=${guid}`;
 }
 
 export function restartNote(status: number | null, what = 'change'): string {
@@ -1649,10 +1681,11 @@ export function channelStatuses(row: Row): ChannelStatus[] {
 
 /**
  * Wiro sends the browser to this address after sign-in with the connected
- * account names appended, so only the agent's own dashboard page or an
- * address on the user's own machine is accepted.
+ * account names appended, so only the agent's own dashboard page (for the API
+ * this server talks to, as dashboardAgentUrl gives it) or an address on the
+ * user's own machine is accepted.
  */
-export function isAllowedRedirectUrl(url: string, agentGuid: string): boolean {
+export function isAllowedRedirectUrl(url: string, agentGuid: string, apiBase: string = DEFAULT_BASE_URL): boolean {
   let parsed: URL;
   try {
     parsed = new URL(url.trim());
@@ -1661,7 +1694,7 @@ export function isAllowedRedirectUrl(url: string, agentGuid: string): boolean {
   }
   if (parsed.username || parsed.password) return false;
   if (parsed.protocol === 'http:') return parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1';
-  const dashboard = new URL(dashboardAgentUrl(agentGuid));
+  const dashboard = new URL(dashboardAgentUrl(agentGuid, apiBase));
   return parsed.protocol === 'https:'
     && parsed.host === dashboard.host
     && parsed.pathname.replace(/\/+$/, '') === dashboard.pathname
@@ -1671,12 +1704,13 @@ export function isAllowedRedirectUrl(url: string, agentGuid: string): boolean {
 
 /**
  * The redirect URI a customer registers in their own OAuth app. Wiro's status gives the one for the host this
- * server talks to; without it, or when it is not an address for this service's callback, the public host's is used.
+ * server talks to; without it, or when it is not an address for this service's callback, the callback under the
+ * API base URL is used (wiroAddresses).
  */
-export function ownAppRedirectUri(meta: CredentialMeta, fromStatus?: string): string | undefined {
+export function ownAppRedirectUri(meta: CredentialMeta, fromStatus?: string, apiBase: string = DEFAULT_BASE_URL): string | undefined {
   const callbackPath = meta.oauth?.callbackPath;
   if (!callbackPath) return undefined;
-  return fromStatus && isCallbackAddress(fromStatus, callbackPath) ? fromStatus : `${OAUTH_CALLBACK_BASE}${callbackPath}`;
+  return fromStatus && isCallbackAddress(fromStatus, callbackPath) ? fromStatus : `${wiroAddresses(apiBase).callbackBase}${callbackPath}`;
 }
 
 function isCallbackAddress(value: string, callbackPath: string): boolean {
@@ -1730,8 +1764,16 @@ function fieldsForMode(meta: CredentialMeta, mode: string): CredentialField[] {
     .filter(field => isWritableField(field));
 }
 
-/** What each connection mode needs, with which of those fields are already saved. redirectUri is the one Wiro's status gave. */
-export function connectionModeRequirements(meta: CredentialMeta, group: Row | null, redirectUri?: string): ModeRequirement[] {
+/** The redirect URI Wiro's connection status gave, and the API base URL this server talks to. */
+export interface ModeContext {
+  /** The redirect URI to register in the user's own app, as Wiro's status gives it. */
+  redirectUri?: string;
+  /** For the redirect URI when Wiro's status gives none. */
+  apiBase?: string;
+}
+
+/** What each connection mode needs, with which of those fields are already saved. */
+export function connectionModeRequirements(meta: CredentialMeta, group: Row | null, context: ModeContext = {}): ModeRequirement[] {
   const modes = meta.connectionModes.length > 0 ? meta.connectionModes : ['wiro'];
   return modes.map(mode => {
     const fields = fieldsForMode(meta, mode).map(field => {
@@ -1773,7 +1815,7 @@ export function connectionModeRequirements(meta: CredentialMeta, group: Row | nu
       };
     }
     if (mode === 'own') {
-      const redirect = ownAppRedirectUri(meta, redirectUri);
+      const redirect = ownAppRedirectUri(meta, context.redirectUri, context.apiBase);
       const requirements = meta.oauth?.connectRequirements ?? [];
       return {
         mode,

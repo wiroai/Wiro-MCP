@@ -1922,6 +1922,50 @@ test('connect_agent_oauth refuses a return address outside the dashboard and the
   });
 });
 
+// The sign-in returns to the dashboard of the API this server talks to, and the user's own app registers that
+// API's callback: the callbacks are under the API base URL, the dashboard on its host without a leading "api.".
+test('connect_agent_oauth and describe use the addresses of the API this server talks to', async () => {
+  const routes = () => ({
+    '/Credentials/Detail': credentialDetail,
+    '/Skills/List': connectSkillList,
+    '/UserAgent/Detail': detail({ skills: skillsOn('int-hubspot-crm', 'int-googleads-manage') }),
+    // A status from an older Wiro API gives no redirect URI.
+    '/UserAgentOAuth/OAuthStatus': OAUTH_STATUS_BEFORE,
+    '/UserAgentOAuth/OAuthConnect': { result: true, authorizeUrl: 'https://app.hubspot.com/oauth/authorize?state=xyz' },
+  });
+  const staging = Object.assign(fakeClient(routes()), { apiBaseUrl: 'https://api.staging.example.test/v1/' });
+  const dashboard = `https://staging.example.test/panel/agents/${AGENT}?id=${AGENT}`;
+  await withClient(staging, async client => {
+    const result = await client.callTool({ name: 'connect_agent_oauth', arguments: { agent_guid: AGENT, credential: 'hubspot' } });
+    assert.equal(result.structuredContent.state, 'authorize_in_browser', text(result));
+    assert.equal(staging.called('/UserAgentOAuth/OAuthConnect')[0].body.redirecturl, dashboard);
+    assert.equal(result.structuredContent.redirectUrl, dashboard);
+
+    // That page is the return address it accepts, besides the user's own machine.
+    const page = await client.callTool({ name: 'connect_agent_oauth', arguments: { agent_guid: AGENT, credential: 'hubspot', redirect_url: `https://staging.example.test/panel/agents/${AGENT}` } });
+    assert.notEqual(page.isError, true, text(page));
+    const other = await client.callTool({ name: 'connect_agent_oauth', arguments: { agent_guid: AGENT, credential: 'hubspot', redirect_url: `https://wiro.ai/panel/agents/${AGENT}?id=${AGENT}` } });
+    assert.equal(other.isError, true);
+    assert.ok(text(other).includes(`the agent's page in the Wiro dashboard (${dashboard})`), text(other));
+
+    const described = await client.callTool({ name: 'set_agent_credentials', arguments: { agent_guid: AGENT, credential: 'google-ads' } });
+    assert.equal(described.structuredContent.credential.ownAppRedirectUri, 'https://api.staging.example.test/v1/UserAgentOAuth/GAdsCallback');
+    assert.doesNotMatch(text(described), /api\.wiro\.ai/);
+  });
+
+  // The public API gives today's addresses. So does an API this server reaches on its own machine or network,
+  // which users and sign-in providers cannot reach.
+  for (const apiBaseUrl of [undefined, 'https://api.wiro.ai/v1', 'http://localhost:8080/v1', 'http://192.0.2.10:8080/v1', 'https://127.0.0.1/v1', 'https://api-internal/v1']) {
+    const fake = Object.assign(fakeClient(routes()), apiBaseUrl ? { apiBaseUrl } : {});
+    await withClient(fake, async client => {
+      await client.callTool({ name: 'connect_agent_oauth', arguments: { agent_guid: AGENT, credential: 'hubspot' } });
+      assert.equal(fake.called('/UserAgentOAuth/OAuthConnect')[0].body.redirecturl, `https://wiro.ai/panel/agents/${AGENT}?id=${AGENT}`, String(apiBaseUrl));
+      const described = await client.callTool({ name: 'set_agent_credentials', arguments: { agent_guid: AGENT, credential: 'google-ads' } });
+      assert.equal(described.structuredContent.credential.ownAppRedirectUri, 'https://api.wiro.ai/v1/UserAgentOAuth/GAdsCallback', String(apiBaseUrl));
+    });
+  }
+});
+
 test('connect_agent_oauth explains what to save before a provider can connect', async () => {
   const fake = fakeClient({
     '/Credentials/Detail': credentialDetail,
@@ -4467,6 +4511,13 @@ test('sign-in return addresses are limited to the agent page and the local machi
   assert.equal(isAllowedRedirectUrl('http://wiro.ai/panel/agents/x', AGENT), false);
   assert.equal(isAllowedRedirectUrl('https://user@wiro.ai/panel/agents/ua-0001', AGENT), false);
   assert.equal(isAllowedRedirectUrl('javascript:alert(1)', AGENT), false);
+  // On another API, the agent's page in that API's dashboard takes the public one's place.
+  const staging = 'https://api.staging.example.test/v1';
+  assert.equal(isAllowedRedirectUrl(`https://staging.example.test/panel/agents/${AGENT}?id=${AGENT}`, AGENT, staging), true);
+  assert.equal(isAllowedRedirectUrl(`https://wiro.ai/panel/agents/${AGENT}?id=${AGENT}`, AGENT, staging), false);
+  assert.equal(isAllowedRedirectUrl(`https://api.staging.example.test/panel/agents/${AGENT}`, AGENT, staging), false);
+  assert.equal(isAllowedRedirectUrl('http://localhost:5173/callback', AGENT, staging), true);
+  assert.equal(isAllowedRedirectUrl(`https://wiro.ai/panel/agents/${AGENT}`, AGENT, 'http://localhost:8080/v1'), true);
 });
 
 test('base64 values and picker payloads match the API', () => {
