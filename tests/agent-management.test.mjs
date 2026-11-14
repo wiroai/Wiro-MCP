@@ -298,7 +298,8 @@ test('update_agent and the playbook say which changes restart a running agent', 
 
   const line = PLAYBOOKS.agents.split('\n').find(item => item.startsWith('- Some changes restart'));
   assert.match(line, /`update_agent` with a new title or a setting that changes \(time zone, session sharing, models, commands, setup from chat turned on or off\)/);
-  assert.match(line, /These leave it running: a new description, cover or categories with `update_agent`, setup from chat moved between "all" and "webchat", a new plan, plan changes, credit packs and renewals, and a save that changes nothing\./);
+  // Wiro restarts nothing for a sign-in's app keys or token before it connects; the connection restarts the agent once.
+  assert.match(line, /These leave it running: a new description, cover or categories with `update_agent`, setup from chat moved between "all" and "webchat", a new plan, plan changes, credit packs and renewals, app keys or a token saved for a sign-in that is not connected yet \(the connection then restarts it once\), and a save that changes nothing\./);
   assert.match(line, /`apply_agent_skills` when a skill turns on or off/);
   assert.match(line, /and the same changes approved in the agent's chat\./);
   assert.match(line, /A text or description edit of a custom skill or scheduled task usually reaches a running agent without a restart, though an edit of `cs-approval-policy` restarts it; the result says which happened\./);

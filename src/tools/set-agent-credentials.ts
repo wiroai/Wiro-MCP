@@ -268,7 +268,9 @@ export function registerSetAgentCredentials(server: McpServer, client: WiroClien
         + 'Wiro dashboard). Other file fields take a public URL and the file is uploaded. '
         + 'Values are never echoed back. A running agent restarts to load '
         + 'values that change, and one still stopping or queued for a restart, such as after a setup change approved '
-        + 'in its chat, loads them with that restart; a save that changes nothing leaves it running. A key the agent '
+        + 'in its chat, loads them with that restart; a save that changes nothing leaves it running. Fields saved for a '
+        + 'sign-in integration that is not connected yet, such as its app keys or token, leave it running too: it '
+        + 'restarts once, when connect_agent_oauth completes the connection. A key the agent '
         + 'or Wiro asks for in its chat is saved here, never sent in a message. Channels such as Telegram, Slack and Discord turn on by themselves once all '
         + 'their required fields are set, and turn off when one is cleared. Saving a credential turns on '
         + 'the scheduled tasks that need it, and the result names any that stay paused until a skill they need is on; '
@@ -410,7 +412,11 @@ export function registerSetAgentCredentials(server: McpServer, client: WiroClien
         // The credentials the setup still waits for, named as get_my_agent names them.
         const setup = row ? toAgentDetail(row) : null;
         const stillMissing = setup?.setupRequired ? setup.missingCredentials : [];
-        notes.unshift(...afterWriteNotes(status, stillMissing));
+        // Wiro does not restart an agent for fields of sign-ins that read not connected before and after the
+        // save, such as app keys or a token saved before the sign-in or token check: the connection restarts it.
+        const awaitsConnection = keys.every(key => !!metas.get(key)?.oauth
+          && statuses.find(entry => entry.key === key)?.connected === false);
+        notes.unshift(...afterWriteNotes(status, stillMissing, { awaitsConnection }));
 
         // Connect is offered only once the mode it uses has every field saved, as
         // describe does; the agent read back after the write says which are.
