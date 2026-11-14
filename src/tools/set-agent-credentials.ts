@@ -26,11 +26,14 @@ import {
   isWritableField,
   keyList,
   loadCredentialMeta,
+  modeContext,
   ownAppRedirectUri,
   pausedSkillTitles,
   prepareCredentialWrite,
+  readOAuthStatus,
   readUserAgent,
   redactSecrets,
+  savedForModesText,
   unusedCredentialNote,
   uploadFileName,
   usableConnectionModes,
@@ -513,8 +516,14 @@ async function describeCredential(
   const status = row ? credentialStatus(row, key, meta) : null;
   const kind = credentialKind(meta);
   const apiBase = apiBaseUrlOf(client);
-  const modes = meta.oauth ? connectionModeRequirements(meta, group, { apiBase }) : undefined;
-  const redirectUri = meta.oauth && meta.connectionModes.includes('own') ? ownAppRedirectUri(meta, undefined, apiBase) : undefined;
+  // App keys read as empty in the agent's detail even once saved. Wiro's status says whether they and the token are
+  // saved, and gives the redirect URI for the host this server talks to; without it, describe reads as before.
+  const oauthStatus = meta.oauth && row
+    ? await readOAuthStatus(client, agentGuid, key, meta.oauth.picker, signal).catch(() => null)
+    : null;
+  const context = modeContext(oauthStatus, apiBase);
+  const modes = meta.oauth ? connectionModeRequirements(meta, group, context) : undefined;
+  const redirectUri = meta.oauth && meta.connectionModes.includes('own') ? ownAppRedirectUri(meta, oauthStatus?.redirectUri, apiBase) : undefined;
   const fields = meta.fields.map(describeField);
 
   if (row && await isPlainTeamMember(client, row, signal)) {
@@ -531,6 +540,8 @@ async function describeCredential(
   if (usableModes.length > 0) {
     notes.push(`To choose how it connects, set field authmethod to one of: ${usableModes.join(', ')}.`);
   }
+  const savedForModes = meta.oauth ? savedForModesText(meta, context) : '';
+  if (savedForModes) notes.push(savedForModes);
   if (key === WIRO_PROJECT_CREDENTIAL) notes.push(WIRO_PROJECT_NOTE);
 
   const unusedNote = row && meta.oauth && !status?.connected

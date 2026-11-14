@@ -31,6 +31,7 @@ import {
   isFilledValue,
   loadCredentialMeta,
   loadSkillRegistry,
+  modeContext,
   ownAppRedirectUri,
   ownCandidates,
   ownFailedFlow,
@@ -39,7 +40,9 @@ import {
   pickedAccountIds,
   readOAuthStatus,
   readUserAgent,
+  savedForModesText,
   skillTitles,
+  statusRedirectUri,
   toAccountRefs,
   turnOnSkillText,
   unusedCredential,
@@ -110,6 +113,10 @@ const outputSchema = {
     note: z.string(),
   })).optional(),
   ownAppRedirectUri: z.string().optional(),
+  appKeysSaved: z.boolean().optional()
+    .describe('status: whether the keys of the user\'s own app (mode own) are saved, as Wiro says. They are never shown.'),
+  tokenSaved: z.boolean().optional()
+    .describe('status: whether the token, or every field the token check reads, is saved, as Wiro says.'),
   message: z.string(),
   nextAction: nextActionSchema.optional(),
 };
@@ -280,10 +287,10 @@ async function connect(
   if (refusal) return errorResult(new Error(refusal));
   const group = credentialGroup(row, credential);
   const apiBase = apiBaseUrlOf(client);
-  // One status read gives the connection time before this sign-in and the redirect URI Wiro gives for the user's
-  // own app. A connect still goes ahead without it.
+  // One status read gives the connection time before this sign-in, the redirect URI Wiro gives for the user's own
+  // app and whether the app keys or the token are saved. A connect still goes ahead without it.
   const before = await readOAuthStatus(client, agentGuid, credential, oauth.picker, signal).catch(() => null);
-  const modes = connectionModeRequirements(meta, group, { redirectUri: before?.redirectUri, apiBase });
+  const modes = connectionModeRequirements(meta, group, modeContext(before, apiBase));
   const redirectUri = meta.connectionModes.includes('own') ? ownAppRedirectUri(meta, before?.redirectUri, apiBase) : undefined;
   const setupExtra = { connectionModes: modes, ...(redirectUri ? { ownAppRedirectUri: redirectUri } : {}) };
   const describeAction = {
@@ -436,7 +443,7 @@ async function connect(
       : '';
     return result('connect', context, 'setup_needed',
       `Mode ${mode} needs these saved first with set_agent_credentials: ${appKeys.map(field => `${field.label} (${field.field})`).join(', ')}. ${requirement.note}${goneText}`,
-      { ...setupExtra, connectionModes: connectionModeRequirements(meta, groupNow, { redirectUri: before?.redirectUri, apiBase }), mode, nextAction: describeAction });
+      { ...setupExtra, connectionModes: connectionModeRequirements(meta, groupNow, modeContext(before, apiBase)), mode, nextAction: describeAction });
   }
   const body = requireApiSuccess(answer, `Could not start the ${meta.title} sign-in.`);
   const authorizeUrl = asString(body.authorizeUrl);
@@ -606,14 +613,38 @@ async function status(
   const childStep = snapshot.childStep
     ? { ...snapshot.childStep, label: picker?.next?.label ?? snapshot.childStep.picker }
     : undefined;
-  return result('status', context, state, `${statusMessage(state, meta, snapshot, unusedNote, row)}${pausedNote}`, {
+  const setup = setupFromStatus(meta, snapshot);
+  // Where connect is offered, the message says what is saved for it and the redirect URI the user's own app allows.
+  const setupNote = (state === 'not_connected' || state === 'token_expired') && setup.text ? ` ${setup.text}` : '';
+  return result('status', context, state, `${statusMessage(state, meta, snapshot, unusedNote, row)}${setupNote}${pausedNote}`, {
     ...(snapshot.connectedAt ? { connectedAt: snapshot.connectedAt } : {}),
     ...(snapshot.tokenExpiresAt ? { tokenExpiresAt: snapshot.tokenExpiresAt } : {}),
     accounts: snapshot.accounts,
     ...(candidates.length > 0 ? { candidates } : {}),
     ...(childStep ? { childStep } : {}),
+    ...setup.extra,
     ...(nextAction ? { nextAction } : {}),
   }, candidates.length > 0 ? ['', ...candidates.map(account => `- ${accountLabel(account)}`)] : []);
+}
+
+/**
+ * What Wiro's status says about the setup the connection modes need: whether the keys of the user's own app and
+ * the token are saved, and the redirect URI to allow in that app. An older Wiro API says none of it.
+ */
+function setupFromStatus(meta: CredentialMeta, snapshot: OAuthStatusSnapshot) {
+  const ownMode = meta.connectionModes.includes('own');
+  const probe = meta.oauth?.directProbe;
+  const redirect = ownMode ? statusRedirectUri(meta, snapshot.redirectUri) : undefined;
+  const extra = {
+    ...(redirect ? { ownAppRedirectUri: redirect } : {}),
+    ...(ownMode && snapshot.appKeysSaved !== undefined ? { appKeysSaved: snapshot.appKeysSaved } : {}),
+    ...(probe && snapshot.tokenSaved !== undefined ? { tokenSaved: snapshot.tokenSaved } : {}),
+  };
+  const text = [
+    savedForModesText(meta, snapshot),
+    redirect ? `With mode own, the user's own app must allow ${redirect} as a redirect URI.` : '',
+  ].filter(Boolean).join(' ');
+  return { extra, text };
 }
 
 /** The child step's items as Wiro saved them, under each readable account. */

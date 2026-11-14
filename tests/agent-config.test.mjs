@@ -1031,9 +1031,11 @@ test('set_agent_credentials describes a credential without writing or leaking va
 });
 
 test('set_agent_credentials describe offers connect only once the chosen mode has every field saved', async () => {
+  // A status from an older Wiro API says nothing about saved keys, so the agent's own values decide.
   const empty = fakeClient({
     '/Credentials/Detail': credentialDetail,
     '/UserAgent/Detail': detail(),
+    '/UserAgentOAuth/OAuthStatus': OAUTH_STATUS_BEFORE,
   });
   await withClient(empty, async client => {
     const result = await client.callTool({ name: 'set_agent_credentials', arguments: { agent_guid: AGENT, credential: 'google-ads' } });
@@ -1042,7 +1044,7 @@ test('set_agent_credentials describe offers connect only once the chosen mode ha
     assert.ok(result.structuredContent.notes.includes('Mode own needs clientid, clientsecret and developertoken saved first.'));
     assert.match(text(result), /- Mode own needs clientid, clientsecret and developertoken saved first\./);
     assert.doesNotMatch(text(result), /Everything mode own needs is saved/);
-    assert.deepEqual(empty.paths(), ['/Credentials/Detail', '/UserAgent/Detail', '/Skills/List']);
+    assert.deepEqual(empty.paths(), ['/Credentials/Detail', '/UserAgent/Detail', '/UserAgentOAuth/OAuthStatus', '/Skills/List']);
   });
 
   const saved = fakeClient({
@@ -2525,6 +2527,108 @@ test('set_agent_credentials describe does not call app keys saved or missing for
     assert.ok(result.structuredContent.notes.includes('Mode own needs clientid, clientsecret and developertoken saved first.'), text(result));
     assert.ok(result.structuredContent.notes.includes('App keys are not shown once saved. If they are saved already, connect with mode own.'), text(result));
     assert.doesNotMatch(text(result), /Everything mode own needs is saved/);
+  });
+});
+
+// Wiro's connection status says whether the keys of the user's own app, and the fields a token check reads, are
+// saved, which the agent's detail cannot show for app keys, and gives the redirect URI for the host it runs on.
+test('set_agent_credentials describe reads saved app keys and a saved token from Wiro\'s status', async () => {
+  const redirecturi = 'https://api.example.test/v1/UserAgentOAuth/GAdsCallback';
+  const describe = async (credential, credentials, status) => {
+    const fake = fakeClient({
+      '/Credentials/Detail': credentialDetail,
+      '/Skills/List': connectSkillList,
+      '/UserAgent/Detail': detail({ skills: skillsOn('int-googleads-manage', 'int-metaads-manage'), ...credentials }),
+      '/UserAgentOAuth/OAuthStatus': { ...OAUTH_STATUS_BEFORE, ...status },
+    });
+    let result;
+    await withClient(fake, async client => {
+      result = await client.callTool({ name: 'set_agent_credentials', arguments: { agent_guid: AGENT, credential } });
+    });
+    assert.notEqual(result.isError, true, text(result));
+    assert.ok(fake.called('/UserAgentOAuth/OAuthStatus').length === 1);
+    return result;
+  };
+  const fieldsOf = (result, mode) => result.structuredContent.credential.connectionModes
+    .find(candidate => candidate.mode === mode).fields.map(field => [field.field, field.isSet, field.writeOnly === true]);
+  const keys = { credentials: { 'google-ads': googleAdsKeys } };
+
+  const saved = await describe('google-ads', keys, { authmethod: 'own', redirecturi, appkeyssaved: true, tokensaved: false });
+  assert.deepEqual(fieldsOf(saved, 'own'), [['clientid', true, false], ['clientsecret', true, false], ['developertoken', true, false]]);
+  assert.ok(saved.structuredContent.notes.includes('The keys of the user\'s own Google Ads app (mode own) are saved.'), text(saved));
+  assert.equal(saved.structuredContent.notes.some(note => /If they are saved already|saved first/.test(note)), false, text(saved));
+  assert.deepEqual(saved.structuredContent.nextAction, {
+    tool: 'connect_agent_oauth',
+    arguments: { action: 'connect', agent_guid: AGENT, credential: 'google-ads', mode: 'own' },
+    reason: 'Everything mode own needs is saved; connect Google Ads.',
+  });
+  assert.match(text(saved), /Fields: clientid \(set\), clientsecret \(set\), developertoken \(set\)\./);
+  // The redirect URI is the one Wiro gives for its own host.
+  assert.equal(saved.structuredContent.credential.ownAppRedirectUri, redirecturi);
+  assert.match(text(saved), /allow https:\/\/api\.example\.test\/v1\/UserAgentOAuth\/GAdsCallback as a redirect URI/);
+  assert.doesNotMatch(text(saved), /api\.wiro\.ai/);
+
+  // Keys Wiro says are not saved read as missing, with no hedge about keys that might be saved.
+  const missing = await describe('google-ads', keys, { authmethod: '', redirecturi, appkeyssaved: false, tokensaved: false });
+  assert.deepEqual(fieldsOf(missing, 'own'), [['clientid', false, false], ['clientsecret', false, false], ['developertoken', false, false]]);
+  assert.ok(missing.structuredContent.notes.includes('The keys of the user\'s own Google Ads app (mode own) are not saved yet.'), text(missing));
+  assert.ok(missing.structuredContent.notes.includes('Mode own needs clientid, clientsecret and developertoken saved first.'), text(missing));
+  assert.doesNotMatch(text(missing), /If they are saved already/);
+  assert.equal(missing.structuredContent.nextAction, undefined);
+
+  // A token Wiro says is saved reads as set, so connect is offered with the mode that checks it.
+  const token = await describe('meta-ads', {}, { authmethod: 'api_key', appkeyssaved: false, tokensaved: true });
+  assert.deepEqual(fieldsOf(token, 'api_key'), [['systemusertoken', true, false]]);
+  assert.ok(token.structuredContent.notes.includes('The keys of the user\'s own Meta Ads app (mode own) are not saved yet. The System User Token (mode api_key) is saved.'), text(token));
+  assert.deepEqual(token.structuredContent.nextAction.arguments, { action: 'connect', agent_guid: AGENT, credential: 'meta-ads', mode: 'api_key' });
+});
+
+test('connect_agent_oauth status says what Wiro\'s status says is saved, and the redirect URI it gives', async () => {
+  const redirecturi = 'https://api.example.test/v1/UserAgentOAuth/MetaAdsCallback';
+  const routes = status => ({
+    '/Credentials/Detail': credentialDetail,
+    '/Skills/List': connectSkillList,
+    '/UserAgent/Detail': detail({ skills: skillsOn('int-metaads-manage') }),
+    '/UserAgentOAuth/OAuthStatus': { ...OAUTH_STATUS_BEFORE, ...status },
+    '/UserAgentOAuth/OAuthConnect': { result: true, authorizeUrl: 'https://www.facebook.com/dialog/oauth?state=xyz' },
+  });
+  const fake = fakeClient(routes({ authmethod: '', redirecturi, appkeyssaved: true, tokensaved: false }));
+  await withClient(fake, async client => {
+    const result = await client.callTool({ name: 'connect_agent_oauth', arguments: { action: 'status', agent_guid: AGENT, credential: 'meta-ads' } });
+    assert.notEqual(result.isError, true, text(result));
+    const out = result.structuredContent;
+    assert.equal(out.state, 'not_connected');
+    assert.equal(out.message, 'Meta Ads is not connected. Start with action connect. The keys of the user\'s own Meta Ads app (mode own) are '
+      + `saved. The System User Token (mode api_key) is not saved yet. With mode own, the user's own app must allow ${redirecturi} as a redirect URI.`);
+    assert.equal(out.appKeysSaved, true);
+    assert.equal(out.tokenSaved, false);
+    assert.equal(out.ownAppRedirectUri, redirecturi);
+    assert.ok(text(result).includes(out.message));
+    assert.deepEqual(out.nextAction.arguments, { action: 'connect', agent_guid: AGENT, credential: 'meta-ads' });
+
+    // Connect then takes the mode whose keys are saved and starts its sign-in.
+    const connected = await client.callTool({ name: 'connect_agent_oauth', arguments: out.nextAction.arguments });
+    assert.equal(connected.structuredContent.state, 'authorize_in_browser', text(connected));
+    assert.equal(connected.structuredContent.mode, 'own');
+    assert.equal(fake.called('/UserAgentOAuth/OAuthConnect')[0].body.authmethod, 'own');
+  });
+
+  // Once connected, the message says nothing of the setup; the structured answer still carries it.
+  const done = fakeClient(routes({ connected: true, connectedat: '2026-11-13T10:00:00.000Z', accounts: [{ adaccountid: '1234', adaccountname: 'Acme Ads' }], authmethod: 'own', redirecturi, appkeyssaved: true, tokensaved: false }));
+  await withClient(done, async client => {
+    const result = await client.callTool({ name: 'connect_agent_oauth', arguments: { action: 'status', agent_guid: AGENT, credential: 'meta-ads' } });
+    assert.equal(result.structuredContent.state, 'connected', text(result));
+    assert.doesNotMatch(result.structuredContent.message, /saved|redirect URI/);
+    assert.equal(result.structuredContent.appKeysSaved, true);
+    assert.equal(result.structuredContent.ownAppRedirectUri, redirecturi);
+  });
+
+  // An older Wiro API says none of it, and the answer reads as before.
+  const before = fakeClient(routes({}));
+  await withClient(before, async client => {
+    const result = await client.callTool({ name: 'connect_agent_oauth', arguments: { action: 'status', agent_guid: AGENT, credential: 'meta-ads' } });
+    assert.equal(result.structuredContent.message, 'Meta Ads is not connected. Start with action connect.');
+    for (const key of ['appKeysSaved', 'tokenSaved', 'ownAppRedirectUri']) assert.equal(key in result.structuredContent, false, key);
   });
 });
 
