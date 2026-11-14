@@ -777,6 +777,8 @@ export interface NextPickerMeta {
   itemValueField: string;
   itemLabelField: string;
   persistField: string;
+  /** How many accounts Wiro lists this step for at once. */
+  maxParents?: number;
 }
 
 export interface PickerMeta {
@@ -899,6 +901,7 @@ function parsePicker(raw: unknown): PickerMeta | null {
     }
   }
   const nextRaw = isPlainObject(raw.next) && raw.next.enabled !== false ? raw.next : null;
+  const maxParents = nextRaw ? toNumber(nextRaw.max_parents) : null;
   const next = nextRaw && asString(nextRaw.key) && asString(nextRaw.item_value_field)
     ? {
       key: asString(nextRaw.key) as string,
@@ -909,6 +912,7 @@ function parsePicker(raw: unknown): PickerMeta | null {
       itemValueField: asString(nextRaw.item_value_field) as string,
       itemLabelField: asString(nextRaw.item_label_field) ?? (asString(nextRaw.item_value_field) as string),
       persistField: asString(nextRaw.persist_field) ?? '',
+      ...(maxParents !== null && Number.isInteger(maxParents) && maxParents > 0 ? { maxParents } : {}),
     }
     : null;
   return {
@@ -1866,7 +1870,7 @@ export function buildChainedSelections(
     if (!group) {
       return {
         skippedParents: [],
-        error: `Account "${selection.parent}" is not among the connected accounts (${groups.map(candidate => candidate.parent.id).join(', ') || 'none'}).`,
+        error: `Account "${selection.parent}" is not among the accounts this step lists (${groups.map(candidate => candidate.parent.id).join(', ') || 'none'}).`,
       };
     }
     if (group.errorCode) {

@@ -2627,39 +2627,203 @@ test('connect_agent_oauth status names a failed sign-in and stops waiting for it
   });
 });
 
-test('connect_agent_oauth saves accounts and runs the chained page step', async () => {
+const META_PAGES = {
+  result: true,
+  pickerkey: 'pages',
+  groups: [
+    { parent: { adaccountid: '1234', adaccountname: 'Acme Ads' }, items: [{ pageid: '555', pagename: 'Acme Page' }, { pageid: '556', pagename: 'Acme Two' }] },
+    { parent: { adaccountid: '5678', adaccountname: 'Beta Ads' }, items: [{ pageid: '777', pagename: 'Beta Page' }] },
+  ],
+};
+
+// Wiro lists the Pages of the ad accounts a request names, before they are saved.
+const metaPagesOf = body => ({
+  ...structuredClone(META_PAGES),
+  groups: structuredClone(META_PAGES.groups).filter(group => !body.parents || body.parents.includes(group.parent.adaccountid)),
+});
+
+test('connect_agent_oauth saves the ad accounts and their Pages in one call, so the agent restarts once', async () => {
   const fake = fakeClient({
     '/Credentials/Detail': credentialDetail,
-    '/UserAgentOAuth/SetPickerAccounts': body => (body.pickerkey
-      ? { result: true, pickerkey: 'pages', pagemappings: [{ adaccountid: '1234', adaccountname: 'Acme Ads', pageid: '555', pagename: 'Acme Page' }] }
-      : { result: true, accounts: [{ id: '1234', name: 'Acme Ads' }, { id: '5678', name: 'Beta Ads' }] }),
-    '/UserAgentOAuth/DiscoverPickerItems': {
+    '/UserAgentOAuth/SetPickerAccounts': body => ({
       result: true,
+      accounts: body.accountids.map(id => ({ id, name: id === '1234' ? 'Acme Ads' : 'Beta Ads' })),
       pickerkey: 'pages',
-      groups: [
-        { parent: { adaccountid: '1234', adaccountname: 'Acme Ads' }, items: [{ pageid: '555', pagename: 'Acme Page' }, { pageid: '556', pagename: 'Acme Two' }] },
-        { parent: { adaccountid: '5678', adaccountname: 'Beta Ads' }, items: [{ pageid: '777', pagename: 'Beta Page' }] },
-      ],
-    },
+      pagemappings: body.selections.flatMap(selection => selection.itemids.map(pageid => ({ adaccountid: selection.parentvalue, adaccountname: 'Acme Ads', pageid, pagename: pageid === '555' ? 'Acme Page' : 'Acme Two' }))),
+      restart: 'scheduled',
+    }),
+    '/UserAgentOAuth/DiscoverPickerItems': metaPagesOf,
   });
   await withClient(fake, async client => {
+    const accounts = [{ id: '1234', name: 'Acme Ads' }, { id: 5678, name: 'Beta Ads' }];
+    // The Pages are listed for the chosen ad accounts first, and nothing is saved yet.
+    const listed = await client.callTool({
+      name: 'connect_agent_oauth',
+      arguments: { action: 'select_accounts', agent_guid: AGENT, credential: 'meta-ads', accounts },
+    });
+    assert.notEqual(listed.isError, true, text(listed));
+    assert.deepEqual(fake.called('/UserAgentOAuth/DiscoverPickerItems')[0].body, {
+      useragentguid: AGENT,
+      credentialkey: 'meta-ads',
+      pickerkey: 'pages',
+      parents: ['1234', '5678'],
+    });
+    assert.equal(fake.paths().includes('/UserAgentOAuth/SetPickerAccounts'), false);
+    assert.equal(listed.structuredContent.state, 'pick_child_items');
+    assert.equal(listed.structuredContent.message, 'Nothing is saved yet. Choose the Facebook Pages to use under each account. This step is optional: empty selections save the accounts without any Facebook Pages. Then call select_accounts again with these accounts, picker "pages" and selections within 15 minutes of the sign-in or token check: it saves both at once, so a running agent restarts only once.');
+    assert.equal(listed.structuredContent.childStep.label, 'Facebook Pages');
+    assert.deepEqual(listed.structuredContent.nextAction.arguments, {
+      action: 'select_accounts',
+      agent_guid: AGENT,
+      credential: 'meta-ads',
+      accounts,
+      picker: 'pages',
+      selections: [{ parent: '1234', items: ['555', '556'] }, { parent: '5678', items: ['777'] }],
+    });
+
+    // One save takes both steps, with the Pages by id.
     const saved = await client.callTool({
       name: 'connect_agent_oauth',
-      arguments: { action: 'select_accounts', agent_guid: AGENT, credential: 'meta-ads', accounts: [{ id: '1234', name: 'Acme Ads' }, { id: 5678, name: 'Beta Ads' }] },
+      arguments: { ...listed.structuredContent.nextAction.arguments, selections: [{ parent: '1234', items: ['555'] }] },
     });
     assert.notEqual(saved.isError, true, text(saved));
-    assert.deepEqual(fake.calls.find(call => call.path === '/UserAgentOAuth/SetPickerAccounts').body, {
+    assert.equal(fake.called('/UserAgentOAuth/SetPickerAccounts').length, 1);
+    assert.deepEqual(fake.called('/UserAgentOAuth/SetPickerAccounts')[0].body, {
       useragentguid: AGENT,
       credentialkey: 'meta-ads',
       accountids: ['1234', '5678'],
+      pickerkey: 'pages',
+      selections: [{ parentvalue: '1234', itemids: ['555'] }, { parentvalue: '5678', itemids: [] }],
     });
+    // The save follows a fresh list for the same accounts.
+    assert.deepEqual(fake.called('/UserAgentOAuth/DiscoverPickerItems').at(-1).body.parents, ['1234', '5678']);
     assert.equal(saved.structuredContent.state, 'connected');
-    assert.match(saved.structuredContent.message, /^Saved 2 accounts: .* A running agent restarts to use the accounts\.$/);
-    assert.deepEqual(saved.structuredContent.nextAction.arguments, { action: 'select_accounts', agent_guid: AGENT, credential: 'meta-ads', picker: 'pages' });
+    assert.equal(saved.structuredContent.message, 'Saved 2 accounts: `Acme Ads` (`1234`), `Beta Ads` (`5678`), and the Facebook Pages selection (1 selected). Nothing was chosen for `Beta Ads` (`5678`). A running agent restarts once to use them.');
+    assert.deepEqual(saved.structuredContent.accounts, [{ id: '1234', name: 'Acme Ads' }, { id: '5678', name: 'Beta Ads' }]);
+    assert.deepEqual(saved.structuredContent.childStep.groups[0].items, [{ id: '555', name: 'Acme Page' }]);
+    assert.equal(saved.structuredContent.nextAction, undefined);
 
-    const listed = await client.callTool({ name: 'connect_agent_oauth', arguments: saved.structuredContent.nextAction.arguments });
+    // The optional step can be left empty, still in one call.
+    const without = await client.callTool({
+      name: 'connect_agent_oauth',
+      arguments: { action: 'select_accounts', agent_guid: AGENT, credential: 'meta-ads', accounts: [{ id: '1234' }], selections: [] },
+    });
+    assert.notEqual(without.isError, true, text(without));
+    assert.deepEqual(fake.called('/UserAgentOAuth/SetPickerAccounts').at(-1).body, {
+      useragentguid: AGENT,
+      credentialkey: 'meta-ads',
+      accountids: ['1234'],
+      pickerkey: 'pages',
+      selections: [{ parentvalue: '1234', itemids: [] }],
+    });
+    assert.equal(without.structuredContent.message, 'Saved 1 account: `Acme Ads` (`1234`), and the Facebook Pages selection (0 selected). Nothing was chosen for `Acme Ads` (`1234`). A running agent restarts once to use them.');
+
+    // A Page that was not listed, or a Page step for an ad account not chosen, is refused before anything is saved.
+    const saves = fake.called('/UserAgentOAuth/SetPickerAccounts').length;
+    const unknown = await client.callTool({
+      name: 'connect_agent_oauth',
+      arguments: { action: 'select_accounts', agent_guid: AGENT, credential: 'meta-ads', accounts, picker: 'pages', selections: [{ parent: '1234', items: ['999'] }] },
+    });
+    assert.equal(unknown.isError, true);
+    assert.match(text(unknown), /"999" is not available under `Acme Ads` \(`1234`\)\. Available: `Acme Page` \(`555`\), `Acme Two` \(`556`\)\./);
+    const otherParent = await client.callTool({
+      name: 'connect_agent_oauth',
+      arguments: { action: 'select_accounts', agent_guid: AGENT, credential: 'meta-ads', accounts: [{ id: '1234' }], selections: [{ parent: '5678', items: ['777'] }] },
+    });
+    assert.equal(otherParent.isError, true);
+    assert.equal(text(otherParent), '## Error\n\nAccount "5678" is not among the accounts this step lists (1234).');
+    assert.equal(fake.called('/UserAgentOAuth/SetPickerAccounts').length, saves);
+  });
+});
+
+test('connect_agent_oauth saves Business Profile accounts with their locations, and Wiro asks for one location', async () => {
+  const business = {
+    key: 'google-business',
+    title: 'Google Business Profile',
+    credential_mode: 'oauth',
+    connection_modes: ['wiro', 'own'],
+    wiro_connect_pending: true,
+    credential_schema: [
+      { key: 'clientid', type: 'text', label: 'Client ID', required: true, oauth_managed: true, only_in_modes: ['own'] },
+      { key: 'clientsecret', type: 'password', label: 'Client Secret', required: true, encrypted: true, oauth_managed: true, only_in_modes: ['own'] },
+      { key: 'accountid', type: 'text', label: 'Account ID', required: true, auto_filled_by_oauth: true },
+    ],
+    oauth_provider: {
+      auth_method_value: 'own',
+      oauth_flow: { callback_path: '/UserAgentOAuth/GBPCallback', client_id_field: 'clientid', client_secret_field: 'clientsecret' },
+      account_picker: {
+        enabled: true,
+        multi_select: true,
+        item_value_field: 'accountid',
+        item_label_field: 'accountname',
+        item_fields_to_save: ['accountid', 'accountname'],
+        url_item_fields: { accountid: 'id', accountname: 'name' },
+        next: {
+          enabled: true,
+          key: 'locations',
+          optional: false,
+          parent_value_field: 'accountid',
+          parent_label_field: 'accountname',
+          item_value_field: 'locationid',
+          item_label_field: 'locationtitle',
+          persist_field: 'locationmappings',
+          modal_title: 'Select Business Locations',
+          max_parents: 20,
+        },
+      },
+    },
+  };
+  const fake = fakeClient({
+    '/Credentials/Detail': { result: true, errors: [], credential: business },
+    '/UserAgentOAuth/DiscoverPickerItems': {
+      result: true,
+      pickerkey: 'locations',
+      groups: [{ parent: { accountid: '42', accountname: 'Acme Group' }, items: [{ locationid: '9001', locationtitle: 'Acme Downtown' }] }],
+    },
+    '/UserAgentOAuth/SetPickerAccounts': body => (body.selections.some(selection => selection.itemids.length > 0)
+      ? { result: true, errors: [], accounts: [{ id: '42', name: 'Acme Group' }], pickerkey: 'locations', locationmappings: [{ accountid: '42', accountname: 'Acme Group', locationid: '9001', locationtitle: 'Acme Downtown' }], restart: 'scheduled' }
+      : { result: false, errorcode: 'next_required', errors: [{ code: 0, message: 'Choose at least one location to finish.' }] }),
+  });
+  await withClient(fake, async client => {
+    const listed = await client.callTool({
+      name: 'connect_agent_oauth',
+      arguments: { action: 'select_accounts', agent_guid: AGENT, credential: 'google-business', accounts: [{ id: '42', name: 'Acme Group' }] },
+    });
     assert.equal(listed.structuredContent.state, 'pick_child_items');
-    assert.equal(listed.structuredContent.childStep.label, 'Facebook Pages');
+    assert.equal(listed.structuredContent.message, 'Nothing is saved yet. Choose the Business Locations to use under each account. Then call select_accounts again with these accounts, picker "locations" and selections within 15 minutes of the sign-in or token check: it saves both at once, so a running agent restarts only once.');
+    assert.equal(listed.structuredContent.childStep.optional, false);
+
+    const saved = await client.callTool({ name: 'connect_agent_oauth', arguments: listed.structuredContent.nextAction.arguments });
+    assert.notEqual(saved.isError, true, text(saved));
+    assert.deepEqual(fake.called('/UserAgentOAuth/SetPickerAccounts')[0].body, {
+      useragentguid: AGENT,
+      credentialkey: 'google-business',
+      accountids: ['42'],
+      pickerkey: 'locations',
+      selections: [{ parentvalue: '42', itemids: ['9001'] }],
+    });
+    assert.equal(saved.structuredContent.message, 'Saved 1 account: `Acme Group` (`42`), and the Business Locations selection (1 selected). A running agent restarts once to use them.');
+
+    // Wiro refuses the save without a location, and nothing is saved.
+    const empty = await client.callTool({
+      name: 'connect_agent_oauth',
+      arguments: { ...listed.structuredContent.nextAction.arguments, selections: [{ parent: '42', items: [] }] },
+    });
+    assert.equal(empty.isError, true);
+    assert.equal(text(empty), '## Error\n\nChoose at least one location to finish.');
+  });
+});
+
+test('connect_agent_oauth still changes the Pages of ad accounts saved before on their own', async () => {
+  const fake = fakeClient({
+    '/Credentials/Detail': credentialDetail,
+    '/UserAgentOAuth/SetPickerAccounts': { result: true, pickerkey: 'pages', pagemappings: [{ adaccountid: '1234', adaccountname: 'Acme Ads', pageid: '555', pagename: 'Acme Page' }] },
+    '/UserAgentOAuth/DiscoverPickerItems': META_PAGES,
+  });
+  await withClient(fake, async client => {
+    const listed = await client.callTool({ name: 'connect_agent_oauth', arguments: { action: 'select_accounts', agent_guid: AGENT, credential: 'meta-ads', picker: 'pages' } });
+    assert.equal(listed.structuredContent.state, 'pick_child_items');
+    assert.deepEqual(fake.called('/UserAgentOAuth/DiscoverPickerItems')[0].body, { useragentguid: AGENT, credentialkey: 'meta-ads', pickerkey: 'pages' });
     assert.deepEqual(listed.structuredContent.nextAction.arguments.selections, [
       { parent: '1234', items: ['555', '556'] },
       { parent: '5678', items: ['777'] },
@@ -2670,8 +2834,7 @@ test('connect_agent_oauth saves accounts and runs the chained page step', async 
       arguments: { action: 'select_accounts', agent_guid: AGENT, credential: 'meta-ads', picker: 'pages', selections: [{ parent: '1234', items: ['555'] }] },
     });
     assert.notEqual(chained.isError, true, text(chained));
-    const save = fake.calls.filter(call => call.path === '/UserAgentOAuth/SetPickerAccounts').at(-1);
-    assert.deepEqual(save.body, {
+    assert.deepEqual(fake.called('/UserAgentOAuth/SetPickerAccounts').at(-1).body, {
       useragentguid: AGENT,
       credentialkey: 'meta-ads',
       pickerkey: 'pages',
@@ -2681,14 +2844,21 @@ test('connect_agent_oauth saves accounts and runs the chained page step', async 
       ],
     });
     assert.equal(chained.structuredContent.message, 'Saved the Facebook Pages selection (1 selected). Nothing was chosen for `Beta Ads` (`5678`). A running agent restarts to use it.');
-    assert.deepEqual(chained.structuredContent.childStep.groups[0].items, [{ id: '555', name: 'Acme Page' }]);
+  });
+});
 
-    const unknown = await client.callTool({
+test('connect_agent_oauth asks for fewer accounts than Wiro lists the extra step for', async () => {
+  const limited = structuredClone(credentials['meta-ads']);
+  limited.oauth_provider.account_picker.next.max_parents = 1;
+  const fake = fakeClient({ '/Credentials/Detail': () => ({ result: true, errors: [], credential: limited }) });
+  await withClient(fake, async client => {
+    const result = await client.callTool({
       name: 'connect_agent_oauth',
-      arguments: { action: 'select_accounts', agent_guid: AGENT, credential: 'meta-ads', picker: 'pages', selections: [{ parent: '1234', items: ['999'] }] },
+      arguments: { action: 'select_accounts', agent_guid: AGENT, credential: 'meta-ads', accounts: [{ id: '1234' }, { id: '5678' }] },
     });
-    assert.equal(unknown.isError, true);
-    assert.match(text(unknown), /"999" is not available under `Acme Ads` \(`1234`\)\. Available: `Acme Page` \(`555`\), `Acme Two` \(`556`\)\./);
+    assert.equal(result.isError, true);
+    assert.equal(text(result), '## Error\n\nChoose at most 1 account to go on: Wiro lists the Facebook Pages for at most 1 account at once.');
+    assert.equal(fake.paths().includes('/UserAgentOAuth/DiscoverPickerItems'), false);
   });
 });
 
@@ -2744,15 +2914,15 @@ test('connect_agent_oauth saves accounts by id and says why Wiro refuses ones no
 test('connect_agent_oauth names one saved account in the singular', async () => {
   const fake = fakeClient({
     '/Credentials/Detail': credentialDetail,
-    '/UserAgentOAuth/SetPickerAccounts': { result: true, accounts: [{ id: '1234', name: 'Acme Ads' }] },
+    '/UserAgentOAuth/SetPickerAccounts': { result: true, accounts: [{ id: '111', name: 'Acme Page' }] },
   });
   await withClient(fake, async client => {
     const saved = await client.callTool({
       name: 'connect_agent_oauth',
-      arguments: { action: 'select_accounts', agent_guid: AGENT, credential: 'meta-ads', accounts: [{ id: '1234', name: 'Acme Ads' }] },
+      arguments: { action: 'select_accounts', agent_guid: AGENT, credential: 'facebook-pages', accounts: [{ id: '111', name: 'Acme Page' }] },
     });
     assert.notEqual(saved.isError, true, text(saved));
-    assert.equal(saved.structuredContent.message, 'Saved 1 account: `Acme Ads` (`1234`). Optionally, also choose Facebook Pages. A running agent restarts to use the account.');
+    assert.equal(saved.structuredContent.message, 'Saved 1 account: `Acme Page` (`111`). A running agent restarts to use the account.');
   });
 });
 
@@ -3198,7 +3368,7 @@ test('connect_agent_oauth status, select_accounts and disconnect_agent_oauth do 
     const status = await client.callTool({ name: 'connect_agent_oauth', arguments: { action: 'status', agent_guid: AGENT, credential: 'hubspot' } });
     assert.equal(status.structuredContent.state, 'connected');
     const afterStatus = fake.paths().length;
-    const saved = await client.callTool({ name: 'connect_agent_oauth', arguments: { action: 'select_accounts', agent_guid: AGENT, credential: 'meta-ads', accounts: [{ id: '1234', name: 'Acme Ads' }] } });
+    const saved = await client.callTool({ name: 'connect_agent_oauth', arguments: { action: 'select_accounts', agent_guid: AGENT, credential: 'facebook-pages', accounts: [{ id: '1234', name: 'Acme Ads' }] } });
     assert.notEqual(saved.isError, true, text(saved));
     const preview = await client.callTool({ name: 'disconnect_agent_oauth', arguments: { agent_guid: AGENT, credential: 'hubspot' } });
     assert.equal(preview.structuredContent.disconnected, false);
@@ -4258,6 +4428,7 @@ test('connect_agent_oauth tells a guid it cannot reach from a project that may n
     '/Credentials/Detail': credentialDetail,
     '/UserAgent/Detail': detailRoute,
     '/UserAgentOAuth/OAuthStatus': refusal,
+    '/UserAgentOAuth/DiscoverPickerItems': refusal,
     '/UserAgentOAuth/SetPickerAccounts': refusal,
     '/UserAgentOAuth/OAuthDisconnect': refusal,
   });
