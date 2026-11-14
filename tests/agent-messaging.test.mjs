@@ -3949,6 +3949,40 @@ test('get_agent_message shows an add with what it also turns on, the tasks that 
   assert.doesNotMatch(signIn.structuredContent.nextAction.reason, /For a key/);
 });
 
+// A connector that connects with a sign-in, the user's own app keys or a token now comes with its connect card
+// too. Wiro connects it on that card in the web chat, so a reply from here never connects it.
+test('get_agent_message says how an add\'s app keys, token or sign-in connector connects, and that a reply does not', async () => {
+  const needs = [
+    { connector: 'ga4', title: 'Google Analytics 4', mode: 'appkeys' },
+    { connector: 'facebook-pages', title: 'Facebook', mode: 'token' },
+    { connector: 'twitter', title: 'Twitter / X', mode: 'signin' },
+  ];
+  const result = await readSetupReply([
+    setupBlock({ id: 'zzzzzzzzzz40', kind: 'add', key: 'int-ga4-reports', needs }, 0),
+    setupBlock({ id: 'zzzzzzzzzz41', kind: 'connect', connector: 'ga4' }, 1),
+    setupBlock({ id: 'zzzzzzzzzz42', kind: 'connect', connector: 'facebook-pages' }, 2),
+  ]);
+  const { message, nextAction } = result.structuredContent;
+  assert.deepEqual(message.setupChanges[0].needs, needs);
+  const text = textOf(result);
+  assert.ok(text.includes([
+    '- Still to connect once it is on:',
+    '  - `Google Analytics 4` (`ga4`): the user\'s own app keys, then a sign-in, on the agent page or with set_agent_credentials and then connect_agent_oauth, never in a chat message',
+    '  - `Facebook` (`facebook-pages`): its token, which Wiro checks, on the agent page or with set_agent_credentials and then connect_agent_oauth, never in a chat message',
+    '  - `Twitter / X` (`twitter`): sign in on the agent page, or with connect_agent_oauth',
+  ].join('\n')), text);
+  assert.match(text, /#### Proposed change 2: Connect `ga4`\n\n- Connects what proposed change 1 adds, once it is applied: the user's own app keys, then a sign-in, on the agent page or with set_agent_credentials and then connect_agent_oauth, never in a chat message\. A reply does not connect it\.\n/);
+  assert.match(text, /#### Proposed change 3: Connect `facebook-pages`\n\n- Connects what proposed change 1 adds, once it is applied: its token, which Wiro checks, on the agent page or with set_agent_credentials and then connect_agent_oauth, never in a chat message\. A reply does not connect it\.\n/);
+  assert.doesNotMatch(text, /Ask the user for the key together with their yes|The user provides the key or sign-in/);
+  // No key goes with the yes.
+  assert.deepEqual(nextAction.arguments, YES_STEP);
+  assert.doesNotMatch(nextAction.reason, /together with their yes/);
+
+  // A connect card with no add that brings its connector reads as before.
+  const alone = await readSetupReply([setupBlock({ id: 'zzzzzzzzzz43', kind: 'connect', connector: 'ga4' }, 0)]);
+  assert.match(textOf(alone), /- The user provides the key or sign-in for it\. A key is saved with set_agent_credentials, never sent in a chat message\./);
+});
+
 test('get_agent_message shows a remove with what it also turns off, the tasks that pause, and that a Connector keeps its key', async () => {
   const result = await readSetupReply([
     setupBlock(REMOVE_CARD, 0),
