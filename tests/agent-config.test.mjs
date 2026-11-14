@@ -2752,6 +2752,17 @@ test('a saved secret Wiro shows as dots reads as set, is never shown, and is nev
     assert.equal(deploy.isError, true);
     assert.equal(text(deploy), '## Error\n\nNothing was deployed: credentials telegram.bottoken holds the dots Wiro shows in place of a saved secret, not the secret itself. Send the value itself, or leave it out and save it after the deploy with set_agent_credentials.');
     assert.equal(fake.calls.length, calls);
+
+    // Only Wiro's mask, exactly eight of those dots, stands for a saved secret. Other dots are a value like any
+    // other, which Wiro checks.
+    for (const value of [MASK.slice(1), `${MASK}•`]) {
+      const result = await client.callTool({ name: 'set_agent_credentials', arguments: { agent_guid: AGENT, fields: [{ credential: 'telegram', field: 'bottoken', value }] } });
+      assert.notEqual(result.isError, true, text(result));
+    }
+    assert.deepEqual(fake.called('/UserAgent/CredentialUpsert').map(call => call.body.fields), [
+      [{ credentialkey: 'telegram', fieldname: 'bottoken', fieldvalue: '•'.repeat(7) }],
+      [{ credentialkey: 'telegram', fieldname: 'bottoken', fieldvalue: '•'.repeat(9) }],
+    ]);
   });
 });
 

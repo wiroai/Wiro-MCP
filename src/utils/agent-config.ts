@@ -1168,13 +1168,14 @@ function isEmptyValue(value: unknown): boolean {
   return false;
 }
 
-// An agent's detail shows a saved secret, such as a key or a token, as a row of dots: it reads as set, and it is
-// never the value. A value that is only such dots was copied from there, so it is never sent back.
-const SECRET_MASK = /^\u2022+$/;
+// An agent's detail shows a saved secret, such as a key or a token, as exactly eight dots (U+2022), and an unsaved
+// one as "": the dots read as set, and they are never the value. A value that is exactly those dots, spaces around
+// it aside, was copied from there, so it is never sent back. Any other text is a value like any other.
+const SECRET_MASK = '\u2022'.repeat(8);
 
 /** Whether a value is that mask, or holds it as a list item or an entry's field. */
 export function holdsSecretMask(value: unknown): boolean {
-  if (typeof value === 'string') return SECRET_MASK.test(value.trim());
+  if (typeof value === 'string') return value.trim() === SECRET_MASK;
   if (Array.isArray(value)) return value.some(holdsSecretMask);
   if (isPlainObject(value)) return Object.values(value).some(holdsSecretMask);
   return false;
