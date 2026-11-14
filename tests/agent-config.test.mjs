@@ -2484,6 +2484,60 @@ test('set_agent_credentials describe does not call app keys saved or missing for
   });
 });
 
+// An agent's detail shows a saved secret as dots. It reads as set, the dots are never shown as a value, and they
+// are never sent back as one.
+test('a saved secret Wiro shows as dots reads as set, is never shown, and is never sent back', async () => {
+  const MASK = '••••••••';
+  const row = detailRow({ skills: skillsOn('int-metaads-manage') });
+  row.credentials['meta-ads'] = { ...row.credentials['meta-ads'], systemusertoken: MASK };
+  row.credentials.telegram = { ...row.credentials.telegram, bottoken: MASK };
+  const fake = fakeClient({
+    '/Credentials/Detail': credentialDetail,
+    '/Skills/List': connectSkillList,
+    '/UserAgent/Detail': { result: true, errors: [], useragents: [row] },
+    '/UserAgentOAuth/OAuthStatus': OAUTH_STATUS_BEFORE,
+    '/UserAgent/CredentialUpsert': { result: true, applied: 1 },
+  });
+  await withClient(fake, async client => {
+    const described = await client.callTool({ name: 'set_agent_credentials', arguments: { agent_guid: AGENT, credential: 'meta-ads' } });
+    assert.notEqual(described.isError, true, text(described));
+    const apiKey = described.structuredContent.credential.connectionModes.find(mode => mode.mode === 'api_key');
+    assert.deepEqual(apiKey.fields, [{ field: 'systemusertoken', label: 'System User Token', isSet: true }]);
+    assert.deepEqual(described.structuredContent.nextAction.arguments, { action: 'connect', agent_guid: AGENT, credential: 'meta-ads', mode: 'api_key' });
+    // A sign-in with the user's own app would remove the saved token, so it asks first.
+    const own = await client.callTool({ name: 'connect_agent_oauth', arguments: { agent_guid: AGENT, credential: 'meta-ads', mode: 'own' } });
+    assert.equal(own.structuredContent.state, 'confirm_needed', text(own));
+    assert.match(own.structuredContent.message, /removes the saved System User Token/);
+    const telegram = await client.callTool({ name: 'set_agent_credentials', arguments: { agent_guid: AGENT, credential: 'telegram' } });
+    assert.deepEqual(telegram.structuredContent.credential.status.missingFields, ['Allowed Telegram DM User IDs']);
+    for (const result of [described, own, telegram]) assert.equal(JSON.stringify(result).includes('•'), false);
+
+    // Sent back alone, padded, inside a list or next to a real value, nothing is saved.
+    const refusal = (title, field) => `## Error\n\nNothing was saved:\n\n- ${title}: "${field}" holds the dots Wiro shows in place of a saved secret, not the secret itself. Leave it out to keep the saved value, or send the new value.`;
+    for (const [fields, expected] of [
+      [[{ credential: 'meta-ads', field: 'systemusertoken', value: MASK }], refusal('Meta Ads', 'systemusertoken')],
+      [[{ credential: 'telegram', field: 'bottoken', value: ` ${MASK} ` }], refusal('Telegram', 'bottoken')],
+      [[{ credential: 'telegram', field: 'groups', value: [{ chatid: '-1001234567', allowedusers: [MASK] }] }], refusal('Telegram', 'groups')],
+      [[{ credential: 'telegram', field: 'allowedusers', value: ['123456789'] }, { credential: 'telegram', field: 'bottoken', value: MASK }], refusal('Telegram', 'bottoken')],
+    ]) {
+      const result = await client.callTool({ name: 'set_agent_credentials', arguments: { agent_guid: AGENT, fields } });
+      assert.equal(result.isError, true, text(result));
+      assert.equal(text(result), expected);
+    }
+    assert.equal(fake.paths().includes('/UserAgent/CredentialUpsert'), false);
+
+    // A deploy refuses them before anything is read or quoted.
+    const calls = fake.calls.length;
+    const deploy = await client.callTool({
+      name: 'deploy_agent',
+      arguments: { template: 'growth-agent', tier: 'starter', credentials: { telegram: { bottoken: MASK, allowedusers: ['123456789'] } } },
+    });
+    assert.equal(deploy.isError, true);
+    assert.equal(text(deploy), '## Error\n\nNothing was deployed: credentials telegram.bottoken holds the dots Wiro shows in place of a saved secret, not the secret itself. Send the value itself, or leave it out and save it after the deploy with set_agent_credentials.');
+    assert.equal(fake.calls.length, calls);
+  });
+});
+
 test('set_agent_credentials offers connect right after saving app keys that read as empty', async () => {
   const routes = {
     '/Credentials/Detail': credentialDetail,

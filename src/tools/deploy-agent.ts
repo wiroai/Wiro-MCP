@@ -38,7 +38,18 @@ import {
   WIRO_PROJECT_CREDENTIAL,
   type AgentDetail,
 } from '../utils/user-agent.js';
-import { APPROVAL_POLICY_KEY, humanizeCustomSkillKey, isFilledValue, pausedSkillTitles, resolveDeployCustomSkills, type DeployCustomSkill, type TemplateCustomSkill } from '../utils/agent-config.js';
+import {
+  APPROVAL_POLICY_KEY,
+  holdsSecretMask,
+  humanizeCustomSkillKey,
+  isFilledValue,
+  keyList,
+  pausedSkillTitles,
+  resolveDeployCustomSkills,
+  SECRET_MASK_TEXT,
+  type DeployCustomSkill,
+  type TemplateCustomSkill,
+} from '../utils/agent-config.js';
 import { readTemplateRow, toSkillSummary, toTemplateDetail, type SkillSummary } from '../utils/agent-catalog.js';
 import { quotedBlock } from '../utils/quoted-text.js';
 import { CHAT_SETUP_DESCRIPTION, CHAT_SETUP_MODES, chatSetupLabel } from '../utils/agent-setup.js';
@@ -424,6 +435,14 @@ export function registerDeployAgent(server: McpServer, client: WiroClient): void
         const syntax = resolveDeployCustomSkills(requestedCustomSkills, null);
         if (syntax.errors.length > 0) {
           throw new Error(`Nothing was deployed. Fix custom_skills:\n\n- ${syntax.errors.join('\n- ')}`);
+        }
+        // An agent's detail shows a saved secret as dots, which are never a value to store.
+        const masked = Object.entries(args.credentials ?? {}).flatMap(([key, fields]) => Object.entries(fields)
+          .filter(([, value]) => holdsSecretMask(value))
+          .map(([field]) => `${key}.${field}`));
+        if (masked.length > 0) {
+          throw new Error(`Nothing was deployed: credentials ${keyList(masked)} ${masked.length > 1 ? 'hold' : 'holds'} `
+            + `${SECRET_MASK_TEXT}. Send the value itself, or leave it out and save it after the deploy with set_agent_credentials.`);
         }
 
         // Every member of a team can read what a quote needs, but only a team
