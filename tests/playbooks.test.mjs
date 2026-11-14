@@ -618,7 +618,9 @@ test('the playbooks and send_agent_message say how setup replies, keys and the h
   assert.doesNotMatch(agents, /Get the user's yes for the add, and once it is applied/);
   // Wiro pairs a connect card with an add for a sign-in, app keys or a token too, and connects it only on that card
   // in the web chat or on the agent page.
-  assert.match(agents, /A connector connected with a sign-in, the user's own app keys or a token comes with its connect card too, but a reply never connects it: once the add is applied, Wiro's answer links to the agent page, and `connect_agent_oauth` connects it from here, after `set_agent_credentials` saves its app keys or token\. One set up on the agent page gets no connect card\./);
+  assert.match(agents, /A connector connected with a sign-in, the user's own app keys or a token comes with its connect card too, but a reply never connects it: once the add is applied, Wiro's answer says to connect it outside the chat, and `connect_agent_oauth` connects it from here, after `set_agent_credentials` saves its app keys or token\. One set up on the agent page gets no connect card\./);
+  // Wiro's answer in a chat sent with an API key names no page and gives no link to one.
+  assert.doesNotMatch(agents, /answer links to the agent page/);
   assert.doesNotMatch(agents, /A connector connected with a sign-in or on the agent page gets no connect card/);
   assert.match(agents, /Studio and the Workflow Agent always have it off: each is one agent shared by every Wiro user, so their connectors, skills and scheduled tasks are fixed, and they help with each request as a one-time task\./);
   assert.match(agents, /`apply_agent_skills` turns skills on or off, Connectors \(`int-\*`\) and Skills \(`util-\*`\) alike\./);
