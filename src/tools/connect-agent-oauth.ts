@@ -145,10 +145,14 @@ const FLOW_WAITING_HINT = 'The sign-in is still open: ask the user to finish it 
   + 'again (connect_agent_oauth status with wait_seconds waits until it is done). Do not start a new connect, which '
   + 'would replace the open sign-in.';
 
+// Wiro words these refusals for a sign-in or for a token check, as the list they are about, the saved mode or the
+// service's first way to connect says. The hints after them fit both.
 function oauthHint(message: string, meta: CredentialMeta, code?: string): string | undefined {
-  if (code === 'not_listed') return 'Save only accounts from the list connect_agent_oauth status gave after the sign-in.';
+  if (code === 'not_listed') return 'Save only accounts from the list connect_agent_oauth gave after the sign-in or token check.';
   if (code === 'flow_waiting') return FLOW_WAITING_HINT;
-  if (code && FLOW_GONE_CODES.has(code)) return 'Connect again: the list is kept 15 minutes and only for the person who signed in.';
+  if (code && FLOW_GONE_CODES.has(code)) {
+    return 'Connect again: the list is kept 15 minutes and only for the person who started the sign-in or token check.';
+  }
   if (code === 'flow_failed') return 'Connect again with action connect.';
   if (code === 'next_expired') return 'Call select_accounts again; it lists the items afresh before saving.';
   if (/credentials not configured/i.test(message)) {

@@ -3351,22 +3351,31 @@ test('connect_agent_oauth saves accounts by id and says why Wiro refuses ones no
   });
 
   const refusal = (errorcode, message) => ({ result: false, errorcode, errors: [{ code: 0, message }] });
+  // Wiro words each refusal for a sign-in or for a token check, and the hint after it fits both.
+  const listHint = 'Save only accounts from the list connect_agent_oauth gave after the sign-in or token check.';
+  const goneHint = 'Connect again: the list is kept 15 minutes and only for the person who started the sign-in or token check.';
+  const failedHint = 'Connect again with action connect.';
   const cases = [
-    [refusal('not_listed', 'Choose accounts from the list Wiro gave after the sign-in.'), 'Choose accounts from the list Wiro gave after the sign-in.\n\nSave only accounts from the list connect_agent_oauth status gave after the sign-in.'],
-    [refusal('flow_expired', 'The sign-in expired. Sign in again to choose the accounts.'), 'The sign-in expired. Sign in again to choose the accounts.\n\nConnect again: the list is kept 15 minutes and only for the person who signed in.'],
-    [refusal('flow_other_person', 'Another admin started this sign-in. Sign in again to choose the accounts yourself.'), 'Another admin started this sign-in. Sign in again to choose the accounts yourself.\n\nConnect again: the list is kept 15 minutes and only for the person who signed in.'],
-    [refusal('flow_replaced', 'A newer sign-in replaced this one. Sign in again.'), 'A newer sign-in replaced this one. Sign in again.\n\nConnect again: the list is kept 15 minutes and only for the person who signed in.'],
-    [refusal('flow_failed', 'The sign-in did not finish. Sign in again.'), 'The sign-in did not finish. Sign in again.\n\nConnect again with action connect.'],
+    ['not_listed', 'Choose accounts from the list the sign-in returned.', listHint],
+    ['not_listed', 'Choose accounts from the list the token check returned.', listHint],
+    ['flow_expired', 'The sign-in expired. Sign in again to choose the accounts.', goneHint],
+    ['flow_expired', 'The token check expired. Check the token again to choose the accounts.', goneHint],
+    ['flow_other_person', 'Another admin started this sign-in. Sign in again to choose the accounts yourself.', goneHint],
+    ['flow_other_person', 'Another admin started this token check. Check the token again to choose the accounts yourself.', goneHint],
+    ['flow_replaced', 'A newer sign-in replaced this one. Sign in again.', goneHint],
+    ['flow_replaced', 'A newer token check replaced this one. Check the token again.', goneHint],
+    ['flow_failed', 'The sign-in did not finish. Sign in again.', failedHint],
+    ['flow_failed', 'The token check did not finish. Check the token again.', failedHint],
   ];
-  for (const [answer, expected] of cases) {
-    const fake = fakeClient({ '/Credentials/Detail': credentialDetail, '/UserAgentOAuth/SetPickerAccounts': answer });
+  for (const [code, message, hint] of cases) {
+    const fake = fakeClient({ '/Credentials/Detail': credentialDetail, '/UserAgentOAuth/SetPickerAccounts': refusal(code, message) });
     await withClient(fake, async client => {
       const result = await client.callTool({
         name: 'connect_agent_oauth',
         arguments: { action: 'select_accounts', agent_guid: AGENT, credential: 'facebook-pages', accounts: [{ id: '999', name: 'Not listed' }] },
       });
       assert.equal(result.isError, true);
-      assert.equal(text(result), `## Error\n\n${expected}`);
+      assert.equal(text(result), `## Error\n\n${message}\n\n${hint}`, message);
     });
   }
 
