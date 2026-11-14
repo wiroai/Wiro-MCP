@@ -114,7 +114,7 @@ const outputSchema = {
   })).optional(),
   ownAppRedirectUri: z.string().optional(),
   appKeysSaved: z.boolean().optional()
-    .describe('status: whether the keys of the user\'s own app (mode own) are saved, as Wiro says. They are never shown.'),
+    .describe('status: true when Wiro says the keys of the user\'s own app (mode own) are saved. They are never shown. Left out otherwise, which does not mean they are missing.'),
   tokenSaved: z.boolean().optional()
     .describe('status: whether the token, or every field the token check reads, is saved, as Wiro says.'),
   message: z.string(),
@@ -288,7 +288,7 @@ async function connect(
   const group = credentialGroup(row, credential);
   const apiBase = apiBaseUrlOf(client);
   // One status read gives the connection time before this sign-in, the redirect URI Wiro gives for the user's own
-  // app and whether the app keys or the token are saved. A connect still goes ahead without it.
+  // app, whether Wiro says the app keys are saved and whether the token is. A connect still goes ahead without it.
   const before = await readOAuthStatus(client, agentGuid, credential, oauth.picker, signal).catch(() => null);
   const modes = connectionModeRequirements(meta, group, modeContext(before, apiBase));
   const redirectUri = meta.connectionModes.includes('own') ? ownAppRedirectUri(meta, before?.redirectUri, apiBase) : undefined;
@@ -628,8 +628,9 @@ async function status(
 }
 
 /**
- * What Wiro's status says about the setup the connection modes need: whether the keys of the user's own app and
- * the token are saved, and the redirect URI to allow in that app. An older Wiro API says none of it.
+ * What Wiro's status says about the setup the connection modes need: that the keys of the user's own app are saved
+ * (only a yes is kept; see parseOAuthStatus), whether the token is, and the redirect URI to allow in that app. An
+ * older Wiro API says none of it.
  */
 function setupFromStatus(meta: CredentialMeta, snapshot: OAuthStatusSnapshot) {
   const ownMode = meta.connectionModes.includes('own');
@@ -637,7 +638,7 @@ function setupFromStatus(meta: CredentialMeta, snapshot: OAuthStatusSnapshot) {
   const redirect = ownMode ? statusRedirectUri(meta, snapshot.redirectUri) : undefined;
   const extra = {
     ...(redirect ? { ownAppRedirectUri: redirect } : {}),
-    ...(ownMode && snapshot.appKeysSaved !== undefined ? { appKeysSaved: snapshot.appKeysSaved } : {}),
+    ...(ownMode && snapshot.appKeysSaved === true ? { appKeysSaved: true } : {}),
     ...(probe && snapshot.tokenSaved !== undefined ? { tokenSaved: snapshot.tokenSaved } : {}),
   };
   const text = [
