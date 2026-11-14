@@ -1754,14 +1754,15 @@ export function writeOnlyModesNote(requirements: ModeRequirement[]): string | nu
 }
 
 /**
- * What Wiro's status says is saved for the modes that need something saved before they connect: the keys of the
- * user's own app and the token a check reads. Empty when the status does not say, as from an older Wiro API.
+ * What Wiro's status says is saved for the modes that need something saved before they connect: that the keys of
+ * the user's own app are saved (Wiro's no says nothing about them; see parseOAuthStatus), and whether the token a
+ * check reads is. Empty when the status does not say, as from an older Wiro API.
  */
 export function savedForModesText(meta: CredentialMeta, context: Pick<ModeContext, 'appKeysSaved' | 'tokenSaved'>): string {
   const modes = usableConnectionModes(meta);
   const sentences: string[] = [];
-  if (modes.includes('own') && context.appKeysSaved !== undefined) {
-    sentences.push(`The keys of the user's own ${meta.title} app (mode own) ${context.appKeysSaved ? 'are saved' : 'are not saved yet'}.`);
+  if (modes.includes('own') && context.appKeysSaved === true) {
+    sentences.push(`The keys of the user's own ${meta.title} app (mode own) are saved.`);
   }
   const probe = meta.oauth?.directProbe;
   if (probe && modes.includes(probe.mode) && context.tokenSaved !== undefined) {
@@ -1791,8 +1792,8 @@ function fieldsForMode(meta: CredentialMeta, mode: string): CredentialField[] {
 export interface ModeContext {
   /** The redirect URI to register in the user's own app, as Wiro's status gives it. */
   redirectUri?: string;
-  /** Every required field of mode own, such as the app keys, holds a value. */
-  appKeysSaved?: boolean;
+  /** Wiro says every required field of mode own, such as the app keys, holds a value. Only a yes is kept. */
+  appKeysSaved?: true;
   /** Every field the token check reads holds a value. */
   tokenSaved?: boolean;
   /** For the redirect URI when Wiro's status gives none. */
@@ -1803,7 +1804,7 @@ export interface ModeContext {
 export function modeContext(status: OAuthStatusSnapshot | null | undefined, apiBase: string): ModeContext {
   return {
     ...(status?.redirectUri ? { redirectUri: status.redirectUri } : {}),
-    ...(status?.appKeysSaved !== undefined ? { appKeysSaved: status.appKeysSaved } : {}),
+    ...(status?.appKeysSaved === true ? { appKeysSaved: true as const } : {}),
     ...(status?.tokenSaved !== undefined ? { tokenSaved: status.tokenSaved } : {}),
     apiBase,
   };
@@ -1811,17 +1812,19 @@ export function modeContext(status: OAuthStatusSnapshot | null | undefined, apiB
 
 /**
  * What each connection mode needs, with which of those fields are already saved. App keys read as empty in the
- * agent's detail even once saved, so where Wiro's status says whether the own app's keys or the token check's
- * fields are saved, that decides for them.
+ * agent's detail even once saved, so where Wiro's status says the own app's keys are saved, or whether the token
+ * check's fields are, that decides for them.
  */
 export function connectionModeRequirements(meta: CredentialMeta, group: Row | null, context: ModeContext = {}): ModeRequirement[] {
   const modes = meta.connectionModes.length > 0 ? meta.connectionModes : ['wiro'];
   return modes.map(mode => {
+    // Mode own only ever has Wiro's yes (see parseOAuthStatus): without it, the app keys keep the hedge below, so a
+    // connect still lets the sign-in route decide whether they are saved.
     const saved = mode === 'own'
       ? context.appKeysSaved
       : mode === meta.oauth?.directProbe?.mode ? context.tokenSaved : undefined;
     const fields = fieldsForMode(meta, mode).map(field => {
-      // Wiro's word on mode own covers its required fields; on the token check, every field the check reads.
+      // Wiro's yes on mode own covers its required fields; its word on the token check, every field the check reads.
       const statusSays = saved !== undefined && (mode !== 'own' || field.required);
       const isSet = (group !== null && isFilledValue(group[field.key])) || (statusSays && saved === true);
       return {
@@ -2061,7 +2064,9 @@ export interface OAuthStatusSnapshot {
   flow: OAuthFlow | null;
   /** The redirect URI to register in the user's own app, as Wiro gives it. */
   redirectUri?: string;
-  appKeysSaved?: boolean;
+  /** Wiro says every required field of the own-app sign-in, such as the app keys, is saved. Only a yes is kept. */
+  appKeysSaved?: true;
+  /** Wiro says whether every field the token check reads is saved. */
   tokenSaved?: boolean;
 }
 
@@ -2108,7 +2113,10 @@ export function parseOAuthStatus(body: Row, picker: PickerMeta | null): OAuthSta
     candidates: toAccountRefs(body.candidates),
     flow: parseOAuthFlow(body.flow),
     ...(redirectUri ? { redirectUri } : {}),
-    ...(typeof body.appkeyssaved === 'boolean' ? { appKeysSaved: body.appkeyssaved } : {}),
+    // Wiro says yes once every required field its own-app setup takes is saved. Its no says less than that the keys
+    // are missing: it is also no for a service whose own-app setup needs a field Wiro manages, such as an approval,
+    // and while any other required field is empty. So only a yes is kept.
+    ...(body.appkeyssaved === true ? { appKeysSaved: true as const } : {}),
     ...(typeof body.tokensaved === 'boolean' ? { tokenSaved: body.tokensaved } : {}),
   };
 }

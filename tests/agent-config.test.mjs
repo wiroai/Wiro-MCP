@@ -2530,8 +2530,8 @@ test('set_agent_credentials describe does not call app keys saved or missing for
   });
 });
 
-// Wiro's connection status says whether the keys of the user's own app, and the fields a token check reads, are
-// saved, which the agent's detail cannot show for app keys, and gives the redirect URI for the host it runs on.
+// Wiro's connection status can say the keys of the user's own app are saved, which the agent's detail cannot show,
+// says whether the fields a token check reads are saved, and gives the redirect URI for the host it runs on.
 test('set_agent_credentials describe reads saved app keys and a saved token from Wiro\'s status', async () => {
   const redirecturi = 'https://api.example.test/v1/UserAgentOAuth/GAdsCallback';
   const describe = async (credential, credentials, status) => {
@@ -2568,18 +2568,23 @@ test('set_agent_credentials describe reads saved app keys and a saved token from
   assert.match(text(saved), /allow https:\/\/api\.example\.test\/v1\/UserAgentOAuth\/GAdsCallback as a redirect URI/);
   assert.doesNotMatch(text(saved), /api\.wiro\.ai/);
 
-  // Keys Wiro says are not saved read as missing, with no hedge about keys that might be saved.
+  // Wiro's no does not say the keys are missing: it is also no when the own-app setup needs a field Wiro manages, or
+  // while another required field is empty. So the keys keep the hedge about keys that do not show, and nothing says
+  // they are not saved.
   const missing = await describe('google-ads', keys, { authmethod: '', redirecturi, appkeyssaved: false, tokensaved: false });
-  assert.deepEqual(fieldsOf(missing, 'own'), [['clientid', false, false], ['clientsecret', false, false], ['developertoken', false, false]]);
-  assert.ok(missing.structuredContent.notes.includes('The keys of the user\'s own Google Ads app (mode own) are not saved yet.'), text(missing));
+  assert.deepEqual(fieldsOf(missing, 'own'), [['clientid', false, true], ['clientsecret', false, true], ['developertoken', false, true]]);
   assert.ok(missing.structuredContent.notes.includes('Mode own needs clientid, clientsecret and developertoken saved first.'), text(missing));
-  assert.doesNotMatch(text(missing), /If they are saved already/);
+  assert.ok(missing.structuredContent.notes.includes('App keys are not shown once saved. If they are saved already, connect with mode own.'), text(missing));
+  assert.doesNotMatch(text(missing), /The keys of the user's own|not saved yet/);
   assert.equal(missing.structuredContent.nextAction, undefined);
 
-  // A token Wiro says is saved reads as set, so connect is offered with the mode that checks it.
+  // A token Wiro says is saved reads as set, so connect is offered with the mode that checks it. The app keys Wiro
+  // does not call saved keep the hedge.
   const token = await describe('meta-ads', {}, { authmethod: 'api_key', appkeyssaved: false, tokensaved: true });
   assert.deepEqual(fieldsOf(token, 'api_key'), [['systemusertoken', true, false]]);
-  assert.ok(token.structuredContent.notes.includes('The keys of the user\'s own Meta Ads app (mode own) are not saved yet. The System User Token (mode api_key) is saved.'), text(token));
+  assert.deepEqual(fieldsOf(token, 'own'), [['appid', false, true], ['appsecret', false, true]]);
+  assert.ok(token.structuredContent.notes.includes('The System User Token (mode api_key) is saved.'), text(token));
+  assert.doesNotMatch(text(token), /The keys of the user's own|not saved yet/);
   assert.deepEqual(token.structuredContent.nextAction.arguments, { action: 'connect', agent_guid: AGENT, credential: 'meta-ads', mode: 'api_key' });
 });
 
@@ -2629,6 +2634,70 @@ test('connect_agent_oauth status says what Wiro\'s status says is saved, and the
     const result = await client.callTool({ name: 'connect_agent_oauth', arguments: { action: 'status', agent_guid: AGENT, credential: 'meta-ads' } });
     assert.equal(result.structuredContent.message, 'Meta Ads is not connected. Start with action connect.');
     for (const key of ['appKeysSaved', 'tokenSaved', 'ownAppRedirectUri']) assert.equal(key in result.structuredContent, false, key);
+  });
+});
+
+// Wiro's appkeyssaved is no for more than missing keys: for a service whose own-app setup needs an approval Wiro
+// manages, it is no whatever is saved. Its app keys keep the hedge about keys that do not show, and connect leaves
+// them to the sign-in route.
+test('connect_agent_oauth still starts a sign-in whose app keys Wiro\'s status does not call saved', async () => {
+  const reddit = {
+    key: 'reddit-like',
+    title: 'Reddit',
+    credential_mode: 'oauth',
+    connection_modes: ['own'],
+    credential_schema: [
+      { key: 'developerprofileusername', type: 'text', label: 'Developer Profile Username', required: true, only_in_modes: ['own'] },
+      { key: 'clientid', type: 'text', label: 'Client ID', required: true, oauth_managed: true, only_in_modes: ['own'] },
+      { key: 'clientsecret', type: 'password', label: 'Client Secret', required: true, encrypted: true, oauth_managed: true, only_in_modes: ['own'] },
+      { key: 'apiaccessapproved', type: 'boolean', label: 'API access approved', required: true, default: false, platform_managed: true, only_in_modes: ['own'] },
+      { key: 'redditusername', type: 'text', label: 'Connected Account', auto_filled_by_oauth: true },
+    ],
+    oauth_provider: {
+      auth_method_value: 'own',
+      oauth_flow: {
+        authorize_url: 'https://www.reddit.com/api/v1/authorize',
+        callback_path: '/UserAgentOAuth/RedditCallback',
+        state_fields: ['developerprofileusername'],
+        connect_requirements: [{ field: 'apiaccessapproved', equals: true, message: 'Wiro must approve this app before it connects.' }],
+      },
+    },
+  };
+  const redirecturi = 'https://api.example.test/v1/UserAgentOAuth/RedditCallback';
+  const fake = fakeClient({
+    '/Credentials/Detail': body => (body.key === 'reddit-like' ? { result: true, errors: [], credential: reddit } : credentialDetail(body)),
+    '/Skills/List': { ...connectSkillList, skills: [...connectSkillList.skills, { name: 'int-reddit-like', title: 'Reddit', depends_on: [], conflicts_with: [], credential_key: 'reddit-like', requires_credentials: true, pricing: {} }] },
+    // The app keys read as empty whether they are saved or not.
+    '/UserAgent/Detail': detail({
+      skills: skillsOn('int-reddit-like'),
+      credentials: { 'reddit-like': { developerprofileusername: 'acme_dev', clientid: '', clientsecret: '', apiaccessapproved: true, redditusername: '', _connected: false, _filled: false, optional: false, _schema: { title: 'Reddit' } } },
+    }),
+    '/UserAgentOAuth/OAuthStatus': { ...OAUTH_STATUS_BEFORE, authmethod: '', redirecturi, appkeyssaved: false, tokensaved: false },
+    '/UserAgentOAuth/OAuthConnect': { result: true, authorizeUrl: 'https://www.reddit.com/api/v1/authorize?state=xyz' },
+  });
+  await withClient(fake, async client => {
+    const described = await client.callTool({ name: 'set_agent_credentials', arguments: { agent_guid: AGENT, credential: 'reddit-like' } });
+    assert.notEqual(described.isError, true, text(described));
+    assert.deepEqual(described.structuredContent.credential.connectionModes.find(mode => mode.mode === 'own').fields, [
+      { field: 'developerprofileusername', label: 'Developer Profile Username', isSet: true },
+      { field: 'clientid', label: 'Client ID', isSet: false, writeOnly: true },
+      { field: 'clientsecret', label: 'Client Secret', isSet: false, writeOnly: true },
+    ]);
+    assert.ok(described.structuredContent.notes.includes('Mode own needs clientid and clientsecret saved first.'), text(described));
+    assert.ok(described.structuredContent.notes.includes('App keys are not shown once saved. If they are saved already, connect with mode own.'), text(described));
+    assert.doesNotMatch(text(described), /The keys of the user's own|not saved yet/);
+
+    // Status says nothing about the keys, in its message or in its structured answer.
+    const status = await client.callTool({ name: 'connect_agent_oauth', arguments: { action: 'status', agent_guid: AGENT, credential: 'reddit-like' } });
+    assert.equal(status.structuredContent.state, 'not_connected', text(status));
+    assert.equal(status.structuredContent.message, `Reddit is not connected. Start with action connect. With mode own, the user's own app must allow ${redirecturi} as a redirect URI.`);
+    assert.equal('appKeysSaved' in status.structuredContent, false);
+
+    // Connect starts the sign-in, and the sign-in route says whether the keys are saved.
+    const connected = await client.callTool({ name: 'connect_agent_oauth', arguments: status.structuredContent.nextAction.arguments });
+    assert.equal(connected.structuredContent.state, 'authorize_in_browser', text(connected));
+    assert.equal(connected.structuredContent.mode, 'own');
+    assert.deepEqual(fake.called('/UserAgentOAuth/OAuthConnect').map(call => call.body.authmethod), ['own']);
   });
 });
 
@@ -4697,6 +4766,10 @@ test('OAuthStatus gives the account list and the sign-in Wiro keeps for 15 minut
   assert.equal(snapshot.redirectUri, 'https://api.wiro.ai/v1/UserAgentOAuth/FacebookCallback');
   assert.equal(snapshot.appKeysSaved, true);
   assert.equal(snapshot.tokenSaved, false);
+  // Wiro's no on the app keys does not say they are missing, so it is left out; its word on the token is kept.
+  const no = parseOAuthStatus({ ...OAUTH_STATUS_BEFORE, appkeyssaved: false, tokensaved: false }, null);
+  assert.equal('appKeysSaved' in no, false);
+  assert.equal(no.tokenSaved, false);
 
   // Another admin's sign-in shows only that it is there.
   assert.deepEqual(parseOAuthStatus({ ...OAUTH_STATUS_BEFORE, flow: { mine: false, status: 'waiting', expiresat: NOW + 600 } }, null).flow,

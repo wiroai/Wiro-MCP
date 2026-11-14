@@ -516,8 +516,8 @@ async function describeCredential(
   const status = row ? credentialStatus(row, key, meta) : null;
   const kind = credentialKind(meta);
   const apiBase = apiBaseUrlOf(client);
-  // App keys read as empty in the agent's detail even once saved. Wiro's status says whether they and the token are
-  // saved, and gives the redirect URI for the host this server talks to; without it, describe reads as before.
+  // App keys read as empty in the agent's detail even once saved. Wiro's status can say they are saved, says whether
+  // the token is, and gives the redirect URI for the host this server talks to; without it, describe reads as before.
   const oauthStatus = meta.oauth && row
     ? await readOAuthStatus(client, agentGuid, key, meta.oauth.picker, signal).catch(() => null)
     : null;
