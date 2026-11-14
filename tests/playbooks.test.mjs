@@ -636,6 +636,8 @@ test('the playbooks and send_agent_message say how setup replies, keys and the h
     assert.match(tools.find(tool => tool.name === 'get_playbook').description, /statuses and restarts, setup and sign-ins, an agent that does not answer, messages and setup proposals in chat/);
     const credentials = tools.find(tool => tool.name === 'set_agent_credentials').description;
     assert.match(credentials, /A running agent restarts to load values that change, and one still stopping or queued for a restart, such as after a setup change approved in its chat, loads them with that restart;/);
+    // Wiro restarts nothing for a sign-in's fields before it connects; the connection restarts the agent once.
+    assert.match(credentials, /a save that changes nothing leaves it running\. Fields saved for a sign-in integration that is not connected yet, such as its app keys or token, leave it running too: it restarts once, when connect_agent_oauth completes the connection\./);
     assert.match(credentials, /A key the agent or Wiro asks for in its chat is saved here, never sent in a message\./);
     assert.match(tools.find(tool => tool.name === 'get_my_agent').description, /1 stopping \(also during a restart, which starts it again by itself\)/);
     const prompt = await client.getPrompt({ name: 'talk_to_my_agent', arguments: PROMPT_ARGUMENTS.talk_to_my_agent });

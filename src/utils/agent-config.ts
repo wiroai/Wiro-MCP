@@ -100,7 +100,12 @@ export function keyList(keys: string[]): string {
   return keys.length > 1 ? `${keys.slice(0, -1).join(', ')} and ${keys[keys.length - 1]}` : keys.join('');
 }
 
-function afterWriteNote(status: number | null): string {
+// Wiro restarts nothing for fields of a sign-in that is not connected yet; the connection restarts the agent once.
+const AWAITS_CONNECTION_NOTE = 'The agent kept running: fields saved for a sign-in integration that is not connected yet, '
+  + 'such as its app keys or token, do not restart it. It needs no restart now: it restarts once, when '
+  + 'connect_agent_oauth completes the connection.';
+
+function afterWriteNote(status: number | null, awaitsConnection: boolean): string {
   switch (status) {
     case 1:
       return 'The agent restarts to load the new values, which takes about a minute.';
@@ -108,6 +113,7 @@ function afterWriteNote(status: number | null): string {
     case 3:
       return 'The agent is starting and loads the new values.';
     case 4:
+      if (awaitsConnection) return AWAITS_CONNECTION_NOTE;
       // A save that changes a value sets a running agent stopping before Wiro answers.
       return 'The agent kept running: a save that matches what is stored does not restart it. If it should load new values now, control_agent with action restart does it.';
     case 6:
@@ -138,12 +144,20 @@ export function setupStillMissingNote(missing: Array<{ key: string; title: strin
   return `Setup is not finished: still missing ${keyList(titles(missing))}. ${how}, then check with get_my_agent.`;
 }
 
-/** When the agent loads the values, and the credentials its setup still waits for, at any status. */
-export function afterWriteNotes(status: number | null, missing: Array<{ key: string; title: string; oauth: boolean }>): string[] {
+/**
+ * When the agent loads the values, and the credentials its setup still waits for, at any status.
+ * awaitsConnection: every credential written is a sign-in that still reads not connected.
+ */
+export function afterWriteNotes(
+  status: number | null,
+  missing: Array<{ key: string; title: string; oauth: boolean }>,
+  options: { awaitsConnection?: boolean } = {},
+): string[] {
+  const note = afterWriteNote(status, options.awaitsConnection === true);
   const setup = setupStillMissingNote(missing);
-  if (!setup) return [afterWriteNote(status)];
+  if (!setup) return [note];
   // At status 6 the general note says the same without the names.
-  return status === 6 ? [setup] : [afterWriteNote(status), setup];
+  return status === 6 ? [setup] : [note, setup];
 }
 
 export async function readUserAgent(

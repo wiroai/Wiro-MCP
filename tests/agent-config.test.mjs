@@ -1322,6 +1322,75 @@ test('set_agent_credentials names the credentials the setup still waits for afte
   });
 });
 
+test('set_agent_credentials does not ask to restart a running agent for a sign-in\'s app keys or token', async () => {
+  // Wiro restarts nothing for fields of a sign-in that reads not connected before and after the save: the sign-in,
+  // the token check or the account choice that connects it restarts the agent once.
+  const awaitsNote = 'The agent kept running: fields saved for a sign-in integration that is not connected yet, such as '
+    + 'its app keys or token, do not restart it. It needs no restart now: it restarts once, when connect_agent_oauth '
+    + 'completes the connection.';
+  const keptNote = 'The agent kept running: a save that matches what is stored does not restart it. If it should load new values now, control_agent with action restart does it.';
+  const googleAds = { clientid: '', clientsecret: '', developertoken: '', optional: false, _connected: false, _filled: false, _schema: { title: 'Google Ads' } };
+  const metaAds = { appid: '', appsecret: '', systemusertoken: '', optional: false, _connected: false, _filled: false, _schema: { title: 'Meta Ads' } };
+  const hubspot = { clientid: '', clientsecret: '', portalname: 'Acme', optional: false, _connected: true, _filled: true, _schema: { title: 'HubSpot' } };
+  const telegram = { bottoken: TOKEN, allowedusers: ['123456789'], optional: true, _connected: true, _filled: true, _schema: { title: 'Telegram' } };
+  const readBack = (status, credentials) => fakeClient({
+    '/Credentials/Detail': credentialDetail,
+    '/Skills/List': connectSkillList,
+    '/UserAgent/CredentialUpsert': body => ({ result: true, errors: [], applied: body.fields.length }),
+    '/UserAgent/Detail': detail({
+      status,
+      skills: skillsOn('int-googleads-manage', 'int-metaads-manage', 'int-hubspot-crm'),
+      credentials,
+      communicationChannels: [],
+      scheduledskills: [],
+    }),
+  });
+  const save = (client, fields) => client.callTool({ name: 'set_agent_credentials', arguments: { agent_guid: AGENT, fields } });
+  const googleKeys = ['clientid', 'clientsecret', 'developertoken'].map(field => ({ credential: 'google-ads', field, value: `own-${field}-value` }));
+  const metaToken = [{ credential: 'meta-ads', field: 'systemusertoken', value: 'EAAG-system-user-token' }];
+
+  // Own app keys, then a System User Token, each before its connection: no restart, and none to ask for. App keys
+  // read as empty once saved; the token reads as set.
+  const tokenSaved = { ...metaAds, systemusertoken: 'EAAG-system-user-token', _filled: true };
+  for (const [fields, credential, credentials] of [
+    [googleKeys, 'google-ads', { 'google-ads': googleAds, 'meta-ads': metaAds }],
+    [metaToken, 'meta-ads', { 'google-ads': googleAds, 'meta-ads': tokenSaved }],
+  ]) {
+    await withClient(readBack(4, credentials), async client => {
+      const result = await save(client, fields);
+      assert.notEqual(result.isError, true, text(result));
+      assert.deepEqual(result.structuredContent.notes, [awaitsNote], credential);
+      assert.match(text(result), /\n- The agent kept running: fields saved for a sign-in integration that is not connected yet/);
+      assert.doesNotMatch(text(result), /control_agent|matches what is stored/);
+      assert.equal(result.structuredContent.nextAction?.tool, 'connect_agent_oauth', credential);
+      assert.equal(result.structuredContent.nextAction?.arguments.credential, credential);
+      assert.doesNotMatch(JSON.stringify(result), /own-(clientid|clientsecret|developertoken)-value|EAAG-system-user-token/);
+    });
+  }
+
+  // An agent already stopping or queued, such as for a setup change approved in its chat, loads them with that restart.
+  await withClient(readBack(1, { 'google-ads': googleAds, 'meta-ads': metaAds }), async client => {
+    const result = await save(client, googleKeys);
+    assert.deepEqual(result.structuredContent.notes, ['The agent restarts to load the new values, which takes about a minute.']);
+  });
+
+  // A connected sign-in read back running: the save matched what is stored, as for any other credential.
+  await withClient(readBack(4, { hubspot }), async client => {
+    const result = await save(client, [{ credential: 'hubspot', field: 'clientid', value: 'same-client-id' }]);
+    assert.notEqual(result.isError, true, text(result));
+    assert.deepEqual(result.structuredContent.notes, [keptNote]);
+  });
+
+  // A write that also saves another credential restarts the agent when a value changes, so one read back running
+  // kept what was stored.
+  await withClient(readBack(4, { 'google-ads': googleAds, telegram }), async client => {
+    const result = await save(client, [...googleKeys, { credential: 'telegram', field: 'allowedusers', value: ['123456789'] }]);
+    assert.notEqual(result.isError, true, text(result));
+    assert.equal(result.structuredContent.notes[0], keptNote);
+    assert.doesNotMatch(text(result), /not connected yet/);
+  });
+});
+
 test('set_agent_credentials clears an optional field or a chat channel\'s field, never another required one', async () => {
   const fake = fakeClient({
     '/Credentials/Detail': credentialDetail,
