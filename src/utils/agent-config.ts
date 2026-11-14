@@ -1710,7 +1710,13 @@ export function isAllowedRedirectUrl(url: string, agentGuid: string, apiBase: st
 export function ownAppRedirectUri(meta: CredentialMeta, fromStatus?: string, apiBase: string = DEFAULT_BASE_URL): string | undefined {
   const callbackPath = meta.oauth?.callbackPath;
   if (!callbackPath) return undefined;
-  return fromStatus && isCallbackAddress(fromStatus, callbackPath) ? fromStatus : `${wiroAddresses(apiBase).callbackBase}${callbackPath}`;
+  return statusRedirectUri(meta, fromStatus) ?? `${wiroAddresses(apiBase).callbackBase}${callbackPath}`;
+}
+
+/** The redirect URI Wiro's status gave, when it is an address for this service's callback; else undefined. */
+export function statusRedirectUri(meta: CredentialMeta, fromStatus?: string): string | undefined {
+  const callbackPath = meta.oauth?.callbackPath;
+  return callbackPath && fromStatus && isCallbackAddress(fromStatus, callbackPath) ? fromStatus : undefined;
 }
 
 function isCallbackAddress(value: string, callbackPath: string): boolean {
@@ -1747,6 +1753,23 @@ export function writeOnlyModesNote(requirements: ModeRequirement[]): string | nu
   return modes.length > 0 ? writeOnlyNote(modes.join(' or ')) : null;
 }
 
+/**
+ * What Wiro's status says is saved for the modes that need something saved before they connect: the keys of the
+ * user's own app and the token a check reads. Empty when the status does not say, as from an older Wiro API.
+ */
+export function savedForModesText(meta: CredentialMeta, context: Pick<ModeContext, 'appKeysSaved' | 'tokenSaved'>): string {
+  const modes = usableConnectionModes(meta);
+  const sentences: string[] = [];
+  if (modes.includes('own') && context.appKeysSaved !== undefined) {
+    sentences.push(`The keys of the user's own ${meta.title} app (mode own) ${context.appKeysSaved ? 'are saved' : 'are not saved yet'}.`);
+  }
+  const probe = meta.oauth?.directProbe;
+  if (probe && modes.includes(probe.mode) && context.tokenSaved !== undefined) {
+    sentences.push(`The ${probe.label ?? 'token'} (mode ${probe.mode}) ${context.tokenSaved ? 'is saved' : 'is not saved yet'}.`);
+  }
+  return sentences.join(' ');
+}
+
 function fieldsForMode(meta: CredentialMeta, mode: string): CredentialField[] {
   if (mode === 'wiro') return [];
   const byKey = new Map(meta.fields.map(field => [field.key, field]));
@@ -1764,25 +1787,48 @@ function fieldsForMode(meta: CredentialMeta, mode: string): CredentialField[] {
     .filter(field => isWritableField(field));
 }
 
-/** The redirect URI Wiro's connection status gave, and the API base URL this server talks to. */
+/** What Wiro's connection status says about a connection's setup, and the API base URL this server talks to. */
 export interface ModeContext {
   /** The redirect URI to register in the user's own app, as Wiro's status gives it. */
   redirectUri?: string;
+  /** Every required field of mode own, such as the app keys, holds a value. */
+  appKeysSaved?: boolean;
+  /** Every field the token check reads holds a value. */
+  tokenSaved?: boolean;
   /** For the redirect URI when Wiro's status gives none. */
   apiBase?: string;
 }
 
-/** What each connection mode needs, with which of those fields are already saved. */
+/** The context of a status read, which may have failed (null): then only the API base URL. */
+export function modeContext(status: OAuthStatusSnapshot | null | undefined, apiBase: string): ModeContext {
+  return {
+    ...(status?.redirectUri ? { redirectUri: status.redirectUri } : {}),
+    ...(status?.appKeysSaved !== undefined ? { appKeysSaved: status.appKeysSaved } : {}),
+    ...(status?.tokenSaved !== undefined ? { tokenSaved: status.tokenSaved } : {}),
+    apiBase,
+  };
+}
+
+/**
+ * What each connection mode needs, with which of those fields are already saved. App keys read as empty in the
+ * agent's detail even once saved, so where Wiro's status says whether the own app's keys or the token check's
+ * fields are saved, that decides for them.
+ */
 export function connectionModeRequirements(meta: CredentialMeta, group: Row | null, context: ModeContext = {}): ModeRequirement[] {
   const modes = meta.connectionModes.length > 0 ? meta.connectionModes : ['wiro'];
   return modes.map(mode => {
+    const saved = mode === 'own'
+      ? context.appKeysSaved
+      : mode === meta.oauth?.directProbe?.mode ? context.tokenSaved : undefined;
     const fields = fieldsForMode(meta, mode).map(field => {
-      const isSet = group !== null && isFilledValue(group[field.key]);
+      // Wiro's word on mode own covers its required fields; on the token check, every field the check reads.
+      const statusSays = saved !== undefined && (mode !== 'own' || field.required);
+      const isSet = (group !== null && isFilledValue(group[field.key])) || (statusSays && saved === true);
       return {
         field: field.key,
         label: field.label,
         isSet,
-        ...(field.oauthManaged && !isSet ? { writeOnly: true } : {}),
+        ...(field.oauthManaged && !isSet && !statusSays ? { writeOnly: true } : {}),
       };
     });
     if (mode === 'wiro') {
