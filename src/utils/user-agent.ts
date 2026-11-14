@@ -1401,7 +1401,9 @@ const PRE_CHARGE_REFUSALS: RegExp[] = [
   /^the (scheduled )?plan change could not be (scheduled|cancelled)\./i,
   /^we couldn't (schedule|undo) the cancellation\./i,
   /enabledchannels is not accepted|credentials must be an object|credential field|is missing required fields/i,
-  /chat mode is not accepted|is managed by (wiro|the connection flow)|^agent-[a-z-]+$/i,
+  // A field the connection flow fills, or one Wiro fills: "is managed by the platform", as Wiro words it now, or
+  // "by Wiro", as it did.
+  /chat mode is not accepted|is managed by (wiro|the platform|the connection flow)|^agent-[a-z-]+$/i,
   /^failed to deploy agent|failed to save communication channel settings|failed to save custom skill/i,
 ];
 

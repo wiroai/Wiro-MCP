@@ -993,6 +993,20 @@ test('the refusals that come before any charge settle the outcome', () => {
   assert.equal(isPreChargeRefusal(apiError("The agent's plan could not be read.")), false, 'only the sentence that says nothing was charged');
 });
 
+// A deploy or credential write that sets a field Wiro or the connection flow fills is refused before anything is
+// created or charged. Wiro's sentence names no brand now: "is managed by the platform", where it said "by Wiro".
+test('a field Wiro fills, refused before any charge, settles the outcome in either wording', () => {
+  for (const message of [
+    'Telegram Bot Token is managed by the platform',
+    'telegram.bottoken is managed by the platform',
+    'Telegram Bot Token is managed by Wiro',
+    'Portal is managed by the connection flow',
+  ]) {
+    assert.equal(isPreChargeRefusal(apiError(message)), true, message);
+    assert.equal(outcomeUnknown(apiError(message)), false, message);
+  }
+});
+
 test('an answer that says what the wallet paid settles the outcome on the fixed words of its sentence', () => {
   const sentences = [
     'The wallet was charged $98.00, but the tier change did not finish. Please contact support and do not try again.',
