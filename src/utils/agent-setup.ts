@@ -37,7 +37,10 @@ import {
 // the yes that applies the add is sent, and it is saved with
 // set_agent_credentials as the very next step: the agent stays stopping or
 // queued for the restart the add started only for seconds, and a key saved then
-// loads with that same restart.
+// loads with that same restart. One that connects with a sign-in, the user's own
+// app keys or a token comes with its connect card too, but a reply never
+// connects it: that is done with connect_agent_oauth or on the agent page once
+// the add is applied.
 
 /** A pending proposal older than this cannot be approved with a typed reply. */
 export const SETUP_REPLY_WINDOW_SECONDS = 30 * 60;
@@ -66,10 +69,12 @@ const MAX_NAME_LENGTH = 64;
 const MAX_WITH = 12;
 const MAX_TASKS = 20;
 const MAX_NEEDS = 3;
-// How a connector an add brings is connected: its key, a sign-in, or a setup on the agent page
-// (files, service accounts, a Wiro project).
-export const SETUP_NEED_MODES = ['key', 'signin', 'page'] as const;
+// How a connector an add brings is connected: its key, a sign-in with Wiro's app, the user's own app keys and
+// then a sign-in, a token that Wiro checks, or a setup on the agent page (files, service accounts, a Wiro project).
+export const SETUP_NEED_MODES = ['key', 'signin', 'appkeys', 'token', 'page'] as const;
 type SetupNeedMode = typeof SETUP_NEED_MODES[number];
+// The modes whose connect card a reply never connects.
+const SIGN_IN_NEED_MODES: readonly SetupNeedMode[] = ['signin', 'appkeys', 'token'];
 
 export const CHAT_SETUP_MODES = ['off', 'webchat', 'all'] as const;
 export type ChatSetupMode = typeof CHAT_SETUP_MODES[number];
@@ -118,8 +123,9 @@ export const setupChangeSchema = z.object({
     .describe('Add and remove: the scheduled tasks, by key, that run again with the change. Wiro adds it.'),
   needs: z.array(setupNeedSchema).optional()
     .describe('Add: the connectors the change brings that are not connected yet, and how each one connects: key '
-      + '(its key, saved with set_agent_credentials, never in a chat message), signin (a sign-in on the agent page) '
-      + 'or page (set up on the agent page). Wiro adds it.'),
+      + '(its key, saved with set_agent_credentials, never in a chat message), signin (a sign-in with Wiro\'s app), '
+      + 'appkeys (the user\'s own app keys, then a sign-in), token (a token that Wiro checks), each of these three '
+      + 'with connect_agent_oauth or on the agent page, or page (set up on the agent page). Wiro adds it.'),
   note: z.string().optional(),
   status: z.enum(SETUP_CHANGE_STATUSES),
   proposedAt: z.string().optional(),
@@ -414,6 +420,10 @@ const NEED_HOW: Record<SetupNeedMode, string> = {
   key: 'its key. Ask the user for it together with their yes to this change, and save it with set_agent_credentials '
     + 'as soon as this change is applied (one restart then loads both), never in a chat message',
   signin: 'sign in on the agent page, or with connect_agent_oauth',
+  appkeys: 'the user\'s own app keys, then a sign-in, on the agent page or with set_agent_credentials and then '
+    + 'connect_agent_oauth, never in a chat message',
+  token: 'its token, which Wiro checks, on the agent page or with set_agent_credentials and then connect_agent_oauth, '
+    + 'never in a chat message',
   page: 'set up on the agent page',
 };
 
@@ -445,14 +455,19 @@ function registryChangeLines(change: SetupChange): string[] {
 }
 
 /**
- * The number of the pending add on the same reply that brings this connect card's connector with a key (the
- * add-and-connect pair Wiro makes), or undefined.
+ * The pending add on the same reply that brings this connect card's connector with a key, a sign-in, the user's
+ * own app keys or a token (the add-and-connect pair Wiro makes): its number and how the connector connects, or
+ * undefined.
  */
-function pairedAddNumber(change: SetupChange, pending: readonly SetupChange[]): number | undefined {
+function pairedAdd(change: SetupChange, pending: readonly SetupChange[]): { number: number; mode: SetupNeedMode } | undefined {
   if (change.kind !== 'connect' || !change.connector) return undefined;
-  const index = pending.findIndex(other => other.kind === 'add'
-    && other.needs?.some(need => need.connector === change.connector && need.mode === 'key'));
-  return index >= 0 ? index + 1 : undefined;
+  for (const [index, other] of pending.entries()) {
+    if (other.kind !== 'add') continue;
+    const need = other.needs?.find(candidate => candidate.connector === change.connector
+      && (candidate.mode === 'key' || SIGN_IN_NEED_MODES.includes(candidate.mode as SetupNeedMode)));
+    if (need?.mode) return { number: index + 1, mode: need.mode };
+  }
+  return undefined;
 }
 
 function pendingChangeLines(change: SetupChange, index: number, nowMs: number, pending: readonly SetupChange[]): string[] {
@@ -462,11 +477,14 @@ function pendingChangeLines(change: SetupChange, index: number, nowMs: number, p
     lines.push(`- Schedule: ${quotedSpan(change.cron)} (cron: minute, hour, day of month, month, weekday; in the `
       + 'agent\'s time zone)');
   }
-  const pairedAdd = pairedAddNumber(change, pending);
-  if (pairedAdd !== undefined) {
-    lines.push(`- Connects what proposed change ${pairedAdd} adds. Ask the user for the key together with their yes to `
-      + `change ${pairedAdd}. Once change ${pairedAdd} is applied, save the key with set_agent_credentials at once, `
+  const paired = pairedAdd(change, pending);
+  if (paired?.mode === 'key') {
+    lines.push(`- Connects what proposed change ${paired.number} adds. Ask the user for the key together with their yes to `
+      + `change ${paired.number}. Once change ${paired.number} is applied, save the key with set_agent_credentials at once, `
       + 'never in a chat message: one restart then loads both.');
+  } else if (paired) {
+    lines.push(`- Connects what proposed change ${paired.number} adds, once it is applied: ${NEED_HOW[paired.mode]}. `
+      + 'A reply does not connect it.');
   } else if (change.kind === 'connect') {
     lines.push('- The user provides the key or sign-in for it. A key is saved with set_agent_credentials, never sent '
       + 'in a chat message.');
