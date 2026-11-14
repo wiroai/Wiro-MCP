@@ -16,6 +16,7 @@ import {
   OAUTH_LINK_TTL_SECONDS,
   accountLabel,
   agentStatusOf,
+  apiBaseUrlOf,
   buildChainedSelections,
   chooseConnectionMode,
   connectionModeRequirements,
@@ -278,11 +279,12 @@ async function connect(
   const refusal = unusedCredentialRefusal(row, context, await loadSkillRegistry(client, signal));
   if (refusal) return errorResult(new Error(refusal));
   const group = credentialGroup(row, credential);
+  const apiBase = apiBaseUrlOf(client);
   // One status read gives the connection time before this sign-in and the redirect URI Wiro gives for the user's
   // own app. A connect still goes ahead without it.
   const before = await readOAuthStatus(client, agentGuid, credential, oauth.picker, signal).catch(() => null);
-  const modes = connectionModeRequirements(meta, group, before?.redirectUri);
-  const redirectUri = meta.connectionModes.includes('own') ? ownAppRedirectUri(meta, before?.redirectUri) : undefined;
+  const modes = connectionModeRequirements(meta, group, { redirectUri: before?.redirectUri, apiBase });
+  const redirectUri = meta.connectionModes.includes('own') ? ownAppRedirectUri(meta, before?.redirectUri, apiBase) : undefined;
   const setupExtra = { connectionModes: modes, ...(redirectUri ? { ownAppRedirectUri: redirectUri } : {}) };
   const describeAction = {
     tool: 'set_agent_credentials',
@@ -413,9 +415,9 @@ async function connect(
       { mode });
   }
 
-  const redirectUrl = input.redirectUrl?.trim() || dashboardAgentUrl(agentGuid);
-  if (!isAllowedRedirectUrl(redirectUrl, agentGuid)) {
-    return errorResult(new Error(`redirect_url can only be the agent's page in the Wiro dashboard (${dashboardAgentUrl(agentGuid)}) or a local address on the user's own machine (http://localhost or http://127.0.0.1, any port). Leave it out to use the dashboard page.`));
+  const redirectUrl = input.redirectUrl?.trim() || dashboardAgentUrl(agentGuid, apiBase);
+  if (!isAllowedRedirectUrl(redirectUrl, agentGuid, apiBase)) {
+    return errorResult(new Error(`redirect_url can only be the agent's page in the Wiro dashboard (${dashboardAgentUrl(agentGuid, apiBase)}) or a local address on the user's own machine (http://localhost or http://127.0.0.1, any port). Leave it out to use the dashboard page.`));
   }
   const since = before?.connectedAt ?? '';
   const answer = await client.post<ConnectBody>('/UserAgentOAuth/OAuthConnect', {
@@ -434,7 +436,7 @@ async function connect(
       : '';
     return result('connect', context, 'setup_needed',
       `Mode ${mode} needs these saved first with set_agent_credentials: ${appKeys.map(field => `${field.label} (${field.field})`).join(', ')}. ${requirement.note}${goneText}`,
-      { ...setupExtra, connectionModes: connectionModeRequirements(meta, groupNow, before?.redirectUri), mode, nextAction: describeAction });
+      { ...setupExtra, connectionModes: connectionModeRequirements(meta, groupNow, { redirectUri: before?.redirectUri, apiBase }), mode, nextAction: describeAction });
   }
   const body = requireApiSuccess(answer, `Could not start the ${meta.title} sign-in.`);
   const authorizeUrl = asString(body.authorizeUrl);

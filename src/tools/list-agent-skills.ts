@@ -20,6 +20,7 @@ import {
   type SkillSummary,
 } from '../utils/agent-catalog.js';
 import {
+  apiBaseUrlOf,
   connectionModeRequirements,
   loadSkillRegistry,
   parseCredentialMeta,
@@ -83,10 +84,10 @@ interface CredentialEntry {
   modes: ModeRequirement[];
 }
 
-function toCredentialEntry(credential: Record<string, unknown>, role: CredentialSetup['role']): CredentialEntry {
+function toCredentialEntry(credential: Record<string, unknown>, role: CredentialSetup['role'], apiBase: string): CredentialEntry {
   return {
     setup: toCredentialSetup(credential, role),
-    modes: connectionModeRequirements(parseCredentialMeta(credential), null).filter(mode => mode.available),
+    modes: connectionModeRequirements(parseCredentialMeta(credential), null, { apiBase }).filter(mode => mode.available),
   };
 }
 
@@ -211,7 +212,7 @@ export function registerListAgentSkills(server: McpServer, client: WiroClient): 
             for (const entry of keys) {
               if (isPlatformCredentialKey(entry.key)) continue;
               const credential = await readCredential(client, entry.key, extra.signal);
-              if (credential) credentials.push(toCredentialEntry(credential, entry.role));
+              if (credential) credentials.push(toCredentialEntry(credential, entry.role, apiBaseUrlOf(client)));
             }
           } else {
             const credential = await readCredential(client, key, extra.signal);
@@ -222,7 +223,7 @@ export function registerListAgentSkills(server: McpServer, client: WiroClient): 
                 {},
               );
             }
-            credentials.push(toCredentialEntry(credential, 'credential'));
+            credentials.push(toCredentialEntry(credential, 'credential', apiBaseUrlOf(client)));
           }
 
           const lines: string[] = [];

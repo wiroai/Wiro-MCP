@@ -15,6 +15,7 @@ import {
   afterWriteNotes,
   agentStatusLabel,
   agentStatusOf,
+  apiBaseUrlOf,
   channelStatuses,
   chooseConnectionMode,
   connectionModeRequirements,
@@ -432,7 +433,7 @@ export function registerSetAgentCredentials(server: McpServer, client: WiroClien
           }
           const written = new Set(prepared.apiFields.filter(field => field.credentialkey === key).map(field => field.fieldname));
           const authMethod = prepared.apiFields.find(field => field.credentialkey === key && field.fieldname === 'authmethod')?.fieldvalue;
-          const modes = connectionModeRequirements(meta, credentialGroup(row, key));
+          const modes = connectionModeRequirements(meta, credentialGroup(row, key), { apiBase: apiBaseUrlOf(client) });
           const mode = connectModeFor(meta, written, typeof authMethod === 'string' ? authMethod : undefined)
             ?? chooseConnectionMode(meta, modes);
           if (!mode || (mode === 'api_key' && !meta.oauth.directProbe)) continue;
@@ -511,8 +512,9 @@ async function describeCredential(
   const group = row ? credentialGroup(row, key) : null;
   const status = row ? credentialStatus(row, key, meta) : null;
   const kind = credentialKind(meta);
-  const modes = meta.oauth ? connectionModeRequirements(meta, group) : undefined;
-  const redirectUri = meta.oauth && meta.connectionModes.includes('own') ? ownAppRedirectUri(meta) : undefined;
+  const apiBase = apiBaseUrlOf(client);
+  const modes = meta.oauth ? connectionModeRequirements(meta, group, { apiBase }) : undefined;
+  const redirectUri = meta.oauth && meta.connectionModes.includes('own') ? ownAppRedirectUri(meta, undefined, apiBase) : undefined;
   const fields = meta.fields.map(describeField);
 
   if (row && await isPlainTeamMember(client, row, signal)) {
