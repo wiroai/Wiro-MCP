@@ -476,13 +476,15 @@ test('deployed agent refusals say who can act on a team agent without reading th
   const cases = [
     [0, 'Agent is stopped. Start it from the agent panel before sending messages.', /On a team agent, starting it needs a team admin or the person who deployed it\.$/],
     [5, 'Agent is in error state. Restart it from the agent panel before sending messages.', /On a team agent, both need a team admin or the person who deployed it\.$/],
-    [6, 'Agent setup is incomplete. Complete the setup before sending messages.', /On a team agent, a team admin or the person who deployed it saves credentials and pays for the plan, and only the person who deployed it can use connect_agent_oauth\.$/],
+    // A team admin connects accounts too, as Wiro allows it.
+    [6, 'Agent setup is incomplete. Complete the setup before sending messages.', /On a team agent, a team admin or the person who deployed it saves credentials, connects accounts with connect_agent_oauth and pays for the plan\.$/],
   ];
   for (const [agentstatus, message, expect] of cases) {
     const fake = fakeClient({ '/UserAgent/Message/Send': { result: false, errors: [{ code: 0, message }], agentstatus } });
     await withClient(fake, async client => {
       const result = await client.callTool({ name: 'send_agent_message', arguments: { agent: 'agent-guid-1', message: 'hello' } });
       assert.match(textOf(result), expect);
+      assert.doesNotMatch(textOf(result), /only the person who deployed it can/);
       assert.deepEqual(fake.calls.map(call => call.path), ['/UserAgent/Message/Send']);
     });
   }
