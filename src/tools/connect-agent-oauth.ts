@@ -154,7 +154,9 @@ function oauthHint(message: string, meta: CredentialMeta, code?: string): string
   if (/credentials not configured/i.test(message)) {
     return `Save your own ${meta.title} app keys with set_agent_credentials first (call it with credential "${meta.key}" to see the fields).`;
   }
-  if (/wiro-managed oauth is not enabled/i.test(message)) {
+  // A sign-in with Wiro's own app that is not open for this service: "Sign-in with the platform's app is not enabled
+  // for <title>", as Wiro words it now, or "Wiro-managed OAuth is not enabled for <title>", as it did.
+  if (/(sign-in with the platform's app|wiro-managed oauth) is not enabled/i.test(message)) {
     return 'Connect this service with mode own (your own app) or api_key where offered.';
   }
   if (/no pending .* connection/i.test(message)) {
