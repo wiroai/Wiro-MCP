@@ -114,7 +114,7 @@ const outputSchema = {
 };
 
 type Action = 'connect' | 'status' | 'select_accounts';
-type ConnectBody = ApiEnvelope & { authorizeUrl?: unknown; accounts?: unknown; errorcode?: unknown };
+type ConnectBody = ApiEnvelope & { authorizeUrl?: unknown; accounts?: unknown; errorcode?: unknown; restart?: unknown };
 type PickerBody = ApiEnvelope & Record<string, unknown>;
 
 interface Context {
@@ -371,7 +371,14 @@ async function connect(
       }
       // An error result reads as nothing done, so it says what the check still did.
       if (modeSaved) parts.push(`The mode is saved as ${mode}.`);
-      if ((modeSaved || code) && isAgentRunning(agentStatusOf(row))) {
+      // Wiro restarts a running agent after a failed check only when the check cleared a connection that read
+      // connected before it, and says so in restart. Saving the mode restarts it only when the service read
+      // connected. An answer without restart, from an older Wiro API, goes by the saved mode and the code.
+      const restart = asString(body.restart);
+      const restarts = restart === undefined
+        ? modeSaved || Boolean(code)
+        : restart === 'scheduled' || (modeSaved && connectedBefore);
+      if (restarts && isAgentRunning(agentStatusOf(row))) {
         parts.push('The running agent restarts, which takes about a minute.');
       }
       return errorResult(new Error(parts.join(' ')));

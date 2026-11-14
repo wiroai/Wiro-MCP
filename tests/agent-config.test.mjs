@@ -2254,6 +2254,50 @@ test('connect_agent_oauth says what a direct check that did not pass still did',
   assert.ok(!seen.body.includes(RESTART), seen.body);
 });
 
+test('connect_agent_oauth says a failed token check restarts the agent only when Wiro says it does', async () => {
+  // Wiro restarts a running agent after a failed check only when the check cleared a connection that read connected
+  // before it, and says so in restart. Saving the mode restarts it only when the service read connected.
+  const check = async ({ authmethod, connected = false, answer }) => {
+    const row = detailRow({ skills: skillsOn('int-metaads-manage') });
+    row.credentials['meta-ads'] = { ...row.credentials['meta-ads'], systemusertoken: 'EAAB-token', authmethod, _connected: connected };
+    const fake = fakeClient({
+      '/Credentials/Detail': credentialDetail,
+      '/Skills/List': connectSkillList,
+      '/UserAgent/Detail': { result: true, useragents: [row] },
+      '/UserAgent/CredentialUpsert': { result: true, errors: [], applied: 1 },
+      '/UserAgentOAuth/OAuthConnect': answer,
+    });
+    let result;
+    await withClient(fake, async client => {
+      result = await client.callTool({ name: 'connect_agent_oauth', arguments: { agent_guid: AGENT, credential: 'meta-ads', mode: 'api_key', confirm: true } });
+    });
+    assert.equal(result.isError, true, text(result));
+    return text(result);
+  };
+  const failed = extra => ({ result: false, errorcode: 'direct_probe_failed', errors: [{ code: 0, message: 'Meta Ads did not accept the System User Token.' }], ...extra });
+  const RESTART = 'The running agent restarts, which takes about a minute.';
+
+  // Scheduled: the check cleared the connection the agent had, so the running agent restarts without it.
+  let body = await check({ authmethod: 'api_key', connected: true, answer: failed({ restart: 'scheduled' }) });
+  assert.ok(body.includes('Connect again to restore the connection.'), body);
+  assert.ok(body.includes(RESTART), body);
+
+  // None: nothing read connected, so neither the saved mode nor the check restarts the agent.
+  body = await check({ authmethod: 'own', answer: failed({ restart: 'none' }) });
+  assert.ok(body.includes('The mode is saved as api_key.'), body);
+  assert.doesNotMatch(body, /restart/i);
+  body = await check({ authmethod: 'api_key', answer: failed({ restart: 'none' }) });
+  assert.doesNotMatch(body, /restart/i);
+
+  // The mode saved for a service that read connected restarts the agent, whatever the check says.
+  body = await check({ authmethod: 'own', connected: true, answer: failed({ restart: 'none' }) });
+  assert.ok(body.includes(RESTART), body);
+
+  // No restart field, from an older Wiro: the running agent is still said to restart.
+  body = await check({ authmethod: 'api_key', answer: failed() });
+  assert.ok(body.includes(RESTART), body);
+});
+
 test('connect_agent_oauth asks before a sign-in removes a saved token', async () => {
   const metaAds = { appid: '', appsecret: '', systemusertoken: 'EAAG-system-user-token', _connected: false, _filled: true, _required_missing: false, optional: false, _schema: { title: 'Meta Ads' } };
   const fake = fakeClient({
