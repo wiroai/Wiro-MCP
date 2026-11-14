@@ -2092,6 +2092,26 @@ test('connect_agent_oauth keeps the refusal an error for a mode with no app keys
   });
 });
 
+// Wiro refuses a sign-in with its own app for a service where that is not open. Its sentence names no brand now
+// ("Sign-in with the platform's app"); it said "Wiro-managed OAuth" before.
+test('connect_agent_oauth points to the user\'s own app when Wiro\'s app is not open for the service, in either wording', async () => {
+  for (const message of ['Sign-in with the platform\'s app is not enabled for HubSpot', 'Wiro-managed OAuth is not enabled for HubSpot']) {
+    const fake = fakeClient({
+      '/Credentials/Detail': credentialDetail,
+      '/Skills/List': connectSkillList,
+      '/UserAgent/Detail': detail({ skills: skillsOn('int-hubspot-crm') }),
+      '/UserAgentOAuth/OAuthStatus': { result: true, connected: false, accounts: [], connectedat: '', tokenexpiresat: '' },
+      '/UserAgentOAuth/OAuthConnect': { result: false, errors: [{ code: 0, message }] },
+    });
+    await withClient(fake, async client => {
+      const result = await client.callTool({ name: 'connect_agent_oauth', arguments: { agent_guid: AGENT, credential: 'hubspot', mode: 'wiro' } });
+      assert.equal(result.isError, true);
+      assert.equal(text(result), `## Error\n\n${message}\n\nConnect this service with mode own (your own app) or api_key where offered.`);
+      assert.equal(fake.called('/UserAgentOAuth/OAuthConnect')[0].body.authmethod, 'wiro');
+    });
+  }
+});
+
 test('connect_agent_oauth passes on any other refusal from the sign-in route', async () => {
   const fake = fakeClient({
     '/Credentials/Detail': credentialDetail,
