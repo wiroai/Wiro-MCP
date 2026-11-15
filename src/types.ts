@@ -169,6 +169,12 @@ export interface ToolParameterItem {
   maxvalue?: string | number;
   incrementby?: string | number;
   advanced?: boolean;
+  /**
+   * Kept for callers that already send it, not offered: a file input's former
+   * `{id}Url` / `...UrlMultiple` field after the input took URLs itself. The
+   * model page leaves it out, and so does the schema here.
+   */
+  hidden?: boolean | string;
   jsonschema?: Record<string, unknown> | string | null;
 }
 

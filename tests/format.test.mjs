@@ -604,3 +604,36 @@ test('estimatedCostUsd is null whenever there is no positive estimate', () => {
   assert.equal(toStructuredModel({ ...catalogModel('acme/model'), approximatelycost: 'n/a' }).estimatedCostUsd, null);
   assert.equal(toStructuredModel({ ...catalogModel('qwen/qwen3-8-27b'), approximatelycost: 0.01950320415013732 }).estimatedCostUsd, 0.01950320415013732);
 });
+
+test('get_model_schema leaves out a hidden parameter, such as a file input\'s former URL field', () => {
+  // wiro/text-removal after its file input took URLs itself: inputImageUrl is
+  // kept for callers that already send it, and the model page hides it.
+  const model = {
+    ...catalogModel('wiro/text-removal', '[{"inputs":{},"price":0.04,"priceMethod":"cpr"}]'),
+    parameters: [
+      {
+        title: '',
+        items: [
+          { id: 'inputImage', type: 'combinefileinput', label: 'Image', defaultvalue: 'wiro-text-removal.jpeg', maxinputlenght: 1 },
+          { id: 'inputImageUrl', type: 'text', label: 'Image URL', hidden: true },
+          { id: 'outputFormat', type: 'select', label: 'Output Format', defaultvalue: 'jpeg', options: [{ value: 'jpeg', text: 'jpeg' }, { value: 'png', text: 'png' }] },
+        ],
+      },
+      // A group with nothing but hidden items is not shown at all.
+      { title: 'Legacy', items: [{ id: 'inputVideoUrlMultiple', type: 'text', label: 'Video URLs', hidden: 'true' }] },
+      { title: 'Shown', items: [{ id: 'seed', type: 'text', label: 'seed', hidden: false }] },
+    ],
+  };
+
+  const text = formatModelSchema(model);
+  assert.match(text, /- \*\*`inputImage`\*\* \(combinefileinput\)/);
+  assert.match(text, /- \*\*`outputFormat`\*\* \(select\)/);
+  assert.match(text, /#### Shown/);
+  assert.doesNotMatch(text, /inputImageUrl|inputVideoUrlMultiple|Image URL|#### Legacy/);
+
+  const detail = toStructuredModelDetail(model);
+  assert.deepEqual(
+    detail.model.parameters.map(group => [group.title, group.items.map(item => item.id)]),
+    [['', ['inputImage', 'outputFormat']], ['Shown', ['seed']]]
+  );
+});

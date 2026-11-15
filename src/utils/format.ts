@@ -401,6 +401,20 @@ export function isSampleParameter(item: ToolParameterItem): boolean {
   return SAMPLE_TYPES.has(String(item.type)) || id.includes('input') || SAMPLE_IDS.has(id);
 }
 
+/**
+ * The parameter groups a schema shows. A hidden item is not offered: it is a
+ * field kept for callers that already send it, such as a file input's former
+ * `{id}Url` / `...UrlMultiple` once the input takes URLs itself. A group that
+ * only held hidden items goes too.
+ */
+export function shownParameterGroups(groups: ToolParameterGroup[] | null | undefined): ToolParameterGroup[] {
+  return (groups ?? []).flatMap(group => {
+    const items = group.items ?? [];
+    const shown = items.filter(item => item.hidden !== true && String(item.hidden) !== 'true');
+    return items.length > 0 && shown.length === 0 ? [] : [{ ...group, items: shown }];
+  });
+}
+
 /** What a left-out parameter gets: `default` in a run, `sample` only in a workflow step. */
 export function parameterFallback(item: ToolParameterItem): { default?: string; sample?: string } {
   const id = String(item.id);
@@ -490,11 +504,12 @@ export function formatModelSchema(model: ToolListItem): string {
     lines.push('');
   }
 
-  if (model.parameters && model.parameters.length > 0) {
+  const parameterGroups = shownParameterGroups(model.parameters);
+  if (parameterGroups.length > 0) {
     lines.push('### Parameters');
     lines.push('');
 
-    for (const group of model.parameters) {
+    for (const group of parameterGroups) {
       if (group.title) {
         lines.push(`#### ${group.title}`);
         lines.push('');

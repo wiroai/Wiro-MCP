@@ -15,6 +15,7 @@ import {
   parameterFallback,
   parameterRange,
   pricingNotes,
+  shownParameterGroups,
   toParameterOption,
 } from './format.js';
 import {
@@ -305,7 +306,7 @@ export function toStructuredModelDetail(model: ToolListItem): {
       ...summary,
       ...(pricing ? { pricing } : {}),
       ...(notes.length > 0 ? { pricingNotes: notes } : {}),
-      parameters: (model.parameters ?? []).map(group => ({
+      parameters: shownParameterGroups(model.parameters).map(group => ({
         title: group.title || '',
         items: group.items.map(item => compact({
           id: String(item.id),
