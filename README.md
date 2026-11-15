@@ -305,7 +305,7 @@ your wallet after each reply. Your own agents run on a monthly plan with credits
 
 | Tool | Description |
 |------|-------------|
-| `list_agent_templates` | Browse ready-made agent templates and their monthly prices |
+| `list_agent_templates` | Browse ready-made agent templates and the three monthly plans |
 | `get_agent_template` | Read a template's skills, plans, and the accounts and keys it needs |
 | `list_agent_skills` | Browse the skills an agent can have, and what each one needs to work |
 | `deploy_agent` | Deploy an agent from a template or build one from skills, on the Starter, Pro or Max plan; shows the plan's price, the wallet it charges and the other plans' prices, and asks before charging |
