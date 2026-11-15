@@ -306,7 +306,8 @@ export function registerRunModel(
     {
       title: 'Run a Wiro model',
       description: 'Run any AI model on Wiro. Supports image, video, text, audio, '
-        + '3D, and more. Call `get_model_schema` first. With `wait=true` this '
+        + '3D, and more. Call `get_model_schema` first. Each run costs money: tell the user '
+        + 'the expected cost in one line and wait for their yes before calling it. With `wait=true` this '
         + 'performs a bounded wait; when the response contains '
         + '`nextAction.tool = "wait_for_task"`, call that tool with the exact '
         + 'arguments returned. Do not resubmit the original request. A completed '

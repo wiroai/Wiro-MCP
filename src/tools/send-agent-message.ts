@@ -57,7 +57,7 @@ export function registerSendAgentMessage(server: McpServer, client: WiroClient):
         + 'their outputs as modelRuns. One message can start several paid model runs; they and the agent\'s own '
         + 'usage are billed after the turn to the wallet of the connected project\'s workspace (the team wallet for team '
         + 'projects). Studio and the Workflow Agent need at least $10 in that wallet to start; a turn can cost more '
-        + 'than that minimum. '
+        + 'than that minimum, so tell the user what a turn can cost and wait for their yes before each one. '
         + 'The Workflow Agent ("workflow-agent") designs Wiro workflows; its usage is billed to the same wallet. '
         + 'Pass workflow to have it edit an existing one. It never saves anything: valid workflows in its reply come '
         + 'back under workflows, and you save the one the user picks with save_workflow_from_agent (a request to save it is that choice). '

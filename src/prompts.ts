@@ -68,7 +68,7 @@ function createWithStudioText(request: string | undefined): string {
     'Before anything else, call `get_playbook` with the topic "studio" and follow it.',
     '',
     'Plan:',
-    '1. Call `get_account`. Tell me in one line that a Studio turn needs at least $10 in the wallet to start (a minimum, not a spending cap) and is billed after the turn for its chat and each model run it starts. If my request is large or open-ended, such as many videos, agree on the scope with me first.',
+    '1. Call `get_account`. Tell me in one line that a Studio turn needs at least $10 in the wallet to start (a minimum, not a spending cap) and is billed after the turn for its chat and each model run it starts, and wait for my yes before sending. If my request is large or open-ended, such as many videos, agree on the scope with me first.',
     `2. Call \`send_agent_message\` with agent "studio", my request and a new session name. ${SESSION_NAME_RULE}`,
     '3. If the reply is not ready, follow its `nextAction` with `get_agent_message` until the turn completes. Never send the request again.',
     '4. Show me every file from the turn\'s model runs, inline when you can, with its link and the cost. If Studio says it is working in the background, or a result is missing, collect the rest with `list_studio_results`.',
@@ -136,7 +136,7 @@ export function registerPrompts(server: McpServer, toolsets: readonly Toolset[] 
       'create_with_studio',
       {
         title: 'Create with Wiro Studio',
-        description: 'Ask Wiro Studio to create images, video or audio, after explaining what a turn can cost.',
+        description: 'Ask Wiro Studio to create images, video or audio, after showing what a turn can cost and getting a yes.',
         argsSchema: {
           request: z.string().describe('What to create, e.g. "three square product shots of a ceramic mug on a wooden table".'),
         },
