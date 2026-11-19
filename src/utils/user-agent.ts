@@ -1355,8 +1355,8 @@ export function nextStepForAgent(agent: AgentDetail, waitSeconds: number, plainM
   return undefined;
 }
 
-// Refusals known to leave the wallet untouched.
-const PRE_CHARGE_CODES = new Set([95, 96, 97, 99, 101, 102, 103, 104, 105, 106, 107, 108, 109]);
+// Refusals known to leave the wallet untouched (93: a spend limit refused the purchase).
+const PRE_CHARGE_CODES = new Set([93, 95, 96, 97, 99, 101, 102, 103, 104, 105, 106, 107, 108, 109]);
 
 const WALLET_NOT_READ = /could not retrieve wallet balance/i;
 
