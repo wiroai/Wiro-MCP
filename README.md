@@ -14,11 +14,12 @@ Official MCP server for Wiro AI: run image, video, audio and LLM models, build a
 
 </div>
 
-`@wiro-ai/wiro-mcp` is a TypeScript [Model Context Protocol](https://modelcontextprotocol.io/) server that runs locally over stdio, with `npx` or [Docker](#docker). Its tools are grouped in three sets:
+`@wiro-ai/wiro-mcp` is a TypeScript [Model Context Protocol](https://modelcontextprotocol.io/) server that runs locally over stdio, with `npx` or [Docker](#docker). Its tools are grouped in four sets:
 
 - **Models**: search the Wiro AI model catalog, read a model's parameters and price, run it and wait for the result, upload input files and browse past tasks.
 - **Workflows**: build multi-step workflows that chain models, run them, resume failed runs, browse the public gallery, and design workflows together with the Workflow Agent.
 - **Agents**: talk to Studio, the creative agent that runs models for you, and deploy, configure, run and message your own agents built from templates or from scratch.
+- **Controls**: see and change your workspace's Spend Limits and Model Access rules, the caps on what it spends and the rules on which models it runs, always after a change summary you confirm.
 
 Playbooks explain each job step by step, so the assistant knows the order of calls, what costs money and what needs your approval. The hosted server at `https://mcp.wiro.ai/v1` serves the same tools with nothing to install.
 
@@ -159,6 +160,13 @@ Ask your AI assistant:
 - *"Which agent templates can manage Instagram? What does each plan cost?"*
 - *"Deploy the Instagram manager agent on the Starter plan and tell me what it still needs"*
 - *"Tell my support agent to summarise today's tickets"*
+
+**Controls**
+
+- *"Cap our whole team at $500 a month"*
+- *"Stop Jane from using video models"*
+- *"Why was my last run refused, and what would allow it?"*
+- *"What did we spend this month, and who spent it?"*
 
 ## Docker
 
@@ -324,12 +332,36 @@ your wallet after each reply. Your own agents run on a monthly plan with credits
 | `get_agent_activity` | Read an agent's credit usage and activity logs, including who changed what on it |
 | `delete_agent` | Delete an agent, after your confirmation |
 
+### Controls
+
+Spend Limits cap what a workspace spends in a month or a day, in USD, and Model Access
+rules allow or block models by category or one by one. Each covers the whole wallet, one
+team member, one API key, one way in (the dashboard, the API, the hosted MCP server, the LLM
+gateway, the browser extensions or agents) or one agent, and every limit and rule that
+applies to a run must allow it. Work they refuse never runs and is never charged: error code
+93 for a spend limit, 92 for a Model Access rule. A local install of this server sends its
+calls with your API key, so it counts as the API.
+
+| Tool | Description |
+|------|-------------|
+| `get_controls` | Show the workspace's spend limits with what each used, what is left and when it resets (UTC), its Model Access rules in plain words, and this month's or today's spending by way in, member, API key and agent |
+| `check_model_access` | Check how the rules decide one model for one run, rule by rule, and get the change summary that would allow it; nothing runs |
+| `manage_spend_limit` | Set, raise, lower or remove a monthly or daily spend limit, after your confirmation |
+| `manage_model_access` | Update, replace or remove a Model Access rule, after your confirmation |
+
+Only the account owner, a team admin or the organization's owner can change them; other
+team members can read them. Calls act as the person who created the connected project, so
+with a team, connect a project you created as an admin. Every change shows a summary first
+(what it covers, the value before and after, what was spent this period) and is made only
+when the call is repeated with `confirm: true`. If the limit or rule changed in between,
+nothing is saved and you get a new summary.
+
 ### Account and guides
 
 | Tool | Description |
 |------|-------------|
-| `get_account` | Show which workspace the connected project belongs to, its wallet balance and, when you ask, the wallet's recent transactions |
-| `get_playbook` | Step-by-step guides: getting started, models, workflows, workflow graphs, the Workflow Agent, Studio, agents and billing |
+| `get_account` | Show which workspace the connected project belongs to, its wallet balance, its spend limits and, when you ask, the wallet's recent transactions |
+| `get_playbook` | Step-by-step guides: getting started, models, workflows, workflow graphs, the Workflow Agent, Studio, agents, billing and controls |
 | `search_docs` | Search the Wiro documentation for guides and API references |
 
 The server also offers prompts for common jobs (`build_workflow`, `deploy_agent`,
@@ -339,8 +371,8 @@ they appear as ready-made commands.
 ### Choosing tool groups
 
 All groups are on by default. Some clients work best with fewer tools; set
-`WIRO_TOOLSETS` to a comma-separated list of `models`, `workflows` and `agents`
-to load only those. `get_account`, `get_playbook` and `search_docs` are always
+`WIRO_TOOLSETS` to a comma-separated list of `models`, `workflows`, `agents`
+and `controls` to load only those. `get_account`, `get_playbook` and `search_docs` are always
 available, and `workflows` also brings the model search tools it needs. The
 conversation tools for Studio and the Workflow Agent, with
 `save_workflow_from_agent`, come with either `workflows` or `agents`, and each
@@ -371,7 +403,9 @@ workflow, an agent, a conversation or an account connection also waits for
 and so do connecting an agent to a Wiro project with `bind_agent_project` and
 replacing a workflow's steps with `update_workflow` or
 `save_workflow_from_agent`: you see a summary of the change first, with the old
-and new value of each step input that changes. No tool adds
+and new value of each step input that changes. Changing a spend limit or a Model
+Access rule also waits for `confirm: true`: you see the old and new values and
+what was spent this period first. No tool adds
 funds or takes a card payment: funds are added in the Wiro dashboard, and an
 agent plan paid by card moves to a larger plan or is topped up there. The connected project
 decides the workspace: a personal project uses your personal wallet, a team
@@ -484,6 +518,9 @@ Workflow Agent chain:
 Agent chain:
 `list_agent_templates → get_agent_template → deploy_agent → set_agent_credentials / connect_agent_oauth / bind_agent_project → control_agent → send_agent_message`
 
+Controls chain:
+`get_controls → manage_spend_limit or manage_model_access (change summary) → the same call with confirm: true`
+
 ## Hosted MCP Server
 
 Wiro AI also hosts the same tools at `https://mcp.wiro.ai/v1` over streamable HTTP, so nothing has to be installed locally. Send your credentials in the `Authorization` header as shown under [Authentication](#authentication). The [MCP Server documentation](https://wiro.ai/docs/wiro-mcp-server) has setup instructions for each client.
@@ -564,7 +601,7 @@ registerTools(myServer, client, { toolsets: ['models'] });
 | `WIRO_API_KEY` | Yes | Your Wiro project API key |
 | `WIRO_API_SECRET` | No | Your Wiro project API secret (for signature auth) |
 | `WIRO_API_BASE_URL` | No | Override API base URL (default: `https://api.wiro.ai/v1`) |
-| `WIRO_TOOLSETS` | No | Comma-separated tool groups to load: `models`, `workflows`, `agents` (default: all) |
+| `WIRO_TOOLSETS` | No | Comma-separated tool groups to load: `models`, `workflows`, `agents`, `controls` (default: all) |
 
 ## More from Wiro AI
 
