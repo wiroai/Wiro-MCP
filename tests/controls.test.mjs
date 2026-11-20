@@ -1106,6 +1106,7 @@ const IDS = {
   '201': { id: '201', model: 'acme/old-video' },
   'openai/gpt-6-2-astra': { id: '501', model: 'openai/gpt-6-2-astra' },
   'google/nano-banana-2': { id: '502', model: 'google/nano-banana-2' },
+  'kling/kling-v3': { id: '601', model: 'kling/kling-v3' },
 };
 
 test('manage_model_access update keeps the rule\'s entries, sends them by id, and saves on the confirmed repeat', async () => {
@@ -1243,6 +1244,91 @@ test('manage_model_access shows a new summary when the rule changed after the on
     const blind = await client.callTool({ name: 'manage_model_access', arguments: { action: 'remove', rule_guid: 'r-key', confirm: true, updated_at: 250 } });
     assert.equal(blind.structuredContent.outcome, 'preview');
     assert.equal(replace.paths().some(path => path === '/ModelAccess/Set' || path === '/ModelAccess/Remove'), false);
+  });
+});
+
+test('manage_model_access warns when a wider rule still blocks a model the change allows, as Check finds it', async () => {
+  const teamVideo = ruleRow({ guid: 'r-acc', categories: [category('video', 'block')] });
+  const bob = ruleRow({ guid: 'r-bob', scope: 'member', target: BOB, targetlabel: 'Bob Roe', categories: [category('llm', 'block')] });
+  const webRule = ruleRow({ guid: 'r-web', scope: 'surface', target: 'api', targetlabel: 'the API', access: 'block' });
+  const decisions = {
+    'kling/kling-v3': [{ rule: teamVideo, access: 'block', by: 'category', category: 'video' }],
+    'openai/gpt-6-2-astra': [
+      { rule: teamVideo, access: 'allow', by: 'default', category: null },
+      { rule: bob, access: 'block', by: 'category', category: 'llm' },
+      // The API's surface rule covers only some runs of a key, so it is no reason to warn about the key's rule.
+      { rule: webRule, access: 'block', by: 'default', category: null },
+    ],
+  };
+  const fake = fakeClient({
+    '/ModelAccess/List': ruleList([teamVideo, HELD_RULE, bob, webRule]),
+    '/ModelAccess/Preview': body => rulePreview(body.scope === 'member' ? HELD_RULE : null, IDS)(body),
+    '/ModelAccess/Check': body => ({ result: true, errors: [], check: { model: body.model, categories: [], allowed: false, message: 'x', rules: decisions[body.model] ?? [] } }),
+  });
+  await withClient(fake, async client => {
+    // "Let Jane use Kling" while the team's rule blocks Video Generation.
+    const jane = await client.callTool({ name: 'manage_model_access', arguments: { action: 'update', scope: 'member', member: JANE, models: [{ model: 'kling/kling-v3', access: 'allow' }] } });
+    assert.notEqual(jane.isError, true, textOf(jane));
+    assert.deepEqual(fake.calls.find(call => call.path === '/ModelAccess/Check').body, { model: 'kling/kling-v3', member: JANE });
+    assert.deepEqual(jane.structuredContent.warnings, ['The rule for the whole team blocks Video Generation, and `kling/kling-v3` is in it, so allowing it here changes nothing until that rule allows it too.']);
+    assert.ok(linesOf(jane).includes('- Warning: The rule for the whole team blocks Video Generation, and `kling/kling-v3` is in it, so allowing it here changes nothing until that rule allows it too.'), textOf(jane));
+
+    // A key's runs count as its creator, so Bob's member rule decides them too; the API surface's does not always.
+    const key = await client.callTool({ name: 'manage_model_access', arguments: { action: 'replace', scope: 'project', project: '48211', everything_else: 'block', models: [{ model: 'openai/gpt-6-2-astra', access: 'allow' }] } });
+    assert.notEqual(key.isError, true, textOf(key));
+    assert.deepEqual(fake.calls.filter(call => call.path === '/ModelAccess/Check').at(-1).body, { model: 'openai/gpt-6-2-astra', project: '48211' });
+    assert.deepEqual(key.structuredContent.warnings, [`The rule for team member \`Bob Roe\` (user id \`${BOB}\`) blocks LLM & Chat, and \`openai/gpt-6-2-astra\` is in it, so allowing it here changes nothing until that rule allows it too.`]);
+  });
+
+  // "Allow GPT on this key" with no key rule would block nothing; the refusal names the rule that really blocks it.
+  const onlyImage = ruleRow({ guid: 'r-acc', access: 'block', categories: [category('image', 'allow')] });
+  const nothing = fakeClient({
+    '/ModelAccess/List': ruleList([onlyImage]),
+    '/ModelAccess/Check': { result: true, errors: [], check: { model: 'openai/gpt-6-2-astra', categories: ['llm'], allowed: false, message: 'x', rules: [{ rule: onlyImage, access: 'block', by: 'default', category: null }] } },
+  });
+  await withClient(nothing, async client => {
+    const result = await client.callTool({ name: 'manage_model_access', arguments: { action: 'update', scope: 'project', models: [{ model: 'openai/gpt-6-2-astra', access: 'allow' }] } });
+    assert.notEqual(result.isError, true, textOf(result));
+    assert.equal(result.structuredContent.outcome, 'refused');
+    assert.deepEqual(result.structuredContent.warnings, ['The rule for the whole team lets only the models it names run, and `openai/gpt-6-2-astra` is not one of them, so allowing it here changes nothing until that rule allows it too.']);
+    assert.match(result.structuredContent.message, /would block nothing: .* To open a model that a wider rule blocks, that rule has to change: check_model_access shows every rule that blocks it\. Nothing was changed\.$/);
+    assert.doesNotMatch(result.structuredContent.message, /set everything_else to block/);
+    assert.deepEqual(nothing.paths(), ['/ModelAccess/List', '/ModelAccess/Check']);
+  });
+
+  // A check that fails adds nothing, and the change summary stands.
+  const failing = fakeClient({
+    '/ModelAccess/List': ruleList([teamVideo, HELD_RULE]),
+    '/ModelAccess/Preview': body => rulePreview(HELD_RULE, IDS)(body),
+    '/ModelAccess/Check': () => { throw new WiroApiError(502, 'Bad gateway'); },
+  });
+  await withClient(failing, async client => {
+    const result = await client.callTool({ name: 'manage_model_access', arguments: { action: 'update', scope: 'member', member: JANE, models: [{ model: 'kling/kling-v3', access: 'allow' }] } });
+    assert.notEqual(result.isError, true, textOf(result));
+    assert.equal(result.structuredContent.outcome, 'preview');
+    assert.deepEqual(result.structuredContent.warnings, []);
+  });
+
+  // Each target is checked as one of its own runs.
+  const runs = fakeClient({
+    '/ModelAccess/List': ruleList([]),
+    '/UserAgent/MyAgents': AGENTS,
+    '/ModelAccess/Preview': body => rulePreview(null, IDS)(body),
+    '/ModelAccess/Check': { result: true, errors: [], check: { model: 'x', categories: [], allowed: true, message: null, rules: [] } },
+  });
+  await withClient(runs, async client => {
+    for (const [target, body] of [
+      [{ scope: 'agent', agent: 'Sales Bot' }, { model: 'kling/kling-v3', agent: AGENT }],
+      [{ scope: 'surface', surface: 'llm-gateway' }, { model: 'kling/kling-v3', surface: 'llm-gateway' }],
+      [{ scope: 'surface', surface: 'agent' }, { model: 'kling/kling-v3' }],
+    ]) {
+      await client.callTool({ name: 'manage_model_access', arguments: { action: 'replace', ...target, everything_else: 'block', models: [{ model: 'kling/kling-v3', access: 'allow' }] } });
+      assert.deepEqual(runs.calls.filter(call => call.path === '/ModelAccess/Check').at(-1).body, body);
+    }
+    // The whole wallet's rule has nothing wider to check.
+    const before = runs.calls.length;
+    await client.callTool({ name: 'manage_model_access', arguments: { action: 'replace', scope: 'account', everything_else: 'block', models: [{ model: 'kling/kling-v3', access: 'allow' }] } });
+    assert.equal(runs.calls.slice(before).some(call => call.path === '/ModelAccess/Check'), false);
   });
 });
 

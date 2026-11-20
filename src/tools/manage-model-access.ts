@@ -21,6 +21,7 @@ import {
   CONTROL_SCOPES,
   cannotChangeText,
   entryName,
+  isCategory,
   isThisConnection,
   MAX_RULE_MODELS,
   NOTHING_CHANGED,
@@ -37,6 +38,7 @@ import {
   SURFACES,
   targetArgument,
   targetText,
+  toRuleDecisions,
   toRuleRow,
   versionOf,
   wholeWallet,
@@ -46,6 +48,7 @@ import {
   type ControlScope,
   type ControlsWorkspace,
   type ResolvedTarget,
+  type RuleDecision,
   type RuleList,
   type RuleRow,
   type Surface,
@@ -347,15 +350,20 @@ function changeLines(changes: Changes): string[] {
   return lines;
 }
 
-/** Allowing something here changes nothing while the whole wallet's rule blocks it. */
-function accountWarnings(target: ResolvedTarget, before: RuleRow | null, after: RuleRow, list: RuleList): string[] {
+/** Allowing a category here changes nothing while the whole wallet's rule blocks it. */
+function categoryWarnings(
+  target: ResolvedTarget,
+  before: RuleRow['categories'],
+  after: RuleRow['categories'],
+  list: RuleList,
+): string[] {
   if (target.scope === 'account') return [];
   const account = list.rules.find(rule => rule.scope === 'account');
   if (!account) return [];
   const whole = wholeWallet(list.workspace.kind);
   const warnings: string[] = [];
   for (const category of CATEGORY_KEYS) {
-    if (after.categories[category] !== 'allow' || before?.categories[category] === 'allow') continue;
+    if (after[category] !== 'allow' || before[category] === 'allow') continue;
     const label = list.labels[category];
     if (account.categories[category] === 'block') {
       warnings.push(`The rule for ${whole} blocks ${label}, so allowing it here changes nothing until that rule allows it too.`);
@@ -363,13 +371,105 @@ function accountWarnings(target: ResolvedTarget, before: RuleRow | null, after: 
       warnings.push(`The rule for ${whole} lets only what it names run, and it does not allow ${label}, so allowing it here changes nothing until that rule allows it too.`);
     }
   }
-  for (const entry of after.models) {
-    if (entry.access !== 'allow' || before?.models.some(was => was.id === entry.id && was.access === 'allow')) continue;
-    if (account.models.some(held => held.id === entry.id && held.access === 'block')) {
-      warnings.push(`The rule for ${whole} blocks ${entryName(entry, true)}, so allowing it here changes nothing until that rule allows it too.`);
-    }
-  }
   return warnings;
+}
+
+/** When the wider rules could not be checked: the whole wallet's rule blocks this model by name. */
+function accountModelWarning(target: ResolvedTarget, id: string | undefined, name: string, list: RuleList): string[] {
+  if (target.scope === 'account' || !id) return [];
+  const account = list.rules.find(rule => rule.scope === 'account');
+  if (!account?.models.some(held => held.id === id && held.access === 'block')) return [];
+  return [`The rule for ${wholeWallet(list.workspace.kind)} blocks ${name}, so allowing it here changes nothing until that rule allows it too.`];
+}
+
+/** Besides a target's own rule, the rules that apply to every run of it: they must allow a model too. */
+const ALWAYS_APPLY: Record<ControlScope, readonly ControlScope[]> = {
+  account: [],
+  member: ['account'],
+  // A key acts as the person who created it, so in a team that member's rule covers every run with it.
+  project: ['account', 'member'],
+  surface: ['account'],
+  // An agent's runs come in on the agent surface with its own key, as that key's creator.
+  agent: ['account', 'member', 'project', 'surface'],
+};
+
+/** At most this many models of one change are checked against the wider rules. */
+const MAX_WIDER_CHECKS = 10;
+
+/** A ModelAccess/Check body for a run of the target. The agent surface needs an agent, so a plain run stands in for it. */
+function targetRunBody(target: ResolvedTarget): Record<string, string> {
+  switch (target.scope) {
+    case 'member':
+      return { member: target.target };
+    case 'project':
+      return { project: target.target };
+    case 'surface':
+      return target.target === 'agent' ? {} : { surface: target.target };
+    case 'agent':
+      return { agent: target.target };
+    case 'account':
+      return {};
+  }
+}
+
+/**
+ * For each model a change allows, the wider rules that still block it for the target, as ModelAccess/Check decides
+ * them today. null when that model's check failed, so nothing is known; a model past the first ten is not checked.
+ */
+async function widerBlocks(
+  client: WiroClient,
+  target: ResolvedTarget,
+  models: Array<{ key: string; ref: string }>,
+  signal: AbortSignal,
+): Promise<Map<string, RuleDecision[] | null>> {
+  const found = new Map<string, RuleDecision[] | null>();
+  if (target.scope === 'account') return found;
+  const scopes = ALWAYS_APPLY[target.scope];
+  await Promise.all(models.slice(0, MAX_WIDER_CHECKS).map(async ({ key, ref }) => {
+    try {
+      const body = requireApiSuccess(
+        await client.post<ApiEnvelope & { check?: unknown }>('/ModelAccess/Check', { model: ref, ...targetRunBody(target) }, signal),
+        'The model could not be checked.',
+      );
+      const check = isPlainObject(body.check) ? body.check : {};
+      found.set(key, toRuleDecisions(check.rules).filter(decision => decision.decides === 'block'
+        && scopes.includes(decision.rule.scope)
+        && !(decision.rule.scope === target.scope && sameTarget(decision.rule.target, target.target))));
+    } catch (error) {
+      if (signal.aborted) throw error;
+      found.set(key, null);
+    }
+  }));
+  return found;
+}
+
+/** A wider rule that still blocks a model this change allows. */
+function widerBlockText(decision: RuleDecision, model: string, kind: ControlsWorkspace['kind'], labels: CategoryLabels): string {
+  const rule = `The rule for ${targetText(decision.rule, kind)}`;
+  const tail = 'so allowing it here changes nothing until that rule allows it too.';
+  if (decision.by === 'model') return `${rule} blocks ${model} by name, ${tail}`;
+  if (decision.by === 'category') {
+    const label = decision.category && isCategory(decision.category) ? labels[decision.category] : 'one of its categories';
+    return `${rule} blocks ${label}, and ${model} is in it, ${tail}`;
+  }
+  return `${rule} lets only the models it names run, and ${model} is not one of them, ${tail}`;
+}
+
+/** What the wider rules say of the models a change allows: a warning for each one that still blocks one. */
+async function modelWarnings(
+  client: WiroClient,
+  target: ResolvedTarget,
+  allowed: Array<{ key: string; ref: string; id?: string; name: string }>,
+  list: RuleList,
+  signal: AbortSignal,
+): Promise<string[]> {
+  const checks = await widerBlocks(client, target, allowed, signal);
+  return allowed.flatMap(entry => {
+    const decisions = checks.get(entry.key);
+    return decisions
+      ? decisions.map(decision => widerBlockText(decision, entry.name, list.workspace.kind, list.labels))
+      : accountModelWarning(target, entry.id, entry.name, list);
+  });
 }
 
 interface PreviewAnswer {
@@ -471,9 +571,22 @@ async function changeRule(client: WiroClient, args: Args, list: RuleList, signal
   if (draftMatches(draft, existing)) return unchanged(existing as RuleRow);
 
   if (!blocksSomething(draft)) {
+    // Often the wish behind it is to open a model a wider rule blocks: say which rule that is.
+    const opened = draft.models.filter(entry => entry.access === 'allow'
+      && !existing?.models.some(held => held.id !== undefined && held.id === entry.id && held.access === 'allow'));
+    const warnings = [...new Set([
+      ...categoryWarnings(target, existing?.categories ?? {}, draft.categories, list),
+      ...await modelWarnings(client, target, opened.map(entry => {
+        const held = entry.id ? existing?.models.find(candidate => candidate.id === entry.id) : undefined;
+        return { key: entry.id ?? entry.ref, ref: entry.ref, ...(entry.id ? { id: entry.id } : {}), name: held ? entryName(held, true) : quotedSpan(entry.ref) };
+      }), list, signal),
+    ])];
+    const hint = warnings.length > 0
+      ? 'To open a model that a wider rule blocks, that rule has to change: check_model_access shows every rule that blocks it.'
+      : 'To let only some models run, set everything_else to block.';
     const message = `After this change the rule for ${covers()} would block nothing: with everything_else allow, allow entries `
-      + 'change nothing, since a narrower rule cannot open what a wider one blocks. To let only some models run, set '
-      + `everything_else to block. ${existing ? 'To lift the rule, remove it: nextAction shows that summary. ' : ''}${NOTHING_CHANGED}`;
+      + `change nothing, since a narrower rule cannot open what a wider one blocks. ${hint} `
+      + `${existing ? 'To lift the rule, remove it: nextAction shows that summary. ' : ''}${NOTHING_CHANGED}`;
     const nextAction = existing?.guid ? removeNextAction(existing) : undefined;
     return result({
       action: args.action,
@@ -482,12 +595,12 @@ async function changeRule(client: WiroClient, args: Args, list: RuleList, signal
       target: targetView(target),
       before: existing ? ruleView(existing, labels, caller) : null,
       after: null,
-      warnings: [],
+      warnings,
       notes: unsetNote,
       message,
       dashboardUrl: MODEL_ACCESS_URL,
       ...(nextAction ? { nextAction } : {}),
-    }, ['## Not changed', '', message, ...bullets([], unsetNote), ...nextLine(nextAction)]);
+    }, ['## Not changed', '', message, ...bullets(warnings, unsetNote), ...nextLine(nextAction)]);
   }
   if (draft.models.length > MAX_RULE_MODELS) {
     throw inputError(`A rule can name at most ${MAX_RULE_MODELS} models, and this one would name ${draft.models.length}.`);
@@ -509,7 +622,14 @@ async function changeRule(client: WiroClient, args: Args, list: RuleList, signal
   if (!after.models.some(entry => entry.access === 'allow') && !Object.values(after.categories).includes('allow') && after.access === 'block') {
     warnings.push(`This rule blocks every model for ${covers()}.`);
   }
-  warnings.push(...accountWarnings(target, before, after, list));
+  warnings.push(...categoryWarnings(target, before?.categories ?? {}, after.categories, list));
+  const allowedModels = changes.models.filter(entry => entry.to === 'allow' && entry.from !== 'allow');
+  warnings.push(...await modelWarnings(client, target, allowedModels.map(entry => ({
+    key: entry.id,
+    ref: entry.model ?? entry.id,
+    id: entry.id,
+    name: entryName(entry, true),
+  })), list, signal));
   const notes = [APPLIES_NOTE];
   if (target.scope === 'agent') notes.push(AGENT_NOTE);
   if (target.scope === 'account' || target.thisConnection) notes.push('It covers runs through this connection too.');
@@ -699,9 +819,9 @@ export function registerManageModelAccess(server: McpServer, client: WiroClient)
         + 'remove deletes it. Every rule that applies to a run must allow its model, so a narrower rule cannot open what '
         + 'a wider one blocks. Only the account owner, a team admin or the organization\'s owner can change rules; for '
         + 'anyone else this changes nothing. Without `confirm: true` it returns a change summary: the rule before and '
-        + 'after, each entry that changes, and warnings. Show it, wait for a clear yes, then repeat the call exactly as its '
-        + 'nextAction shows. If the rule changed in between, or the call asks for anything else, nothing is saved and a '
-        + 'new summary comes back.',
+        + 'after, each entry that changes, and warnings, such as a wider rule that still blocks a model it allows. Show it, '
+        + 'wait for a clear yes, then repeat the call exactly as its nextAction shows. If the rule changed in between, or '
+        + 'the call asks for anything else, nothing is saved and a new summary comes back.',
       inputSchema: strictInput({
         action: z.enum(['update', 'replace', 'remove'])
           .describe('update merges the entries given into the rule, replace writes the whole rule from the entries given, remove deletes the rule.'),
