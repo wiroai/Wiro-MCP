@@ -344,17 +344,19 @@ calls with your API key, so it counts as the API.
 
 | Tool | Description |
 |------|-------------|
-| `get_controls` | Show the workspace's spend limits with what each used, what is left and when it resets (UTC), its Model Access rules in plain words, and this month's or today's spending by way in, member, API key and agent |
+| `get_controls` | Show the workspace's spend limits with what each used, what running work holds, what is left and when it resets (UTC), its Model Access rules in plain words, which of them cover this connection's own runs, and this month's or today's spending by way in, member, API key and agent |
 | `check_model_access` | Check how the rules decide one model for one run, rule by rule, and get the change summary that would allow it; nothing runs |
-| `manage_spend_limit` | Set, raise, lower or remove a monthly or daily spend limit, after your confirmation |
+| `manage_spend_limit` | Set, raise, lower or remove a monthly or daily spend limit, or change only its alert, after your confirmation |
 | `manage_model_access` | Update, replace or remove a Model Access rule, after your confirmation |
 
 Only the account owner, a team admin or the organization's owner can change them; other
 team members can read them. Calls act as the person who created the connected project, so
 with a team, connect a project you created as an admin. Every change shows a summary first
 (what it covers, the value before and after, what was spent this period) and is made only
-when the call is repeated with `confirm: true`. If the limit or rule changed in between,
-nothing is saved and you get a new summary.
+when the summary's own call is repeated with `confirm: true`. A confirm saves only the change
+its summary showed: if the limit or rule changed in between, or the call asks for something
+else, nothing is saved and you get a new summary. A Model Access summary also warns when a
+wider rule still blocks a model the change allows.
 
 ### Account and guides
 
@@ -519,7 +521,7 @@ Agent chain:
 `list_agent_templates → get_agent_template → deploy_agent → set_agent_credentials / connect_agent_oauth / bind_agent_project → control_agent → send_agent_message`
 
 Controls chain:
-`get_controls → manage_spend_limit or manage_model_access (change summary) → the same call with confirm: true`
+`get_controls → manage_spend_limit or manage_model_access (change summary) → its nextAction, with confirm: true`
 
 ## Hosted MCP Server
 
