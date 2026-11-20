@@ -20,6 +20,25 @@ interface WalletListResponse extends ApiEnvelope {
   wallet?: Array<Record<string, unknown>>;
 }
 
+interface SpendLimitListResponse extends ApiEnvelope {
+  limits?: Array<Record<string, unknown>>;
+}
+
+const SPEND_LIMIT_SCOPES = ['account', 'member', 'project', 'surface', 'agent'] as const;
+
+const spendLimitSchema = z.object({
+  scope: z.enum(SPEND_LIMIT_SCOPES).describe('What the limit caps: the whole wallet (account), one team member, one API key (project), one way in (surface: web, api, mcp, llm-gateway, extension, agent) or one agent.'),
+  target: z.string().optional().describe('The member\'s uuid, the project id, the surface or the agent guid; absent for the whole wallet.'),
+  targetName: z.string().optional(),
+  period: z.enum(['month', 'day']).describe('Monthly limits reset on the 1st, daily ones at 00:00 UTC.'),
+  amountUsd: z.number(),
+  spentUsd: z.number().describe('Spent in the current period.'),
+  usedUp: z.boolean().describe('True when new work this limit covers is refused (error code 93).'),
+  resetsAt: z.string().optional(),
+});
+
+type SpendLimit = z.infer<typeof spendLimitSchema>;
+
 const MAX_TRANSACTIONS = 50;
 const DEFAULT_TRANSACTIONS = 20;
 const TEXT_FIELD_MAX = 200;
@@ -53,6 +72,45 @@ const transactionsSchema = z.object({
   nextStart: z.number().int().nonnegative().nullable(),
   rows: z.array(walletTransactionSchema),
 });
+
+/** A limit row of SpendLimit/List, rebuilt from an allowlist. */
+function toSpendLimit(row: Record<string, unknown>): SpendLimit | null {
+  const scope = asString(row.scope) as SpendLimit['scope'] | undefined;
+  const period = asString(row.period);
+  const amountUsd = toNumber(row.amountusd);
+  if (!scope || !SPEND_LIMIT_SCOPES.includes(scope) || (period !== 'month' && period !== 'day') || amountUsd === null) return null;
+  const spentUsd = toNumber(row.spentusd) ?? 0;
+  const target = textField(row.target);
+  const targetName = textField(row.targetlabel);
+  const resetsAt = unixToIso(row.resetsat);
+  return {
+    scope,
+    ...(target ? { target } : {}),
+    ...(targetName ? { targetName } : {}),
+    period,
+    amountUsd,
+    spentUsd,
+    usedUp: spentUsd >= amountUsd,
+    ...(resetsAt ? { resetsAt } : {}),
+  };
+}
+
+function spendLimitLine(limit: SpendLimit): string {
+  const name = limit.targetName ? quotedSpan(limit.targetName) : limit.target ? quotedSpan(limit.target) : '';
+  const what = limit.scope === 'account'
+    ? 'the whole wallet'
+    : limit.scope === 'member'
+      ? `team member ${name}`
+      : limit.scope === 'project'
+        ? `the API key of project ${name}`
+        : limit.scope === 'surface'
+          ? `calls through ${name}`
+          : `agent ${name}`;
+  const period = limit.period === 'day' ? 'Daily' : 'Monthly';
+  const state = limit.usedUp ? ', used up: new work it covers is refused until it resets' : '';
+  const reset = limit.resetsAt ? ` (resets ${limit.resetsAt})` : '';
+  return `- ${period} limit for ${what}: $${limit.spentUsd} of $${limit.amountUsd}${state}${reset}`;
+}
 
 function textField(value: unknown): string | undefined {
   const text = asString(value);
@@ -179,6 +237,10 @@ export function registerGetAccount(server: McpServer, client: WiroClient): void 
         transactions: transactionsSchema.optional(),
         transactionsError: z.string().optional()
           .describe('Why the transactions could not be read, when the balance could.'),
+        spendLimits: z.array(spendLimitSchema).optional()
+          .describe('The workspace\'s spend limits with what each has used this period. A used-up limit refuses new work with error code 93 even when the wallet has money.'),
+        spendLimitsError: z.string().optional()
+          .describe('Why the spend limits could not be read, when the balance could.'),
       },
       annotations: {
         readOnlyHint: true,
@@ -213,9 +275,23 @@ export function registerGetAccount(server: McpServer, client: WiroClient): void 
         } else {
           lines.push('**Balance:** no wallet yet. Add funds at https://wiro.ai/panel/wallet/deposit/credit-card to start; for a team project, select that team in the Wiro dashboard first.');
         }
-        if (workspace.kind === 'team') {
-          lines.push('', 'Team spend limits and the team\'s model rules can still refuse a run when the wallet has money.');
+        // The spend limits (the whole wallet, a member, an API key, a surface or an agent). The balance stands without them.
+        let spendLimits: SpendLimit[] | undefined;
+        let spendLimitsError: string | undefined;
+        try {
+          const listed = await client.post<SpendLimitListResponse>('/SpendLimit/List', {}, extra.signal);
+          requireApiSuccess(listed, 'Could not read the spend limits.');
+          spendLimits = (listed.limits ?? []).filter(isPlainObject).map(toSpendLimit).filter((l): l is SpendLimit => l !== null);
+          lines.push('', spendLimits.length ? '**Spend limits:**' : '**Spend limits:** none');
+          lines.push(...spendLimits.map(spendLimitLine));
+        } catch (error) {
+          if (extra.signal.aborted) throw error;
+          spendLimitsError = errorText(error);
+          lines.push('', `The spend limits could not be read: ${spendLimitsError}`);
         }
+        lines.push('', workspace.kind === 'team'
+          ? 'A used-up spend limit refuses new work (error code 93) even when the wallet has money, and the team\'s model rules can refuse a run too.'
+          : 'A used-up spend limit refuses new work (error code 93) even when the wallet has money.');
         if (workspace.role === 'member') {
           lines.push('Only a team admin can deploy an agent in this team. Starting, changing or paying for a team agent '
             + 'needs a team admin or the person who deployed it (for payments also the organization\'s owner).');
@@ -243,6 +319,8 @@ export function registerGetAccount(server: McpServer, client: WiroClient): void 
             authMode: client.authType,
             ...(transactions ? { transactions } : {}),
             ...(transactionsError ? { transactionsError } : {}),
+            ...(spendLimits ? { spendLimits } : {}),
+            ...(spendLimitsError ? { spendLimitsError } : {}),
           },
         };
       } catch (error) {

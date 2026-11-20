@@ -83,6 +83,14 @@ export function isOutcomeUnknown(error: unknown): boolean {
   return true;
 }
 
+/** Wiro's code for a spend limit that is used up: the wallet's, a team member's, an API key's, a surface's or an agent's. */
+export const SPEND_LIMIT_CODE = 93;
+
+/** What follows a spend-limit refusal: nothing ran, and trying again changes nothing until the limit does. */
+export const SPEND_LIMIT_NOTE = 'A spend limit of this workspace is used up, so nothing ran and nothing was charged. '
+  + 'Do not try again until the limit resets or someone who manages it raises it (the account owner, a team admin, '
+  + 'or for an agent\'s own limit the agent\'s owner) at https://wiro.ai/panel/wallet/limits; get_account lists the limits.';
+
 export function hasErrorCode(error: unknown, code: number | string): boolean {
   return error instanceof ApiResultError
     && error.codes.some(candidate => String(candidate) === String(code));

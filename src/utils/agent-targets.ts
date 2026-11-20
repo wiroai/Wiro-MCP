@@ -6,6 +6,8 @@ import {
   hasErrorCode,
   isPlainObject,
   requireApiSuccess,
+  SPEND_LIMIT_CODE,
+  SPEND_LIMIT_NOTE,
   toNumber,
   type ApiEnvelope,
 } from './api.js';
@@ -382,6 +384,9 @@ export async function explainSendRefusal(
   }
 
   if (isWalletNotRead(error)) return `${message}\n\n${WALLET_NOT_READ_NOTE}`;
+
+  // The workspace's spend limit (Studio, the Workflow Agent) or the agent's own.
+  if (hasErrorCode(error, SPEND_LIMIT_CODE)) return `${message}\n\n${SPEND_LIMIT_NOTE}`;
 
   if (target.kind !== 'deployed' && hasErrorCode(error, 97)) {
     const walletUsd = toNumber(response.walletUsd);

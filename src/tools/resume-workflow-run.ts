@@ -4,8 +4,11 @@ import type { WiroClient } from '../client.js';
 import {
   errorResult,
   errorText,
+  hasErrorCode,
   isOutcomeUnknown,
   requireApiSuccess,
+  SPEND_LIMIT_CODE,
+  SPEND_LIMIT_NOTE,
   type ApiEnvelope,
 } from '../utils/api.js';
 import { DEFAULT_WAIT_SECONDS, MAX_WAIT_SECONDS } from '../utils/poll.js';
@@ -56,6 +59,9 @@ export function registerResumeWorkflowRun(server: McpServer, client: WiroClient)
             'The run could not be resumed.',
           );
         } catch (error) {
+          if (hasErrorCode(error, SPEND_LIMIT_CODE)) {
+            throw new Error(`${(error as Error).message} ${SPEND_LIMIT_NOTE}`);
+          }
           if (isOutcomeUnknown(error)) {
             throw new Error(`The resume request was sent but no clear answer came back (${errorText(error)}). `
               + 'The run may already be running again and charging. Check it with wait_for_workflow_run '

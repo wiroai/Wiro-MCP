@@ -7,7 +7,7 @@ import {
   type WiroClient,
 } from '../client.js';
 import type { Task } from '../types.js';
-import { errorText, isOutcomeUnknown } from '../utils/api.js';
+import { errorText, isOutcomeUnknown, SPEND_LIMIT_CODE, SPEND_LIMIT_NOTE } from '../utils/api.js';
 import {
   formatTaskPending,
   formatTaskResult,
@@ -159,7 +159,9 @@ function runFailure(settled: RunSubmission, model: string, project: string): Too
   const runResult = settled.result;
   if (!runResult.result) {
     const errors = runResult.errors?.map(e => e.message).join(', ') || 'Unknown error';
-    return errorResult(`Failed to run model: ${errors}`);
+    // Wiro sends each error's code too; the declared type names only the message.
+    const limited = runResult.errors?.some(e => String((e as { code?: unknown }).code) === String(SPEND_LIMIT_CODE));
+    return errorResult(`Failed to run model: ${errors}${limited ? ` ${SPEND_LIMIT_NOTE}` : ''}`);
   }
   // Wiro created the task, so it runs and can be charged; only this call
   // cannot follow it.

@@ -7,6 +7,8 @@ import {
   hasErrorCode,
   isOutcomeUnknown,
   requireApiSuccess,
+  SPEND_LIMIT_CODE,
+  SPEND_LIMIT_NOTE,
   type ApiEnvelope,
 } from '../utils/api.js';
 import { DEFAULT_WAIT_SECONDS, MAX_WAIT_SECONDS } from '../utils/poll.js';
@@ -123,6 +125,9 @@ export function registerRunWorkflow(server: McpServer, client: WiroClient): void
             'The workflow could not be started.',
           ).workflowtoken;
         } catch (error) {
+          if (hasErrorCode(error, SPEND_LIMIT_CODE)) {
+            throw new Error(`${(error as Error).message} ${SPEND_LIMIT_NOTE}`);
+          }
           if (hasErrorCode(error, 97)) {
             throw new Error(`${(error as Error).message} The wallet does not cover this workflow's `
               + 'minimum balance. Funds are added at https://wiro.ai/panel/wallet/deposit/credit-card (for a team project, '
