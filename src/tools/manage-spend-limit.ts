@@ -278,9 +278,13 @@ async function setLimit(client: WiroClient, args: Args, list: LimitList, signal:
   const located = await locate(client, args, list, signal);
   if (typeof located === 'string') throw inputError(`${located} get_controls lists the limits with their guids.`);
   const { target, period, other } = located;
-  const amount = cents(args.amount_usd as number);
-  const alert = args.alert_percent !== undefined ? args.alert_percent : located.existing ? located.existing.alertPercent : DEFAULT_ALERT;
   const covers = () => targetText(target, workspace.kind);
+  // Only the alert given: the limit keeps its amount.
+  if (args.amount_usd === undefined && !located.existing) {
+    throw inputError(`There is no ${periodWord(period)} limit for ${covers()} yet, so set needs amount_usd: the limit in USD.`);
+  }
+  const amount = args.amount_usd !== undefined ? cents(args.amount_usd) : (located.existing as LimitRow).amountUsd;
+  const alert = args.alert_percent !== undefined ? args.alert_percent : located.existing ? located.existing.alertPercent : DEFAULT_ALERT;
 
   const unchanged = (row: LimitRow) => {
     const message = `${capitalized(limitPhrase(row, covers()))} is already set, with ${alertText(row.alertPercent)}. ${NOTHING_CHANGED}`;
@@ -334,7 +338,8 @@ async function setLimit(client: WiroClient, args: Args, list: LimitList, signal:
     warnings.push('Nothing is left at once: work that is still running holds the rest, so new work it covers is refused until that work ends or the limit resets.');
   }
   const notes: string[] = [];
-  if (Math.abs((args.amount_usd as number) - amount) > 1e-9) notes.push(`The amount is rounded to cents: ${usd(amount)}.`);
+  if (args.amount_usd !== undefined && Math.abs(args.amount_usd - amount) > 1e-9) notes.push(`The amount is rounded to cents: ${usd(amount)}.`);
+  if (args.amount_usd === undefined) notes.push(`The amount stays ${usd(amount)}.`);
   if (!before && after.periodStart) {
     notes.push(`It counts all of this ${period}'s spending since ${utcText(after.periodStart)}, also what was spent before the limit was set.`);
   }
@@ -518,8 +523,10 @@ async function removeLimit(client: WiroClient, args: Args, list: LimitList, sign
 
 /** Refusals that need no call: arguments that do not fit together. */
 function checkArguments(args: Args): void {
-  if (args.action === 'set' && args.amount_usd === undefined) throw inputError('set needs amount_usd: the limit in USD.');
-  if (args.action === 'set' && cents(args.amount_usd as number) < 0.01) throw inputError('amount_usd must be at least $0.01.');
+  if (args.action === 'set' && args.amount_usd === undefined && args.alert_percent === undefined) {
+    throw inputError('set needs amount_usd (the limit in USD), or alert_percent alone to change only the alert of a limit that exists.');
+  }
+  if (args.action === 'set' && args.amount_usd !== undefined && cents(args.amount_usd) < 0.01) throw inputError('amount_usd must be at least $0.01.');
   if (args.action === 'remove' && (args.amount_usd !== undefined || args.alert_percent !== undefined)) {
     throw inputError('remove takes no amount_usd or alert_percent.');
   }
@@ -546,7 +553,7 @@ export function registerManageSpendLimit(server: McpServer, client: WiroClient):
         + 'Without `confirm: true` it returns a change summary: what the limit covers, its value before and after, what was '
         + 'spent this period and when it resets. Show it, wait for a clear yes, then repeat the call exactly as its '
         + 'nextAction shows. If the limit changed in between, or the call asks for anything else, nothing is saved and a '
-        + 'new summary comes back.',
+        + 'new summary comes back. To change only the alert, give limit_guid and alert_percent.',
       inputSchema: strictInput({
         action: z.enum(['set', 'remove'])
           .describe('set adds a limit, or changes the one with the same scope, target and period; remove deletes one.'),
@@ -563,7 +570,7 @@ export function registerManageSpendLimit(server: McpServer, client: WiroClient):
         period: z.enum(PERIODS).optional()
           .describe('month (from the 1st, 00:00 UTC) or day (from 00:00 UTC). Left out, the period of the target\'s only limit, and month for a new one.'),
         amount_usd: z.number().positive().max(MAX_AMOUNT_USD).optional()
-          .describe('set: the limit in USD, at least 0.01, rounded to cents.'),
+          .describe('set: the limit in USD, at least 0.01, rounded to cents. Left out with alert_percent, a limit keeps its amount.'),
         alert_percent: z.union([z.literal(50), z.literal(80), z.literal(90)]).nullable().optional()
           .describe('set: when the alert email goes out, at 50, 80 or 90 percent of the limit; null for no alert. Left out, a limit keeps its alert, and a new one gets 80.'),
         limit_guid: z.string().trim().min(1).max(64).optional()

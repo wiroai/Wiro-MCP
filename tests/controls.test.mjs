@@ -778,7 +778,7 @@ test('manage_spend_limit refuses an amount under a cent and arguments that do no
   await withClient(fake, async client => {
     const cases = [
       [{ action: 'set', scope: 'account', amount_usd: 0.004 }, 'amount_usd must be at least $0.01. Nothing was changed.'],
-      [{ action: 'set', scope: 'account' }, 'set needs amount_usd: the limit in USD. Nothing was changed.'],
+      [{ action: 'set', scope: 'account' }, 'set needs amount_usd (the limit in USD), or alert_percent alone to change only the alert of a limit that exists. Nothing was changed.'],
       [{ action: 'remove', scope: 'account', amount_usd: 5 }, 'remove takes no amount_usd or alert_percent. Nothing was changed.'],
       [{ action: 'set', amount_usd: 5 }, 'Name the limit: scope with its target (member, project, surface or agent), or limit_guid from get_controls. Nothing was changed.'],
       [{ action: 'set', scope: 'account', member: JANE, amount_usd: 5 }, 'Scope account covers the whole wallet and takes no `member`. For one member, use scope member. Nothing was changed.'],
@@ -1019,6 +1019,32 @@ test('manage_spend_limit writes only what the summary showed: an edited, blind o
     const saved = await client.callTool({ name: 'manage_spend_limit', arguments: shown });
     assert.equal(saved.structuredContent.outcome, 'saved');
     assert.deepEqual(fake.calls.find(call => call.path === '/SpendLimit/Set').body, { scope: 'account', target: '', period: 'month', amountusd: 600, alertpct: 80 });
+  });
+});
+
+test('manage_spend_limit changes only the alert of a limit, keeping its amount', async () => {
+  const key = limitRow({ guid: 'l-key', scope: 'project', target: '48211', targetlabel: 'Production', period: 'day', amountusd: 5, alertpct: 90, spentusd: 1, periodstart: DAY_START, resetsat: DAY_END });
+  const fake = fakeClient({ '/SpendLimit/List': limitList([key]), '/SpendLimit/Preview': body => limitPreview(key, 1)(body) });
+  await withClient(fake, async client => {
+    const quiet = await client.callTool({ name: 'manage_spend_limit', arguments: { action: 'set', limit_guid: 'l-key', alert_percent: null } });
+    assert.notEqual(quiet.isError, true, textOf(quiet));
+    assert.equal(quiet.structuredContent.outcome, 'preview');
+    assert.deepEqual(fake.calls.at(-1).body, { scope: 'project', target: '48211', period: 'day', amountusd: 5, alertpct: null });
+    assert.equal(quiet.structuredContent.nextAction.arguments.amount_usd, 5);
+    assert.equal(quiet.structuredContent.nextAction.arguments.alert_percent, null);
+    assert.ok(quiet.structuredContent.notes.includes('The amount stays $5.00.'), quiet.structuredContent.notes.join('\n'));
+    assert.ok(linesOf(quiet).includes('**After:** $5.00 a day, no alert email'), textOf(quiet));
+
+    // The same alert again is already so.
+    const same = await client.callTool({ name: 'manage_spend_limit', arguments: { action: 'set', limit_guid: 'l-key', alert_percent: 90 } });
+    assert.equal(same.structuredContent.outcome, 'unchanged');
+  });
+  const none = fakeClient({ '/SpendLimit/List': limitList([]) });
+  await withClient(none, async client => {
+    const result = await client.callTool({ name: 'manage_spend_limit', arguments: { action: 'set', scope: 'project', project: '7', alert_percent: 50 } });
+    assert.equal(result.isError, true);
+    assert.equal(textOf(result), '## Error\n\nThere is no monthly limit for the API key of project id `7` yet, so set needs amount_usd: the limit in USD. Nothing was changed.');
+    assert.deepEqual(none.paths(), ['/SpendLimit/List']);
   });
 });
 
