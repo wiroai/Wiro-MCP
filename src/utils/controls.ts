@@ -140,10 +140,12 @@ export interface ControlsWorkspace {
   canManage?: boolean;
 }
 
-/** How Wiro counts calls through this connection: the surface and the API key's project. */
+/** How Wiro counts calls through this connection: the surface, the API key's project and, in a team, the member. */
 export interface Caller {
   surface?: Surface;
   projectId?: string;
+  /** In a team, the user id of the person this connection acts as: the creator of its key's project. */
+  memberUuid?: string;
 }
 
 function toWorkspace(value: unknown): ControlsWorkspace {
@@ -278,7 +280,7 @@ export interface TargetView {
   scope: ControlScope;
   target?: string;
   targetName?: string;
-  /** This connection's own API key, or the surface this connection counts as. */
+  /** This connection's own API key, the surface this connection counts as, or in a team the member it acts as. */
   thisConnection?: boolean;
 }
 
@@ -286,6 +288,7 @@ export function isThisConnection(scope: ControlScope, target: string, caller: Ca
   if (!caller) return false;
   if (scope === 'project') return caller.projectId !== undefined && caller.projectId === target;
   if (scope === 'surface') return caller.surface !== undefined && caller.surface === target;
+  if (scope === 'member') return caller.memberUuid !== undefined && caller.memberUuid.toLowerCase() === target.toLowerCase();
   return false;
 }
 
@@ -312,7 +315,9 @@ export function targetText(view: TargetView, kind: ControlsWorkspace['kind']): s
       break;
   }
   if (!view.thisConnection) return text;
-  return view.scope === 'project' ? `${text}, the key this connection uses` : `${text}, the way in this connection counts as`;
+  if (view.scope === 'project') return `${text}, the key this connection uses`;
+  if (view.scope === 'member') return `${text}, the person this connection acts as`;
+  return `${text}, the way in this connection counts as`;
 }
 
 /** The argument that names a scope's target in the manage tools, or none for the whole wallet. */
@@ -325,7 +330,7 @@ export const limitViewSchema = z.object({
   scope: z.enum(CONTROL_SCOPES).describe('What the limit caps: the whole wallet (account), one team member, one API key (project), one way in (surface) or one agent.'),
   target: z.string().optional().describe('The member\'s user id, the project id, the surface or the agent guid; absent for the whole wallet.'),
   targetName: z.string().optional(),
-  thisConnection: z.boolean().optional().describe('True for the API key this connection uses, or the surface it counts as.'),
+  thisConnection: z.boolean().optional().describe('True for the API key this connection uses, the surface it counts as, or in a team the member it acts as.'),
   period: z.enum(PERIODS).describe('A monthly limit runs from the 1st at 00:00 UTC, a daily one from 00:00 UTC.'),
   amountUsd: z.number(),
   spentUsd: z.number().describe('Spent in the current period, including what was spent before the limit was set.'),
@@ -512,7 +517,7 @@ export const ruleViewSchema = z.object({
   scope: z.enum(CONTROL_SCOPES).describe('Whose runs the rule covers: the whole wallet (account), one team member, one API key (project), one way in (surface) or one agent.'),
   target: z.string().optional().describe('The member\'s user id, the project id, the surface or the agent guid; absent for the whole wallet.'),
   targetName: z.string().optional(),
-  thisConnection: z.boolean().optional().describe('True for the API key this connection uses, or the surface it counts as.'),
+  thisConnection: z.boolean().optional().describe('True for the API key this connection uses, the surface it counts as, or in a team the member it acts as.'),
   everythingElse: z.enum(['allow', 'block']).describe('What a model the rule names neither by category nor by name gets.'),
   categories: z.array(z.object({
     category: z.enum(CATEGORY_KEYS),

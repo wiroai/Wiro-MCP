@@ -17,6 +17,7 @@ const linesOf = result => textOf(result).split('\n');
 
 const TEAM = '0d9aade4-d31b-4b97-88f3-a90482f080ea';
 const JANE = '4b7d6c1e-2f3a-4c5d-9e8f-0a1b2c3d4e01';
+const BOB = '7c7d6c1e-2f3a-4c5d-9e8f-0a1b2c3d4e02';
 const AGENT = '35c1ed58-0a1b-4c2d-8e3f-405162738495';
 const MONTH_START = 1793491200; // 2026-11-01T00:00:00Z
 const MONTH_END = 1796083200; // 2026-12-01T00:00:00Z
@@ -275,6 +276,111 @@ test('get_controls lists the spending by way in, member, key and agent, and the 
     // The members' e-mail addresses stay out of the answer.
     assert.doesNotMatch(JSON.stringify(result), /jane@acme\.test|new@acme\.test/);
     assert.deepEqual(fake.calls.find(call => call.path === '/SpendLimit/Usage').body, { period: 'month' });
+  });
+});
+
+test('get_controls shows what running work holds per way in, member, key and agent, also where nothing was charged yet', async () => {
+  const fake = fakeClient({
+    '/SpendLimit/List': limitList([]),
+    '/ModelAccess/List': ruleList([]),
+    '/Organization/List': ORGS,
+    '/SpendLimit/Usage': {
+      result: true,
+      errors: [],
+      usage: {
+        period: 'month',
+        periodstart: MONTH_START,
+        resetsat: MONTH_END,
+        totalusd: 12.5,
+        heldusd: 42.5,
+        surfaces: [
+          { surface: 'web', label: 'the dashboard', spentusd: 0 },
+          { surface: 'mcp', label: 'MCP', spentusd: 12.5, heldusd: 12.5 },
+          { surface: 'api', label: 'the API', spentusd: 0, heldusd: 30 },
+        ],
+        members: [
+          { useruuid: BOB, label: 'Bob Roe', spentusd: 12.5, heldusd: 12.5 },
+          // Jane's renders are still running: nothing charged yet, but they hold $30.
+          { useruuid: JANE, label: 'Jane Doe', spentusd: 0, heldusd: 30 },
+        ],
+        projects: [{ projectid: '7', label: 'Staging', spentusd: 0, heldusd: 30 }],
+        agents: [],
+      },
+    },
+  });
+  await withClient(fake, async client => {
+    const result = await client.callTool({ name: 'get_controls', arguments: { usage: 'month' } });
+    assert.notEqual(result.isError, true, textOf(result));
+    const lines = linesOf(result);
+    for (const line of [
+      '**Total:** $12.50',
+      '**Held by work still running:** $42.50',
+      '- By way in: MCP (`mcp`) $12.50 ($12.50 held by work still running), the API (`api`) $0.00 ($30.00 held by work still running)',
+      '- By team member: `Bob Roe` $12.50 ($12.50 held by work still running), `Jane Doe` $0.00 ($30.00 held by work still running)',
+      '- By API key: `Staging` (id `7`) $0.00 ($30.00 held by work still running)',
+    ]) assert.ok(lines.includes(line), `missing line: ${line}\n\n${textOf(result)}`);
+    const { usage } = result.structuredContent;
+    assert.deepEqual(usage.members.find(row => row.useruuid === JANE), { useruuid: JANE, name: 'Jane Doe', spentUsd: 0, heldUsd: 30 });
+    assert.deepEqual(usage.surfaces.find(row => row.surface === 'web'), { surface: 'web', label: 'the dashboard', spentUsd: 0 });
+    assert.equal(usage.heldUsd, 42.5);
+  });
+});
+
+test('get_controls marks the member limit and rule this connection acts under, from its key\'s creator', async () => {
+  const fake = fakeClient({
+    '/SpendLimit/List': limitList([
+      limitRow({ guid: 'l-bob', scope: 'member', target: BOB, targetlabel: 'Bob Roe', amountusd: 100, spentusd: 100 }),
+      limitRow({ guid: 'l-jane', scope: 'member', target: JANE, targetlabel: 'Jane Doe', amountusd: 100, spentusd: 100 }),
+    ]),
+    '/ModelAccess/List': ruleList([
+      ruleRow({ guid: 'r-bob', scope: 'member', target: BOB, targetlabel: 'Bob Roe', categories: [category('video', 'block')] }),
+    ]),
+    '/Organization/List': ORGS,
+    // Project/List rows name each project's creator; this connection's key is project 48211, which Bob created.
+    '/Project/List': { ...PROJECTS, project: PROJECTS.project.map(row => ({ ...row, uuid: row.id === '48211' ? BOB : JANE })) },
+    '/Team/Member/List': { ...MEMBERS, member: [...MEMBERS.member, { useruuid: BOB, role: 'admin', status: 'active', user: { firstname: 'Bob', lastname: 'Roe', email: 'bob@acme.test' } }] },
+  });
+  await withClient(fake, async client => {
+    const result = await client.callTool({ name: 'get_controls', arguments: { members: true } });
+    assert.notEqual(result.isError, true, textOf(result));
+    const lines = linesOf(result);
+    for (const line of [
+      `**This connection's runs count as:** surface \`mcp\` (the hosted MCP server at mcp.wiro.ai), with the API key of project id \`48211\`, as team member \`Bob Roe\` (user id \`${BOB}\`)`,
+      `- Monthly limit for team member \`Bob Roe\` (user id \`${BOB}\`), the person this connection acts as: $100.00 of $100.00 used: used up, so new work it covers is refused until it resets, alert email at 80%, resets December 1, 2026 at 00:00 UTC (limit_guid \`l-bob\`)`,
+      `- Monthly limit for team member \`Jane Doe\` (user id \`${JANE}\`): $100.00 of $100.00 used: used up, so new work it covers is refused until it resets, alert email at 80%, resets December 1, 2026 at 00:00 UTC (limit_guid \`l-jane\`)`,
+      `- Rule for team member \`Bob Roe\` (user id \`${BOB}\`), the person this connection acts as: Every model except Video Generation (rule_guid \`r-bob\`)`,
+      `- \`Bob Roe\` (admin): user id \`${BOB}\`, the person this connection acts as`,
+    ]) assert.ok(lines.includes(line), `missing line: ${line}\n\n${textOf(result)}`);
+    const data = result.structuredContent;
+    assert.deepEqual(data.caller, { surface: 'mcp', projectId: '48211', memberUuid: BOB });
+    assert.equal(data.spendLimits.find(row => row.guid === 'l-bob').thisConnection, true);
+    assert.equal(data.spendLimits.find(row => row.guid === 'l-jane').thisConnection, undefined);
+    assert.equal(data.modelAccessRules[0].thisConnection, true);
+    assert.equal(data.members.find(member => member.useruuid === BOB).thisConnection, true);
+    // Project/List rows carry each key; no output does.
+    assert.doesNotMatch(JSON.stringify(result), new RegExp(`${OWN_KEY}|${OTHER_KEY}|k-9|k-10`));
+  });
+
+  // Without a member limit or rule there is nothing to mark, so the projects are not read.
+  const plain = fakeClient({ '/SpendLimit/List': limitList([limitRow({ guid: 'l-acc' })]), '/ModelAccess/List': ruleList([]), '/Organization/List': ORGS });
+  await withClient(plain, async client => {
+    const result = await client.callTool({ name: 'get_controls', arguments: {} });
+    assert.notEqual(result.isError, true, textOf(result));
+    assert.equal(plain.paths().includes('/Project/List'), false);
+  });
+
+  // Projects that cannot be read mark nothing, and the rest stands.
+  const unread = fakeClient({
+    '/SpendLimit/List': limitList([limitRow({ guid: 'l-bob', scope: 'member', target: BOB, targetlabel: 'Bob Roe' })]),
+    '/ModelAccess/List': ruleList([]),
+    '/Organization/List': ORGS,
+    '/Project/List': () => { throw new WiroApiError(502, 'Bad gateway'); },
+  });
+  await withClient(unread, async client => {
+    const result = await client.callTool({ name: 'get_controls', arguments: {} });
+    assert.notEqual(result.isError, true, textOf(result));
+    assert.equal(result.structuredContent.spendLimits[0].thisConnection, undefined);
+    assert.deepEqual(result.structuredContent.caller, { surface: 'mcp', projectId: '48211' });
   });
 });
 

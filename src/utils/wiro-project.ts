@@ -28,6 +28,8 @@ export interface ListedProject {
   view: ProjectView;
   /** The workspace it belongs to: a team's guid, or '' for a personal project. Undefined when the row does not say. */
   workspace?: string;
+  /** The user id of the person who created it, whom its key acts as. Never shown on its own. */
+  creator?: string;
   /** Whether a value is this project's key. */
   hasKey(value: unknown): boolean;
 }
@@ -46,6 +48,7 @@ function toListedProject(row: Record<string, unknown>, id: string, client: WiroC
       ...(Array.isArray(row.ipwhitelist) ? { ipRestricted: !row.ipwhitelist.includes('*') } : {}),
     },
     ...('teamguid' in row ? { workspace: asString(row.teamguid) ?? '' } : {}),
+    ...(asString(row.uuid)?.trim() ? { creator: (asString(row.uuid) as string).trim() } : {}),
     hasKey: value => key !== undefined && value === key,
   };
 }
