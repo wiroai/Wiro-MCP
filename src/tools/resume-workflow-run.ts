@@ -10,7 +10,7 @@ import {
   MODEL_ACCESS_NOTE,
   requireApiSuccess,
   SPEND_LIMIT_CODE,
-  SPEND_LIMIT_NOTE,
+  spendLimitNote,
   type ApiEnvelope,
 } from '../utils/api.js';
 import { DEFAULT_WAIT_SECONDS, MAX_WAIT_SECONDS } from '../utils/poll.js';
@@ -66,7 +66,7 @@ export function registerResumeWorkflowRun(server: McpServer, client: WiroClient)
             throw new Error(`${(error as Error).message} ${MODEL_ACCESS_NOTE}`);
           }
           if (hasErrorCode(error, SPEND_LIMIT_CODE)) {
-            throw new Error(`${(error as Error).message} ${SPEND_LIMIT_NOTE}`);
+            throw new Error(`${(error as Error).message} ${spendLimitNote((error as Error).message)}`);
           }
           if (isOutcomeUnknown(error)) {
             throw new Error(`The resume request was sent but no clear answer came back (${errorText(error)}). `

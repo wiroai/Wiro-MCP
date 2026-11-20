@@ -9,7 +9,7 @@ import {
   MODEL_ACCESS_NOTE,
   requireApiSuccess,
   SPEND_LIMIT_CODE,
-  SPEND_LIMIT_NOTE,
+  spendLimitNote,
   toNumber,
   type ApiEnvelope,
 } from './api.js';
@@ -388,7 +388,7 @@ export async function explainSendRefusal(
   if (isWalletNotRead(error)) return `${message}\n\n${WALLET_NOT_READ_NOTE}`;
 
   // The workspace's spend limit (Studio, the Workflow Agent) or the agent's own.
-  if (hasErrorCode(error, SPEND_LIMIT_CODE)) return `${message}\n\n${SPEND_LIMIT_NOTE}`;
+  if (hasErrorCode(error, SPEND_LIMIT_CODE)) return `${message}\n\n${spendLimitNote(message)}`;
 
   // A Model Access rule blocks the model the message asked for.
   if (hasErrorCode(error, MODEL_ACCESS_CODE)) return `${message}\n\n${MODEL_ACCESS_NOTE}`;

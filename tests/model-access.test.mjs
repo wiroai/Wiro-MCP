@@ -60,10 +60,12 @@ test('the Model Access code is 92 and its note says nothing ran, not to work aro
   assert.match(MODEL_ACCESS_NOTE, /^A Model Access rule of this workspace blocks this model, so nothing ran and nothing was charged\. /);
   assert.ok(MODEL_ACCESS_NOTE.endsWith(MODEL_ACCESS_ADVICE));
   assert.match(MODEL_ACCESS_ADVICE, /Do not try again, and do not work around the rule on your own/);
-  assert.match(MODEL_ACCESS_ADVICE, /Tell the user which rule blocked the model/);
-  assert.match(MODEL_ACCESS_ADVICE, /The account owner or a team admin/);
+  assert.match(MODEL_ACCESS_ADVICE, /Tell the user which rule blocked the model \(the refusal names it; check_model_access shows every rule that blocks it and why\)/);
+  assert.match(MODEL_ACCESS_ADVICE, /The account owner, a team admin or the organization's owner can change the rule with manage_model_access after a change summary/);
   assert.match(MODEL_ACCESS_ADVICE, /https:\/\/wiro\.ai\/panel\/controls\/model-access/);
   assert.match(MODEL_ACCESS_ADVICE, /or the user can pick another model\.$/);
+  // An agent's owner cannot change its rule unless they manage the workspace.
+  assert.doesNotMatch(MODEL_ACCESS_ADVICE, /agent's owner/);
   assert.doesNotMatch(MODEL_ACCESS_NOTE, /—|–/);
 });
 

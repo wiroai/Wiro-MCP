@@ -13,7 +13,7 @@ import {
   MODEL_ACCESS_CODE,
   MODEL_ACCESS_NOTE,
   SPEND_LIMIT_CODE,
-  SPEND_LIMIT_NOTE,
+  spendLimitNote,
 } from '../utils/api.js';
 import {
   formatTaskPending,
@@ -170,7 +170,7 @@ function runFailure(settled: RunSubmission, model: string, project: string): Too
     const codes = runResult.errors?.map(e => String((e as { code?: unknown }).code)) ?? [];
     const note = codes.includes(String(MODEL_ACCESS_CODE))
       ? ` ${MODEL_ACCESS_NOTE}`
-      : codes.includes(String(SPEND_LIMIT_CODE)) ? ` ${SPEND_LIMIT_NOTE}` : '';
+      : codes.includes(String(SPEND_LIMIT_CODE)) ? ` ${spendLimitNote(errors)}` : '';
     return errorResult(`Failed to run model: ${errors}${note}`);
   }
   // Wiro created the task, so it runs and can be charged; only this call
