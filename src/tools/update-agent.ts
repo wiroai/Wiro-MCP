@@ -1,7 +1,16 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { WiroClient } from '../client.js';
-import { ApiResultError, errorResult, errorText, requireApiSuccess, type ApiEnvelope } from '../utils/api.js';
+import {
+  ApiResultError,
+  errorResult,
+  errorText,
+  hasErrorCode,
+  MODEL_ACCESS_ADVICE,
+  MODEL_ACCESS_CODE,
+  requireApiSuccess,
+  type ApiEnvelope,
+} from '../utils/api.js';
 import { pausedSkillTitles } from '../utils/agent-config.js';
 import { CHAT_SETUP_DESCRIPTION, CHAT_SETUP_MODES } from '../utils/agent-setup.js';
 import { DEFAULT_WAIT_SECONDS } from '../utils/poll.js';
@@ -169,8 +178,12 @@ export function registerUpdateAgent(server: McpServer, client: WiroClient): void
               'The agent settings could not be updated.',
             );
           } catch (error) {
-            if (changed.length === 0) throw error;
-            throw new Error(`${errorText(error)}\n\nThe ${changed.join(', ')} change was saved; the settings were not.`
+            // A Model Access rule (such as the agent's own) blocks a model it was given.
+            const blocked = hasErrorCode(error, MODEL_ACCESS_CODE);
+            if (changed.length === 0 && !blocked) throw error;
+            const reason = blocked ? `${errorText(error)} ${MODEL_ACCESS_ADVICE}` : errorText(error);
+            if (changed.length === 0) throw new Error(`${reason}\n\nThe settings were not saved.`);
+            throw new Error(`${reason}\n\nThe ${changed.join(', ')} change was saved; the settings were not.`
               + (profileRestarts ? ' The agent restarts to apply the saved change.' : ''));
           }
           changed.push(...settingNames);

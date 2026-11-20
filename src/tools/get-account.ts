@@ -289,9 +289,8 @@ export function registerGetAccount(server: McpServer, client: WiroClient): void 
           spendLimitsError = errorText(error);
           lines.push('', `The spend limits could not be read: ${spendLimitsError}`);
         }
-        lines.push('', workspace.kind === 'team'
-          ? 'A used-up spend limit refuses new work (error code 93) even when the wallet has money, and the team\'s model rules can refuse a run too.'
-          : 'A used-up spend limit refuses new work (error code 93) even when the wallet has money.');
+        lines.push('', 'A used-up spend limit refuses new work (error code 93) even when the wallet has money, '
+          + 'and a Model Access rule can block a model (error code 92).');
         if (workspace.role === 'member') {
           lines.push('Only a team admin can deploy an agent in this team. Starting, changing or paying for a team agent '
             + 'needs a team admin or the person who deployed it (for payments also the organization\'s owner).');

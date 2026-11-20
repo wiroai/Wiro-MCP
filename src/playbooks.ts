@@ -154,6 +154,7 @@ Example, "a 10 second clip of a city street at night with Kling": \`search_model
 - Successful tasks are billed. Failed tasks and tasks cancelled while queued are not; a task stopped while running can still be charged.
 - A finished task's result shows its cost: the amount charged, and the list price when the two differ. \`get_task_price\` gives the cost of a task whose result you do not have. Right after a task ends, the result can show only the list price, marked as such: \`get_task_price\` a moment later gives the amount charged.
 - A run is refused with "Insufficient balance" when the spendable balance for that model is under $0.50. Tell the user the balance from \`get_account\`.
+- A run is refused with error code 92 when a Model Access rule blocks the model, and nothing is charged. The refusal names the rule. Do not try again or switch to another model on your own: tell the user which rule blocked it. The account owner or a team admin can change the rule at wiro.ai/panel/controls/model-access, or the user can pick another model.
 - With a balance of $250 or less, a wallet can have one unfinished task per $10 of balance, at least 1: $50 allows 5. A run over that is refused with "You have reached your concurrent task limit" and nothing is charged: start it again once a task finishes. Above $250 there is no such limit.
 
 ## Earlier work
@@ -660,11 +661,12 @@ Where to see costs afterwards:
 - Agent plans: a plan is charged in full when it starts or renews. If the wallet is short at renewal, the plan ends instead of renewing.
 - A refusal for balance does not change on a retry. Give the user the amounts it names, required and available, or else the balance from \`get_account\`, and ask them to add funds (for a team wallet, a teammate who can). Do not switch to a cheaper model or plan without asking.
 - An answer that the balance could not be read is no such refusal: nothing was charged, no funds need adding, and trying again is fine.
+- Spend limits: a monthly or daily limit can cover the whole wallet, a team member, an API key, a way in (such as MCP) or an agent. A used-up limit refuses the work it covers with error code 93 even when the wallet has money, and nothing is charged. Do not try again until it resets or someone who manages it raises it; \`get_account\` lists the limits.
+- Model Access: rules can allow or block single models and whole categories, for the same scopes. A blocked model is refused with error code 92 before anything runs, and the refusal names the rule. Do not try again or switch to another model on your own: tell the user which rule blocked it. The account owner or a team admin (for an agent's own rule, also the agent's owner) can change the rule at wiro.ai/panel/controls/model-access, or the user can pick another model.
 
 ## Teams
 
-- A team can set a spend limit for the whole team and for each member, and it can allow or block models. Each of these can refuse a run even when the wallet has money: "Team spend limit has been reached", "Your personal spend limit in this team has been reached" or "This model is not available for your team".
-- A member's limit counts the spending of the person who created the connected project.
+- A team's spend limits and Model Access rules can also cover one member. For a member's limit or rule, the member is the person who created the connected project.
 - Only team admins can deploy the team's agents, and only team admins or the person who deployed an agent can pay for or change it (for payments also the organization's owner). That refusal is final for this connection: a team admin can do it or grant admin rights.
 
 ## Estimates and quotes

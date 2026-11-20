@@ -6,6 +6,8 @@ import {
   errorText,
   hasErrorCode,
   isOutcomeUnknown,
+  MODEL_ACCESS_CODE,
+  MODEL_ACCESS_NOTE,
   requireApiSuccess,
   SPEND_LIMIT_CODE,
   SPEND_LIMIT_NOTE,
@@ -59,6 +61,10 @@ export function registerResumeWorkflowRun(server: McpServer, client: WiroClient)
             'The run could not be resumed.',
           );
         } catch (error) {
+          // A Model Access rule blocks a model of the steps left to run.
+          if (hasErrorCode(error, MODEL_ACCESS_CODE)) {
+            throw new Error(`${(error as Error).message} ${MODEL_ACCESS_NOTE}`);
+          }
           if (hasErrorCode(error, SPEND_LIMIT_CODE)) {
             throw new Error(`${(error as Error).message} ${SPEND_LIMIT_NOTE}`);
           }

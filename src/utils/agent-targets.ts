@@ -5,6 +5,8 @@ import {
   asString,
   hasErrorCode,
   isPlainObject,
+  MODEL_ACCESS_CODE,
+  MODEL_ACCESS_NOTE,
   requireApiSuccess,
   SPEND_LIMIT_CODE,
   SPEND_LIMIT_NOTE,
@@ -387,6 +389,9 @@ export async function explainSendRefusal(
 
   // The workspace's spend limit (Studio, the Workflow Agent) or the agent's own.
   if (hasErrorCode(error, SPEND_LIMIT_CODE)) return `${message}\n\n${SPEND_LIMIT_NOTE}`;
+
+  // A Model Access rule blocks the model the message asked for.
+  if (hasErrorCode(error, MODEL_ACCESS_CODE)) return `${message}\n\n${MODEL_ACCESS_NOTE}`;
 
   if (target.kind !== 'deployed' && hasErrorCode(error, 97)) {
     const walletUsd = toNumber(response.walletUsd);

@@ -6,6 +6,8 @@ import {
   errorText,
   hasErrorCode,
   isOutcomeUnknown,
+  MODEL_ACCESS_CODE,
+  MODEL_ACCESS_NOTE,
   requireApiSuccess,
   SPEND_LIMIT_CODE,
   SPEND_LIMIT_NOTE,
@@ -125,6 +127,10 @@ export function registerRunWorkflow(server: McpServer, client: WiroClient): void
             'The workflow could not be started.',
           ).workflowtoken;
         } catch (error) {
+          // A Model Access rule blocks one of the workflow's models.
+          if (hasErrorCode(error, MODEL_ACCESS_CODE)) {
+            throw new Error(`${(error as Error).message} ${MODEL_ACCESS_NOTE}`);
+          }
           if (hasErrorCode(error, SPEND_LIMIT_CODE)) {
             throw new Error(`${(error as Error).message} ${SPEND_LIMIT_NOTE}`);
           }

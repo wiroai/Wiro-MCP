@@ -131,7 +131,8 @@ test('get_account lists the spend limits with what each has used, and which are 
     assert.ok(lines.includes('- Monthly limit for the whole wallet: $248.7 of $300 (resets 2026-12-01T00:00:00.000Z)'), textOf(result));
     assert.ok(lines.includes('- Daily limit for the API key of project `Production`: $25.2 of $25, used up: new work it covers is refused until it resets (resets 2026-11-21T00:00:00.000Z)'), textOf(result));
     assert.ok(lines.includes('- Monthly limit for calls through `the LLM gateway`: $3 of $50'), textOf(result));
-    assert.ok(lines.includes('A used-up spend limit refuses new work (error code 93) even when the wallet has money.'), textOf(result));
+    assert.ok(lines.includes('A used-up spend limit refuses new work (error code 93) even when the wallet has money, '
+      + 'and a Model Access rule can block a model (error code 92).'), textOf(result));
     assert.deepEqual(result.structuredContent.spendLimits.map(l => [l.scope, l.usedUp]), [['account', false], ['project', true], ['surface', false]]);
     assert.equal(result.structuredContent.balance.totalUsd, 40);
   });
