@@ -1498,8 +1498,22 @@ test('the controls playbook teaches the rules, the roles, the surfaces and the r
     'Block one model everywhere:',
     'Find why work was refused, and fix it:',
     'Raise or remove a limit:',
+    'Change or turn off the alert:',
     'See what was spent this month, and by whom:',
   ]) assert.ok(text.split('\n').includes(recipe), recipe);
+  // Every recipe that changes a limit or a rule shows the summary, waits for a yes, confirms, and says what to tell the user.
+  const recipes = text.slice(text.indexOf('## Recipes'), text.indexOf('## What to tell the user')).split('\n\n').slice(1);
+  const changing = recipes.filter(recipe => /`manage_(spend_limit|model_access)`/.test(recipe));
+  assert.ok(changing.length >= 9, `${changing.length} recipes change something`);
+  for (const recipe of changing) {
+    const title = recipe.split('\n')[0];
+    assert.match(recipe, /wait for a yes, then confirm|get one yes for that list, then confirm each one/i, title);
+    assert.match(recipe, /Tell the user/, title);
+  }
+  // The member list names members; the limits are listed with the other limits.
+  assert.doesNotMatch(text, /members with their user ids and limits/);
+  assert.match(text, /A confirm saves only the change its summary showed\./);
+  assert.match(text, /runs in progress hold part of the limit/);
   assert.doesNotMatch(text, /agent's owner can|also the agent's owner|panel\/wallet\/limits|dryrun/);
   for (const topic of ['models', 'billing', 'getting-started']) assert.match(PLAYBOOKS[topic], /`controls`/, topic);
 });
