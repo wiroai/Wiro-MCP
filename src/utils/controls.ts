@@ -1,3 +1,4 @@
+import { createHmac } from 'node:crypto';
 import { z } from 'zod';
 import { WiroApiError, type WiroClient } from '../client.js';
 import {
@@ -15,6 +16,7 @@ import {
 } from './api.js';
 import { oneLine, quotedSpan } from './quoted-text.js';
 import { keySafeErrorText, readProjects } from './wiro-project.js';
+import { canonicalStringify } from './workflow-artifacts.js';
 
 // Controls: a workspace's Spend Limits (caps on what it spends in a month or a
 // day) and Model Access rules (which models it may run). The four controls
@@ -246,6 +248,63 @@ export function isUsedUp(row: Pick<LimitRow, 'amountUsd' | 'spentUsd'>): boolean
 export function versionOf(row: { updatedAt?: number; createdAt?: number } | null | undefined): number {
   return row ? row.updatedAt ?? row.createdAt ?? 1 : 0;
 }
+
+// ------------------------------------------------------------- confirming
+
+/** What a confirm repeats from a change summary's nextAction. */
+export interface ConfirmArgs {
+  confirm: boolean;
+  updated_at?: number;
+  summary_id?: string;
+}
+
+/**
+ * Where a call stands: a summary to show, or a confirm. A confirm writes only when it repeats the summary of this
+ * very change, made from the row's current version.
+ *   summary     no confirm: show the change summary.
+ *   changed     the row changed after the summary the user saw.
+ *   no-summary  confirm without the summary's updated_at and summary_id.
+ *   differs     confirm of another change than the summary it repeats.
+ *   confirmed   write.
+ */
+export type ConfirmState = 'summary' | 'changed' | 'no-summary' | 'differs' | 'confirmed';
+
+export function confirmState(args: ConfirmArgs, version: number, id: string): ConfirmState {
+  if (!args.confirm) return 'summary';
+  if (args.updated_at === undefined || args.summary_id === undefined) return 'no-summary';
+  if (args.updated_at !== version) return 'changed';
+  return args.summary_id === id ? 'confirmed' : 'differs';
+}
+
+/**
+ * The id of a change summary: a digest of the exact change it shows and the version of the row it was made from,
+ * keyed by this connection's API key. It cannot be made up without the key, and every server of one deployment
+ * gives the same id for the same change.
+ */
+export function summaryId(client: WiroClient, change: Record<string, unknown>): string {
+  const identity = (client as { identity?: unknown }).identity;
+  return createHmac('sha256', `wiro-mcp-controls:${typeof identity === 'string' ? identity : ''}`)
+    .update(canonicalStringify(change))
+    .digest('hex')
+    .slice(0, 32);
+}
+
+/** The sentence a summary opens with when a confirm did not write, by why it did not. */
+export function confirmLead(state: ConfirmState, what: 'limit' | 'rule'): string | null {
+  switch (state) {
+    case 'changed':
+      return `The ${what} changed after the summary you showed, so nothing was saved. Show this summary and ask the user again.`;
+    case 'no-summary':
+      return 'This call did not repeat a change summary\'s nextAction, so nothing was saved. Show this summary and ask the user.';
+    case 'differs':
+      return 'This call asks for something other than the summary it repeats, so nothing was saved. Show this summary and ask the user.';
+    default:
+      return null;
+  }
+}
+
+export const summaryIdSchema = z.string().trim().min(1).max(64).optional()
+  .describe('From the change summary\'s nextAction: the id of the change the user saw. Never set it yourself.');
 
 export function periodWord(period: Period): string {
   return period === 'day' ? 'daily' : 'monthly';

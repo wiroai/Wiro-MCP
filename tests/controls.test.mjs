@@ -665,9 +665,10 @@ test('manage_spend_limit shows a change summary from Preview, then saves on the 
     assert.equal(data.after.leftUsd, 187.6);
     assert.equal(data.usedUpAtOnce, false);
     assert.equal(data.alertRecipients, 'the team\'s admins and the organization\'s owner');
+    assert.match(data.nextAction.arguments.summary_id, /^[0-9a-f]{32}$/);
     assert.deepEqual(data.nextAction, {
       tool: 'manage_spend_limit',
-      arguments: { action: 'set', scope: 'account', period: 'month', amount_usd: 500, alert_percent: 80, confirm: true, updated_at: 0 },
+      arguments: { action: 'set', scope: 'account', period: 'month', amount_usd: 500, alert_percent: 80, confirm: true, updated_at: 0, summary_id: data.nextAction.arguments.summary_id },
       reason: 'Ask the user to confirm this change first.',
     });
     const lines = linesOf(preview);
@@ -794,13 +795,14 @@ test('manage_spend_limit refuses an amount under a cent and arguments that do no
 });
 
 test('manage_spend_limit shows a new summary when the limit changed after the one the user saw', async () => {
-  const now = limitRow({ guid: 'l-acc', amountusd: 300, updatedat: 200 });
-  const fake = fakeClient({ '/SpendLimit/List': limitList([now]), '/SpendLimit/Preview': body => limitPreview(now, 248.7)(body) });
+  let now = limitRow({ guid: 'l-acc', amountusd: 500, updatedat: 100 });
+  const fake = fakeClient({ '/SpendLimit/List': () => limitList([now]), '/SpendLimit/Preview': body => limitPreview(now, 248.7)(body) });
   await withClient(fake, async client => {
-    const result = await client.callTool({
-      name: 'manage_spend_limit',
-      arguments: { action: 'set', scope: 'account', period: 'month', amount_usd: 700, alert_percent: 80, confirm: true, updated_at: 100 },
-    });
+    const summary = await client.callTool({ name: 'manage_spend_limit', arguments: { action: 'set', scope: 'account', amount_usd: 700 } });
+    assert.equal(summary.structuredContent.nextAction.arguments.updated_at, 100);
+    // A colleague lowers it to $300 before the user says yes.
+    now = limitRow({ guid: 'l-acc', amountusd: 300, updatedat: 200 });
+    const result = await client.callTool({ name: 'manage_spend_limit', arguments: summary.structuredContent.nextAction.arguments });
     assert.notEqual(result.isError, true, textOf(result));
     assert.equal(result.structuredContent.outcome, 'preview');
     assert.equal(result.structuredContent.changedSinceSummary, true);
@@ -812,7 +814,7 @@ test('manage_spend_limit shows a new summary when the limit changed after the on
     // A confirm with no version from a summary is shown as a summary, and nothing is saved.
     const blind = await client.callTool({ name: 'manage_spend_limit', arguments: { action: 'set', scope: 'account', amount_usd: 700, confirm: true } });
     assert.equal(blind.structuredContent.outcome, 'preview');
-    assert.match(textOf(blind), /This call did not come from a change summary \(it has no updated_at\), so nothing was saved\./);
+    assert.match(textOf(blind), /This call did not repeat a change summary's nextAction, so nothing was saved\./);
     assert.equal(fake.paths().includes('/SpendLimit/Set'), false);
   });
 });
@@ -845,7 +847,8 @@ test('manage_spend_limit changes nothing on an older Wiro API without Preview, a
     '/SpendLimit/Remove': () => { throw new WiroApiError(401, JSON.stringify({ result: false, errors: [{ code: 0, message: 'API keys can\'t manage teams or organizations. Sign in and try again.' }] })); },
   });
   await withClient(older, async client => {
-    const result = await client.callTool({ name: 'manage_spend_limit', arguments: { action: 'remove', limit_guid: 'l-acc', confirm: true, updated_at: 100 } });
+    const summary = await client.callTool({ name: 'manage_spend_limit', arguments: { action: 'remove', limit_guid: 'l-acc' } });
+    const result = await client.callTool({ name: 'manage_spend_limit', arguments: summary.structuredContent.nextAction.arguments });
     assert.equal(result.isError, true);
     assert.equal(textOf(result), '## Error\n\nThis change cannot be made through this connection right now, so nothing was changed. It can be made on the Spend Limits page of the Wiro dashboard: https://wiro.ai/panel/controls/spend-limits.');
   });
@@ -910,7 +913,8 @@ test('manage_spend_limit passes Wiro\'s refusals on, says when the outcome is un
     '/SpendLimit/Set': () => { throw new WiroApiError(502, 'Bad gateway'); },
   });
   await withClient(failing, async client => {
-    const result = await client.callTool({ name: 'manage_spend_limit', arguments: { action: 'set', scope: 'account', period: 'month', amount_usd: 500, alert_percent: 80, confirm: true, updated_at: 0 } });
+    const summary = await client.callTool({ name: 'manage_spend_limit', arguments: { action: 'set', scope: 'account', amount_usd: 500 } });
+    const result = await client.callTool({ name: 'manage_spend_limit', arguments: summary.structuredContent.nextAction.arguments });
     assert.equal(result.isError, true);
     assert.match(textOf(result), /The outcome is not known: the limit may or may not have changed\. get_controls shows the limit as it is now, and repeating this same call is safe, since it sets the same values\./);
   });
@@ -921,7 +925,8 @@ test('manage_spend_limit passes Wiro\'s refusals on, says when the outcome is un
     '/SpendLimit/Set': { result: false, errors: [{ code: 0, message: 'Too many changes to Spend Limits and Model Access in the last hour. Try again later.' }] },
   });
   await withClient(limited, async client => {
-    const result = await client.callTool({ name: 'manage_spend_limit', arguments: { action: 'set', scope: 'account', period: 'month', amount_usd: 500, alert_percent: 80, confirm: true, updated_at: 0 } });
+    const summary = await client.callTool({ name: 'manage_spend_limit', arguments: { action: 'set', scope: 'account', amount_usd: 500 } });
+    const result = await client.callTool({ name: 'manage_spend_limit', arguments: summary.structuredContent.nextAction.arguments });
     assert.equal(textOf(result), '## Error\n\nToo many changes to Spend Limits and Model Access in the last hour. Try again later. Nothing was changed.');
   });
 });
@@ -943,7 +948,10 @@ test('manage_spend_limit removes by guid after a summary, and an already removed
     const preview = await client.callTool({ name: 'manage_spend_limit', arguments: { action: 'remove', scope: 'member', member: JANE } });
     assert.notEqual(preview.isError, true, textOf(preview));
     assert.equal(preview.structuredContent.outcome, 'preview');
-    assert.deepEqual(preview.structuredContent.nextAction.arguments, { action: 'remove', limit_guid: 'l-mem', confirm: true, updated_at: 100 });
+    assert.deepEqual(preview.structuredContent.nextAction.arguments, {
+      action: 'remove', limit_guid: 'l-mem', confirm: true, updated_at: 100, summary_id: preview.structuredContent.nextAction.arguments.summary_id,
+    });
+    assert.match(preview.structuredContent.nextAction.arguments.summary_id, /^[0-9a-f]{32}$/);
     const lines = linesOf(preview);
     assert.ok(lines.includes(`**Limit:** the monthly limit of $50.00 for team member \`Jane Doe\` (user id \`${JANE}\`), alert email at 80%`), textOf(preview));
     assert.ok(lines.includes('- Still in place: the monthly limit of $500.00 for the whole team.'), textOf(preview));
@@ -962,9 +970,102 @@ test('manage_spend_limit removes by guid after a summary, and an already removed
   // Removed by someone else between the list and the call: Wiro's answer settles it.
   const racing = fakeClient({ '/SpendLimit/List': limitList([limitRow({ guid: 'l-acc' })]), '/SpendLimit/Remove': { result: false, errors: [{ code: 0, message: 'Limit not found in this workspace.' }] } });
   await withClient(racing, async client => {
-    const result = await client.callTool({ name: 'manage_spend_limit', arguments: { action: 'remove', limit_guid: 'l-acc', confirm: true, updated_at: 100 } });
+    const summary = await client.callTool({ name: 'manage_spend_limit', arguments: { action: 'remove', limit_guid: 'l-acc' } });
+    const result = await client.callTool({ name: 'manage_spend_limit', arguments: summary.structuredContent.nextAction.arguments });
     assert.equal(result.structuredContent.outcome, 'unchanged');
     assert.match(textOf(result), /is not there any more: it was removed already\. Nothing was changed\./);
+  });
+});
+
+test('manage_spend_limit writes only what the summary showed: an edited, blind or hand-made confirm gets a summary', async () => {
+  let rows = [limitRow({ guid: 'l-acc' })];
+  const fake = fakeClient({
+    '/SpendLimit/List': () => limitList(rows),
+    '/SpendLimit/Preview': body => limitPreview(rows.find(row => row.period === body.period && row.scope === body.scope) ?? null, 248.7)(body),
+    '/SpendLimit/Set': body => {
+      rows = [limitRow({ guid: 'l-acc', amountusd: body.amountusd, alertpct: body.alertpct, updatedat: 300 })];
+      return { result: true, errors: [], limit: rows[0] };
+    },
+    '/SpendLimit/Remove': { result: true, errors: [] },
+  });
+  await withClient(fake, async client => {
+    const summary = await client.callTool({ name: 'manage_spend_limit', arguments: { action: 'set', scope: 'account', amount_usd: 600 } });
+    const shown = summary.structuredContent.nextAction.arguments;
+    assert.equal(shown.amount_usd, 600);
+
+    // "Yes, but make it $5,000": the user never saw that summary, so this is a new one and nothing is saved.
+    const edited = await client.callTool({ name: 'manage_spend_limit', arguments: { ...shown, amount_usd: 5000 } });
+    assert.notEqual(edited.isError, true, textOf(edited));
+    assert.equal(edited.structuredContent.outcome, 'preview');
+    assert.equal(edited.structuredContent.changedSinceSummary, undefined);
+    assert.match(textOf(edited), /^## Set a spend limit\? \(nothing changed yet\)\n\nThis call asks for something other than the summary it repeats, so nothing was saved\. Show this summary and ask the user\./);
+    assert.ok(linesOf(edited).includes('**After:** $5000.00 a month, alert email at 80%'), textOf(edited));
+    assert.notEqual(edited.structuredContent.nextAction.arguments.summary_id, shown.summary_id);
+
+    // A first call that sets confirm on its own, and one built from get_controls' updatedAt, are summaries too.
+    const blind = await client.callTool({ name: 'manage_spend_limit', arguments: { action: 'set', scope: 'account', amount_usd: 50, confirm: true, updated_at: 0 } });
+    assert.equal(blind.structuredContent.outcome, 'preview');
+    assert.match(textOf(blind), /This call did not repeat a change summary's nextAction, so nothing was saved\./);
+    const handMade = await client.callTool({ name: 'manage_spend_limit', arguments: { action: 'set', limit_guid: 'l-acc', amount_usd: 100000, confirm: true, updated_at: 100 } });
+    assert.equal(handMade.structuredContent.outcome, 'preview');
+    const removeHandMade = await client.callTool({ name: 'manage_spend_limit', arguments: { action: 'remove', limit_guid: 'l-acc', confirm: true, updated_at: 100 } });
+    assert.equal(removeHandMade.structuredContent.outcome, 'preview');
+    // The id of one summary does not confirm another change.
+    const otherId = await client.callTool({ name: 'manage_spend_limit', arguments: { action: 'remove', limit_guid: 'l-acc', confirm: true, updated_at: 100, summary_id: shown.summary_id } });
+    assert.equal(otherId.structuredContent.outcome, 'preview');
+    assert.equal(fake.paths().some(path => path === '/SpendLimit/Set' || path === '/SpendLimit/Remove'), false);
+
+    // The exact repeat saves.
+    const saved = await client.callTool({ name: 'manage_spend_limit', arguments: shown });
+    assert.equal(saved.structuredContent.outcome, 'saved');
+    assert.deepEqual(fake.calls.find(call => call.path === '/SpendLimit/Set').body, { scope: 'account', target: '', period: 'month', amountusd: 600, alertpct: 80 });
+  });
+});
+
+test('manage_spend_limit remove shows a new summary when the limit changed after the one the user saw', async () => {
+  let row = limitRow({ guid: 'l-acc', amountusd: 500 });
+  const fake = fakeClient({ '/SpendLimit/List': () => limitList([row]), '/SpendLimit/Remove': { result: true, errors: [] } });
+  await withClient(fake, async client => {
+    const summary = await client.callTool({ name: 'manage_spend_limit', arguments: { action: 'remove', limit_guid: 'l-acc' } });
+    // A colleague raises it in the meantime.
+    row = limitRow({ guid: 'l-acc', amountusd: 900, updatedat: 200 });
+    const stale = await client.callTool({ name: 'manage_spend_limit', arguments: summary.structuredContent.nextAction.arguments });
+    assert.equal(stale.structuredContent.outcome, 'preview');
+    assert.equal(stale.structuredContent.changedSinceSummary, true);
+    assert.equal(stale.structuredContent.nextAction.arguments.updated_at, 200);
+    assert.notEqual(stale.structuredContent.nextAction.arguments.summary_id, summary.structuredContent.nextAction.arguments.summary_id);
+    assert.match(textOf(stale), /^## The limit changed since the summary \(nothing removed\)\n\nThe limit changed after the summary you showed, so nothing was saved\./);
+    assert.ok(linesOf(stale).includes('**Limit:** the monthly limit of $900.00 for the whole team, alert email at 80%'), textOf(stale));
+    assert.equal(fake.paths().includes('/SpendLimit/Remove'), false);
+    const removed = await client.callTool({ name: 'manage_spend_limit', arguments: stale.structuredContent.nextAction.arguments });
+    assert.equal(removed.structuredContent.outcome, 'removed');
+  });
+});
+
+test('the manage tools change nothing on an older Wiro API whose List has no caller, a removal included', async () => {
+  const limits = fakeClient({ '/SpendLimit/List': limitList([limitRow({ guid: 'l-acc' })], ADMIN, null) });
+  await withClient(limits, async client => {
+    for (const args of [{ action: 'remove', limit_guid: 'l-acc' }, { action: 'set', scope: 'account', amount_usd: 50 }]) {
+      const result = await client.callTool({ name: 'manage_spend_limit', arguments: args });
+      assert.equal(result.isError, true);
+      assert.equal(textOf(result), '## Error\n\nThis change cannot be previewed right now, so it was not made and nothing was changed. It can be made on the Spend Limits page of the Wiro dashboard: https://wiro.ai/panel/controls/spend-limits.');
+    }
+    assert.deepEqual([...new Set(limits.paths())], ['/SpendLimit/List']);
+  });
+  const rules = fakeClient({ '/ModelAccess/List': ruleList([ruleRow({ guid: 'r-acc', categories: [category('video', 'block')] })], ADMIN, null) });
+  await withClient(rules, async client => {
+    for (const args of [{ action: 'remove', rule_guid: 'r-acc' }, { action: 'update', scope: 'account', categories: [{ category: 'audio', access: 'block' }] }]) {
+      const result = await client.callTool({ name: 'manage_model_access', arguments: args });
+      assert.equal(result.isError, true);
+      assert.equal(textOf(result), '## Error\n\nThis change cannot be previewed right now, so it was not made and nothing was changed. It can be made on the Model Access page of the Wiro dashboard: https://wiro.ai/panel/controls/model-access.');
+    }
+    assert.deepEqual([...new Set(rules.paths())], ['/ModelAccess/List']);
+  });
+  // A member still gets the member's refusal first.
+  const member = fakeClient({ '/SpendLimit/List': limitList([], MEMBER, null) });
+  await withClient(member, async client => {
+    const result = await client.callTool({ name: 'manage_spend_limit', arguments: { action: 'set', scope: 'account', amount_usd: 50 } });
+    assert.equal(result.structuredContent.outcome, 'refused');
   });
 });
 
@@ -1011,7 +1112,9 @@ test('manage_model_access update keeps the rule\'s entries, sends them by id, an
     assert.deepEqual(data.changes, { categories: [{ category: 'video', label: 'Video Generation', from: 'not named', to: 'block' }], models: [] });
     assert.deepEqual(data.nextAction.arguments, {
       action: 'update', scope: 'member', member: JANE, categories: [{ category: 'video', access: 'block' }], confirm: true, updated_at: 100,
+      summary_id: data.nextAction.arguments.summary_id,
     });
+    assert.match(data.nextAction.arguments.summary_id, /^[0-9a-f]{32}$/);
     const lines = linesOf(preview);
     for (const line of [
       '## Change a Model Access rule? (nothing changed yet)',
@@ -1046,7 +1149,7 @@ test('manage_model_access replace writes only what is given, and unset takes an 
       arguments: { action: 'replace', scope: 'project', everything_else: 'block', models: [{ model: 'google/nano-banana-2', access: 'allow' }] },
     });
     assert.notEqual(replaced.isError, true, textOf(replaced));
-    assert.deepEqual(fake.calls.at(-1).body, { scope: 'project', target: '48211', access: 'block', categories: [], models: [{ model: 'google/nano-banana-2', access: 'allow' }] });
+    assert.deepEqual(fake.calls.filter(call => call.path === '/ModelAccess/Preview').at(-1).body, { scope: 'project', target: '48211', access: 'block', categories: [], models: [{ model: 'google/nano-banana-2', access: 'allow' }] });
     assert.equal(replaced.structuredContent.after.summary, 'Only google/nano-banana-2');
     assert.ok(replaced.structuredContent.notes.includes('It covers runs through this connection too.'));
 
@@ -1055,12 +1158,65 @@ test('manage_model_access replace writes only what is given, and unset takes an 
       arguments: { action: 'update', scope: 'project', models: [{ model: 'OpenAI/GPT-6-2-Astra', access: 'unset' }, { model: 'acme/missing', access: 'unset' }] },
     });
     assert.notEqual(unset.isError, true, textOf(unset));
-    assert.deepEqual(fake.calls.at(-1).body, { scope: 'project', target: '48211', access: 'block', categories: [{ category: 'image', access: 'allow' }], models: [] });
+    assert.deepEqual(fake.calls.filter(call => call.path === '/ModelAccess/Preview').at(-1).body, { scope: 'project', target: '48211', access: 'block', categories: [{ category: 'image', access: 'allow' }], models: [] });
     assert.ok(unset.structuredContent.notes.includes('`acme/missing` is not in the rule, so unset changes nothing there.'));
 
     const wrong = await client.callTool({ name: 'manage_model_access', arguments: { action: 'replace', scope: 'project', models: [{ model: 'a/b', access: 'unset' }] } });
     assert.equal(wrong.isError, true);
     assert.match(textOf(wrong), /Access unset takes an entry out of a rule, so it goes with update\./);
+  });
+});
+
+test('manage_model_access shows a new summary when the rule changed after the one the user saw, keeping a colleague\'s entry', async () => {
+  let rule = HELD_RULE;
+  const fake = fakeClient({
+    '/ModelAccess/List': () => ruleList([rule]),
+    '/ModelAccess/Preview': body => rulePreview(rule, IDS)(body),
+    '/ModelAccess/Set': () => ({ result: true, errors: [], rule }),
+  });
+  await withClient(fake, async client => {
+    const summary = await client.callTool({ name: 'manage_model_access', arguments: { action: 'update', scope: 'member', member: JANE, categories: [{ category: 'video', access: 'block' }] } });
+    assert.equal(summary.structuredContent.outcome, 'preview');
+    // A colleague blocks Image Generation for Jane in the meantime.
+    rule = { ...HELD_RULE, categories: [...HELD_RULE.categories, category('image', 'block')], updatedat: 200 };
+    const stale = await client.callTool({ name: 'manage_model_access', arguments: summary.structuredContent.nextAction.arguments });
+    assert.equal(stale.structuredContent.outcome, 'preview');
+    assert.equal(stale.structuredContent.changedSinceSummary, true);
+    assert.equal(stale.structuredContent.nextAction.arguments.updated_at, 200);
+    assert.match(textOf(stale), /^## The rule changed since the summary \(nothing saved\)\n\nThe rule changed after the summary you showed, so nothing was saved\./);
+    // The new summary is built on the colleague's rule: their entry stays.
+    assert.deepEqual(fake.calls.filter(call => call.path === '/ModelAccess/Preview').at(-1).body.categories, [
+      { category: 'image', access: 'block' }, { category: 'video', access: 'block' }, { category: 'audio', access: 'block' },
+    ]);
+    assert.equal(fake.paths().includes('/ModelAccess/Set'), false);
+    const saved = await client.callTool({ name: 'manage_model_access', arguments: stale.structuredContent.nextAction.arguments });
+    assert.equal(saved.structuredContent.outcome, 'saved');
+    assert.deepEqual(fake.calls.find(call => call.path === '/ModelAccess/Set').body.categories.map(entry => entry.category), ['image', 'video', 'audio']);
+  });
+
+  // replace writes the whole rule, so a colleague's change in between needs a new yes too.
+  let keyRule = ruleRow({ guid: 'r-key', scope: 'project', target: '48211', targetlabel: 'Production', access: 'block', categories: [category('image', 'allow')] });
+  const replace = fakeClient({
+    '/ModelAccess/List': () => ruleList([keyRule]),
+    '/ModelAccess/Preview': body => rulePreview(keyRule, IDS)(body),
+    '/ModelAccess/Check': { result: true, errors: [], check: { model: 'x', categories: [], allowed: true, message: null, rules: [] } },
+    '/ModelAccess/Set': () => ({ result: true, errors: [], rule: keyRule }),
+  });
+  await withClient(replace, async client => {
+    const summary = await client.callTool({ name: 'manage_model_access', arguments: { action: 'replace', scope: 'project', everything_else: 'block', models: [{ model: 'google/nano-banana-2', access: 'allow' }] } });
+    keyRule = { ...keyRule, categories: [category('image', 'allow'), category('llm', 'allow')], updatedat: 250 };
+    const stale = await client.callTool({ name: 'manage_model_access', arguments: summary.structuredContent.nextAction.arguments });
+    assert.equal(stale.structuredContent.changedSinceSummary, true);
+    assert.ok(linesOf(stale).includes('**Before:** Only Image Generation and LLM & Chat'), textOf(stale));
+    assert.equal(replace.paths().includes('/ModelAccess/Set'), false);
+
+    // An edited confirm of the new summary is not a yes to it either.
+    const edited = await client.callTool({ name: 'manage_model_access', arguments: { ...stale.structuredContent.nextAction.arguments, models: [{ model: 'openai/gpt-6-2-astra', access: 'allow' }] } });
+    assert.equal(edited.structuredContent.outcome, 'preview');
+    assert.match(textOf(edited), /This call asks for something other than the summary it repeats, so nothing was saved\./);
+    const blind = await client.callTool({ name: 'manage_model_access', arguments: { action: 'remove', rule_guid: 'r-key', confirm: true, updated_at: 250 } });
+    assert.equal(blind.structuredContent.outcome, 'preview');
+    assert.equal(replace.paths().some(path => path === '/ModelAccess/Set' || path === '/ModelAccess/Remove'), false);
   });
 });
 
@@ -1120,7 +1276,13 @@ test('manage_model_access removes a rule after a summary, says when it changed s
     },
   });
   await withClient(fake, async client => {
-    const stale = await client.callTool({ name: 'manage_model_access', arguments: { action: 'remove', rule_guid: 'r-gw', confirm: true, updated_at: 100 } });
+    // A confirm that does not come from a summary is only a summary.
+    const blind = await client.callTool({ name: 'manage_model_access', arguments: { action: 'remove', rule_guid: 'r-gw', confirm: true, updated_at: 100 } });
+    assert.equal(blind.structuredContent.outcome, 'preview');
+    assert.equal(blind.structuredContent.changedSinceSummary, undefined);
+    assert.equal(blind.structuredContent.nextAction.arguments.updated_at, 400);
+    // A summary of the rule as it was, confirmed after a colleague changed it, is not a yes to the new rule.
+    const stale = await client.callTool({ name: 'manage_model_access', arguments: { ...blind.structuredContent.nextAction.arguments, updated_at: 100 } });
     assert.equal(stale.structuredContent.outcome, 'preview');
     assert.equal(stale.structuredContent.changedSinceSummary, true);
     assert.equal(stale.structuredContent.nextAction.arguments.updated_at, 400);
@@ -1240,6 +1402,7 @@ test('the controls tools name the right argument for a wrong one, and reach noth
       ['manage_spend_limit', { action: 'set', scope: 'project', project_id: '48211', amount_usd: 5 }, /`project_id` \(use `project`\)/],
       ['manage_spend_limit', { action: 'remove', limitGuid: 'l-1' }, /`limitGuid` \(use `limit_guid`\)/],
       ['manage_spend_limit', { action: 'remove', guid: 'l-1' }, /`guid` \(use `limit_guid`\)/],
+      ['manage_spend_limit', { action: 'remove', limit_guid: 'l-1', confirm: true, updated_at: 1, digest: 'x' }, /`digest` \(use `summary_id`\)/],
       ['manage_model_access', { action: 'update', scope: 'account', access: 'block' }, /`access` \(use `everything_else`\)/],
       ['manage_model_access', { action: 'remove', ruleId: 'r-1' }, /`ruleId` \(use `rule_guid`\)/],
       ['manage_model_access', { action: 'update', scope: 'agent', agent_guid: AGENT, models: [] }, /`agent_guid` \(use `agent`\)/],

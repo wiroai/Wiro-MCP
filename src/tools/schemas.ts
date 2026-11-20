@@ -34,6 +34,7 @@ const ARGUMENT_ALIASES: Record<string, string[]> = {
   categories: ['category', 'families'],
   models: ['model', 'modellist'],
   updated_at: ['version'],
+  summary_id: ['summaryid', 'digest', 'confirmdigest', 'summarydigest', 'changeid'],
   usage: ['spending', 'breakdown'],
   members: ['team', 'teammembers'],
 };

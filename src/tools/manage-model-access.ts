@@ -16,6 +16,8 @@ import {
   CATEGORY_KEYS,
   changeFailure,
   checkTargetArguments,
+  confirmLead,
+  confirmState,
   CONTROL_SCOPES,
   cannotChangeText,
   entryName,
@@ -30,10 +32,13 @@ import {
   ruleSummary,
   ruleView,
   ruleViewSchema,
+  summaryId,
+  summaryIdSchema,
   SURFACES,
   targetArgument,
   targetText,
   toRuleRow,
+  versionOf,
   wholeWallet,
   type Access,
   type CategoryKey,
@@ -54,8 +59,6 @@ const SET_UNKNOWN = 'The outcome is not known: the rule may or may not have chan
   + 'is now, and repeating this same call is safe, since it asks for the same rule.';
 const REMOVE_UNKNOWN = 'The outcome is not known: the rule may or may not be removed. get_controls shows whether it is '
   + 'still there, and repeating this same call is safe.';
-const CHANGED_SINCE = 'The rule changed after the summary you showed, so nothing was saved. Show this summary and ask the user again.';
-const NO_SUMMARY = 'This call did not come from a change summary (it has no updated_at), so nothing was saved. Show this summary and ask the user.';
 const ASK_REASON = 'Ask the user to confirm this change first.';
 const APPLIES_NOTE = 'It applies to runs that start from now on; work already running is not stopped.';
 const AGENT_NOTE = 'The agent follows a change to its own rule within about a minute.';
@@ -75,6 +78,7 @@ interface Args {
   rule_guid?: string;
   confirm: boolean;
   updated_at?: number;
+  summary_id?: string;
 }
 
 type Outcome = 'preview' | 'saved' | 'removed' | 'unchanged' | 'refused';
@@ -410,11 +414,7 @@ async function previewRule(client: WiroClient, body: Record<string, unknown>, ex
   };
 }
 
-function versionOf(rule: RuleRow | null | undefined): number {
-  return rule ? rule.updatedAt ?? rule.createdAt ?? 1 : 0;
-}
-
-function nextArguments(args: Args, target: ResolvedTarget, version: number): Record<string, unknown> {
+function nextArguments(args: Args, target: ResolvedTarget, version: number, id: string): Record<string, unknown> {
   return {
     action: args.action,
     scope: target.scope,
@@ -424,7 +424,14 @@ function nextArguments(args: Args, target: ResolvedTarget, version: number): Rec
     ...(args.models && args.models.length > 0 ? { models: args.models.map(entry => ({ model: entry.model.trim(), access: entry.access })) } : {}),
     confirm: true,
     updated_at: version,
+    summary_id: id,
   };
+}
+
+/** The change a rule summary shows, for its id: the rule Set would get, in an order that does not depend on the reads. */
+function ruleChange(action: Args['action'], body: Record<string, unknown>, version: number): Record<string, unknown> {
+  const models = (body.models as Array<{ model: string; access: Access }>).map(entry => [entry.model, entry.access]).sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+  return { tool: 'manage_model_access', action, ...body, models, version };
 }
 
 function removeNextAction(rule: RuleRow) {
@@ -510,11 +517,13 @@ async function changeRule(client: WiroClient, args: Args, list: RuleList, signal
   if (gone > 0) notes.push(`${gone === 1 ? 'One model' : `${gone} models`} in this rule ${gone === 1 ? 'is' : 'are'} no longer on Wiro and stay in it until taken out.`);
   notes.push(...unsetNote);
 
-  const nextAction = { tool: 'manage_model_access', arguments: nextArguments(args, target, versionOf(before)), reason: ASK_REASON };
-  const confirmed = args.confirm && args.updated_at !== undefined;
-  if (!confirmed || versionOf(before) !== args.updated_at) {
-    const changedSinceSummary = confirmed;
-    const lead = changedSinceSummary ? CHANGED_SINCE : args.confirm ? NO_SUMMARY : null;
+  const version = versionOf(before);
+  const id = summaryId(client, ruleChange(args.action, body, version));
+  const nextAction = { tool: 'manage_model_access', arguments: nextArguments(args, target, version, id), reason: ASK_REASON };
+  const state = confirmState(args, version, id);
+  if (state !== 'confirmed') {
+    const changedSinceSummary = state === 'changed';
+    const lead = confirmLead(state, 'rule');
     const message = lead ?? `Change the rule for ${covers()} to: ${ruleSummary(after, labels)}? Nothing has changed yet.`;
     return result({
       action: args.action,
@@ -614,13 +623,15 @@ async function removeRule(client: WiroClient, args: Args, list: RuleList, signal
     ...(stillApply ? [stillApply] : []),
     ...(rule.scope === 'agent' ? [AGENT_NOTE] : []),
   ];
-  const confirmed = args.confirm && args.updated_at !== undefined;
-  if (!confirmed || versionOf(rule) !== args.updated_at) {
-    const changedSinceSummary = confirmed;
-    const lead = changedSinceSummary ? CHANGED_SINCE : args.confirm ? NO_SUMMARY : null;
+  const version = versionOf(rule);
+  const id = summaryId(client, { tool: 'manage_model_access', action: 'remove', guid: rule.guid, version });
+  const state = confirmState(args, version, id);
+  if (state !== 'confirmed') {
+    const changedSinceSummary = state === 'changed';
+    const lead = confirmLead(state, 'rule');
     const nextAction = {
       tool: 'manage_model_access',
-      arguments: { action: 'remove', rule_guid: rule.guid, confirm: true, updated_at: versionOf(rule) },
+      arguments: { action: 'remove', rule_guid: rule.guid, confirm: true, updated_at: version, summary_id: id },
       reason: ASK_REASON,
     };
     const previewNotes = ['Once it is removed, models it blocked can run again, unless another rule blocks them.', ...notes];
@@ -688,8 +699,9 @@ export function registerManageModelAccess(server: McpServer, client: WiroClient)
         + 'remove deletes it. Every rule that applies to a run must allow its model, so a narrower rule cannot open what '
         + 'a wider one blocks. Only the account owner, a team admin or the organization\'s owner can change rules; for '
         + 'anyone else this changes nothing. Without `confirm: true` it returns a change summary: the rule before and '
-        + 'after, each entry that changes, and warnings. Show it, wait for a clear yes, then repeat the call as its '
-        + 'nextAction shows. If the rule changed in between, nothing is saved and a new summary comes back.',
+        + 'after, each entry that changes, and warnings. Show it, wait for a clear yes, then repeat the call exactly as its '
+        + 'nextAction shows. If the rule changed in between, or the call asks for anything else, nothing is saved and a '
+        + 'new summary comes back.',
       inputSchema: strictInput({
         action: z.enum(['update', 'replace', 'remove'])
           .describe('update merges the entries given into the rule, replace writes the whole rule from the entries given, remove deletes the rule.'),
@@ -721,6 +733,7 @@ export function registerManageModelAccess(server: McpServer, client: WiroClient)
           .describe('Set true only by repeating the change summary\'s nextAction, after the user approved that summary.'),
         updated_at: z.number().int().min(0).optional()
           .describe('From the change summary\'s nextAction: the version of the rule the user saw. Never set it yourself.'),
+        summary_id: summaryIdSchema,
       }),
       outputSchema,
       annotations: {
@@ -743,6 +756,8 @@ export function registerManageModelAccess(server: McpServer, client: WiroClient)
         }
         // Wiro says whether it would take a change from this connection: a member gets the refusal here.
         if (list.workspace.canManage === false) return refusedResult(args.action, list.workspace);
+        // List's caller came in the same Wiro API release as Preview: without it there is no change summary, so no change.
+        if (!list.caller) throw new Error(previewMissingText('model-access'));
         return args.action === 'remove'
           ? await removeRule(client, args, list, extra.signal)
           : await changeRule(client, args, list, extra.signal);

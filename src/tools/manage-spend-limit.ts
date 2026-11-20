@@ -17,6 +17,8 @@ import {
   cents,
   changeFailure,
   checkTargetArguments,
+  confirmLead,
+  confirmState,
   CONTROL_SCOPES,
   cannotChangeText,
   isThisConnection,
@@ -35,6 +37,8 @@ import {
   resolveTarget,
   soFarLabel,
   spendingText,
+  summaryId,
+  summaryIdSchema,
   SURFACES,
   targetArgument,
   targetText,
@@ -60,8 +64,6 @@ const SET_UNKNOWN = 'The outcome is not known: the limit may or may not have cha
   + 'is now, and repeating this same call is safe, since it sets the same values.';
 const REMOVE_UNKNOWN = 'The outcome is not known: the limit may or may not be removed. get_controls shows whether it is '
   + 'still there, and repeating this same call is safe.';
-const CHANGED_SINCE = 'The limit changed after the summary you showed, so nothing was saved. Show this summary and ask the user again.';
-const NO_SUMMARY = 'This call did not come from a change summary (it has no updated_at), so nothing was saved. Show this summary and ask the user.';
 const ASK_REASON = 'Ask the user to confirm this change first.';
 const APPLIES_NOTE = 'It applies to new work from now on. Work already running finishes and is charged.';
 
@@ -78,6 +80,7 @@ interface Args {
   limit_guid?: string;
   confirm: boolean;
   updated_at?: number;
+  summary_id?: string;
 }
 
 type Outcome = 'preview' | 'saved' | 'removed' | 'unchanged' | 'refused';
@@ -305,6 +308,8 @@ async function setLimit(client: WiroClient, args: Args, list: LimitList, signal:
   if (before && sameLimit(before, amount, alert)) return unchanged(before);
   const after = preview.limit;
 
+  const version = versionOf(before);
+  const id = summaryId(client, { tool: 'manage_spend_limit', action: 'set', ...body, version });
   const nextAction = {
     tool: 'manage_spend_limit',
     arguments: {
@@ -315,7 +320,8 @@ async function setLimit(client: WiroClient, args: Args, list: LimitList, signal:
       amount_usd: amount,
       alert_percent: alert,
       confirm: true,
-      updated_at: versionOf(before),
+      updated_at: version,
+      summary_id: id,
     },
     reason: ASK_REASON,
   };
@@ -337,10 +343,10 @@ async function setLimit(client: WiroClient, args: Args, list: LimitList, signal:
   if (other) notes.push(`${capitalized(limitPhrase(other, 'the same target'))} stays as it is, and both apply.`);
   if (before && before.alertPercent !== null && alert === null) notes.push('No alert email goes out before the limit is used up.');
 
-  const confirmed = args.confirm && args.updated_at !== undefined;
-  if (!confirmed || versionOf(before) !== args.updated_at) {
-    const changedSinceSummary = confirmed;
-    const lead = changedSinceSummary ? CHANGED_SINCE : args.confirm ? NO_SUMMARY : null;
+  const state = confirmState(args, version, id);
+  if (state !== 'confirmed') {
+    const changedSinceSummary = state === 'changed';
+    const lead = confirmLead(state, 'limit');
     const message = lead ?? `Set ${amountPerPeriod(amount, period)} for ${covers()}? Nothing has changed yet.`;
     const lines = [
       changedSinceSummary ? '## The limit changed since the summary (nothing saved)' : '## Set a spend limit? (nothing changed yet)',
@@ -444,13 +450,15 @@ async function removeLimit(client: WiroClient, args: Args, list: LimitList, sign
 
   const stillApply = stillApplyNote(row, list);
   const notes = [...(stillApply ? [stillApply] : [])];
-  const confirmed = args.confirm && args.updated_at !== undefined;
-  if (!confirmed || versionOf(row) !== args.updated_at) {
-    const changedSinceSummary = confirmed;
-    const lead = changedSinceSummary ? CHANGED_SINCE : args.confirm ? NO_SUMMARY : null;
+  const version = versionOf(row);
+  const id = summaryId(client, { tool: 'manage_spend_limit', action: 'remove', guid: row.guid, version });
+  const state = confirmState(args, version, id);
+  if (state !== 'confirmed') {
+    const changedSinceSummary = state === 'changed';
+    const lead = confirmLead(state, 'limit');
     const nextAction = {
       tool: 'manage_spend_limit',
-      arguments: { action: 'remove', limit_guid: row.guid, confirm: true, updated_at: versionOf(row) },
+      arguments: { action: 'remove', limit_guid: row.guid, confirm: true, updated_at: version, summary_id: id },
       reason: ASK_REASON,
     };
     notes.push('Once it is removed, work it refused can start again at once.');
@@ -536,8 +544,9 @@ export function registerManageSpendLimit(server: McpServer, client: WiroClient):
         + 'work it covers is refused with error code 93. Each target can have one monthly and one daily limit. Only the '
         + 'account owner, a team admin or the organization\'s owner can change limits; for anyone else this changes nothing. '
         + 'Without `confirm: true` it returns a change summary: what the limit covers, its value before and after, what was '
-        + 'spent this period and when it resets. Show it, wait for a clear yes, then repeat the call as its nextAction shows. '
-        + 'If the limit changed in between, nothing is saved and a new summary comes back.',
+        + 'spent this period and when it resets. Show it, wait for a clear yes, then repeat the call exactly as its '
+        + 'nextAction shows. If the limit changed in between, or the call asks for anything else, nothing is saved and a '
+        + 'new summary comes back.',
       inputSchema: strictInput({
         action: z.enum(['set', 'remove'])
           .describe('set adds a limit, or changes the one with the same scope, target and period; remove deletes one.'),
@@ -563,6 +572,7 @@ export function registerManageSpendLimit(server: McpServer, client: WiroClient):
           .describe('Set true only by repeating the change summary\'s nextAction, after the user approved that summary.'),
         updated_at: z.number().int().min(0).optional()
           .describe('From the change summary\'s nextAction: the version of the limit the user saw. Never set it yourself.'),
+        summary_id: summaryIdSchema,
       }),
       outputSchema,
       annotations: {
@@ -585,6 +595,8 @@ export function registerManageSpendLimit(server: McpServer, client: WiroClient):
         }
         // Wiro says whether it would take a change from this connection: a member gets the refusal here.
         if (list.workspace.canManage === false) return refusedResult(args.action, list.workspace);
+        // List's caller came in the same Wiro API release as Preview: without it there is no change summary, so no change.
+        if (!list.caller) throw new Error(previewMissingText('spend-limits'));
         return args.action === 'remove'
           ? await removeLimit(client, args, list, extra.signal)
           : await setLimit(client, args, list, extra.signal);
