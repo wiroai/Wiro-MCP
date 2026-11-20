@@ -83,6 +83,12 @@ export function isOutcomeUnknown(error: unknown): boolean {
   return true;
 }
 
+/** The Spend Limits page of the Wiro dashboard. */
+export const SPEND_LIMITS_URL = 'https://wiro.ai/panel/controls/spend-limits';
+
+/** The Model Access page of the Wiro dashboard. */
+export const MODEL_ACCESS_URL = 'https://wiro.ai/panel/controls/model-access';
+
 /** Wiro's code for a spend limit that is used up: the wallet's, a team member's, an API key's, a surface's or an agent's. */
 export const SPEND_LIMIT_CODE = 93;
 

@@ -52,8 +52,12 @@ import { registerDisconnectAgentOauth } from './disconnect-agent-oauth.js';
 import { registerManageAgentCustomSkill } from './manage-agent-custom-skill.js';
 import { registerListProjects } from './list-projects.js';
 import { registerBindAgentProject } from './bind-agent-project.js';
+import { registerGetControls } from './get-controls.js';
+import { registerCheckModelAccess } from './check-model-access.js';
+import { registerManageSpendLimit } from './manage-spend-limit.js';
+import { registerManageModelAccess } from './manage-model-access.js';
 
-export const TOOLSETS = ['models', 'workflows', 'agents'] as const;
+export const TOOLSETS = ['models', 'workflows', 'agents', 'controls'] as const;
 export type Toolset = typeof TOOLSETS[number];
 
 /** What a tool wrapper is told about the tool it wraps. */
@@ -190,6 +194,15 @@ export function registerTools(
     registerListProjects(server, client);
     registerBindAgentProject(server, client);
   }
+
+  // Spend Limits and Model Access of the connected workspace. A group of its own, so a server that loads only some
+  // groups leaves out tools that change the connected workspace's own controls.
+  if (enabled.has('controls')) {
+    registerGetControls(server, client);
+    registerCheckModelAccess(server, client);
+    registerManageSpendLimit(server, client);
+    registerManageModelAccess(server, client);
+  }
 }
 
 export { advertiseJsonSchema2020_12, withJsonSchema2020_12 } from '../utils/json-schema-dialect.js';
@@ -245,4 +258,8 @@ export {
   registerManageAgentCustomSkill,
   registerListProjects,
   registerBindAgentProject,
+  registerGetControls,
+  registerCheckModelAccess,
+  registerManageSpendLimit,
+  registerManageModelAccess,
 };

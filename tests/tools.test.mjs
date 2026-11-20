@@ -538,6 +538,8 @@ const EXPECTED_TOOLS = [
   'manage_agent_billing', 'get_agent_activity', 'delete_agent',
   'apply_agent_skills', 'set_agent_credentials', 'connect_agent_oauth',
   'disconnect_agent_oauth', 'manage_agent_custom_skill', 'list_projects', 'bind_agent_project',
+  // Controls
+  'get_controls', 'check_model_access', 'manage_spend_limit', 'manage_model_access',
 ];
 
 test('wrapTool sees every tool with its annotations and can answer in its place', async () => {
@@ -622,7 +624,7 @@ test('tool annotations follow the MCP meaning of each hint', async () => {
   // Repeating one of these with the same arguments has no further effect.
   const repeatable = new Set([
     'apply_agent_skills', 'bind_agent_project', 'cancel_agent_message', 'cancel_task', 'delete_agent',
-    'delete_agent_session', 'delete_workflow', 'kill_task',
+    'delete_agent_session', 'delete_workflow', 'kill_task', 'manage_model_access', 'manage_spend_limit',
   ]);
   await withClient({}, async client => {
     const { tools } = await client.listTools();
@@ -653,6 +655,12 @@ test('tool annotations follow the MCP meaning of each hint', async () => {
     assert.deepEqual(hints('bind_agent_project'), [true, true]);
     // A deployed agent's turn can change or remove things, and a model switch shortens a session's memory.
     assert.deepEqual(hints('send_agent_message'), [true, false]);
+    // A change can lift or lower a cap or a rule; asking for the same values again changes nothing.
+    assert.deepEqual(hints('manage_spend_limit'), [true, true]);
+    assert.deepEqual(hints('manage_model_access'), [true, true]);
+    for (const name of ['get_controls', 'check_model_access']) {
+      assert.equal(tools.find(tool => tool.name === name).annotations.readOnlyHint, true, `${name} only reads`);
+    }
   });
 });
 

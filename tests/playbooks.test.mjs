@@ -27,6 +27,7 @@ const PLANNED_TOOLS = new Set([
   'manage_agent_billing', 'get_agent_activity', 'delete_agent',
   'apply_agent_skills', 'set_agent_credentials', 'connect_agent_oauth',
   'disconnect_agent_oauth', 'manage_agent_custom_skill', 'list_projects', 'bind_agent_project',
+  'get_controls', 'check_model_access', 'manage_spend_limit', 'manage_model_access',
 ]);
 
 // snake_case words in the guidance that are parameters, actions or LLM segment
@@ -40,6 +41,8 @@ const NON_TOOL_IDENTIFIERS = new Set([
   'product_photo', 'api_key',
   // A plan status get_my_agent shows: a card plan whose last payment did not go through.
   'past_due',
+  // Arguments of the controls tools.
+  'amount_usd', 'alert_percent', 'everything_else', 'limit_guid',
 ]);
 
 const PROMPT_ARGUMENTS = {
@@ -305,9 +308,12 @@ test('the instructions and the agent playbooks say that a reply is content', () 
 
 // Every combination of toolsets a server can be started with.
 const TOOLSET_CHOICES = [
-  ['models'], ['workflows'], ['agents'],
+  ['models'], ['workflows'], ['agents'], ['controls'],
   ['models', 'workflows'], ['models', 'agents'], ['workflows', 'agents'],
-  ['models', 'workflows', 'agents'],
+  ['models', 'controls'], ['workflows', 'controls'], ['agents', 'controls'],
+  ['models', 'workflows', 'agents'], ['models', 'workflows', 'controls'],
+  ['models', 'agents', 'controls'], ['workflows', 'agents', 'controls'],
+  ['models', 'workflows', 'agents', 'controls'],
 ];
 
 function expectedPrompts(toolsets) {

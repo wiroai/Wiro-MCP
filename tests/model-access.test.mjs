@@ -209,4 +209,6 @@ test('the playbooks name code 92 and the Model Access page instead of the old te
   const all = Object.values(PLAYBOOKS).join('\n');
   assert.doesNotMatch(all, /This model is not available for your team|Team spend limit has been reached/);
   assert.match(PLAYBOOKS.billing, /refuses the work it covers with error code 93/);
+  // Only the account owner, a team admin or the organization's owner changes a rule: an agent's owner as such never does.
+  assert.doesNotMatch(all, /also the agent's owner|agent's owner can|panel\/wallet\/limits/);
 });

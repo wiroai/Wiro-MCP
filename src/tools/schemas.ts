@@ -9,7 +9,7 @@ const ARGUMENT_ALIASES: Record<string, string[]> = {
   timeout_seconds: ['timeout', 'waitseconds', 'waittime'],
   start: ['offset', 'skip'],
   limit: ['count', 'size', 'pagesize'],
-  model: ['modelslug'],
+  model: ['modelslug', 'models'],
   workflow: ['slug', 'fullslug', 'workflowslug'],
   params: ['parameters', 'input', 'inputs', 'args', 'arguments'],
   input: ['inputs', 'params', 'parameters', 'args', 'arguments'],
@@ -20,6 +20,22 @@ const ARGUMENT_ALIASES: Record<string, string[]> = {
   workflowtoken: ['token', 'runtoken', 'run'],
   breakpoint_node_id: ['breakpoint', 'breakpointnode', 'stopafter'],
   project_id: ['project', 'id'],
+  // Spend Limits and Model Access.
+  amount_usd: ['amount', 'usd', 'cap', 'limit', 'spendlimit', 'limitusd', 'max', 'maxusd', 'budget'],
+  alert_percent: ['alert', 'alertpct', 'alertpercentage', 'threshold', 'alertthreshold', 'alertat'],
+  member: ['email', 'useruuid', 'user', 'uuid', 'userid', 'memberid', 'memberemail', 'memberuuid'],
+  project: ['projectid', 'apikey', 'key', 'projectname'],
+  agent: ['agentguid', 'useragentguid', 'agentid', 'agentname'],
+  surface: ['channel', 'source', 'via', 'wayin'],
+  period: ['interval', 'window', 'resetperiod'],
+  limit_guid: ['limitid', 'guid', 'id'],
+  rule_guid: ['ruleid', 'guid', 'id'],
+  everything_else: ['access', 'default', 'defaultaccess', 'others', 'rest', 'fallback'],
+  categories: ['category', 'families'],
+  models: ['model', 'modellist'],
+  updated_at: ['version'],
+  usage: ['spending', 'breakdown'],
+  members: ['team', 'teammembers'],
 };
 
 function argumentKey(name: string): string {
