@@ -6,7 +6,9 @@ import {
   errorResult,
   errorText,
   isPlainObject,
+  MODEL_ACCESS_URL,
   requireApiSuccess,
+  SPEND_LIMITS_URL,
   toNumber,
   truncate,
   unixToIso,
@@ -22,6 +24,12 @@ interface WalletListResponse extends ApiEnvelope {
 
 interface SpendLimitListResponse extends ApiEnvelope {
   limits?: Array<Record<string, unknown>>;
+  workspace?: unknown;
+}
+
+export interface GetAccountOptions {
+  /** Whether the controls tools (get_controls, manage_spend_limit, manage_model_access) are loaded too. */
+  controls?: boolean;
 }
 
 const SPEND_LIMIT_SCOPES = ['account', 'member', 'project', 'surface', 'agent'] as const;
@@ -33,6 +41,7 @@ const spendLimitSchema = z.object({
   period: z.enum(['month', 'day']).describe('Monthly limits reset on the 1st, daily ones at 00:00 UTC.'),
   amountUsd: z.number(),
   spentUsd: z.number().describe('Spent in the current period.'),
+  heldUsd: z.number().optional().describe('Held by work that is still running, until it is charged or ends.'),
   usedUp: z.boolean().describe('True when new work this limit covers is refused (error code 93).'),
   resetsAt: z.string().optional(),
 });
@@ -80,6 +89,7 @@ function toSpendLimit(row: Record<string, unknown>): SpendLimit | null {
   const amountUsd = toNumber(row.amountusd);
   if (!scope || !SPEND_LIMIT_SCOPES.includes(scope) || (period !== 'month' && period !== 'day') || amountUsd === null) return null;
   const spentUsd = toNumber(row.spentusd) ?? 0;
+  const heldUsd = toNumber(row.heldusd);
   const target = textField(row.target);
   const targetName = textField(row.targetlabel);
   const resetsAt = unixToIso(row.resetsat);
@@ -90,6 +100,7 @@ function toSpendLimit(row: Record<string, unknown>): SpendLimit | null {
     period,
     amountUsd,
     spentUsd,
+    ...(heldUsd !== null && heldUsd > 0 ? { heldUsd: Math.round(heldUsd * 100) / 100 } : {}),
     usedUp: spentUsd >= amountUsd,
     ...(resetsAt ? { resetsAt } : {}),
   };
@@ -107,9 +118,10 @@ function spendLimitLine(limit: SpendLimit): string {
           ? `calls through ${name}`
           : `agent ${name}`;
   const period = limit.period === 'day' ? 'Daily' : 'Monthly';
+  const held = limit.heldUsd ? `, $${limit.heldUsd} held by work still running` : '';
   const state = limit.usedUp ? ', used up: new work it covers is refused until it resets' : '';
   const reset = limit.resetsAt ? ` (resets ${limit.resetsAt})` : '';
-  return `- ${period} limit for ${what}: $${limit.spentUsd} of $${limit.amountUsd}${state}${reset}`;
+  return `- ${period} limit for ${what}: $${limit.spentUsd} of $${limit.amountUsd}${held}${state}${reset}`;
 }
 
 function textField(value: unknown): string | undefined {
@@ -201,7 +213,24 @@ function transactionLines(transactions: z.infer<typeof transactionsSchema>): str
   return lines;
 }
 
-export function registerGetAccount(server: McpServer, client: WiroClient): void {
+/** Who changes the workspace's controls, as get_account says it; the controls tools are named only when they are loaded. */
+function controlsLine(canManage: boolean | undefined, kind: string, controlsLoaded: boolean): string {
+  if (canManage === false) {
+    const who = kind === 'team' ? 'a team admin or the organization\'s owner' : 'the account owner';
+    return controlsLoaded
+      ? `This connection can only read the spend limits and Model Access rules: ${who} changes them. get_controls shows them all.`
+      : `This connection can only read the spend limits and Model Access rules: ${who} changes them at ${SPEND_LIMITS_URL}.`;
+  }
+  if (canManage === true) {
+    return controlsLoaded
+      ? 'This connection can change them with manage_spend_limit and manage_model_access, after a change summary; get_controls shows the rules and what each limit used.'
+      : `They are managed at ${SPEND_LIMITS_URL} and ${MODEL_ACCESS_URL}.`;
+  }
+  return controlsLoaded ? 'get_controls shows the rules and what each limit used.' : `They are managed at ${SPEND_LIMITS_URL} and ${MODEL_ACCESS_URL}.`;
+}
+
+export function registerGetAccount(server: McpServer, client: WiroClient, options: GetAccountOptions = {}): void {
+  const controlsLoaded = options.controls === true;
   server.registerTool(
     'get_account',
     {
@@ -212,7 +241,8 @@ export function registerGetAccount(server: McpServer, client: WiroClient): void 
         + 'work and when a call is refused for insufficient balance. With recent_transactions it also lists the '
         + 'wallet\'s latest transactions, the rows the Transactions page of the Wiro dashboard shows, which is how to '
         + 'check that a charge or a credit landed. In a team the wallet is shared, so the list holds the activity of '
-        + 'the whole team.',
+        + 'the whole team. It also lists the workspace\'s spend limits and says whether this connection can change '
+        + `Spend Limits and Model Access rules${controlsLoaded ? ' (get_controls shows the rules)' : ''}.`,
       inputSchema: strictInput({
         recent_transactions: z.number().int().min(1).max(MAX_TRANSACTIONS).optional()
           .describe(`Also list this many of the wallet's latest transactions, newest first (1 to ${MAX_TRANSACTIONS}). Leave it out to read only the balance.`),
@@ -241,6 +271,9 @@ export function registerGetAccount(server: McpServer, client: WiroClient): void 
           .describe('The workspace\'s spend limits with what each has used this period. A used-up limit refuses new work with error code 93 even when the wallet has money.'),
         spendLimitsError: z.string().optional()
           .describe('Why the spend limits could not be read, when the balance could.'),
+        controls: z.object({
+          canManage: z.boolean().describe('Whether this connection can change the Spend Limits and Model Access rules.'),
+        }).optional(),
       },
       annotations: {
         readOnlyHint: true,
@@ -278,9 +311,16 @@ export function registerGetAccount(server: McpServer, client: WiroClient): void 
         // The spend limits (the whole wallet, a member, an API key, a surface or an agent). The balance stands without them.
         let spendLimits: SpendLimit[] | undefined;
         let spendLimitsError: string | undefined;
+        let canManage: boolean | undefined;
+        // Who changes the controls follows the workspace Wiro names for them, else the wallet's.
+        let controlsKind: string = workspace.kind;
         try {
           const listed = await client.post<SpendLimitListResponse>('/SpendLimit/List', {}, extra.signal);
           requireApiSuccess(listed, 'Could not read the spend limits.');
+          if (isPlainObject(listed.workspace)) {
+            if (typeof listed.workspace.canmanage === 'boolean') canManage = listed.workspace.canmanage;
+            if (listed.workspace.type === 'team' || listed.workspace.type === 'personal') controlsKind = listed.workspace.type;
+          }
           spendLimits = (listed.limits ?? []).filter(isPlainObject).map(toSpendLimit).filter((l): l is SpendLimit => l !== null);
           lines.push('', spendLimits.length ? '**Spend limits:**' : '**Spend limits:** none');
           lines.push(...spendLimits.map(spendLimitLine));
@@ -291,6 +331,7 @@ export function registerGetAccount(server: McpServer, client: WiroClient): void 
         }
         lines.push('', 'A used-up spend limit refuses new work (error code 93) even when the wallet has money, '
           + 'and a Model Access rule can block a model (error code 92).');
+        lines.push(controlsLine(canManage, controlsKind, controlsLoaded));
         if (workspace.role === 'member') {
           lines.push('Only a team admin can deploy an agent in this team. Starting, changing or paying for a team agent '
             + 'needs a team admin or the person who deployed it (for payments also the organization\'s owner).');
@@ -320,6 +361,7 @@ export function registerGetAccount(server: McpServer, client: WiroClient): void 
             ...(transactionsError ? { transactionsError } : {}),
             ...(spendLimits ? { spendLimits } : {}),
             ...(spendLimitsError ? { spendLimitsError } : {}),
+            ...(canManage !== undefined ? { controls: { canManage } } : {}),
           },
         };
       } catch (error) {

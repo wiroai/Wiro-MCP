@@ -120,7 +120,7 @@ export function registerTools(
   const enabled = new Set<Toolset>(options.toolsets ?? TOOLSETS);
 
   // Always available: account context, guides and documentation.
-  registerGetAccount(server, client);
+  registerGetAccount(server, client, { controls: enabled.has('controls') });
   registerGetPlaybook(server);
   registerSearchDocs(server);
 

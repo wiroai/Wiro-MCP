@@ -213,3 +213,59 @@ test('get_account with no limits says none', async () => {
     assert.deepEqual(result.structuredContent.spendLimits, []);
   });
 });
+
+test('get_account says whether this connection can change the controls, and names the tools only when they are loaded', async () => {
+  const listed = canmanage => ({
+    result: true,
+    errors: [],
+    workspace: { type: 'team', teamguid: 'team-1', canmanage },
+    limits: [{ guid: 'l-1', scope: 'account', target: '', period: 'month', amountusd: 300, spentusd: 248.7, heldusd: 12.5, resetsat: 1796083200, alertpct: 80 }],
+  });
+  const routes = canmanage => ({ '/Wallet/List': WALLET, '/Organization/List': ORGS, '/SpendLimit/List': listed(canmanage) });
+
+  const admin = fakeClient(routes(true));
+  await withClient(admin, async client => {
+    const result = await client.callTool({ name: 'get_account', arguments: {} });
+    assert.notEqual(result.isError, true, textOf(result));
+    assert.deepEqual(result.structuredContent.controls, { canManage: true });
+    assert.equal(result.structuredContent.spendLimits[0].heldUsd, 12.5);
+    const lines = textOf(result).split('\n');
+    assert.ok(lines.includes('- Monthly limit for the whole wallet: $248.7 of $300, $12.5 held by work still running (resets 2026-12-01T00:00:00.000Z)'), textOf(result));
+    assert.ok(lines.includes('This connection can change them with manage_spend_limit and manage_model_access, after a change summary; get_controls shows the rules and what each limit used.'), textOf(result));
+    const { tools } = await client.listTools();
+    assert.match(tools.find(tool => tool.name === 'get_account').description, /says whether this connection can change Spend Limits and Model Access rules \(get_controls shows the rules\)\.$/);
+  });
+
+  const member = fakeClient(routes(false));
+  await withClient(member, async client => {
+    const result = await client.callTool({ name: 'get_account', arguments: {} });
+    assert.deepEqual(result.structuredContent.controls, { canManage: false });
+    assert.ok(textOf(result).split('\n').includes('This connection can only read the spend limits and Model Access rules: a team admin or the organization\'s owner changes them. get_controls shows them all.'), textOf(result));
+  });
+
+  // Without the controls group, get_account names the dashboard instead of tools that are not loaded.
+  const server = createMcpServer({ authType: 'apikey-only', ...fakeClient(routes(false)) }, { toolsets: ['models'] });
+  const client = new Client({ name: 'test-client', version: '1.0.0' });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await server.connect(serverTransport);
+  await client.connect(clientTransport);
+  try {
+    const { tools } = await client.listTools();
+    assert.equal(tools.some(tool => tool.name === 'get_controls'), false);
+    assert.doesNotMatch(tools.find(tool => tool.name === 'get_account').description, /get_controls/);
+    const result = await client.callTool({ name: 'get_account', arguments: {} });
+    assert.ok(textOf(result).split('\n').includes('This connection can only read the spend limits and Model Access rules: a team admin or the organization\'s owner changes them at https://wiro.ai/panel/controls/spend-limits.'), textOf(result));
+    assert.doesNotMatch(textOf(result), /get_controls|manage_spend_limit/);
+  } finally {
+    await client.close();
+    await server.close();
+  }
+
+  // An answer without the workspace keeps the old fields only.
+  const older = fakeClient({ '/Wallet/List': WALLET, '/Organization/List': ORGS, '/SpendLimit/List': { result: true, errors: [], limits: [] } });
+  await withClient(older, async client => {
+    const result = await client.callTool({ name: 'get_account', arguments: {} });
+    assert.equal(result.structuredContent.controls, undefined);
+    assert.deepEqual(Object.keys(result.structuredContent).sort(), ['authMode', 'balance', 'spendLimits', 'workspace']);
+  });
+});
