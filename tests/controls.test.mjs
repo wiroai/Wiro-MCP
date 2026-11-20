@@ -534,6 +534,78 @@ test('check_model_access finds a member by e-mail and an agent by name, and chec
   });
 });
 
+test('check_model_access checks a way in that comes with a key with this connection\'s key, and says when a member\'s key is left out', async () => {
+  // This connection's key only lets Image Generation run; the gateway on its own blocks nothing.
+  const keyOnly = ruleRow({ guid: 'r-key', scope: 'project', target: '48211', targetlabel: 'Production', access: 'block', categories: [category('image', 'allow')] });
+  const fake = fakeClient({
+    '/ModelAccess/List': ruleList([keyOnly]),
+    '/Team/Member/List': MEMBERS,
+    '/ModelAccess/Check': body => (body.project === '48211'
+      ? checkAnswer([{ rule: keyOnly, access: 'block', by: 'default', category: null }])
+      : checkAnswer([], true)),
+  });
+  await withClient(fake, async client => {
+    const gateway = await client.callTool({ name: 'check_model_access', arguments: { model: 'openai/gpt-6-2-astra', surface: 'llm-gateway' } });
+    assert.notEqual(gateway.isError, true, textOf(gateway));
+    assert.deepEqual(fake.calls.at(-1).body, { model: 'openai/gpt-6-2-astra', surface: 'llm-gateway', project: '48211' });
+    assert.equal(gateway.structuredContent.allowed, false);
+    assert.ok(linesOf(gateway).includes('**Run checked:** a run through surface `llm-gateway` (the OpenAI and Anthropic compatible LLM gateway), with this connection\'s API key (project id `48211`)'), textOf(gateway));
+    assert.deepEqual(gateway.structuredContent.context, { surface: 'llm-gateway', project: { id: '48211', thisConnection: true }, thisConnection: false });
+
+    // A member's key is not known: the check leaves its rule out and says so.
+    const member = await client.callTool({ name: 'check_model_access', arguments: { model: 'openai/gpt-6-2-astra', member: 'jane@acme.test', surface: 'api' } });
+    assert.notEqual(member.isError, true, textOf(member));
+    assert.deepEqual(fake.calls.at(-1).body, { model: 'openai/gpt-6-2-astra', surface: 'api', member: JANE });
+    assert.ok(linesOf(member).includes('A run through the API comes with an API key, and that key\'s own rule is not part of this check. A key counts as the person who created it: to include its rule, name a key this member created with project.'), textOf(member));
+    assert.equal(member.structuredContent.context.keyLeftOut, true);
+
+    // The dashboard comes with no key, so none is added.
+    await client.callTool({ name: 'check_model_access', arguments: { model: 'openai/gpt-6-2-astra', surface: 'web' } });
+    assert.deepEqual(fake.calls.at(-1).body, { model: 'openai/gpt-6-2-astra', surface: 'web' });
+  });
+});
+
+test('check_model_access describes the run Wiro says it checked: a key counts as the person who created it', async () => {
+  const janeVideo = ruleRow({ guid: 'r-jane', scope: 'member', target: JANE, targetlabel: 'Jane Doe', categories: [category('video', 'block')] });
+  const checked = context => body => ({
+    result: true,
+    errors: [],
+    check: { model: 'bytedance/seedance-v2-5-flash', categories: ['video'], allowed: true, message: null, rules: [], context: context(body) },
+  });
+  const fake = fakeClient({
+    '/ModelAccess/List': ruleList([janeVideo]),
+    '/Team/Member/List': MEMBERS,
+    '/UserAgent/MyAgents': AGENTS,
+    // Staging (project 7) was created by Bob, and so is the key the agent runs with.
+    '/ModelAccess/Check': checked(body => ({
+      surface: body.agent ? 'agent' : body.surface,
+      member: { useruuid: BOB, label: 'Bob Roe' },
+      project: body.project || body.agent ? { projectid: body.agent ? '7' : body.project, label: body.project === '48211' ? 'Production' : 'Staging' } : null,
+      agent: body.agent ? { useragentguid: AGENT, label: 'Sales Bot' } : null,
+    })),
+  });
+  await withClient(fake, async client => {
+    const staging = await client.callTool({ name: 'check_model_access', arguments: { model: 'bytedance/seedance-v2-5-flash', member: 'jane@acme.test', project: '7' } });
+    assert.notEqual(staging.isError, true, textOf(staging));
+    const lines = linesOf(staging);
+    for (const line of [
+      '**Run checked:** a run by team member `Bob Roe` through surface `api` (calls with an API key, a local install of this server included), with the API key of project `Staging` (id `7`)',
+      'A run with an API key counts as the person who created the key, so this checked a run by team member `Bob Roe`, not by team member `Jane Doe`. For that member\'s own runs, name a key they created with project, or leave out project and agent.',
+      '**Allowed.** No Model Access rule applies to this run, so every model can run.',
+    ]) assert.ok(lines.includes(line), `missing line: ${line}\n\n${textOf(staging)}`);
+    assert.doesNotMatch(textOf(staging), /a run by team member `Jane Doe`/);
+    assert.deepEqual(staging.structuredContent.context, { surface: 'api', project: { id: '7', name: 'Staging' }, member: { uuid: BOB, name: 'Bob Roe' }, thisConnection: false });
+
+    const agent = await client.callTool({ name: 'check_model_access', arguments: { model: 'bytedance/seedance-v2-5-flash', agent: 'Sales Bot' } });
+    assert.ok(linesOf(agent).includes(`**Run checked:** a run that agent \`Sales Bot\` (guid \`${AGENT}\`) starts, with the API key of project \`Staging\` (id \`7\`), as team member \`Bob Roe\``), textOf(agent));
+
+    // A run through this connection names the member it counts as too.
+    const own = await client.callTool({ name: 'check_model_access', arguments: { model: 'bytedance/seedance-v2-5-flash' } });
+    assert.ok(linesOf(own).includes('**Run checked:** a run through this connection: surface `mcp` (the hosted MCP server at mcp.wiro.ai), with this connection\'s API key (project id `48211`), as team member `Bob Roe`'), textOf(own));
+    assert.deepEqual(own.structuredContent.context, { surface: 'mcp', project: { id: '48211', name: 'Production', thisConnection: true }, member: { uuid: BOB, name: 'Bob Roe' }, thisConnection: true });
+  });
+});
+
 test('check_model_access without Wiro\'s caller field finds this connection\'s key and says which surface it assumed', async () => {
   const fake = fakeClient({
     '/ModelAccess/List': ruleList([], ADMIN, null),

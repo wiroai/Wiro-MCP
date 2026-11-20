@@ -562,6 +562,71 @@ export function ruleLine(rule: RuleRow, labels: CategoryLabels, kind: ControlsWo
   return `- Rule for ${targetText(view, kind)}: ${ruleSummary(rule, labels, { quote: true, maxModels: 10 })}${guid}`;
 }
 
+// ------------------------------------------------------------------ checks
+
+export type Decision = 'allow' | 'block';
+export type DecidedBy = 'model' | 'category' | 'default';
+
+/** How one rule decides a model for a run, as ModelAccess/Check explains it. */
+export interface RuleDecision {
+  rule: RuleRow;
+  decides: Decision;
+  by: DecidedBy;
+  category: string | null;
+}
+
+/** The rules of a ModelAccess/Check answer that apply to the run, widest first, each with its decision. */
+export function toRuleDecisions(value: unknown): RuleDecision[] {
+  return (Array.isArray(value) ? value.filter(isPlainObject) : []).flatMap(entry => {
+    const rule = isPlainObject(entry.rule) ? toRuleRow(entry.rule) : null;
+    if (!rule) return [];
+    const decides: Decision = entry.access === 'block' ? 'block' : 'allow';
+    const by: DecidedBy = entry.by === 'model' || entry.by === 'category' ? entry.by : 'default';
+    const category = asString(entry.category) ?? null;
+    return [{ rule, decides, by, category }];
+  });
+}
+
+/** The run a ModelAccess/Check answer says it checked. A key acts as its creator, so in a team that is the member. */
+export interface CheckedRun {
+  surface: Surface;
+  member?: { uuid: string; name?: string };
+  project?: { id: string; name?: string };
+  agent?: { guid: string; name?: string };
+}
+
+/** check.context of a ModelAccess/Check answer; undefined when the answer has none (an older Wiro API). */
+export function toCheckedRun(value: unknown): CheckedRun | undefined {
+  if (!isPlainObject(value) || !isSurface(value.surface)) return undefined;
+  const member = isPlainObject(value.member) ? value.member : null;
+  const project = isPlainObject(value.project) ? value.project : null;
+  const agent = isPlainObject(value.agent) ? value.agent : null;
+  const memberUuid = member ? textValue(member.useruuid, 64) : undefined;
+  const projectId = project ? asString(project.projectid)?.trim() : undefined;
+  const agentGuid = agent ? textValue(agent.useragentguid, 64) : undefined;
+  const label = (entry: Record<string, unknown> | null) => (entry ? textValue(entry.label) : undefined);
+  return {
+    surface: value.surface,
+    ...(memberUuid && UUID.test(memberUuid) ? { member: { uuid: memberUuid, ...(label(member) ? { name: label(member) } : {}) } } : {}),
+    ...(projectId && PROJECT_ID.test(projectId) ? { project: { id: projectId, ...(label(project) ? { name: label(project) } : {}) } } : {}),
+    ...(agentGuid && UUID.test(agentGuid) ? { agent: { guid: agentGuid, ...(label(agent) ? { name: label(agent) } : {}) } } : {}),
+  };
+}
+
+/** Why one rule decides the model as it does, as the end of a sentence about that rule. */
+export function decisionReason(decision: Pick<RuleDecision, 'decides' | 'by' | 'category'>, labels: CategoryLabels): string {
+  const label = decision.category && isCategory(decision.category) ? labels[decision.category] : decision.category;
+  if (decision.by === 'model') return decision.decides === 'block' ? 'blocks this model by name' : 'allows this model by name';
+  if (decision.by === 'category') {
+    return decision.decides === 'block'
+      ? `blocks ${label}, and this model is in it`
+      : `allows ${label}, and this model is in it`;
+  }
+  return decision.decides === 'block'
+    ? 'lets only the models it names run, and this model is not one of them'
+    : 'does not name this model, and allows every model it does not name';
+}
+
 // -------------------------------------------------------------------- lists
 
 export interface LimitList {

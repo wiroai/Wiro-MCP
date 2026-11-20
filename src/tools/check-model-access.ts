@@ -13,6 +13,7 @@ import {
 import {
   CATEGORY_KEYS,
   CONTROL_SCOPES,
+  decisionReason,
   isCategory,
   readRuleList,
   resolveAgent,
@@ -20,28 +21,18 @@ import {
   resolveProject,
   ruleSummary,
   SURFACE_DESCRIPTIONS,
+  SURFACE_LABELS,
   SURFACES,
   targetArgument,
   targetText,
-  toRuleRow,
+  toCheckedRun,
+  toRuleDecisions,
   whoCanChange,
-  type CategoryLabels,
   type ControlsWorkspace,
-  type RuleRow,
   type Surface,
 } from '../utils/controls.js';
 import { jsonSpan, quotedSpan } from '../utils/quoted-text.js';
 import { nextActionSchema, strictInput } from './schemas.js';
-
-type Decision = 'allow' | 'block';
-type DecidedBy = 'model' | 'category' | 'default';
-
-interface CheckedRule {
-  rule: RuleRow;
-  decides: Decision;
-  by: DecidedBy;
-  category: string | null;
-}
 
 interface CheckContext {
   surface: Surface;
@@ -52,6 +43,8 @@ interface CheckContext {
   thisConnection: boolean;
   /** Wiro did not say which surface this connection counts as, so api was assumed. */
   surfaceAssumed?: boolean;
+  /** The run comes in with an API key that the call could not name, so that key's own rule is not part of the check. */
+  keyLeftOut?: boolean;
 }
 
 const FIX_REASON = 'Shows what allowing this model in that rule changes; nothing changes without the user\'s yes.';
@@ -59,45 +52,27 @@ const FIX_REASON = 'Shows what allowing this model in that rule changes; nothing
 // Wiro's answer for a model it does not know, or a name that is not an owner/slug.
 const UNKNOWN_MODEL = / is not a model on Wiro\.?$| is not a model's owner\/slug or id\.?$/i;
 
-function toCheckedRules(value: unknown): CheckedRule[] {
-  return (Array.isArray(value) ? value.filter(isPlainObject) : []).flatMap(entry => {
-    const rule = isPlainObject(entry.rule) ? toRuleRow(entry.rule) : null;
-    if (!rule) return [];
-    const decides: Decision = entry.access === 'block' ? 'block' : 'allow';
-    const by: DecidedBy = entry.by === 'model' || entry.by === 'category' ? entry.by : 'default';
-    const category = asString(entry.category) ?? null;
-    return [{ rule, decides, by, category }];
-  });
-}
+// The ways in that always come with an API key. A dashboard run has none, and an agent's run uses the agent's own.
+const KEY_SURFACES: ReadonlySet<Surface> = new Set<Surface>(['api', 'mcp', 'llm-gateway', 'extension']);
 
-/** Why one rule decides the model as it does. */
-function reasonText(checked: CheckedRule, labels: CategoryLabels): string {
-  const label = checked.category && isCategory(checked.category) ? labels[checked.category] : checked.category;
-  if (checked.by === 'model') return checked.decides === 'block' ? 'blocks this model by name' : 'allows this model by name';
-  if (checked.by === 'category') {
-    return checked.decides === 'block'
-      ? `blocks ${label}, and this model is in it`
-      : `allows ${label}, and this model is in it`;
-  }
-  return checked.decides === 'block'
-    ? 'lets only the models it names run, and this model is not one of them'
-    : 'does not name this model, and allows every model it does not name';
+function memberText(member: { uuid: string; name?: string }): string {
+  return `team member ${member.name ? quotedSpan(member.name) : `with user id ${quotedSpan(member.uuid)}`}`;
 }
 
 function contextText(context: CheckContext): string {
   const surface = `surface \`${context.surface}\` (${SURFACE_DESCRIPTIONS[context.surface]})`;
-  if (context.agent) {
-    return `a run that agent ${context.agent.name ? `${quotedSpan(context.agent.name)} (guid ${quotedSpan(context.agent.guid)})` : `with guid ${quotedSpan(context.agent.guid)}`} starts`;
-  }
   const key = context.project
     ? context.project.thisConnection
-      ? `, with this connection's API key (project id ${quotedSpan(context.project.id)})`
-      : `, with the API key of project ${context.project.name ? `${quotedSpan(context.project.name)} (id ${quotedSpan(context.project.id)})` : `id ${quotedSpan(context.project.id)}`}`
-    : '';
-  const who = context.member
-    ? ` by team member ${context.member.name ? quotedSpan(context.member.name) : `with user id ${quotedSpan(context.member.uuid)}`}`
-    : '';
-  return context.thisConnection ? `a run through this connection: ${surface}${key}` : `a run${who} through ${surface}${key}`;
+      ? `this connection's API key (project id ${quotedSpan(context.project.id)})`
+      : `the API key of project ${context.project.name ? `${quotedSpan(context.project.name)} (id ${quotedSpan(context.project.id)})` : `id ${quotedSpan(context.project.id)}`}`
+    : undefined;
+  const withKey = key ? `, with ${key}` : '';
+  if (context.agent) {
+    const agent = context.agent.name ? `${quotedSpan(context.agent.name)} (guid ${quotedSpan(context.agent.guid)})` : `with guid ${quotedSpan(context.agent.guid)}`;
+    return `a run that agent ${agent} starts${withKey}${context.member ? `, as ${memberText(context.member)}` : ''}`;
+  }
+  if (context.thisConnection) return `a run through this connection: ${surface}${withKey}${context.member ? `, as ${memberText(context.member)}` : ''}`;
+  return `a run${context.member ? ` by ${memberText(context.member)}` : ''} through ${surface}${withKey}`;
 }
 
 export function registerCheckModelAccess(server: McpServer, client: WiroClient): void {
@@ -109,16 +84,18 @@ export function registerCheckModelAccess(server: McpServer, client: WiroClient):
         + 'run: rule by rule (the whole wallet\'s, the member\'s, the API key\'s, the surface\'s and the agent\'s), why '
         + 'each decides as it does (the model\'s own entry, one of its categories, or what the rule does with every '
         + 'model it does not name), and the refusal text a run would get (error code 92). Nothing runs and nothing is '
-        + 'charged. With no member, project, surface or agent it checks a run through this connection. When the model '
-        + 'is blocked and this connection can change the rules, nextAction is the change summary that would allow it in '
-        + 'the first rule that blocks it.',
+        + 'charged. With no member, project, surface or agent it checks a run through this connection. A way in that '
+        + 'comes with an API key (api, mcp, llm-gateway, extension) is checked with this connection\'s key unless project '
+        + 'names another, and a run with a key counts as the person who created that key. When the model is blocked and '
+        + 'this connection can change the rules, nextAction is the change summary that would allow it in the first rule '
+        + 'that blocks it.',
       inputSchema: strictInput({
         model: z.string().trim().min(1).max(200)
           .describe('The model, by owner/slug as search_models shows it, or by its id.'),
         member: z.string().trim().min(1).max(320).optional()
-          .describe('Team only: the team member whose run to check, by e-mail or user id. Left out, the person who created the connected project.'),
+          .describe('Team only: the team member whose run to check, by e-mail or user id. Left out, the person who created the connected project. A run with an API key counts as the person who created the key, so with project or agent that person is checked.'),
         project: z.string().trim().min(1).max(200).optional()
-          .describe('The API key the run uses, by its project id or exact name. Left out, this connection\'s own key when nothing else is named.'),
+          .describe('The API key the run uses, by its project id or exact name. Left out, this connection\'s own key when nothing else is named, or when surface is api, mcp, llm-gateway or extension and no member is named.'),
         surface: z.enum(SURFACES).optional()
           .describe('The way in: web (the dashboard), api (an API key, a local install of this server included), mcp (the hosted MCP server), llm-gateway, extension or agent. Left out, the surface this connection counts as when nothing else is named, api with a project, and web for a member.'),
         agent: z.string().trim().min(1).max(200).optional()
@@ -133,7 +110,8 @@ export function registerCheckModelAccess(server: McpServer, client: WiroClient):
           member: z.object({ uuid: z.string(), name: z.string().optional() }).optional(),
           agent: z.object({ guid: z.string(), name: z.string().optional() }).optional(),
           thisConnection: z.boolean().describe('True for a run through this connection.'),
-        }),
+          keyLeftOut: z.boolean().optional().describe('True when the run comes in with an API key the call did not name, so that key\'s own rule is not part of this check.'),
+        }).describe('The run Wiro checked. A run with an API key counts as the person who created the key.'),
         allowed: z.boolean(),
         message: z.string().nullable().describe('The refusal text a run would get, with error code 92; null when it is allowed.'),
         rules: z.array(z.object({
@@ -175,6 +153,7 @@ export function registerCheckModelAccess(server: McpServer, client: WiroClient):
         const canManage = workspace.canManage === true;
 
         const named = member !== undefined || project !== undefined || surface !== undefined || agent !== undefined;
+        const keySurface = surface !== undefined && KEY_SURFACES.has(surface);
         const context: CheckContext = { surface: 'api', thisConnection: !named };
         if (agent !== undefined) {
           const found = await resolveAgent(client, agent, signal);
@@ -184,9 +163,13 @@ export function registerCheckModelAccess(server: McpServer, client: WiroClient):
           const found = await resolveMember(client, member, workspace, signal);
           context.member = { uuid: found.uuid, ...(found.name ? { name: found.name } : {}) };
         }
-        if (project !== undefined || !named) {
+        // A run through the API, MCP, the LLM gateway or an extension always comes with a key: left out, this
+        // connection's. A member's own key is not known, so for a member that key's rule stays out of the check.
+        if (project !== undefined || !named || (keySurface && member === undefined)) {
           const found = await resolveProject(client, project, caller, signal);
           context.project = { id: found.id, ...(found.name ? { name: found.name } : {}), ...(found.connected ? { thisConnection: true } : {}) };
+        } else if (keySurface) {
+          context.keyLeftOut = true;
         }
         if (agent !== undefined) {
           context.surface = 'agent';
@@ -222,11 +205,32 @@ export function registerCheckModelAccess(server: McpServer, client: WiroClient):
         const check = isPlainObject(body.check) ? body.check : {};
         const modelName = asString(check.model)?.trim() || model;
         const categories = (Array.isArray(check.categories) ? check.categories : []).filter(isCategory);
-        const checked = toCheckedRules(check.rules);
+        const checked = toRuleDecisions(check.rules);
         // A rule that blocks decides the run, whatever Wiro's own flag says.
         const allowed = check.allowed === true && !checked.some(entry => entry.decides === 'block');
         const message = allowed ? null : asString(check.message)?.trim() || null;
         const blocking = checked.filter(entry => entry.decides === 'block');
+
+        // Wiro says which run it checked: a key, an agent's included, acts as the person who created it.
+        const asked = context.member;
+        const run = toCheckedRun(check.context);
+        if (run) {
+          const ours = context.project?.id === run.project?.id ? context.project : undefined;
+          context.surface = run.surface;
+          context.member = run.member;
+          if (run.project) {
+            const projectName = run.project.name ?? ours?.name;
+            context.project = {
+              id: run.project.id,
+              ...(projectName ? { name: projectName } : {}),
+              ...(caller?.projectId === run.project.id || ours?.thisConnection ? { thisConnection: true } : {}),
+            };
+          } else {
+            context.project = undefined;
+          }
+          if (run.agent) context.agent = run.agent;
+        }
+        const otherPerson = asked && context.member && asked.uuid.toLowerCase() !== context.member.uuid.toLowerCase() ? asked : undefined;
 
         const fixes = !allowed && canManage
           ? blocking.map(entry => ({
@@ -247,6 +251,14 @@ export function registerCheckModelAccess(server: McpServer, client: WiroClient):
         if (context.surfaceAssumed) {
           lines.push('Wiro did not say which surface this connection counts as, so this checked api. A connection to the hosted server counts as mcp: check again with surface mcp for that.');
         }
+        if (otherPerson && context.member) {
+          lines.push(`A run with an API key counts as the person who created the key, so this checked a run by ${memberText(context.member)}, `
+            + `not by ${memberText(otherPerson)}. For that member's own runs, name a key they created with project, or leave out project and agent.`);
+        }
+        if (context.keyLeftOut) {
+          lines.push(`A run through ${SURFACE_LABELS[context.surface]} comes with an API key, and that key's own rule is not part of this check. `
+            + 'A key counts as the person who created it: to include its rule, name a key this member created with project.');
+        }
         lines.push('');
         if (allowed) {
           lines.push(checked.length === 0
@@ -260,7 +272,7 @@ export function registerCheckModelAccess(server: McpServer, client: WiroClient):
           for (const entry of checked) {
             const view = { scope: entry.rule.scope, target: entry.rule.target, targetName: entry.rule.targetName };
             lines.push(`- Rule for ${targetText(view, kind)}: ${entry.decides === 'block' ? 'blocks' : 'allows'} it, as it `
-              + `${reasonText(entry, labels)}. The rule: ${ruleSummary(entry.rule, labels, { quote: true, maxModels: 10 })}.`);
+              + `${decisionReason(entry, labels)}. The rule: ${ruleSummary(entry.rule, labels, { quote: true, maxModels: 10 })}.`);
           }
         }
         if (!allowed) {
@@ -286,6 +298,7 @@ export function registerCheckModelAccess(server: McpServer, client: WiroClient):
               ...(context.member ? { member: context.member } : {}),
               ...(context.agent ? { agent: context.agent } : {}),
               thisConnection: context.thisConnection,
+              ...(context.keyLeftOut ? { keyLeftOut: true } : {}),
             },
             allowed,
             message,
