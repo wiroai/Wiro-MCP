@@ -6,12 +6,13 @@ import {
   hasErrorCode,
   isPlainObject,
   MODEL_ACCESS_CODE,
-  MODEL_ACCESS_NOTE,
+  modelAccessNote,
   requireApiSuccess,
   SPEND_LIMIT_CODE,
   spendLimitNote,
   toNumber,
   type ApiEnvelope,
+  type RefusalNoteOptions,
 } from './api.js';
 import {
   SESSION_NAME_RULE,
@@ -367,6 +368,7 @@ export async function explainSendRefusal(
   response: Record<string, unknown>,
   session: string,
   signal?: AbortSignal,
+  notes: RefusalNoteOptions = {},
 ): Promise<string> {
   const error = new ApiResultError(
     apiErrorMessage(response as ApiEnvelope, 'The message was not accepted.'),
@@ -388,10 +390,10 @@ export async function explainSendRefusal(
   if (isWalletNotRead(error)) return `${message}\n\n${WALLET_NOT_READ_NOTE}`;
 
   // The workspace's spend limit (Studio, the Workflow Agent) or the agent's own.
-  if (hasErrorCode(error, SPEND_LIMIT_CODE)) return `${message}\n\n${spendLimitNote(message)}`;
+  if (hasErrorCode(error, SPEND_LIMIT_CODE)) return `${message}\n\n${spendLimitNote(message, notes)}`;
 
   // A Model Access rule blocks the model the message asked for.
-  if (hasErrorCode(error, MODEL_ACCESS_CODE)) return `${message}\n\n${MODEL_ACCESS_NOTE}`;
+  if (hasErrorCode(error, MODEL_ACCESS_CODE)) return `${message}\n\n${modelAccessNote(notes)}`;
 
   if (target.kind !== 'deployed' && hasErrorCode(error, 97)) {
     const walletUsd = toNumber(response.walletUsd);

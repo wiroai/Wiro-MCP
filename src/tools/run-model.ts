@@ -11,9 +11,10 @@ import {
   errorText,
   isOutcomeUnknown,
   MODEL_ACCESS_CODE,
-  MODEL_ACCESS_NOTE,
+  modelAccessNote,
   SPEND_LIMIT_CODE,
   spendLimitNote,
+  type RefusalNoteOptions,
 } from '../utils/api.js';
 import {
   formatTaskPending,
@@ -146,7 +147,7 @@ function errorResult(text: string): ToolResult {
 }
 
 /** What a call answers when Wiro created no task it can follow. */
-function runFailure(settled: RunSubmission, model: string, project: string): ToolResult {
+function runFailure(settled: RunSubmission, model: string, project: string, notes: RefusalNoteOptions): ToolResult {
   if (settled.ok && !settled.result.result && settled.result.runkeybusy) {
     return errorResult('An identical run_model call is still starting its task on Wiro, so this call started nothing '
       + 'and nothing was charged for it. Do not run the model again now: in a minute, call list_tasks with model '
@@ -169,8 +170,8 @@ function runFailure(settled: RunSubmission, model: string, project: string): Too
     // Wiro sends each error's code too; the declared type names only the message.
     const codes = runResult.errors?.map(e => String((e as { code?: unknown }).code)) ?? [];
     const note = codes.includes(String(MODEL_ACCESS_CODE))
-      ? ` ${MODEL_ACCESS_NOTE}`
-      : codes.includes(String(SPEND_LIMIT_CODE)) ? ` ${spendLimitNote(errors)}` : '';
+      ? ` ${modelAccessNote(notes)}`
+      : codes.includes(String(SPEND_LIMIT_CODE)) ? ` ${spendLimitNote(errors, notes)}` : '';
     return errorResult(`Failed to run model: ${errors}${note}`);
   }
   // Wiro created the task, so it runs and can be charged; only this call
@@ -312,6 +313,7 @@ export function registerRunModel(
   client: WiroClient,
   timing: RunModelTiming = RUN_MODEL_TIMING,
   ledger: RunLedger = runLedger,
+  notes: RefusalNoteOptions = {},
 ): void {
   server.registerTool(
     'run_model',
@@ -411,7 +413,7 @@ export function registerRunModel(
               continue;
             }
             outcome = 'failed';
-            return runFailure(settled, model, project);
+            return runFailure(settled, model, project, notes);
           }
 
           // Wiro answered with the task of an identical request another server

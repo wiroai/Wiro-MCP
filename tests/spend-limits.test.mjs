@@ -6,13 +6,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WiroClient } from '../dist/client.js';
 import { createMcpServer } from '../dist/server.js';
 import { registerRunModel } from '../dist/tools/run-model.js';
-import {
-  SPEND_LIMIT_CODE,
-  SPEND_LIMIT_HELD_NOTE,
-  SPEND_LIMIT_LEFT_NOTE,
-  SPEND_LIMIT_NOTE,
-  spendLimitNote,
-} from '../dist/utils/api.js';
+import { SPEND_LIMIT_CODE, spendLimitNote, spendRefusalShape } from '../dist/utils/api.js';
 
 // Wiro's spend limits: a workspace's limit (the whole wallet, a team member, an
 // API key, a surface or an agent) that is used up refuses new work with code 93
@@ -22,6 +16,14 @@ import {
 
 const LIMIT_TEXT = "This API key's monthly spend limit is reached ($50.00 of $50.00). It resets on December 1, 2026 at 00:00 UTC.";
 const LEFT_TEXT = "This team's monthly spend limit has $3.10 left of $500.00, and this run costs $4.00. It resets on December 1, 2026 at 00:00 UTC.";
+// Wiro's refusals when work it let in earlier holds part of the limit, word for word as the run gate writes them.
+const HELD_TEXT = "This API key's daily spend limit is reached ($11.00 of $10.00). Runs in progress hold $3.00 of it. It resets at 00:00 UTC.";
+const LEFT_HELD_TEXT = "This API key's daily spend limit has $0.80 left of $20.00, and this run costs $1.20. Runs in progress hold $19.20 of it. It resets at 00:00 UTC.";
+
+// The notes as a server with the controls tools gives them, and as one without them (the default of a tool registered on its own).
+const WITH_CONTROLS = { controls: true };
+const SPEND_LIMIT_NOTE = spendLimitNote(LIMIT_TEXT, WITH_CONTROLS);
+const SPEND_LIMIT_LEFT_NOTE = spendLimitNote(LEFT_TEXT, WITH_CONTROLS);
 
 const textOf = result => result.content.filter(block => block.type === 'text').map(block => block.text).join('\n');
 
@@ -58,32 +60,53 @@ function fakeClient(routes) {
 
 test('the spend-limit code is 93 and its note says nothing ran and not to retry', () => {
   assert.equal(SPEND_LIMIT_CODE, 93);
-  for (const note of [SPEND_LIMIT_NOTE, SPEND_LIMIT_LEFT_NOTE]) {
-    assert.match(note, /nothing ran and nothing was charged/);
-    assert.match(note, /the account owner, a team admin or the organization's owner/);
-    assert.match(note, /get_controls shows the limit and when it resets, and manage_spend_limit changes it after the user confirms a change summary/);
-    assert.match(note, /https:\/\/wiro\.ai\/panel\/controls\/spend-limits\.$/);
-    // The agent-owner path is gone, and no old link is left.
-    assert.doesNotMatch(note, /agent's owner|panel\/wallet\/limits|get_account lists/);
-    assert.doesNotMatch(note, /—|–/);
+  for (const text of [LIMIT_TEXT, LEFT_TEXT, HELD_TEXT, LEFT_HELD_TEXT]) {
+    const loaded = spendLimitNote(text, WITH_CONTROLS);
+    const alone = spendLimitNote(text);
+    for (const note of [loaded, alone]) {
+      assert.match(note, /nothing ran and nothing was charged/);
+      assert.match(note, /the account owner, a team admin or the organization's owner/);
+      assert.match(note, /https:\/\/wiro\.ai\/panel\/controls\/spend-limits/);
+      // The agent-owner path is gone, and no old link is left.
+      assert.doesNotMatch(note, /agent's owner|panel\/wallet\/limits/);
+      assert.doesNotMatch(note, /—|–/);
+    }
+    // The controls tools are named only where they are loaded; without them, get_account and the dashboard.
+    assert.match(loaded, /get_controls shows the limit and when it resets, and manage_spend_limit changes it after the user confirms a change summary/);
+    assert.doesNotMatch(alone, /get_controls|manage_spend_limit|check_model_access|manage_model_access/);
+    assert.match(alone, /on the Spend Limits page of the Wiro dashboard: https:\/\/wiro\.ai\/panel\/controls\/spend-limits\. get_account lists the limits\.$/);
   }
   assert.match(SPEND_LIMIT_NOTE, /^A spend limit of this workspace is used up, so nothing ran and nothing was charged\. Do not try again until the limit resets/);
-  assert.doesNotMatch(SPEND_LIMIT_HELD_NOTE, /—|–/);
+  assert.match(SPEND_LIMIT_NOTE, /https:\/\/wiro\.ai\/panel\/controls\/spend-limits\.$/);
 });
 
-test('the spend-limit note follows the refusal: used up, or less left than this run costs', () => {
-  assert.equal(spendLimitNote(LIMIT_TEXT), SPEND_LIMIT_NOTE);
-  assert.equal(spendLimitNote("Your daily spend limit is reached ($10.00 of $10.00). It resets at 00:00 UTC."), SPEND_LIMIT_NOTE);
-  assert.equal(spendLimitNote(LEFT_TEXT), SPEND_LIMIT_LEFT_NOTE);
-  // An agent purchase is refused the same way.
-  assert.equal(spendLimitNote("This team's monthly spend limit has $12.00 left of $40.00, and this purchase costs $30.00. It resets on December 1, 2026 at 00:00 UTC."), SPEND_LIMIT_LEFT_NOTE);
+test('the spend-limit note follows the refusal: used up, less left than this costs, or room held by running work', () => {
+  assert.equal(spendRefusalShape(LIMIT_TEXT), 'used-up');
+  assert.equal(spendRefusalShape("Your daily spend limit is reached ($10.00 of $10.00). It resets at 00:00 UTC."), 'used-up');
+  assert.equal(spendRefusalShape(LEFT_TEXT), 'left');
+  // An agent purchase and a workflow are refused the same way.
+  assert.equal(spendRefusalShape("This team's monthly spend limit has $12.00 left of $40.00, and this purchase costs $30.00. It resets on December 1, 2026 at 00:00 UTC."), 'left');
+  assert.equal(spendRefusalShape("This team's monthly spend limit has $10.00 left of $50.00, and this workflow costs $12.00. It resets on December 1, 2026 at 00:00 UTC."), 'left');
   assert.match(SPEND_LIMIT_LEFT_NOTE, /^A spend limit of this workspace has less left than this costs, so nothing ran and nothing was charged\. The limit is not used up: cheaper work/);
   assert.match(SPEND_LIMIT_LEFT_NOTE, /start it only with the user's yes/);
+  assert.match(SPEND_LIMIT_LEFT_NOTE, /This same work stays refused until the limit resets/);
   assert.doesNotMatch(SPEND_LIMIT_LEFT_NOTE, /is used up, so|Do not try again until/);
-  // A refusal that names work still running adds what a hold is.
-  const held = "This team's monthly spend limit has $3.10 left of $500.00 after $20.00 held by work still running, and this run costs $4.00. It resets on December 1, 2026 at 00:00 UTC.";
-  assert.equal(spendLimitNote(held), `${SPEND_LIMIT_LEFT_NOTE} ${SPEND_LIMIT_HELD_NOTE}`);
-  assert.equal(spendLimitNote("This API key's daily spend limit is reached ($9.00 of $10.00, and $1.00 is held by work still running). It resets at 00:00 UTC."), `${SPEND_LIMIT_NOTE} ${SPEND_LIMIT_HELD_NOTE}`);
+
+  // A limit that is full because running work holds the rest is not used up: the held part frees up when that work ends.
+  assert.equal(spendRefusalShape(HELD_TEXT), 'held');
+  assert.equal(spendRefusalShape("This team's monthly spend limit is reached ($10.00 of $10.00). Runs in progress hold $4.00 of it. It resets on December 1, 2026 at 00:00 UTC."), 'held');
+  const held = spendLimitNote(HELD_TEXT, WITH_CONTROLS);
+  assert.match(held, /^A spend limit of this workspace has no room left for new work, because work that is still running holds the rest of it, so nothing ran and nothing was charged\. The limit is not used up: the held part frees up when that work ends, and only what the work is charged counts\. Do not try again while that work is running\./);
+  assert.match(held, /Once it has ended, this work may fit, but start it only with the user's yes\./);
+  assert.doesNotMatch(held, /is used up, so|Do not try again until the limit resets/);
+
+  // Less left than this costs, with part of it held: cheaper work may fit now, and this work once the running work ends.
+  assert.equal(spendRefusalShape(LEFT_HELD_TEXT), 'left-held');
+  assert.equal(spendRefusalShape("Your monthly spend limit has $2.00 left of $6.00, and this run costs $2.50. Runs in progress hold $4.00 of it. It resets on December 1, 2026 at 00:00 UTC."), 'left-held');
+  const leftHeld = spendLimitNote(LEFT_HELD_TEXT, WITH_CONTROLS);
+  assert.match(leftHeld, /^A spend limit of this workspace has less left than this costs, so nothing ran and nothing was charged\. The limit is not used up: cheaper work/);
+  assert.match(leftHeld, /Work that is still running holds part of the limit\. That part frees up when the work ends, and only what the work is charged counts, so this same work may fit then: try it again only after that work has ended, and only with the user's yes\./);
+  assert.doesNotMatch(leftHeld, /This same work stays refused until/);
 });
 
 test('run_model passes a spend-limit refusal on with the note, and a balance refusal without it', async () => {
@@ -96,10 +119,10 @@ test('run_model passes a spend-limit refusal on with the note, and a balance ref
     throw new Error(`unexpected request to ${path}`);
   };
   try {
-    const run = async body => {
+    const run = async (body, notes) => {
       answer.current = body;
       const server = new McpServer({ name: 'test-server', version: '1.0.0' });
-      registerRunModel(server, new WiroClient(`spend-limit-key-${Math.random()}`, undefined, 'https://api.example/v1'), { maxWaitMs: 600, retryAfterMs: 250, unansweredWindowMs: 5_000 });
+      registerRunModel(server, new WiroClient(`spend-limit-key-${Math.random()}`, undefined, 'https://api.example/v1'), { maxWaitMs: 600, retryAfterMs: 250, unansweredWindowMs: 5_000 }, undefined, notes);
       const client = new Client({ name: 'test-client', version: '1.0.0' });
       const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
       await server.connect(serverTransport);
@@ -111,14 +134,22 @@ test('run_model passes a spend-limit refusal on with the note, and a balance ref
         await server.close();
       }
     };
-    const limited = await run({ result: false, errors: [{ code: 93, message: LIMIT_TEXT }] });
+    const limited = await run({ result: false, errors: [{ code: 93, message: LIMIT_TEXT }] }, WITH_CONTROLS);
     assert.equal(limited.isError, true);
     assert.equal(textOf(limited), `## Error\n\nFailed to run model: ${LIMIT_TEXT} ${SPEND_LIMIT_NOTE}`);
     // A run that costs more than is left: the limit is not used up, and a cheaper run may fit.
-    const left = await run({ result: false, errors: [{ code: 93, message: LEFT_TEXT }] });
+    const left = await run({ result: false, errors: [{ code: 93, message: LEFT_TEXT }] }, WITH_CONTROLS);
     assert.equal(left.isError, true);
     assert.equal(textOf(left), `## Error\n\nFailed to run model: ${LEFT_TEXT} ${SPEND_LIMIT_LEFT_NOTE}`);
     assert.doesNotMatch(textOf(left), /is used up/);
+    // Running work holds the rest: not used up, and this run may fit once that work ends.
+    const held = await run({ result: false, errors: [{ code: 93, message: HELD_TEXT }] }, WITH_CONTROLS);
+    assert.equal(textOf(held), `## Error\n\nFailed to run model: ${HELD_TEXT} ${spendLimitNote(HELD_TEXT, WITH_CONTROLS)}`);
+    assert.doesNotMatch(textOf(held), /is used up, so/);
+    // Registered on its own, run_model knows nothing of the controls tools and names get_account and the dashboard.
+    const alone = await run({ result: false, errors: [{ code: 93, message: LIMIT_TEXT }] });
+    assert.equal(textOf(alone), `## Error\n\nFailed to run model: ${LIMIT_TEXT} ${spendLimitNote(LIMIT_TEXT)}`);
+    assert.doesNotMatch(textOf(alone), /get_controls|manage_spend_limit/);
     const balance = await run({ result: false, errors: [{ code: 97, message: 'Insufficient wallet balance.' }] });
     assert.equal(textOf(balance), '## Error\n\nFailed to run model: Insufficient wallet balance.');
   } finally {
@@ -149,7 +180,11 @@ test('run_workflow and resume_workflow_run add the note to a spend-limit refusal
 });
 
 test('send_agent_message picks the note by the refusal, for Studio and the Workflow Agent', async () => {
-  for (const [message, note] of [[LIMIT_TEXT, SPEND_LIMIT_NOTE], [LEFT_TEXT, SPEND_LIMIT_LEFT_NOTE]]) {
+  for (const [message, note] of [
+    [LIMIT_TEXT, SPEND_LIMIT_NOTE],
+    [LEFT_TEXT, SPEND_LIMIT_LEFT_NOTE],
+    [LEFT_HELD_TEXT, spendLimitNote(LEFT_HELD_TEXT, WITH_CONTROLS)],
+  ]) {
     const fake = fakeClient({ '/Studio/Message/Send': { result: false, errors: [{ code: 93, message }] } });
     await withClient(fake, async client => {
       const result = await client.callTool({ name: 'send_agent_message', arguments: { agent: 'studio', message: 'make a clip' } });
@@ -157,6 +192,33 @@ test('send_agent_message picks the note by the refusal, for Studio and the Workf
       assert.equal(textOf(result), `## Error\n\n${message}\n\n${note}`);
       assert.equal(fake.calls.length, 1, 'nothing is sent again');
     });
+  }
+});
+
+test('without the controls group, the 93 note points to get_account and the dashboard, not to tools that are not there', async () => {
+  const fake = fakeClient({
+    '/Workflow/Run': { result: false, errors: [{ code: 93, message: HELD_TEXT }] },
+    '/Studio/Message/Send': { result: false, errors: [{ code: 93, message: LEFT_TEXT }] },
+  });
+  const server = createMcpServer({ authType: 'apikey-only', ...fake }, { toolsets: ['models', 'workflows', 'agents'] });
+  const client = new Client({ name: 'test-client', version: '1.0.0' });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await server.connect(serverTransport);
+  await client.connect(clientTransport);
+  try {
+    const { tools } = await client.listTools();
+    assert.equal(tools.some(tool => tool.name === 'get_controls'), false);
+    const started = await client.callTool({ name: 'run_workflow', arguments: { slug: 'fox-maker-Ab3xZ', wait_seconds: 0 } });
+    assert.ok(textOf(started).includes(`${HELD_TEXT} ${spendLimitNote(HELD_TEXT)}`), textOf(started));
+    const sent = await client.callTool({ name: 'send_agent_message', arguments: { agent: 'studio', message: 'make a clip' } });
+    assert.equal(textOf(sent), `## Error\n\n${LEFT_TEXT}\n\n${spendLimitNote(LEFT_TEXT)}`);
+    for (const result of [started, sent]) {
+      assert.doesNotMatch(textOf(result), /get_controls|manage_spend_limit|check_model_access|manage_model_access/);
+      assert.match(textOf(result), /get_account lists the limits\./);
+    }
+  } finally {
+    await client.close();
+    await server.close();
   }
 });
 

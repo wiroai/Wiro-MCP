@@ -118,9 +118,11 @@ export function registerTools(
   advertiseJsonSchema2020_12(mcpServer);
   const server = options.wrapTool ? withToolWrapper(mcpServer, options.wrapTool) : mcpServer;
   const enabled = new Set<Toolset>(options.toolsets ?? TOOLSETS);
+  // Tools that explain a spend-limit (93) or Model Access (92) refusal name the controls tools only when they are here.
+  const notes = { controls: enabled.has('controls') };
 
   // Always available: account context, guides and documentation.
-  registerGetAccount(server, client, { controls: enabled.has('controls') });
+  registerGetAccount(server, client, notes);
   registerGetPlaybook(server);
   registerSearchDocs(server);
 
@@ -129,7 +131,7 @@ export function registerTools(
     registerGetModelSchema(server, client);
     registerRecommendModel(server, client);
     registerExplore(server, client);
-    registerRunModel(server, client);
+    registerRunModel(server, client, undefined, undefined, notes);
     registerWaitForTask(server, client);
     registerGetTask(server, client);
     registerListTasks(server, client);
@@ -154,9 +156,9 @@ export function registerTools(
     registerUpdateWorkflow(server, client);
     registerCloneWorkflow(server, client);
     registerDeleteWorkflow(server, client);
-    registerRunWorkflow(server, client);
+    registerRunWorkflow(server, client, notes);
     registerWaitForWorkflowRun(server, client);
-    registerResumeWorkflowRun(server, client);
+    registerResumeWorkflowRun(server, client, notes);
     registerListWorkflowRuns(server, client);
   }
 
@@ -165,7 +167,7 @@ export function registerTools(
   // guidance collects late results with list_studio_results, and a Workflow Agent
   // reply points at save_workflow_from_agent, so both come along.
   if (enabled.has('agents') || enabled.has('workflows')) {
-    registerSendAgentMessage(server, client);
+    registerSendAgentMessage(server, client, notes);
     registerGetAgentMessage(server, client);
     registerGetAgentConversation(server, client);
     registerCancelAgentMessage(server, client);
@@ -182,7 +184,7 @@ export function registerTools(
     registerListMyAgents(server, client);
     registerGetMyAgent(server, client);
     registerControlAgent(server, client);
-    registerUpdateAgent(server, client);
+    registerUpdateAgent(server, client, notes);
     registerManageAgentBilling(server, client);
     registerGetAgentActivity(server, client);
     registerDeleteAgent(server, client);

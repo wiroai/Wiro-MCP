@@ -1,7 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { WiroClient } from '../client.js';
-import { asString, errorResult, isPlainObject } from '../utils/api.js';
+import { asString, errorResult, isPlainObject, type RefusalNoteOptions } from '../utils/api.js';
 import { setupResultActed, toSetupResult } from '../utils/agent-setup.js';
 import { messageKind, SESSION_NAME_RULE } from '../utils/agent-message.js';
 import {
@@ -46,7 +46,7 @@ function clearingCommandRefusal(message: string): string | undefined {
     + 'the agent. To run the command itself, type it in the agent\'s chat on wiro.ai.';
 }
 
-export function registerSendAgentMessage(server: McpServer, client: WiroClient): void {
+export function registerSendAgentMessage(server: McpServer, client: WiroClient, notes: RefusalNoteOptions = {}): void {
   server.registerTool(
     'send_agent_message',
     {
@@ -168,7 +168,7 @@ export function registerSendAgentMessage(server: McpServer, client: WiroClient):
         }
 
         if (response?.result !== true) {
-          throw new Error(await explainSendRefusal(client, target, response ?? {}, resolved.session, extra.signal));
+          throw new Error(await explainSendRefusal(client, target, response ?? {}, resolved.session, extra.signal, notes));
         }
         const messageId = asString(response.messageguid);
         if (!messageId) throw sendWithoutIdError(target, resolved.session);

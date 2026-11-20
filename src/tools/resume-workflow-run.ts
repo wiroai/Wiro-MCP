@@ -7,11 +7,12 @@ import {
   hasErrorCode,
   isOutcomeUnknown,
   MODEL_ACCESS_CODE,
-  MODEL_ACCESS_NOTE,
+  modelAccessNote,
   requireApiSuccess,
   SPEND_LIMIT_CODE,
   spendLimitNote,
   type ApiEnvelope,
+  type RefusalNoteOptions,
 } from '../utils/api.js';
 import { DEFAULT_WAIT_SECONDS, MAX_WAIT_SECONDS } from '../utils/poll.js';
 import {
@@ -22,7 +23,7 @@ import {
 } from './wait-for-workflow-run.js';
 import { strictInput } from './schemas.js';
 
-export function registerResumeWorkflowRun(server: McpServer, client: WiroClient): void {
+export function registerResumeWorkflowRun(server: McpServer, client: WiroClient, notes: RefusalNoteOptions = {}): void {
   server.registerTool(
     'resume_workflow_run',
     {
@@ -63,10 +64,10 @@ export function registerResumeWorkflowRun(server: McpServer, client: WiroClient)
         } catch (error) {
           // A Model Access rule blocks a model of the steps left to run.
           if (hasErrorCode(error, MODEL_ACCESS_CODE)) {
-            throw new Error(`${(error as Error).message} ${MODEL_ACCESS_NOTE}`);
+            throw new Error(`${(error as Error).message} ${modelAccessNote(notes)}`);
           }
           if (hasErrorCode(error, SPEND_LIMIT_CODE)) {
-            throw new Error(`${(error as Error).message} ${spendLimitNote((error as Error).message)}`);
+            throw new Error(`${(error as Error).message} ${spendLimitNote((error as Error).message, notes)}`);
           }
           if (isOutcomeUnknown(error)) {
             throw new Error(`The resume request was sent but no clear answer came back (${errorText(error)}). `

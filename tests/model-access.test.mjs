@@ -7,7 +7,12 @@ import { WiroClient } from '../dist/client.js';
 import { PLAYBOOKS } from '../dist/playbooks.js';
 import { createMcpServer } from '../dist/server.js';
 import { registerRunModel } from '../dist/tools/run-model.js';
-import { MODEL_ACCESS_ADVICE, MODEL_ACCESS_CODE, MODEL_ACCESS_NOTE, SPEND_LIMIT_NOTE } from '../dist/utils/api.js';
+import { MODEL_ACCESS_CODE, modelAccessAdvice, modelAccessNote, spendLimitNote } from '../dist/utils/api.js';
+
+// The notes as a server with the controls tools gives them (createMcpServer loads every group by default).
+const MODEL_ACCESS_ADVICE = modelAccessAdvice({ controls: true });
+const MODEL_ACCESS_NOTE = modelAccessNote({ controls: true });
+const SPEND_LIMIT_NOTE = spendLimitNote("Your monthly spend limit is reached ($5.00 of $5.00). It resets on December 1, 2026 at 00:00 UTC.", { controls: true });
 
 // Wiro's Model Access: a rule of the workspace (the whole wallet, a team member,
 // an API key, a surface or an agent) that blocks a model refuses work with it
@@ -22,8 +27,8 @@ const AGENT_TEXT = "This agent can't use openai/gpt-6-2-astra. Model Access rule
 
 const textOf = result => result.content.filter(block => block.type === 'text').map(block => block.text).join('\n');
 
-async function withClient(fakeWiroClient, callback) {
-  const server = createMcpServer({ authType: 'apikey-only', ...fakeWiroClient });
+async function withClient(fakeWiroClient, callback, options) {
+  const server = createMcpServer({ authType: 'apikey-only', ...fakeWiroClient }, options);
   const client = new Client({ name: 'test-client', version: '1.0.0' });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await server.connect(serverTransport);
@@ -67,6 +72,11 @@ test('the Model Access code is 92 and its note says nothing ran, not to work aro
   // An agent's owner cannot change its rule unless they manage the workspace.
   assert.doesNotMatch(MODEL_ACCESS_ADVICE, /agent's owner/);
   assert.doesNotMatch(MODEL_ACCESS_NOTE, /—|–/);
+  // A server without the controls group points to the dashboard only.
+  const alone = modelAccessNote();
+  assert.ok(alone.endsWith(modelAccessAdvice()));
+  assert.doesNotMatch(alone, /check_model_access|manage_model_access|get_controls/);
+  assert.match(alone, /Tell the user which rule blocked the model \(the refusal names it\)\. The account owner, a team admin or the organization's owner can change the rule at https:\/\/wiro\.ai\/panel\/controls\/model-access, or the user can pick another model\.$/);
 });
 
 test('run_model passes a Model Access refusal on with its note, and not the spend-limit note', async () => {
@@ -82,7 +92,7 @@ test('run_model passes a Model Access refusal on with its note, and not the spen
     const run = async body => {
       answer.current = body;
       const server = new McpServer({ name: 'test-server', version: '1.0.0' });
-      registerRunModel(server, new WiroClient(`model-access-key-${Math.random()}`, undefined, 'https://api.example/v1'), { maxWaitMs: 600, retryAfterMs: 250, unansweredWindowMs: 5_000 });
+      registerRunModel(server, new WiroClient(`model-access-key-${Math.random()}`, undefined, 'https://api.example/v1'), { maxWaitMs: 600, retryAfterMs: 250, unansweredWindowMs: 5_000 }, undefined, { controls: true });
       const client = new Client({ name: 'test-client', version: '1.0.0' });
       const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
       await server.connect(serverTransport);
@@ -175,6 +185,20 @@ test('update_agent says a Model Access rule kept the model setting from being sa
     assert.equal(result.isError, true);
     assert.equal(textOf(result), `## Error\n\n${AGENT_TEXT} ${MODEL_ACCESS_ADVICE}\n\nThe title change was saved; the settings were not.`);
   });
+
+  // A server without the controls group (such as one that loads only models, workflows and agents) names no controls tool.
+  const noControls = fakeClient({
+    '/UserAgent/Detail': AGENT_DETAIL,
+    '/UserAgent/UpdateSettings': refusal(AGENT_TEXT),
+    '/Studio/Message/Send': refusal(CATEGORY_TEXT),
+  });
+  await withClient(noControls, async client => {
+    const result = await client.callTool({ name: 'update_agent', arguments: { agent_guid: AGENT_GUID, chat_model: 'openai/gpt-6-2-astra' } });
+    assert.equal(textOf(result), `## Error\n\n${AGENT_TEXT} ${modelAccessAdvice()}\n\nThe settings were not saved.`);
+    const sent = await client.callTool({ name: 'send_agent_message', arguments: { agent: 'studio', message: 'make a clip' } });
+    assert.equal(textOf(sent), `## Error\n\n${CATEGORY_TEXT}\n\n${modelAccessNote()}`);
+    for (const answer of [result, sent]) assert.doesNotMatch(textOf(answer), /check_model_access|manage_model_access|get_controls/);
+  }, { toolsets: ['models', 'workflows', 'agents'] });
 
   // Another settings refusal is passed on as before.
   const other = fakeClient({ '/UserAgent/Detail': AGENT_DETAIL, '/UserAgent/UpdateSettings': refusal('Invalid timezone: must be a valid IANA identifier.', 0) });

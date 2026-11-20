@@ -92,54 +92,95 @@ export const MODEL_ACCESS_URL = 'https://wiro.ai/panel/controls/model-access';
 /** Wiro's code for a spend limit that refused work: the wallet's, a team member's, an API key's, a surface's or an agent's. */
 export const SPEND_LIMIT_CODE = 93;
 
-// Who changes a limit: the account itself, or in a team a team admin or the organization's owner. Never an agent.
-const SPEND_LIMIT_CHANGE = 'someone who can change it raises it (the account owner, a team admin or the organization\'s '
-  + 'owner): get_controls shows the limit and when it resets, and manage_spend_limit changes it after the user confirms '
-  + `a change summary. Spend Limits page: ${SPEND_LIMITS_URL}.`;
-
-/** What follows a refusal by a limit that is used up: nothing ran, and trying again changes nothing until the limit does. */
-export const SPEND_LIMIT_NOTE = 'A spend limit of this workspace is used up, so nothing ran and nothing was charged. '
-  + `Do not try again until the limit resets or ${SPEND_LIMIT_CHANGE}`;
-
 /**
- * What follows a refusal of work with a known price that does not fit what is left of a limit. The limit is not
- * used up, so cheaper work can still run; this same work cannot until the limit resets or is raised.
+ * What a tool that adds a refusal note knows about the server it runs in. The controls tools (get_controls,
+ * check_model_access, manage_spend_limit, manage_model_access) are a group of their own that a server may leave
+ * out, so a note names them only when they are loaded, and points to the dashboard otherwise.
  */
-export const SPEND_LIMIT_LEFT_NOTE = 'A spend limit of this workspace has less left than this costs, so nothing ran '
-  + 'and nothing was charged. The limit is not used up: cheaper work, such as a run at a lower resolution, a shorter '
-  + 'length or fewer outputs, may fit what is left, but start it only with the user\'s yes. This same work stays '
-  + `refused until the limit resets or ${SPEND_LIMIT_CHANGE}`;
+export interface RefusalNoteOptions {
+  /** Whether the controls tools are loaded too. */
+  controls?: boolean;
+}
 
-/** Added when part of a limit is held by work that is still running. */
-export const SPEND_LIMIT_HELD_NOTE = 'Part of the limit is held by work that is still running: it frees up when that '
-  + 'work ends, and only what it is charged counts.';
+// Who changes a limit or a rule: the account itself, or in a team a team admin or the organization's owner. Never an agent.
+const CHANGERS = 'the account owner, a team admin or the organization\'s owner';
+
+/** How a limit gets raised, with the tools that show and change it where this server has them. */
+function spendLimitChange(controls: boolean): string {
+  return controls
+    ? `someone who can change it raises it (${CHANGERS}): get_controls shows the limit and when it resets, and `
+      + `manage_spend_limit changes it after the user confirms a change summary. Spend Limits page: ${SPEND_LIMITS_URL}.`
+    : `someone who can change it raises it (${CHANGERS}) on the Spend Limits page of the Wiro dashboard: `
+      + `${SPEND_LIMITS_URL}. get_account lists the limits.`;
+}
+
+const LEFT_OPENING = 'A spend limit of this workspace has less left than this costs, so nothing ran and nothing was '
+  + 'charged. The limit is not used up: cheaper work, such as a run at a lower resolution, a shorter length or fewer '
+  + 'outputs, may fit what is left, but start it only with the user\'s yes.';
+
+/** The shapes of Wiro's spend-limit refusal, which call for different next steps. */
+export type SpendRefusalShape = 'used-up' | 'left' | 'held' | 'left-held';
 
 // Wiro's refusal of work with a known price that does not fit: "... has $3.10 left of $500.00, and this run costs $4.00."
 const LEFT_REFUSAL = /\bhas \$\d[\d,]*(?:\.\d+)? left\b[\s\S]*?\bcosts? \$\d/i;
-// Wiro's refusal names work that is still running when held estimates took part in it.
-const HELD_REFUSAL = /\bheld\b|\bstill running\b/i;
+// Wiro names the work it let in earlier when what that work holds keeps this work out: "Runs in progress hold $4.00 of it."
+const HELD_REFUSAL = /\bin progress hold\b|\bheld\b|\bstill running\b/i;
 
 /**
- * The note for a spend-limit refusal, by its shape: a limit that is used up, or work with a known price that does
- * not fit what is left. Either can name work that is still running, which holds part of the limit.
+ * A spend-limit refusal by its shape: a limit that is used up, work with a known price that does not fit what is
+ * left, or either of those because work that is still running holds part of the limit. Held work frees its part
+ * when it ends, and only what it is charged counts, so a limit full of held work is not used up.
  */
-export function spendLimitNote(message: string): string {
-  const note = LEFT_REFUSAL.test(message) ? SPEND_LIMIT_LEFT_NOTE : SPEND_LIMIT_NOTE;
-  return HELD_REFUSAL.test(message) ? `${note} ${SPEND_LIMIT_HELD_NOTE}` : note;
+export function spendRefusalShape(message: string): SpendRefusalShape {
+  const left = LEFT_REFUSAL.test(message);
+  const held = HELD_REFUSAL.test(message);
+  if (left) return held ? 'left-held' : 'left';
+  return held ? 'held' : 'used-up';
+}
+
+/** The note for a spend-limit refusal: what happened, and what may and may not be tried next. */
+export function spendLimitNote(message: string, options: RefusalNoteOptions = {}): string {
+  const change = spendLimitChange(options.controls === true);
+  switch (spendRefusalShape(message)) {
+    case 'used-up':
+      return 'A spend limit of this workspace is used up, so nothing ran and nothing was charged. '
+        + `Do not try again until the limit resets or ${change}`;
+    case 'left':
+      return `${LEFT_OPENING} This same work stays refused until the limit resets or ${change}`;
+    case 'left-held':
+      return `${LEFT_OPENING} Work that is still running holds part of the limit. That part frees up when the work `
+        + 'ends, and only what the work is charged counts, so this same work may fit then: try it again only after '
+        + `that work has ended, and only with the user's yes. Otherwise it stays refused until the limit resets or ${change}`;
+    case 'held':
+      return 'A spend limit of this workspace has no room left for new work, because work that is still running holds '
+        + 'the rest of it, so nothing ran and nothing was charged. The limit is not used up: the held part frees up '
+        + 'when that work ends, and only what the work is charged counts. Do not try again while that work is running. '
+        + 'Once it has ended, this work may fit, but start it only with the user\'s yes. Otherwise it waits until the '
+        + `limit resets or ${change}`;
+  }
 }
 
 /** Wiro's code for a model that a Model Access rule blocks: the wallet's, a team member's, an API key's, a surface's or an agent's. */
 export const MODEL_ACCESS_CODE = 92;
 
 /** What to do after a Model Access refusal: the rule decides until someone changes it, so nothing is tried in its place. */
-export const MODEL_ACCESS_ADVICE = 'Do not try again, and do not work around the rule on your own, for example with another model. '
-  + 'Tell the user which rule blocked the model (the refusal names it; check_model_access shows every rule that blocks it and why). '
-  + 'The account owner, a team admin or the organization\'s owner can change the rule with manage_model_access after a change '
-  + `summary, or at ${MODEL_ACCESS_URL}, or the user can pick another model.`;
+export function modelAccessAdvice(options: RefusalNoteOptions = {}): string {
+  const controls = options.controls === true;
+  return 'Do not try again, and do not work around the rule on your own, for example with another model. '
+    + `Tell the user which rule blocked the model (the refusal names it${controls ? '; check_model_access shows every rule that blocks it and why' : ''}). `
+    + `${capitalizedChangers()} can change the rule ${controls ? 'with manage_model_access after a change summary, or ' : ''}at `
+    + `${MODEL_ACCESS_URL}, or the user can pick another model.`;
+}
+
+function capitalizedChangers(): string {
+  return `${CHANGERS[0].toUpperCase()}${CHANGERS.slice(1)}`;
+}
 
 /** What follows a Model Access refusal of a run or a message: nothing ran. */
-export const MODEL_ACCESS_NOTE = 'A Model Access rule of this workspace blocks this model, so nothing ran and nothing was charged. '
-  + MODEL_ACCESS_ADVICE;
+export function modelAccessNote(options: RefusalNoteOptions = {}): string {
+  return 'A Model Access rule of this workspace blocks this model, so nothing ran and nothing was charged. '
+    + modelAccessAdvice(options);
+}
 
 export function hasErrorCode(error: unknown, code: number | string): boolean {
   return error instanceof ApiResultError

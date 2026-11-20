@@ -7,11 +7,12 @@ import {
   hasErrorCode,
   isOutcomeUnknown,
   MODEL_ACCESS_CODE,
-  MODEL_ACCESS_NOTE,
+  modelAccessNote,
   requireApiSuccess,
   SPEND_LIMIT_CODE,
   spendLimitNote,
   type ApiEnvelope,
+  type RefusalNoteOptions,
 } from '../utils/api.js';
 import { DEFAULT_WAIT_SECONDS, MAX_WAIT_SECONDS } from '../utils/poll.js';
 import { parseWorkflowSlug } from '../utils/workflow.js';
@@ -65,7 +66,7 @@ export const workflowInputValueSchema = z.union([
   z.array(z.string()),
 ]);
 
-export function registerRunWorkflow(server: McpServer, client: WiroClient): void {
+export function registerRunWorkflow(server: McpServer, client: WiroClient, notes: RefusalNoteOptions = {}): void {
   server.registerTool(
     'run_workflow',
     {
@@ -129,10 +130,10 @@ export function registerRunWorkflow(server: McpServer, client: WiroClient): void
         } catch (error) {
           // A Model Access rule blocks one of the workflow's models.
           if (hasErrorCode(error, MODEL_ACCESS_CODE)) {
-            throw new Error(`${(error as Error).message} ${MODEL_ACCESS_NOTE}`);
+            throw new Error(`${(error as Error).message} ${modelAccessNote(notes)}`);
           }
           if (hasErrorCode(error, SPEND_LIMIT_CODE)) {
-            throw new Error(`${(error as Error).message} ${spendLimitNote((error as Error).message)}`);
+            throw new Error(`${(error as Error).message} ${spendLimitNote((error as Error).message, notes)}`);
           }
           if (hasErrorCode(error, 97)) {
             throw new Error(`${(error as Error).message} The wallet does not cover this workflow's `

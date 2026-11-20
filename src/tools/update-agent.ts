@@ -6,10 +6,11 @@ import {
   errorResult,
   errorText,
   hasErrorCode,
-  MODEL_ACCESS_ADVICE,
   MODEL_ACCESS_CODE,
+  modelAccessAdvice,
   requireApiSuccess,
   type ApiEnvelope,
+  type RefusalNoteOptions,
 } from '../utils/api.js';
 import { pausedSkillTitles } from '../utils/agent-config.js';
 import { CHAT_SETUP_DESCRIPTION, CHAT_SETUP_MODES } from '../utils/agent-setup.js';
@@ -46,7 +47,7 @@ const MODEL_FIELDS = {
   voice_postcall_model: 'voicepostcallmodel',
 } as const;
 
-export function registerUpdateAgent(server: McpServer, client: WiroClient): void {
+export function registerUpdateAgent(server: McpServer, client: WiroClient, notes: RefusalNoteOptions = {}): void {
   server.registerTool(
     'update_agent',
     {
@@ -181,7 +182,7 @@ export function registerUpdateAgent(server: McpServer, client: WiroClient): void
             // A Model Access rule (such as the agent's own) blocks a model it was given.
             const blocked = hasErrorCode(error, MODEL_ACCESS_CODE);
             if (changed.length === 0 && !blocked) throw error;
-            const reason = blocked ? `${errorText(error)} ${MODEL_ACCESS_ADVICE}` : errorText(error);
+            const reason = blocked ? `${errorText(error)} ${modelAccessAdvice(notes)}` : errorText(error);
             if (changed.length === 0) throw new Error(`${reason}\n\nThe settings were not saved.`);
             throw new Error(`${reason}\n\nThe ${changed.join(', ')} change was saved; the settings were not.`
               + (profileRestarts ? ' The agent restarts to apply the saved change.' : ''));
