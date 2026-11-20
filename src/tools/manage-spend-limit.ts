@@ -65,7 +65,8 @@ const SET_UNKNOWN = 'The outcome is not known: the limit may or may not have cha
 const REMOVE_UNKNOWN = 'The outcome is not known: the limit may or may not be removed. get_controls shows whether it is '
   + 'still there, and repeating this same call is safe.';
 const ASK_REASON = 'Ask the user to confirm this change first.';
-const APPLIES_NOTE = 'It applies to new work from now on. Work already running finishes and is charged.';
+const APPLIES_NOTE =
+  'It applies to new work from now on. Work already running finishes and is charged, except a realtime session or a voice call, which ends after the turn that uses the limit up.';
 
 interface Args {
   action: 'set' | 'remove';

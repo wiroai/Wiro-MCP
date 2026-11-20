@@ -690,7 +690,7 @@ test('manage_spend_limit shows a change summary from Preview, then saves on the 
     assert.deepEqual(fake.paths().slice(2), ['/SpendLimit/List', '/SpendLimit/Preview', '/SpendLimit/Set']);
     assert.deepEqual(fake.calls[4].body, { scope: 'account', target: '', period: 'month', amountusd: 500, alertpct: 80 });
     assert.ok(linesOf(saved).includes('**Limit:** $500.00 a month, alert email at 80%'), textOf(saved));
-    assert.ok(linesOf(saved).includes('- It applies to new work from now on. Work already running finishes and is charged.'), textOf(saved));
+    assert.ok(linesOf(saved).includes('- It applies to new work from now on. Work already running finishes and is charged, except a realtime session or a voice call, which ends after the turn that uses the limit up.'), textOf(saved));
 
     // Asking again for what is set now changes nothing and makes no Preview or Set call.
     const again = await client.callTool({ name: 'manage_spend_limit', arguments: data.nextAction.arguments });

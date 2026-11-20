@@ -695,7 +695,7 @@ Controls are a workspace's own rules for what it spends and which models it runs
 
 - A spend limit caps what the workspace spends in a month or in a day, in USD. Once it is reached, new work it covers is refused with error code 93, even when the wallet has money.
 - A Model Access rule allows or blocks models, by category or one by one. A blocked model is refused with error code 92 before anything runs.
-- A refusal runs nothing and charges nothing. Work that is already running finishes and is charged.
+- A refusal runs nothing and charges nothing. Work that is already running finishes and is charged, except a realtime session or a voice call, which ends after the turn that uses a limit up.
 - The connected project decides the workspace: a personal project uses the personal account's controls, a team project the team's. A call cannot switch workspaces.
 - \`get_controls\` shows the workspace, whether this connection can change its controls, every limit with what it used and what is left, every rule in plain words, and which way in, API key and, in a team, member this connection's own runs count as. It marks the limits and rules that cover them.
 
@@ -724,7 +724,7 @@ Each limit and each rule covers one scope:
   - \`agent\`: the runs deployed agents start on their own.
 - \`agent\`: one deployed agent, by name or guid. It covers the models the agent runs through Wiro and the chat model it answers with. Its spend limit also counts the credits its replies use (100 credits = $1).
 
-Studio and the Workflow Agent are not agents of the workspace. The models they run for a person are checked like that person's own runs, against the controls of the whole wallet, the member, the API key the message came with and the surface it came in on. Their own chat is not a Model Access matter, but its cost counts toward the spend limits.
+Studio and the Workflow Agent are not agents of the workspace. The models they run for a person are checked like that person's own runs, against the controls of the whole wallet, the member, the API key the message came with and the surface it came in on. The cost of their chat counts toward the spend limits too.
 
 To restrict one API key, give it its own limit or rule: that follows the key on every way in.
 
