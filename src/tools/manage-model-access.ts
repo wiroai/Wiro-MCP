@@ -7,7 +7,6 @@ import {
   errorResult,
   errorText,
   isPlainObject,
-  MODEL_ACCESS_URL,
   requireApiSuccess,
   type ApiEnvelope,
 } from '../utils/api.js';
@@ -21,6 +20,7 @@ import {
   confirmState,
   CONTROL_SCOPES,
   cannotChangeText,
+  controlsPageUrl,
   entryName,
   GEMINI_VOICE_MODEL,
   isCategory,
@@ -194,7 +194,7 @@ function word(access: Access | 'not named'): string {
 }
 
 function refusedResult(action: Args['action'], workspace: ControlsWorkspace) {
-  const message = cannotChangeText(workspace.kind, 'Model Access rules', 'model-access');
+  const message = cannotChangeText(workspace, 'Model Access rules', 'model-access');
   return result({
     action,
     outcome: 'refused' satisfies Outcome,
@@ -204,7 +204,7 @@ function refusedResult(action: Args['action'], workspace: ControlsWorkspace) {
     warnings: [],
     notes: [],
     message,
-    dashboardUrl: MODEL_ACCESS_URL,
+    dashboardUrl: controlsPageUrl('model-access', workspace),
   }, ['## Not changed', '', message]);
 }
 
@@ -518,7 +518,13 @@ function hiddenModelText(error: unknown, existing: RuleRow | null): string | nul
     + `to models in this call to take it out. ${NOTHING_CHANGED}`;
 }
 
-async function previewRule(client: WiroClient, body: Record<string, unknown>, existing: RuleRow | null, signal: AbortSignal): Promise<PreviewAnswer> {
+async function previewRule(
+  client: WiroClient,
+  body: Record<string, unknown>,
+  existing: RuleRow | null,
+  workspace: ControlsWorkspace,
+  signal: AbortSignal,
+): Promise<PreviewAnswer> {
   let answer: ApiEnvelope & { preview?: unknown; rule?: unknown; existing?: unknown; agentchatmodel?: unknown };
   try {
     answer = requireApiSuccess(
@@ -529,11 +535,11 @@ async function previewRule(client: WiroClient, body: Record<string, unknown>, ex
     if (signal.aborted) throw error;
     const hidden = hiddenModelText(error, existing);
     if (hidden) throw new Error(hidden);
-    throw previewFailure(error, 'model-access');
+    throw previewFailure(error, 'model-access', workspace);
   }
   const rule = isPlainObject(answer.rule) ? toRuleRow(answer.rule) : null;
   // Only an answer that says it is a preview proves nothing was written.
-  if (answer.preview !== true || !rule) throw new Error(previewMissingText('model-access'));
+  if (answer.preview !== true || !rule) throw new Error(previewMissingText('model-access', workspace));
   const previous = isPlainObject(answer.existing) ? toRuleRow(answer.existing) : answer.existing === null ? null : undefined;
   const chat = isPlainObject(answer.agentchatmodel) ? answer.agentchatmodel : null;
   const chatName = chat ? (asString(chat.model)?.trim() || asString(chat.ref)?.trim()) : undefined;
@@ -574,6 +580,7 @@ function removeNextAction(rule: RuleRow) {
 
 async function changeRule(client: WiroClient, args: Args, list: RuleList, signal: AbortSignal) {
   const { workspace, caller, labels } = list;
+  const dashboardUrl = controlsPageUrl('model-access', workspace);
   const located = await locate(client, args, list, signal);
   if (typeof located === 'string') throw inputError(`${located} get_controls lists the rules with their guids.`);
   const { target, existing } = located;
@@ -595,7 +602,7 @@ async function changeRule(client: WiroClient, args: Args, list: RuleList, signal
       warnings: [],
       notes: unsetNote,
       message,
-      dashboardUrl: MODEL_ACCESS_URL,
+      dashboardUrl,
     }, ['## Nothing to change', '', message, ...bullets([], unsetNote)]);
   };
   if (draftMatches(draft, existing)) return unchanged(existing as RuleRow);
@@ -628,7 +635,7 @@ async function changeRule(client: WiroClient, args: Args, list: RuleList, signal
       warnings,
       notes: unsetNote,
       message,
-      dashboardUrl: MODEL_ACCESS_URL,
+      dashboardUrl,
       ...(nextAction ? { nextAction } : {}),
     }, ['## Not changed', '', message, ...bullets(warnings, unsetNote), ...nextLine(nextAction)]);
   }
@@ -637,7 +644,7 @@ async function changeRule(client: WiroClient, args: Args, list: RuleList, signal
   }
 
   const body = ruleBody(target, draft);
-  const preview = await previewRule(client, body, existing, signal);
+  const preview = await previewRule(client, body, existing, workspace, signal);
   const before = preview.existing !== undefined ? preview.existing : existing;
   const after = preview.rule;
   if (!target.targetName && (after.targetName || before?.targetName)) target.targetName = after.targetName ?? before?.targetName;
@@ -688,7 +695,7 @@ async function changeRule(client: WiroClient, args: Args, list: RuleList, signal
       warnings,
       notes,
       message,
-      dashboardUrl: MODEL_ACCESS_URL,
+      dashboardUrl,
       nextAction,
     }, [
       changedSinceSummary ? '## The rule changed since the summary (nothing saved)' : '## Change a Model Access rule? (nothing changed yet)',
@@ -713,7 +720,7 @@ async function changeRule(client: WiroClient, args: Args, list: RuleList, signal
     if (signal.aborted) throw error;
     const hidden = hiddenModelText(error, before);
     if (hidden) throw new Error(hidden);
-    throw changeFailure(error, 'model-access', SET_UNKNOWN);
+    throw changeFailure(error, 'model-access', SET_UNKNOWN, workspace);
   }
   const rule = (isPlainObject(saved.rule) ? toRuleRow(saved.rule) : null) ?? after;
   const savedNotes = notes.filter(note => !unsetNote.includes(note));
@@ -729,7 +736,7 @@ async function changeRule(client: WiroClient, args: Args, list: RuleList, signal
     warnings,
     notes: savedNotes,
     message,
-    dashboardUrl: MODEL_ACCESS_URL,
+    dashboardUrl,
   }, [
     '## Model Access rule saved',
     '',
@@ -750,6 +757,7 @@ function stillApplyNote(rule: RuleRow, list: RuleList): string | null {
 
 async function removeRule(client: WiroClient, args: Args, list: RuleList, signal: AbortSignal) {
   const { workspace, caller, labels } = list;
+  const dashboardUrl = controlsPageUrl('model-access', workspace);
   const located = await locate(client, args, list, signal);
   const nothing = (text: string) => result({
     action: 'remove',
@@ -761,7 +769,7 @@ async function removeRule(client: WiroClient, args: Args, list: RuleList, signal
     warnings: [],
     notes: [],
     message: text,
-    dashboardUrl: MODEL_ACCESS_URL,
+    dashboardUrl,
   }, ['## Nothing to remove', '', text]);
   if (typeof located === 'string') return nothing(`${located} It may be removed already; get_controls lists the rules. ${NOTHING_CHANGED}`);
   const rule = located.existing;
@@ -798,7 +806,7 @@ async function removeRule(client: WiroClient, args: Args, list: RuleList, signal
       warnings: [],
       notes: previewNotes,
       message,
-      dashboardUrl: MODEL_ACCESS_URL,
+      dashboardUrl,
       nextAction,
     }, [
       changedSinceSummary ? '## The rule changed since the summary (nothing removed)' : '## Remove a Model Access rule? (nothing changed yet)',
@@ -820,7 +828,7 @@ async function removeRule(client: WiroClient, args: Args, list: RuleList, signal
     if (error instanceof ApiResultError && /rule not found in this workspace/i.test(error.message)) {
       return nothing(`The rule for ${covers} is not there any more: it was removed already. ${NOTHING_CHANGED}`);
     }
-    throw changeFailure(error, 'model-access', REMOVE_UNKNOWN);
+    throw changeFailure(error, 'model-access', REMOVE_UNKNOWN, workspace);
   }
   const removedNotes = ['Models it blocked can run again from now on, unless another rule blocks them.', ...notes];
   const message = `Removed the rule for ${covers}.`;
@@ -834,7 +842,7 @@ async function removeRule(client: WiroClient, args: Args, list: RuleList, signal
     warnings: [],
     notes: removedNotes,
     message,
-    dashboardUrl: MODEL_ACCESS_URL,
+    dashboardUrl,
   }, ['## Model Access rule removed', '', message, ...bullets([], removedNotes)]);
 }
 
@@ -908,7 +916,7 @@ export function registerManageModelAccess(server: McpServer, client: WiroClient)
         // Wiro says whether it would take a change from this connection: a member gets the refusal here.
         if (list.workspace.canManage === false) return refusedResult(args.action, list.workspace);
         // List's caller came in the same Wiro API release as Preview: without it there is no change summary, so no change.
-        if (!list.caller) throw new Error(previewMissingText('model-access'));
+        if (!list.caller) throw new Error(previewMissingText('model-access', list.workspace));
         return args.action === 'remove'
           ? await removeRule(client, args, list, extra.signal)
           : await changeRule(client, args, list, extra.signal);

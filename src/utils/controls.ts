@@ -1078,18 +1078,38 @@ export async function resolveTarget(
 
 export type ControlsPage = 'spend-limits' | 'model-access';
 
-function pageText(page: ControlsPage): string {
-  return page === 'spend-limits' ? `the Spend Limits page of the Wiro dashboard: ${SPEND_LIMITS_URL}` : `the Model Access page of the Wiro dashboard: ${MODEL_ACCESS_URL}`;
+/** The workspace a Controls link opens in, where it is known. */
+export type LinkedWorkspace = Pick<ControlsWorkspace, 'kind' | 'teamGuid'>;
+
+// A team guid as the dashboard takes it in a link; a link with any other value would name no workspace.
+const LINKED_TEAM_GUID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+
+/**
+ * A Controls page of the Wiro dashboard, in the workspace it is about: ?workspace=<team guid> for a team, or
+ * ?workspace=personal for a personal account, opens the page in that workspace whichever one the browser is on.
+ * The page's plain address when the workspace is not known.
+ */
+export function controlsPageUrl(page: ControlsPage, workspace?: LinkedWorkspace): string {
+  const url = page === 'spend-limits' ? SPEND_LIMITS_URL : MODEL_ACCESS_URL;
+  const named = workspace?.kind === 'personal'
+    ? 'personal'
+    : workspace?.kind === 'team' && workspace.teamGuid && LINKED_TEAM_GUID.test(workspace.teamGuid) ? workspace.teamGuid : undefined;
+  return named ? `${url}?workspace=${named}` : url;
+}
+
+function pageText(page: ControlsPage, workspace?: LinkedWorkspace): string {
+  const url = controlsPageUrl(page, workspace);
+  return page === 'spend-limits' ? `the Spend Limits page of the Wiro dashboard: ${url}` : `the Model Access page of the Wiro dashboard: ${url}`;
 }
 
 /** An older Wiro API has no change summary for controls, so no change goes through this server. */
-export function previewMissingText(page: ControlsPage): string {
-  return `This change cannot be previewed right now, so it was not made and nothing was changed. It can be made on ${pageText(page)}.`;
+export function previewMissingText(page: ControlsPage, workspace?: LinkedWorkspace): string {
+  return `This change cannot be previewed right now, so it was not made and nothing was changed. It can be made on ${pageText(page, workspace)}.`;
 }
 
 /** An older Wiro API takes changes to controls only from a signed-in person. */
-function keyRefusedText(page: ControlsPage): string {
-  return `This change cannot be made through this connection right now, so nothing was changed. It can be made on ${pageText(page)}.`;
+function keyRefusedText(page: ControlsPage, workspace?: LinkedWorkspace): string {
+  return `This change cannot be made through this connection right now, so nothing was changed. It can be made on ${pageText(page, workspace)}.`;
 }
 
 /** The refusal an older Wiro API gives a change made with an API key. */
@@ -1123,14 +1143,14 @@ export function readFailure(what: string, error: unknown): Error {
 }
 
 /** Why a change summary could not be made. A route the API does not have means the change cannot be previewed. */
-export function previewFailure(error: unknown, page: ControlsPage): Error {
+export function previewFailure(error: unknown, page: ControlsPage, workspace?: LinkedWorkspace): Error {
   if (error instanceof ApiResultError) {
-    return new Error(UNKNOWN_ROUTE.test(error.message.trim()) ? previewMissingText(page) : refusalText(error.message));
+    return new Error(UNKNOWN_ROUTE.test(error.message.trim()) ? previewMissingText(page, workspace) : refusalText(error.message));
   }
-  if (error instanceof WiroApiError && error.status === 404) return new Error(previewMissingText(page));
+  if (error instanceof WiroApiError && error.status === 404) return new Error(previewMissingText(page, workspace));
   const text = errorText(error);
   if (TOO_MANY_CHANGES.test(text)) return new Error(`${withPeriod(text)} ${NOTHING_CHANGED}`);
-  if (error instanceof WiroApiError && error.status === 401 && KEY_CANNOT_CHANGE.test(text)) return new Error(keyRefusedText(page));
+  if (error instanceof WiroApiError && error.status === 401 && KEY_CANNOT_CHANGE.test(text)) return new Error(keyRefusedText(page, workspace));
   if (!isOutcomeUnknown(error)) return new Error(`${withPeriod(text)} ${NOTHING_CHANGED}`);
   return new Error(`The change summary could not be made (${keySafeErrorText(error)}), so ${NOTHING_CHANGED.toLowerCase()} Try again in a moment.`);
 }
@@ -1139,20 +1159,20 @@ export function previewFailure(error: unknown, page: ControlsPage): Error {
  * Why a change failed. A clean refusal changed nothing. Without a clear answer the change may have
  * gone through, so `unknownText` says how to find out.
  */
-export function changeFailure(error: unknown, page: ControlsPage, unknownText: string): Error {
+export function changeFailure(error: unknown, page: ControlsPage, unknownText: string, workspace?: LinkedWorkspace): Error {
   if (error instanceof ApiResultError) return new Error(refusalText(error.message));
   const text = errorText(error);
   if (TOO_MANY_CHANGES.test(text)) return new Error(`${withPeriod(text)} ${NOTHING_CHANGED}`);
-  if (error instanceof WiroApiError && error.status === 401 && KEY_CANNOT_CHANGE.test(text)) return new Error(keyRefusedText(page));
-  if (error instanceof WiroApiError && error.status === 404) return new Error(previewMissingText(page));
+  if (error instanceof WiroApiError && error.status === 401 && KEY_CANNOT_CHANGE.test(text)) return new Error(keyRefusedText(page, workspace));
+  if (error instanceof WiroApiError && error.status === 404) return new Error(previewMissingText(page, workspace));
   if (!isOutcomeUnknown(error)) return new Error(`${withPeriod(text)} ${NOTHING_CHANGED}`);
   return new Error(`${keySafeErrorText(error)}\n\n${unknownText}`);
 }
 
 /** The sentence for a connection that may read controls but not change them. */
-export function cannotChangeText(kind: ControlsWorkspace['kind'], what: 'spend limits' | 'Model Access rules', page: ControlsPage): string {
-  const url = page === 'spend-limits' ? SPEND_LIMITS_URL : MODEL_ACCESS_URL;
-  if (kind === 'team') {
+export function cannotChangeText(workspace: LinkedWorkspace, what: 'spend limits' | 'Model Access rules', page: ControlsPage): string {
+  const url = controlsPageUrl(page, workspace);
+  if (workspace.kind === 'team') {
     return `Only a team admin or the organization's owner can change this team's ${what}, and this connection acts as a team `
       + `member without those rights. ${NOTHING_CHANGED} Ask a team admin to do it, with their own connection or at ${url}.`;
   }
@@ -1164,4 +1184,7 @@ export const dashboardSchema = z.object({
   modelAccess: z.string(),
 });
 
-export const DASHBOARD = { spendLimits: SPEND_LIMITS_URL, modelAccess: MODEL_ACCESS_URL };
+/** The Controls pages of the Wiro dashboard, in the given workspace where it is known. */
+export function dashboardOf(workspace?: LinkedWorkspace): z.infer<typeof dashboardSchema> {
+  return { spendLimits: controlsPageUrl('spend-limits', workspace), modelAccess: controlsPageUrl('model-access', workspace) };
+}

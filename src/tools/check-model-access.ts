@@ -6,7 +6,6 @@ import {
   asString,
   errorResult,
   isPlainObject,
-  MODEL_ACCESS_URL,
   requireApiSuccess,
   type ApiEnvelope,
 } from '../utils/api.js';
@@ -16,6 +15,7 @@ import {
   changedBySchema,
   changedByText,
   CONTROL_SCOPES,
+  controlsPageUrl,
   decisionReason,
   isCategory,
   readRuleList,
@@ -288,7 +288,7 @@ export function registerCheckModelAccess(server: McpServer, client: WiroClient):
           }
           lines.push(canManage
             ? 'This connection can change the rules, after the user confirms a change summary. A model the rules allow is the other way out.'
-            : `This connection can only read the rules: ${whoCanChange(kind)} can change them, with their own connection or at ${MODEL_ACCESS_URL}. Or the user can pick another model.`);
+            : `This connection can only read the rules: ${whoCanChange(kind)} can change them, with their own connection or at ${controlsPageUrl('model-access', workspace)}. Or the user can pick another model.`);
         }
         const nextAction = fixes[0];
         if (nextAction) lines.push('', `**Next:** \`${nextAction.tool}\` with ${jsonSpan(nextAction.arguments)}. ${nextAction.reason}`);

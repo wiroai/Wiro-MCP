@@ -7,7 +7,6 @@ import {
   errorText,
   isPlainObject,
   requireApiSuccess,
-  SPEND_LIMITS_URL,
   type ApiEnvelope,
 } from '../utils/api.js';
 import {
@@ -21,6 +20,7 @@ import {
   confirmState,
   CONTROL_SCOPES,
   cannotChangeText,
+  controlsPageUrl,
   isThisConnection,
   isUsedUp,
   leftOf,
@@ -192,7 +192,7 @@ function result(structured: Record<string, unknown>, lines: string[]) {
 }
 
 function refusedResult(action: Args['action'], workspace: ControlsWorkspace) {
-  const message = cannotChangeText(workspace.kind, 'spend limits', 'spend-limits');
+  const message = cannotChangeText(workspace, 'spend limits', 'spend-limits');
   return result({
     action,
     outcome: 'refused' satisfies Outcome,
@@ -202,7 +202,7 @@ function refusedResult(action: Args['action'], workspace: ControlsWorkspace) {
     warnings: [],
     notes: [],
     message,
-    dashboardUrl: SPEND_LIMITS_URL,
+    dashboardUrl: controlsPageUrl('spend-limits', workspace),
   }, ['## Not changed', '', message]);
 }
 
@@ -260,7 +260,7 @@ interface PreviewAnswer {
   existing: LimitRow | null | undefined;
 }
 
-async function previewLimit(client: WiroClient, body: Record<string, unknown>, signal: AbortSignal): Promise<PreviewAnswer> {
+async function previewLimit(client: WiroClient, body: Record<string, unknown>, workspace: ControlsWorkspace, signal: AbortSignal): Promise<PreviewAnswer> {
   let answer: ApiEnvelope & { preview?: unknown; limit?: unknown; existing?: unknown };
   try {
     answer = requireApiSuccess(
@@ -269,17 +269,18 @@ async function previewLimit(client: WiroClient, body: Record<string, unknown>, s
     );
   } catch (error) {
     if (signal.aborted) throw error;
-    throw previewFailure(error, 'spend-limits');
+    throw previewFailure(error, 'spend-limits', workspace);
   }
   const limit = isPlainObject(answer.limit) ? toLimitRow(answer.limit) : null;
   // Only an answer that says it is a preview proves nothing was written.
-  if (answer.preview !== true || !limit) throw new Error(previewMissingText('spend-limits'));
+  if (answer.preview !== true || !limit) throw new Error(previewMissingText('spend-limits', workspace));
   const existing = isPlainObject(answer.existing) ? toLimitRow(answer.existing) : answer.existing === null ? null : undefined;
   return { limit, existing };
 }
 
 async function setLimit(client: WiroClient, args: Args, list: LimitList, signal: AbortSignal) {
   const { workspace, caller } = list;
+  const dashboardUrl = controlsPageUrl('spend-limits', workspace);
   const located = await locate(client, args, list, signal);
   if (typeof located === 'string') throw inputError(`${located} get_controls lists the limits with their guids.`);
   const { target, period, other } = located;
@@ -304,13 +305,13 @@ async function setLimit(client: WiroClient, args: Args, list: LimitList, signal:
       warnings: [],
       notes: [],
       message,
-      dashboardUrl: SPEND_LIMITS_URL,
+      dashboardUrl,
     }, ['## Nothing to change', '', message]);
   };
   if (located.existing && sameLimit(located.existing, amount, alert)) return unchanged(located.existing);
 
   const body = { scope: target.scope, target: target.target, period, amountusd: amount, alertpct: alert };
-  const preview = await previewLimit(client, body, signal);
+  const preview = await previewLimit(client, body, workspace, signal);
   // The preview reads the limit afresh, so its answer wins over the list read before it.
   const before = preview.existing !== undefined ? preview.existing : located.existing;
   if (!target.targetName && (preview.limit.targetName || before?.targetName)) target.targetName = preview.limit.targetName ?? before?.targetName;
@@ -386,7 +387,7 @@ async function setLimit(client: WiroClient, args: Args, list: LimitList, signal:
       warnings,
       notes,
       message,
-      dashboardUrl: SPEND_LIMITS_URL,
+      dashboardUrl,
       nextAction,
     }, lines);
   }
@@ -399,7 +400,7 @@ async function setLimit(client: WiroClient, args: Args, list: LimitList, signal:
     );
   } catch (error) {
     if (signal.aborted) throw error;
-    throw changeFailure(error, 'spend-limits', SET_UNKNOWN);
+    throw changeFailure(error, 'spend-limits', SET_UNKNOWN, workspace);
   }
   const row = (isPlainObject(saved.limit) ? toLimitRow(saved.limit) : null) ?? after;
   const message = `Saved: ${amountPerPeriod(row.amountUsd, row.period)} for ${covers()}, ${alertText(row.alertPercent)}.`;
@@ -417,7 +418,7 @@ async function setLimit(client: WiroClient, args: Args, list: LimitList, signal:
     warnings: isUsedUp(row) ? [`It is used up already: new work it covers is refused until it ${resetText(row)}.`] : [],
     notes: savedNotes,
     message,
-    dashboardUrl: SPEND_LIMITS_URL,
+    dashboardUrl,
   }, [
     '## Spend limit saved',
     '',
@@ -439,6 +440,7 @@ function stillApplyNote(row: LimitRow, list: LimitList): string | null {
 
 async function removeLimit(client: WiroClient, args: Args, list: LimitList, signal: AbortSignal) {
   const { workspace, caller } = list;
+  const dashboardUrl = controlsPageUrl('spend-limits', workspace);
   const located = await locate(client, args, list, signal);
   const nothing = (text: string) => result({
     action: 'remove',
@@ -450,7 +452,7 @@ async function removeLimit(client: WiroClient, args: Args, list: LimitList, sign
     warnings: [],
     notes: [],
     message: text,
-    dashboardUrl: SPEND_LIMITS_URL,
+    dashboardUrl,
   }, ['## Nothing to remove', '', text]);
   if (typeof located === 'string') return nothing(`${located} It may be removed already; get_controls lists the limits. ${NOTHING_CHANGED}`);
   const row = located.existing;
@@ -485,7 +487,7 @@ async function removeLimit(client: WiroClient, args: Args, list: LimitList, sign
       warnings: [],
       notes,
       message,
-      dashboardUrl: SPEND_LIMITS_URL,
+      dashboardUrl,
       nextAction,
     }, [
       changedSinceSummary ? '## The limit changed since the summary (nothing removed)' : '## Remove a spend limit? (nothing changed yet)',
@@ -507,7 +509,7 @@ async function removeLimit(client: WiroClient, args: Args, list: LimitList, sign
     if (error instanceof ApiResultError && /limit not found in this workspace/i.test(error.message)) {
       return nothing(`${capitalized(limitPhrase(row, covers))} is not there any more: it was removed already. ${NOTHING_CHANGED}`);
     }
-    throw changeFailure(error, 'spend-limits', REMOVE_UNKNOWN);
+    throw changeFailure(error, 'spend-limits', REMOVE_UNKNOWN, workspace);
   }
   const removedNotes = ['Work it refused can start again at once.', ...(stillApply ? [stillApply] : [])];
   const message = `Removed ${limitPhrase(row, covers)}.`;
@@ -522,7 +524,7 @@ async function removeLimit(client: WiroClient, args: Args, list: LimitList, sign
     warnings: [],
     notes: removedNotes,
     message,
-    dashboardUrl: SPEND_LIMITS_URL,
+    dashboardUrl,
   }, ['## Spend limit removed', '', message, ...bullets([], removedNotes)]);
 }
 
@@ -608,7 +610,7 @@ export function registerManageSpendLimit(server: McpServer, client: WiroClient):
         // Wiro says whether it would take a change from this connection: a member gets the refusal here.
         if (list.workspace.canManage === false) return refusedResult(args.action, list.workspace);
         // List's caller came in the same Wiro API release as Preview: without it there is no change summary, so no change.
-        if (!list.caller) throw new Error(previewMissingText('spend-limits'));
+        if (!list.caller) throw new Error(previewMissingText('spend-limits', list.workspace));
         return args.action === 'remove'
           ? await removeLimit(client, args, list, extra.signal)
           : await setLimit(client, args, list, extra.signal);

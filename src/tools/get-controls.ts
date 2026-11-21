@@ -13,7 +13,7 @@ import {
 import {
   categoryList,
   CATEGORY_KEYS,
-  DASHBOARD,
+  dashboardOf,
   dashboardSchema,
   isSurface,
   isThisConnection,
@@ -375,7 +375,9 @@ export function registerGetControls(server: McpServer, client: WiroClient): void
         if (usageError) lines.push('', `The spending could not be read: ${usageError}`);
         if (memberList) lines.push(...memberLines(memberList, caller));
         if (membersLine) lines.push('', membersLine);
-        lines.push('', `Dashboard: ${DASHBOARD.spendLimits} and ${DASHBOARD.modelAccess}`);
+        // The pages open in this workspace, whichever one the browser is on.
+        const dashboard = dashboardOf(workspace);
+        lines.push('', `Dashboard: ${dashboard.spendLimits} and ${dashboard.modelAccess}`);
 
         const spendLimitsError = limits ? undefined : errorText((limitsRead as PromiseRejectedResult).reason);
         const modelAccessError = rules ? undefined : errorText((rulesRead as PromiseRejectedResult).reason);
@@ -410,7 +412,7 @@ export function registerGetControls(server: McpServer, client: WiroClient): void
             ...(modelAccessError ? { modelAccessError } : {}),
             ...(usageError ? { usageError } : {}),
             ...(membersError ? { membersError } : {}),
-            dashboard: DASHBOARD,
+            dashboard,
           },
         };
       } catch (error) {

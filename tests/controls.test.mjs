@@ -30,6 +30,9 @@ const ADMIN = { type: 'team', teamguid: TEAM, canmanage: true };
 const MEMBER = { type: 'team', teamguid: TEAM, canmanage: false };
 const PERSONAL = { type: 'personal', teamguid: null, canmanage: true };
 const CALLER = { surface: 'mcp', projectid: '48211' };
+// The dashboard's Controls pages open in the workspace a link names: the team of ADMIN and MEMBER here.
+const SPEND_LIMITS_PAGE = `https://wiro.ai/panel/controls/spend-limits?workspace=${TEAM}`;
+const MODEL_ACCESS_PAGE = `https://wiro.ai/panel/controls/model-access?workspace=${TEAM}`;
 
 const CATEGORIES = [
   ['image', 'Image Generation'], ['video', 'Video Generation'], ['audio', 'Audio & Speech'], ['music', 'Music Generation'],
@@ -197,7 +200,7 @@ test('get_controls shows each limit with what is left, each rule in plain words,
       '### Model Access rules (2)',
       '- Rule for the whole team: Every model except Video Generation; `bytedance/seedance-v2-5-flash` allowed by name (rule_guid `r-acc`)',
       '- Rule for the API key of project `Production` (id `48211`), the key this connection uses: Only Image Generation and `openai/gpt-6-2-astra`, except model 202, no longer on Wiro (rule_guid `r-key`)',
-      'Dashboard: https://wiro.ai/panel/controls/spend-limits and https://wiro.ai/panel/controls/model-access',
+      `Dashboard: ${SPEND_LIMITS_PAGE} and ${MODEL_ACCESS_PAGE}`,
     ]) assert.ok(lines.includes(line), `missing line: ${line}\n\n${textOf(result)}`);
 
     const data = result.structuredContent;
@@ -216,7 +219,7 @@ test('get_controls shows each limit with what is left, each rule in plain words,
     assert.equal(data.categories.length, 7);
     assert.deepEqual(data.surfaces.map(entry => entry.surface), ['web', 'api', 'mcp', 'llm-gateway', 'extension', 'agent']);
     assert.match(data.surfaces.find(entry => entry.surface === 'api').description, /a local install of this server included/);
-    assert.deepEqual(data.dashboard, { spendLimits: 'https://wiro.ai/panel/controls/spend-limits', modelAccess: 'https://wiro.ai/panel/controls/model-access' });
+    assert.deepEqual(data.dashboard, { spendLimits: SPEND_LIMITS_PAGE, modelAccess: MODEL_ACCESS_PAGE });
     assert.deepEqual(fake.paths().sort(), ['/ModelAccess/List', '/Organization/List', '/SpendLimit/List']);
 
     const { tools } = await client.listTools();
@@ -491,7 +494,7 @@ test('check_model_access says every blocking rule must change, and gives no fix 
     assert.equal(result.structuredContent.canManage, false);
     assert.equal(result.structuredContent.nextAction, undefined);
     assert.equal(result.structuredContent.fixes, undefined);
-    assert.ok(linesOf(result).includes('This connection can only read the rules: a team admin or the organization\'s owner can change them, with their own connection or at https://wiro.ai/panel/controls/model-access. Or the user can pick another model.'), textOf(result));
+    assert.ok(linesOf(result).includes(`This connection can only read the rules: a team admin or the organization's owner can change them, with their own connection or at ${MODEL_ACCESS_PAGE}. Or the user can pick another model.`), textOf(result));
     assert.doesNotMatch(textOf(result), /\*\*Next:\*\*/);
   });
 
@@ -714,7 +717,7 @@ test('manage_spend_limit refuses a team member at the summary, with no Preview o
       assert.equal(result.structuredContent.outcome, 'refused');
       assert.equal(result.structuredContent.nextAction, undefined);
       assert.equal(result.structuredContent.workspace.canManage, false);
-      assert.equal(textOf(result), '## Not changed\n\nOnly a team admin or the organization\'s owner can change this team\'s spend limits, and this connection acts as a team member without those rights. Nothing was changed. Ask a team admin to do it, with their own connection or at https://wiro.ai/panel/controls/spend-limits.');
+      assert.equal(textOf(result), `## Not changed\n\nOnly a team admin or the organization's owner can change this team's spend limits, and this connection acts as a team member without those rights. Nothing was changed. Ask a team admin to do it, with their own connection or at ${SPEND_LIMITS_PAGE}.`);
     }
     assert.deepEqual([...new Set(fake.paths())], ['/SpendLimit/List']);
   });
@@ -828,7 +831,7 @@ test('manage_spend_limit changes nothing on an older Wiro API without Preview, a
     ]) {
       const result = await client.callTool({ name: 'manage_spend_limit', arguments: args });
       assert.equal(result.isError, true);
-      assert.equal(textOf(result), '## Error\n\nThis change cannot be previewed right now, so it was not made and nothing was changed. It can be made on the Spend Limits page of the Wiro dashboard: https://wiro.ai/panel/controls/spend-limits.');
+      assert.equal(textOf(result), `## Error\n\nThis change cannot be previewed right now, so it was not made and nothing was changed. It can be made on the Spend Limits page of the Wiro dashboard: ${SPEND_LIMITS_PAGE}.`);
     }
     assert.equal(fake.paths().includes('/SpendLimit/Set'), false);
   });
@@ -850,7 +853,7 @@ test('manage_spend_limit changes nothing on an older Wiro API without Preview, a
     const summary = await client.callTool({ name: 'manage_spend_limit', arguments: { action: 'remove', limit_guid: 'l-acc' } });
     const result = await client.callTool({ name: 'manage_spend_limit', arguments: summary.structuredContent.nextAction.arguments });
     assert.equal(result.isError, true);
-    assert.equal(textOf(result), '## Error\n\nThis change cannot be made through this connection right now, so nothing was changed. It can be made on the Spend Limits page of the Wiro dashboard: https://wiro.ai/panel/controls/spend-limits.');
+    assert.equal(textOf(result), `## Error\n\nThis change cannot be made through this connection right now, so nothing was changed. It can be made on the Spend Limits page of the Wiro dashboard: ${SPEND_LIMITS_PAGE}.`);
   });
 });
 
@@ -1074,7 +1077,7 @@ test('the manage tools change nothing on an older Wiro API whose List has no cal
     for (const args of [{ action: 'remove', limit_guid: 'l-acc' }, { action: 'set', scope: 'account', amount_usd: 50 }]) {
       const result = await client.callTool({ name: 'manage_spend_limit', arguments: args });
       assert.equal(result.isError, true);
-      assert.equal(textOf(result), '## Error\n\nThis change cannot be previewed right now, so it was not made and nothing was changed. It can be made on the Spend Limits page of the Wiro dashboard: https://wiro.ai/panel/controls/spend-limits.');
+      assert.equal(textOf(result), `## Error\n\nThis change cannot be previewed right now, so it was not made and nothing was changed. It can be made on the Spend Limits page of the Wiro dashboard: ${SPEND_LIMITS_PAGE}.`);
     }
     assert.deepEqual([...new Set(limits.paths())], ['/SpendLimit/List']);
   });
@@ -1083,7 +1086,7 @@ test('the manage tools change nothing on an older Wiro API whose List has no cal
     for (const args of [{ action: 'remove', rule_guid: 'r-acc' }, { action: 'update', scope: 'account', categories: [{ category: 'audio', access: 'block' }] }]) {
       const result = await client.callTool({ name: 'manage_model_access', arguments: args });
       assert.equal(result.isError, true);
-      assert.equal(textOf(result), '## Error\n\nThis change cannot be previewed right now, so it was not made and nothing was changed. It can be made on the Model Access page of the Wiro dashboard: https://wiro.ai/panel/controls/model-access.');
+      assert.equal(textOf(result), `## Error\n\nThis change cannot be previewed right now, so it was not made and nothing was changed. It can be made on the Model Access page of the Wiro dashboard: ${MODEL_ACCESS_PAGE}.`);
     }
     assert.deepEqual([...new Set(rules.paths())], ['/ModelAccess/List']);
   });
@@ -1419,7 +1422,7 @@ test('manage_model_access refuses a member at the summary and changes nothing on
   await withClient(member, async client => {
     const result = await client.callTool({ name: 'manage_model_access', arguments: { action: 'update', scope: 'account', categories: [{ category: 'video', access: 'block' }] } });
     assert.equal(result.structuredContent.outcome, 'refused');
-    assert.equal(textOf(result), '## Not changed\n\nOnly a team admin or the organization\'s owner can change this team\'s Model Access rules, and this connection acts as a team member without those rights. Nothing was changed. Ask a team admin to do it, with their own connection or at https://wiro.ai/panel/controls/model-access.');
+    assert.equal(textOf(result), `## Not changed\n\nOnly a team admin or the organization's owner can change this team's Model Access rules, and this connection acts as a team member without those rights. Nothing was changed. Ask a team admin to do it, with their own connection or at ${MODEL_ACCESS_PAGE}.`);
     assert.deepEqual(member.paths(), ['/ModelAccess/List']);
   });
 
@@ -1427,7 +1430,7 @@ test('manage_model_access refuses a member at the summary and changes nothing on
   await withClient(older, async client => {
     const result = await client.callTool({ name: 'manage_model_access', arguments: { action: 'update', scope: 'account', categories: [{ category: 'video', access: 'block' }], confirm: true, updated_at: 0 } });
     assert.equal(result.isError, true);
-    assert.equal(textOf(result), '## Error\n\nThis change cannot be previewed right now, so it was not made and nothing was changed. It can be made on the Model Access page of the Wiro dashboard: https://wiro.ai/panel/controls/model-access.');
+    assert.equal(textOf(result), `## Error\n\nThis change cannot be previewed right now, so it was not made and nothing was changed. It can be made on the Model Access page of the Wiro dashboard: ${MODEL_ACCESS_PAGE}.`);
     assert.equal(older.paths().includes('/ModelAccess/Set'), false);
   });
 });
@@ -1806,5 +1809,61 @@ test('Studio and the Workflow Agent are named as covered by the caller\'s own ru
     const result = await client.callTool({ name: 'manage_spend_limit', arguments: { action: 'set', scope: 'agent', agent: 'Workflow Agent', amount_usd: 25 } });
     assert.equal(result.isError, true);
     assert.match(textOf(result), /Their chat model and the models they run for a person are checked like that person's own runs/);
+  });
+});
+
+// ---------------------------------------------------------------- dashboard links
+
+test('the Controls links open the workspace they are about, and stay plain where it is not known', async () => {
+  const PLAIN = { spendLimits: 'https://wiro.ai/panel/controls/spend-limits', modelAccess: 'https://wiro.ai/panel/controls/model-access' };
+  const OWN = { spendLimits: `${PLAIN.spendLimits}?workspace=personal`, modelAccess: `${PLAIN.modelAccess}?workspace=personal` };
+  // No workspace in Wiro's answer, a team without its guid, and a guid the dashboard would not take name none.
+  const UNKNOWN = [null, { type: 'team', teamguid: null, canmanage: true }, { type: 'team', teamguid: 'acme team', canmanage: true }];
+
+  // get_controls: a team by its guid, a personal account as personal.
+  for (const [workspace, pages] of [
+    [ADMIN, { spendLimits: SPEND_LIMITS_PAGE, modelAccess: MODEL_ACCESS_PAGE }],
+    [PERSONAL, OWN],
+    ...UNKNOWN.map(unknown => [unknown, PLAIN]),
+  ]) {
+    const fake = fakeClient({ '/SpendLimit/List': limitList([], workspace), '/ModelAccess/List': ruleList([], workspace), '/Organization/List': ORGS });
+    await withClient(fake, async client => {
+      const result = await client.callTool({ name: 'get_controls', arguments: {} });
+      assert.notEqual(result.isError, true, textOf(result));
+      assert.deepEqual(result.structuredContent.dashboard, pages, JSON.stringify(workspace));
+      assert.ok(linesOf(result).includes(`Dashboard: ${pages.spendLimits} and ${pages.modelAccess}`), textOf(result));
+    });
+  }
+
+  // The change tools: the page of the workspace they change, in a summary as in a refusal.
+  for (const [workspace, pages] of [[ADMIN, { spendLimits: SPEND_LIMITS_PAGE, modelAccess: MODEL_ACCESS_PAGE }], [PERSONAL, OWN], [null, PLAIN]]) {
+    const fake = fakeClient({
+      '/SpendLimit/List': limitList([], workspace),
+      '/SpendLimit/Preview': limitPreview(null, 0),
+      '/ModelAccess/List': ruleList([], workspace),
+      '/ModelAccess/Preview': rulePreview(null, {}),
+    });
+    await withClient(fake, async client => {
+      const limit = await client.callTool({ name: 'manage_spend_limit', arguments: { action: 'set', scope: 'account', amount_usd: 50 } });
+      assert.equal(limit.structuredContent.outcome, 'preview', textOf(limit));
+      assert.equal(limit.structuredContent.dashboardUrl, pages.spendLimits, JSON.stringify(workspace));
+      const rule = await client.callTool({ name: 'manage_model_access', arguments: { action: 'update', scope: 'account', categories: [{ category: 'video', access: 'block' }] } });
+      assert.equal(rule.structuredContent.outcome, 'preview', textOf(rule));
+      assert.equal(rule.structuredContent.dashboardUrl, pages.modelAccess, JSON.stringify(workspace));
+    });
+  }
+  const member = fakeClient({ '/SpendLimit/List': limitList([], MEMBER), '/ModelAccess/List': ruleList([], MEMBER) });
+  await withClient(member, async client => {
+    const limit = await client.callTool({ name: 'manage_spend_limit', arguments: { action: 'set', scope: 'account', amount_usd: 50 } });
+    assert.equal(limit.structuredContent.dashboardUrl, SPEND_LIMITS_PAGE);
+    const rule = await client.callTool({ name: 'manage_model_access', arguments: { action: 'update', scope: 'account', categories: [{ category: 'video', access: 'block' }] } });
+    assert.equal(rule.structuredContent.dashboardUrl, MODEL_ACCESS_PAGE);
+  });
+  const reader = fakeClient({ '/SpendLimit/List': limitList([], { ...PERSONAL, canmanage: false }) });
+  await withClient(reader, async client => {
+    const refused = await client.callTool({ name: 'manage_spend_limit', arguments: { action: 'set', scope: 'account', amount_usd: 50 } });
+    assert.equal(refused.structuredContent.outcome, 'refused');
+    assert.equal(refused.structuredContent.dashboardUrl, OWN.spendLimits);
+    assert.ok(textOf(refused).endsWith(`The account owner can change them at ${OWN.spendLimits}.`), textOf(refused));
   });
 });
