@@ -21,6 +21,7 @@ import {
   messageKind,
   messageState,
   toAgentMessage,
+  voiceCallEndText,
   type AgentMessage,
 } from './agent-message.js';
 import {
@@ -654,7 +655,10 @@ export async function collectTurn(options: CollectTurnOptions): Promise<AgentTur
     result.message = projected.message;
     if (projected.partialReply) result.partialReply = projected.partialReply;
     const voiceCall = result.message.kind === 'voice_call';
-    if (voiceCall) notes.push('This is a voice call record. Caller details and transcripts are not returned.');
+    if (voiceCall) {
+      const ended = voiceCallEndText(result.message.endReason);
+      notes.push(`This is a voice call record. Caller details and transcripts are not returned.${ended ? ` ${ended}` : ''}`);
+    }
     if (result.message.kind === 'setup_result') {
       notes.push('Wiro answered this message itself as the user\'s answer to a setup change the agent proposed, so the '
         + 'agent took no turn and no credits were used.');

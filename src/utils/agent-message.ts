@@ -61,9 +61,26 @@ export const agentMessageSchema = z.object({
   creditsUsed: z.number().nullable().optional(),
   createdAt: z.string().optional(),
   endedAt: z.string().optional(),
+  endReason: z.enum(['spend_limit', 'balance']).optional()
+    .describe('Set on a voice call record when a spend limit was used up (spend_limit) or the wallet\'s balance ran out '
+      + '(balance) during the call, which ended it.'),
 });
 
 export type AgentMessage = z.infer<typeof agentMessageSchema>;
+
+/** Why a voice call ended, when a spend limit or the wallet's balance ended it. Other reasons are left out. */
+function voiceCallEndReason(row: Record<string, unknown>): AgentMessage['endReason'] {
+  const metadata = isPlainObject(row.metadata) ? row.metadata : {};
+  const reason = asString(metadata.endReason);
+  return reason === 'spend_limit' || reason === 'balance' ? reason : undefined;
+}
+
+/** A sentence for a voice call that a spend limit or the balance ended; empty for any other end. */
+export function voiceCallEndText(reason: AgentMessage['endReason']): string {
+  if (reason === 'spend_limit') return 'A spend limit was used up during the call, so it ended.';
+  if (reason === 'balance') return 'The wallet\'s balance ran out during the call, so it ended.';
+  return '';
+}
 
 export function isTerminalMessageStatus(status: unknown): boolean {
   return (MESSAGE_TERMINAL_STATUSES as readonly string[]).includes(String(status));
@@ -231,7 +248,9 @@ export function toAgentMessage(
   const status = asString(row.status) ?? 'agent_queue';
   const terminal = isTerminalMessageStatus(status);
   if (isVoiceCallRow(row)) {
-    // Every reader gets the same record: the id, status and times, nothing about the caller.
+    // Every reader gets the same record: the id, status and times, nothing about the caller, and why it ended
+    // when a spend limit or the balance ended it.
+    const endReason = voiceCallEndReason(row);
     return {
       messageId: asString(row.guid) ?? '',
       state: messageState(status),
@@ -242,6 +261,7 @@ export function toAgentMessage(
       attachments: [],
       ...(unixToIso(row.createdat) ? { createdAt: unixToIso(row.createdat) } : {}),
       ...(unixToIso(row.endedat) ? { endedAt: unixToIso(row.endedat) } : {}),
+      ...(endReason ? { endReason } : {}),
     };
   }
   const fullReply = terminal || options.includePartial ? extractReply(row) : '';

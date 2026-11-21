@@ -1824,6 +1824,48 @@ test('get_agent_message returns voice call rows without the caller or the call',
   });
 });
 
+test('a voice call record says when a spend limit or the balance ended the call, and nothing else about it', async () => {
+  const call = (guid, endReason) => ({
+    guid,
+    content: '',
+    response: '\u{1F4DE} Incoming voice call: +15551234567',
+    status: 'agent_end',
+    metadata: { type: 'realtime_session', callerInfo: { number: '+15551234567' }, ...(endReason ? { endReason } : {}) },
+    createdat: '1700000000',
+    endedat: '1700000300',
+  });
+  const rows = [call('call-limit', 'spend_limit'), call('call-balance', 'balance'), call('call-hangup', 'twilio_disconnect')];
+  const fake = fakeClient({
+    '/UserAgent/Message/Detail': body => ({ result: true, errors: [], data: rows.find(row => row.guid === body.messageguid) }),
+    '/UserAgent/Message/History': { result: true, errors: [], data: { count: 3, hasmore: false, messages: rows } },
+  });
+  const ended = {
+    'call-limit': ['spend_limit', 'A spend limit was used up during the call, so it ended.'],
+    'call-balance': ['balance', 'The wallet\'s balance ran out during the call, so it ended.'],
+    'call-hangup': [undefined, ''],
+  };
+
+  await withClient(fake, async client => {
+    for (const row of rows) {
+      const result = await client.callTool({ name: 'get_agent_message', arguments: { agent: 'agent-guid-1', message_id: row.guid, wait_seconds: 0 } });
+      assert.notEqual(result.isError, true, textOf(result));
+      const [reason, sentence] = ended[row.guid];
+      assert.equal(result.structuredContent.message.endReason, reason, row.guid);
+      assert.ok(result.structuredContent.notes.includes(`This is a voice call record. Caller details and transcripts are not returned.${sentence ? ` ${sentence}` : ''}`), result.structuredContent.notes.join('\n'));
+      assert.doesNotMatch(JSON.stringify(result), /twilio_disconnect|5551234567/);
+    }
+
+    const history = await client.callTool({ name: 'get_agent_conversation', arguments: { agent: 'agent-guid-1', session: 'default' } });
+    assert.notEqual(history.isError, true, textOf(history));
+    const lines = textOf(history).split('\n');
+    for (const [reason, sentence] of Object.values(ended)) {
+      assert.ok(lines.includes(`Voice call (details are not shown here).${sentence ? ` ${sentence}` : ''}`), `${reason}\n${textOf(history)}`);
+    }
+    assert.deepEqual(history.structuredContent.messages.map(message => message.endReason), ['spend_limit', 'balance', undefined]);
+    assert.doesNotMatch(JSON.stringify(history), /twilio_disconnect|5551234567/);
+  });
+});
+
 test('a workflow attached on send travels through get_agent_message into the save step', async () => {
   const artifact = { artifactVersion: 1, title: 'Faster campaign', contents: workflowContents() };
   const reply = `Here it is.\n\`\`\`wiro-workflow\n${JSON.stringify(artifact)}\n\`\`\``;

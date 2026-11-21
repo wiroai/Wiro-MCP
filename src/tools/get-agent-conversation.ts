@@ -17,6 +17,7 @@ import {
   isTerminalMessageStatus,
   isVoiceCallText,
   toAgentMessage,
+  voiceCallEndText,
   type AgentMessage,
 } from '../utils/agent-message.js';
 import { setupChangeSummaryLines } from '../utils/agent-setup.js';
@@ -147,7 +148,8 @@ function formatHistory(session: string, messages: HistoryMessage[], nextAction?:
   for (const message of messages) {
     lines.push(`### ${message.createdAt ?? 'unknown time'} · ${message.state} · \`${message.messageId}\``);
     if (message.kind === 'voice_call') {
-      lines.push('Voice call (details are not shown here).', '');
+      const ended = voiceCallEndText(message.endReason);
+      lines.push(`Voice call (details are not shown here).${ended ? ` ${ended}` : ''}`, '');
       continue;
     }
     if (message.userText) lines.push(...quotedBlock(USER_MESSAGE_LABEL, truncate(message.userText, 500)));
