@@ -42,7 +42,7 @@ Sign up at [wiro.ai](https://wiro.ai/) and create a project at [wiro.ai/panel/pr
   "mcpServers": {
     "wiro": {
       "command": "npx",
-      "args": ["-y", "@wiro-ai/wiro-mcp"],
+      "args": ["-y", "@wiro-ai/wiro-mcp@latest"],
       "env": {
         "WIRO_API_KEY": "your-api-key",
         "WIRO_API_SECRET": "your-api-secret"
@@ -55,7 +55,7 @@ Sign up at [wiro.ai](https://wiro.ai/) and create a project at [wiro.ai/panel/pr
 **Claude Code:**
 
 ```bash
-claude mcp add wiro -- npx -y @wiro-ai/wiro-mcp
+claude mcp add wiro -- npx -y @wiro-ai/wiro-mcp@latest
 ```
 
 Then set environment variables `WIRO_API_KEY` and `WIRO_API_SECRET`.
@@ -68,7 +68,7 @@ Then set environment variables `WIRO_API_KEY` and `WIRO_API_SECRET`.
     "wiro": {
       "type": "stdio",
       "command": "npx",
-      "args": ["-y", "@wiro-ai/wiro-mcp"],
+      "args": ["-y", "@wiro-ai/wiro-mcp@latest"],
       "env": {
         "WIRO_API_KEY": "your-api-key",
         "WIRO_API_SECRET": "your-api-secret"
@@ -85,7 +85,7 @@ Then set environment variables `WIRO_API_KEY` and `WIRO_API_SECRET`.
   "mcpServers": {
     "wiro": {
       "command": "npx",
-      "args": ["-y", "@wiro-ai/wiro-mcp"],
+      "args": ["-y", "@wiro-ai/wiro-mcp@latest"],
       "env": {
         "WIRO_API_KEY": "your-api-key",
         "WIRO_API_SECRET": "your-api-secret"
