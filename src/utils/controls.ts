@@ -682,13 +682,36 @@ export function ruleLine(rule: RuleRow, labels: CategoryLabels, kind: ControlsWo
   return `- Rule for ${targetText(view, kind)}: ${ruleSummary(rule, labels, { quote: true, maxModels: 10 })}${trailer}`;
 }
 
+/** The model that transcribes the voice notes of an agent that chats on Gemini. It is an LLM & Chat model too. */
+export const GEMINI_VOICE_MODEL = 'google/gemini-3-flash';
+
+/** What an agent's own rule gives its built-in voice. */
+export interface AgentVoice {
+  /** Whether the agent chats on Gemini, so that GEMINI_VOICE_MODEL transcribes its voice notes. */
+  gemini: boolean;
+  /** Its voice notes: transcribed, or not. */
+  notes: Access;
+  /** Whether the rule's entry for GEMINI_VOICE_MODEL decides the voice notes (an agent that chats on Gemini). */
+  notesByName: boolean;
+  /** Its voice replies: spoken, or sent as text. */
+  replies: Access;
+}
+
 /**
- * Whether a rule blocks an agent's built-in voice. Its voice models count as Audio & Speech, so the rule's Audio &
- * Speech entry decides them, else what it gives every other model. Allowing LLM & Chat does not open them.
+ * What an agent's own rule gives its built-in voice; null for no rule. Its voice models count as Audio & Speech, so the
+ * rule's Audio & Speech entry decides them, else what it gives every other model, and allowing LLM & Chat does not
+ * open them. An agent that chats on Gemini has its voice notes transcribed by GEMINI_VOICE_MODEL, which has to pass
+ * the rule both as an Audio & Speech model and as the LLM & Chat model it is: a rule entry that names it decides
+ * both, else Audio & Speech and LLM & Chat must both let it run.
  */
-export function blocksVoice(rule: Pick<RuleRow, 'access' | 'categories'>): boolean {
-  const audio = rule.categories.audio;
-  return audio === 'block' || (audio === undefined && rule.access === 'block');
+export function agentVoice(rule: Pick<RuleRow, 'access' | 'categories' | 'models'> | null, chatModel: string | undefined): AgentVoice {
+  const gemini = chatModel?.trim().toLowerCase().startsWith('google/') === true;
+  if (!rule) return { gemini, notes: 'allow', notesByName: false, replies: 'allow' };
+  const audio = rule.categories.audio ?? rule.access;
+  const named = gemini ? rule.models.find(entry => entry.model?.toLowerCase() === GEMINI_VOICE_MODEL) : undefined;
+  if (named) return { gemini, notes: named.access, notesByName: true, replies: audio };
+  const llm = rule.categories.llm ?? rule.access;
+  return { gemini, notes: audio === 'block' || (gemini && llm === 'block') ? 'block' : 'allow', notesByName: false, replies: audio };
 }
 
 // ------------------------------------------------------------------ checks

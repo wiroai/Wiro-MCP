@@ -1694,6 +1694,55 @@ test('manage_model_access warns when an agent\'s rule newly blocks its built-in 
   // A rule that already blocked the voice says nothing new about it.
   const blocking = ruleRow({ guid: 'r-agent', scope: 'agent', target: AGENT, targetlabel: 'Sales Bot', access: 'block', categories: [category('image', 'allow')] });
   assert.equal((await run({ action: 'update', scope: 'agent', agent: 'Sales Bot', categories: [{ category: 'video', access: 'allow' }] }, { existing: blocking })).some(text => /Audio & Speech/.test(text)), false);
+
+  // An agent that chats on Gemini: google/gemini-3-flash transcribes its voice notes, as an Audio & Speech model and
+  // as the LLM & Chat model it is, so a rule entry that names it decides them, else both categories must let it run.
+  const notesByName = 'The agent chats on Gemini, so `google/gemini-3-flash` transcribes its voice notes, and this rule blocks that model by name: voice notes are not transcribed. Allow that model to keep them.';
+  const notesByRule = 'The agent chats on Gemini, so `google/gemini-3-flash` transcribes its voice notes, and this rule blocks that model as an Audio & Speech or an LLM & Chat model: voice notes are not transcribed. Allow that model by name to keep them.';
+  const voiceOf = warnings => warnings.filter(text => /voice/.test(text));
+  const argon = { ref: 'google/gemini-4-argon', model: 'google/gemini-4-argon', blocked: false };
+  const terra = { ref: 'openai/gpt-5.6-terra', model: 'openai/gpt-5-6-terra', blocked: false };
+  const withArgon = { ...ids, 'google/gemini-4-argon': { id: '702', model: 'google/gemini-4-argon' } };
+  const runIds = async (args, options, extraIds) => {
+    const fake = fakeClient({
+      '/ModelAccess/List': ruleList(options.existing ? [options.existing] : []),
+      '/UserAgent/MyAgents': AGENTS,
+      '/ModelAccess/Preview': body => rulePreview(options.existing ?? null, extraIds, { agentchatmodel: options.chat })(body),
+    });
+    let warnings;
+    await withClient(fake, async client => {
+      const result = await client.callTool({ name: 'manage_model_access', arguments: args });
+      assert.equal(result.structuredContent.outcome, 'preview', textOf(result));
+      warnings = result.structuredContent.warnings;
+    });
+    return voiceOf(warnings);
+  };
+  const agentArgs = fields => ({ scope: 'agent', agent: 'Sales Bot', ...fields });
+  // Blocked by name, with Audio & Speech still allowed: only the voice notes stop. An agent on another provider keeps its voice.
+  const blockFlash = agentArgs({ action: 'update', models: [{ model: 'google/gemini-3-flash', access: 'block' }] });
+  assert.deepEqual(await runIds(blockFlash, { chat: argon }, withArgon), [notesByName]);
+  assert.deepEqual(await runIds(blockFlash, { chat: terra }, withArgon), []);
+  // Blocked by name with Audio & Speech blocked too: the replies stop by the category, the notes by the name.
+  assert.deepEqual(await runIds(agentArgs({ action: 'update', categories: [{ category: 'audio', access: 'block' }], models: [{ model: 'google/gemini-3-flash', access: 'block' }] }), { chat: argon }, withArgon), [repliesOnly, notesByName]);
+  // Audio & Speech blocked on a rule that lets LLM & Chat run: allowing Audio & Speech brings both back.
+  assert.deepEqual(await runIds(agentArgs({ action: 'update', categories: [{ category: 'audio', access: 'block' }] }), { chat: argon }, withArgon), [general]);
+  // Only the chat model by name: allowing Audio & Speech would bring back the replies, not the notes.
+  const onlyArgon = agentArgs({ action: 'replace', everything_else: 'block', models: [{ model: 'google/gemini-4-argon', access: 'allow' }] });
+  assert.deepEqual(await runIds(onlyArgon, { chat: argon }, withArgon), [repliesOnly, notesByRule]);
+  // Audio & Speech allowed is not enough while LLM & Chat is blocked, by the category or by everything else.
+  assert.deepEqual(await runIds({ ...onlyArgon, categories: [{ category: 'audio', access: 'allow' }] }, { chat: argon }, withArgon), [notesByRule]);
+  assert.deepEqual(await runIds(agentArgs({ action: 'update', categories: [{ category: 'llm', access: 'block' }], models: [{ model: 'google/gemini-4-argon', access: 'allow' }] }), { chat: argon }, withArgon), [notesByRule]);
+  // Both categories allowed keep the voice.
+  assert.deepEqual(await runIds({ ...onlyArgon, categories: [{ category: 'audio', access: 'allow' }, { category: 'llm', access: 'allow' }] }, { chat: argon }, withArgon), []);
+  // A rule whose voice notes ran only on the model's own allow entry stops them once that entry goes; its replies were already stopped.
+  const flashAllowed = ruleRow({
+    guid: 'r-agent', scope: 'agent', target: AGENT, targetlabel: 'Sales Bot', access: 'block',
+    models: [{ id: '701', model: 'google/gemini-3-flash', access: 'allow' }, { id: '702', model: 'google/gemini-4-argon', access: 'allow' }],
+  });
+  assert.deepEqual(await runIds(onlyArgon, { chat: argon, existing: flashAllowed }, withArgon), [notesByRule]);
+  // A rule that already blocked the model by name says nothing new about the voice notes.
+  const flashBlocked = ruleRow({ guid: 'r-agent', scope: 'agent', target: AGENT, targetlabel: 'Sales Bot', models: [{ id: '701', model: 'google/gemini-3-flash', access: 'block' }] });
+  assert.deepEqual(await runIds(agentArgs({ action: 'update', categories: [{ category: 'video', access: 'block' }] }), { chat: argon, existing: flashBlocked }, withArgon), []);
   // Other scopes have no built-in voice.
   assert.equal((await run({ action: 'replace', scope: 'surface', surface: 'mcp', everything_else: 'block', categories: [{ category: 'image', access: 'allow' }] })).some(text => /Audio & Speech/.test(text)), false);
 
@@ -1725,6 +1774,9 @@ test('the controls playbook and texts are true to Studio\'s chat model, an agent
     // An agent's rule covers its built-in voice.
     /the chat model it answers with and its built-in voice: transcribing the voice notes it gets and speaking its voice replies, which count as Audio & Speech\./,
     /voice notes are not transcribed and voice replies go out as text\. Allowing LLM & Chat does not open it\./,
+    // A Gemini agent's voice notes go through google/gemini-3-flash, which a rule entry decides by name.
+    /An agent that chats on Gemini has its voice notes transcribed by `google\/gemini-3-flash`, an LLM & Chat model: a rule that allows that model by name keeps them, even with Audio & Speech blocked, and one that blocks it by name stops them, even with Audio & Speech allowed\. A rule that does not name it keeps them only while it lets both Audio & Speech and LLM & Chat run\./,
+    /If it warns about the agent's voice, say what that does to it, or allow what the warning names to keep it\./,
     // A realtime session or call ends at the limit, with the reason.
     /A realtime session or a voice call ends after the turn that uses a limit up, and says why\./,
     /`task_session_stopped` event with reason `spend_limit`, code 93/,
@@ -1738,6 +1790,8 @@ test('the controls playbook and texts are true to Studio\'s chat model, an agent
     /who changed each limit and rule last/,
   ]) assert.match(text, pattern);
   assert.doesNotMatch(text, /The cost of their chat counts toward the spend limits too\.|Their own chat is not a Model Access matter/);
+  // Allowing Audio & Speech does not bring back a Gemini agent's voice notes while LLM & Chat is blocked.
+  assert.doesNotMatch(text, /allow Audio & Speech too to keep it/);
   assert.ok(text.split('\n').includes('Find who changed a limit or a rule:'));
   for (const topic of ['studio', 'workflow-agent']) {
     assert.match(PLAYBOOKS[topic], /a rule blocks (Studio's|the agent's) chat model, the default included \(error code 92\)\. That refusal lists the chat models the rules allow: pass one as `model` only when the user picks it\./, topic);

@@ -12,8 +12,8 @@ import {
   type ApiEnvelope,
 } from '../utils/api.js';
 import {
+  agentVoice,
   blocksSomething,
-  blocksVoice,
   CATEGORY_KEYS,
   changeFailure,
   checkTargetArguments,
@@ -22,6 +22,7 @@ import {
   CONTROL_SCOPES,
   cannotChangeText,
   entryName,
+  GEMINI_VOICE_MODEL,
   isCategory,
   isThisConnection,
   MAX_RULE_MODELS,
@@ -67,20 +68,32 @@ const ASK_REASON = 'Ask the user to confirm this change first.';
 const APPLIES_NOTE = 'It applies to runs that start from now on; work already running is not stopped.';
 const AGENT_NOTE = 'The agent follows a change to its own rule within about a minute.';
 
-// An agent that chats on Gemini has its voice notes transcribed by this model, so a rule can allow them by name.
-const GEMINI_VOICE_MODEL = 'google/gemini-3-flash';
+const VOICE_STOPS = 'This rule also blocks Audio & Speech, which covers the agent\'s built-in voice: voice notes are not '
+  + 'transcribed and voice replies go out as text. Allow Audio & Speech to keep them.';
+const VOICE_REPLIES_STOP = 'This rule also blocks Audio & Speech, which covers the agent\'s voice replies, so they go out '
+  + 'as text. Allow Audio & Speech to keep them.';
+
+/** What stops the voice notes of an agent that chats on Gemini: the rule's entry for their model, or its categories. */
+function geminiNotesWarning(byName: boolean): string {
+  const opener = `The agent chats on Gemini, so ${quotedSpan(GEMINI_VOICE_MODEL)} transcribes its voice notes, and this rule blocks that model`;
+  return byName
+    ? `${opener} by name: voice notes are not transcribed. Allow that model to keep them.`
+    : `${opener} as an Audio & Speech or an LLM & Chat model: voice notes are not transcribed. Allow that model by name to keep them.`;
+}
 
 /**
- * What a rule that newly blocks Audio & Speech does to an agent's built-in voice. Voice replies always stop; voice
- * notes stay open only for an agent that chats on Gemini when the rule allows their model by name.
+ * The warnings for what a change newly stops of an agent's built-in voice: its voice replies, its voice notes, or
+ * both. For an agent that chats on Gemini the rule decides its voice notes apart from its voice replies (agentVoice).
  */
-function voiceWarning(rule: RuleRow, chatModel: string | undefined): string {
-  const notesOpen = chatModel?.toLowerCase().startsWith('google/') === true
-    && rule.models.some(entry => entry.access === 'allow' && entry.model?.toLowerCase() === GEMINI_VOICE_MODEL);
-  return notesOpen
-    ? 'This rule also blocks Audio & Speech, which covers the agent\'s voice replies, so they go out as text. Allow Audio & Speech to keep them.'
-    : 'This rule also blocks Audio & Speech, which covers the agent\'s built-in voice: voice notes are not transcribed and '
-      + 'voice replies go out as text. Allow Audio & Speech to keep them.';
+function voiceWarnings(before: RuleRow | null, after: RuleRow, chatModel: string | undefined): string[] {
+  const was = agentVoice(before, chatModel);
+  const now = agentVoice(after, chatModel);
+  const notesStop = now.notes === 'block' && was.notes === 'allow';
+  const repliesStop = now.replies === 'block' && was.replies === 'allow';
+  if (!now.gemini) return notesStop || repliesStop ? [VOICE_STOPS] : [];
+  // One warning when allowing Audio & Speech would bring back both.
+  if (notesStop && repliesStop && !now.notesByName && (after.categories.llm ?? after.access) === 'allow') return [VOICE_STOPS];
+  return [...(repliesStop ? [VOICE_REPLIES_STOP] : []), ...(notesStop ? [geminiNotesWarning(now.notesByName)] : [])];
 }
 
 type EntryAccess = Access | 'unset';
@@ -636,9 +649,7 @@ async function changeRule(client: WiroClient, args: Args, list: RuleList, signal
     warnings.push(`This rule also blocks ${quotedSpan(preview.chatModel.name)}, the chat model the agent answers with, so the agent `
       + 'would stop answering. Allow that model too, or allow LLM & Chat.');
   }
-  if (target.scope === 'agent' && blocksVoice(after) && !(before && blocksVoice(before))) {
-    warnings.push(voiceWarning(after, preview.chatModel?.name));
-  }
+  if (target.scope === 'agent') warnings.push(...voiceWarnings(before, after, preview.chatModel?.name));
   if (!after.models.some(entry => entry.access === 'allow') && !Object.values(after.categories).includes('allow') && after.access === 'block') {
     warnings.push(`This rule blocks every model for ${covers()}.`);
   }

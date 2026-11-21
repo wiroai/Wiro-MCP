@@ -754,7 +754,7 @@ To restrict one API key, give it its own limit or rule: that follows the key on 
 - Each scope and target has one rule. \`update\` changes only the entries you name and keeps the rest, and access unset takes an entry out. \`replace\` writes the whole rule again. \`remove\` deletes it.
 - A rule that would block nothing is refused: remove the rule instead.
 - A model that is no longer on Wiro stays in a rule until it is taken out.
-- An agent whose own rule blocks its chat model stops answering until the model is allowed or another one is chosen. One of its scheduled tasks whose model that rule blocks pauses, without failing, until the rule allows it. An agent rule that blocks Audio & Speech, or that blocks every other model without allowing Audio & Speech, stops the agent's built-in voice: voice notes are not transcribed and voice replies go out as text. Allowing LLM & Chat does not open it.
+- An agent whose own rule blocks its chat model stops answering until the model is allowed or another one is chosen. One of its scheduled tasks whose model that rule blocks pauses, without failing, until the rule allows it. An agent rule that blocks Audio & Speech, or that blocks every other model without allowing Audio & Speech, stops the agent's built-in voice: voice notes are not transcribed and voice replies go out as text. Allowing LLM & Chat does not open it. An agent that chats on Gemini has its voice notes transcribed by \`google/gemini-3-flash\`, an LLM & Chat model: a rule that allows that model by name keeps them, even with Audio & Speech blocked, and one that blocks it by name stops them, even with Audio & Speech allowed. A rule that does not name it keeps them only while it lets both Audio & Speech and LLM & Chat run.
 
 ## How limits and rules combine
 
@@ -801,7 +801,7 @@ Stop a team member from using video models:
 Let one agent use only one model:
 1. Find the agent with \`list_my_agents\`, or use its name.
 2. \`manage_model_access\` with \`action\` replace, \`scope\` agent, \`agent\`, \`everything_else\` block and \`models\` \`[{ "model": "owner/slug", "access": "allow" }]\`.
-3. The rule also covers the chat model the agent answers with and its built-in voice. If the summary warns that it blocks that model, add the chat model as a second allowed model, or the agent stops answering. If it warns that it blocks Audio & Speech, say what that does to the agent's voice, or allow Audio & Speech too to keep it, which also lets the agent run audio models. If it warns that a wider rule blocks the model, say that the model stays refused until that rule allows it too.
+3. The rule also covers the chat model the agent answers with and its built-in voice. If the summary warns that it blocks that model, add the chat model as a second allowed model, or the agent stops answering. If it warns about the agent's voice, say what that does to it, or allow what the warning names to keep it. Allowing Audio & Speech also lets the agent run audio models. If it warns that a wider rule blocks the model, say that the model stays refused until that rule allows it too.
 4. Show the summary, wait for a yes, then confirm.
 5. Tell the user which model the agent may use now, and that it follows the rule within about a minute.
 
