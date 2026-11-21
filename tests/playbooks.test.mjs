@@ -43,6 +43,8 @@ const NON_TOOL_IDENTIFIERS = new Set([
   'past_due',
   // Arguments of the controls tools.
   'amount_usd', 'alert_percent', 'everything_else', 'limit_guid',
+  // The event a realtime session gets when a spend limit ends it, and its reason.
+  'task_session_stopped', 'spend_limit',
 ]);
 
 const PROMPT_ARGUMENTS = {

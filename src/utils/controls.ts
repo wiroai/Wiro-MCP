@@ -855,8 +855,9 @@ export function checkTargetArguments(args: TargetArgs): void {
 const HOUSE_AGENTS = /^(wiro[ -]?)?(studio|workflow[ -]?agent)$/i;
 
 const HOUSE_AGENT_TEXT = 'Studio and the Workflow Agent are not agents of this workspace, so no limit or rule names them. '
-  + 'The models they run for a person are checked like that person\'s own runs, against the controls of the whole '
-  + 'wallet, the member, the API key the message came with and the surface it came in on. Use one of those scopes instead.';
+  + 'Their chat model and the models they run for a person are checked like that person\'s own runs, against the '
+  + 'controls of the whole wallet, the member, the API key the message came with and the surface it came in on. Use one '
+  + 'of those scopes instead.';
 
 interface ProjectChoice {
   id: string;

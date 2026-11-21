@@ -339,7 +339,9 @@ rules allow or block models by category or one by one. Each covers the whole wal
 team member, one API key, one way in (the dashboard, the API, the hosted MCP server, the LLM
 gateway, the browser extensions or agents) or one agent, and every limit and rule that
 applies to a run must allow it. Work they refuse never runs and is never charged: error code
-93 for a spend limit, 92 for a Model Access rule. A local install of this server sends its
+93 for a spend limit, 92 for a Model Access rule. Studio's and the Workflow Agent's chat model
+follows your rules too, like the models Studio runs, and an agent's own rule also covers the
+chat model it answers with and its built-in voice. A local install of this server sends its
 calls with your API key, so it counts as the API.
 
 | Tool | Description |

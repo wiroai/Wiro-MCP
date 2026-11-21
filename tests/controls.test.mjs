@@ -1714,3 +1714,43 @@ test('manage_spend_limit says an agent pauses at its next step once its own limi
     assert.deepEqual(saved.structuredContent.notes, ['It applies from now on. Once it is used up, the agent pauses at its next step, even in the middle of a reply, a voice call it is on ends after the current turn, and its scheduled tasks pause, until the limit resets or is raised.']);
   });
 });
+
+test('the controls playbook and texts are true to Studio\'s chat model, an agent\'s voice and running work', () => {
+  const text = PLAYBOOKS.controls;
+  for (const pattern of [
+    // Studio's and the Workflow Agent's chat model follows the caller's rules.
+    /Their chat model and the models they run for a person are checked like that person's own runs/,
+    /a rule that blocks LLM & Chat blocks it unless it allows that model by name, and a rule that lets only some models run blocks it unless it allows LLM & Chat or that model\./,
+    /the default one included when the message names none, is refused with error code 92 before anything is sent, and the refusal lists the chat models the rules allow\./,
+    // An agent's rule covers its built-in voice.
+    /the chat model it answers with and its built-in voice: transcribing the voice notes it gets and speaking its voice replies, which count as Audio & Speech\./,
+    /voice notes are not transcribed and voice replies go out as text\. Allowing LLM & Chat does not open it\./,
+    // A realtime session or call ends at the limit, with the reason.
+    /A realtime session or a voice call ends after the turn that uses a limit up, and says why\./,
+    /`task_session_stopped` event with reason `spend_limit`, code 93/,
+    /the reason is `balance` and the code 97/,
+    // An agent pauses mid-reply, and its scheduled tasks pause instead of failing.
+    /pauses at its next step, even in the middle of a reply/,
+    /Its scheduled tasks pause too, without failing\./,
+    // Automatic renewals count on the wallet and the buyer, never on a way in.
+    /toward the limits of the member who started the plan, but toward no way in, API key or agent/,
+    // Who changed it last.
+    /who changed each limit and rule last/,
+  ]) assert.match(text, pattern);
+  assert.doesNotMatch(text, /The cost of their chat counts toward the spend limits too\.|Their own chat is not a Model Access matter/);
+  assert.ok(text.split('\n').includes('Find who changed a limit or a rule:'));
+  for (const topic of ['studio', 'workflow-agent']) {
+    assert.match(PLAYBOOKS[topic], /a rule blocks (Studio's|the agent's) chat model, the default included \(error code 92\)\. That refusal lists the chat models the rules allow: pass one as `model` only when the user picks it\./, topic);
+  }
+  assert.match(PLAYBOOKS.agents, /`get_controls` shows the agent's own spend limits and Model Access rule\./);
+  for (const label of Object.keys(PLAYBOOKS)) assert.doesNotMatch(PLAYBOOKS[label], /\bproxy\b|OpenClaw/i, label);
+});
+
+test('Studio and the Workflow Agent are named as covered by the caller\'s own rules, chat model included', async () => {
+  const fake = fakeClient({ '/SpendLimit/List': limitList([]), '/UserAgent/MyAgents': AGENTS });
+  await withClient(fake, async client => {
+    const result = await client.callTool({ name: 'manage_spend_limit', arguments: { action: 'set', scope: 'agent', agent: 'Workflow Agent', amount_usd: 25 } });
+    assert.equal(result.isError, true);
+    assert.match(textOf(result), /Their chat model and the models they run for a person are checked like that person's own runs/);
+  });
+});
