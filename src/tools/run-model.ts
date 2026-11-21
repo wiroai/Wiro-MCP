@@ -8,6 +8,8 @@ import {
 } from '../client.js';
 import type { Task } from '../types.js';
 import {
+  controlsErrorItems,
+  errorItemsMeta,
   errorText,
   isOutcomeUnknown,
   MODEL_ACCESS_CODE,
@@ -15,6 +17,7 @@ import {
   SPEND_LIMIT_CODE,
   spendLimitNote,
   type RefusalNoteOptions,
+  type WiroErrorItem,
 } from '../utils/api.js';
 import {
   formatTaskPending,
@@ -142,8 +145,9 @@ function settleBy(
   });
 }
 
-function errorResult(text: string): ToolResult {
-  return { content: [{ type: 'text', text: `## Error\n\n${text}` }], isError: true };
+/** A tool error; items, Wiro's own error items of a refusal by the workspace's controls, go in its _meta. */
+function errorResult(text: string, items?: WiroErrorItem[]): ToolResult {
+  return { content: [{ type: 'text', text: `## Error\n\n${text}` }], isError: true, ...(items ? { _meta: errorItemsMeta(items) } : {}) };
 }
 
 /** What a call answers when Wiro created no task it can follow. */
@@ -172,7 +176,7 @@ function runFailure(settled: RunSubmission, model: string, project: string, note
     const note = codes.includes(String(MODEL_ACCESS_CODE))
       ? ` ${modelAccessNote(notes)}`
       : codes.includes(String(SPEND_LIMIT_CODE)) ? ` ${spendLimitNote(errors, notes)}` : '';
-    return errorResult(`Failed to run model: ${errors}${note}`);
+    return errorResult(`Failed to run model: ${errors}${note}`, controlsErrorItems(runResult.errors));
   }
   // Wiro created the task, so it runs and can be charged; only this call
   // cannot follow it.

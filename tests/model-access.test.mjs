@@ -242,6 +242,90 @@ test('an invalid model does not offer the default chat model when a rule blocks 
   });
 });
 
+// A client tells a refusal by the workspace's controls by its code: the tool error carries Wiro's own error items as
+// _meta['ai.wiro/errors'], each { code, message } with Wiro's sentence and none of this server's note. The text stays as it was.
+const LIMIT_TEXT = "This API key's monthly spend limit is reached ($50.00 of $50.00). It resets on December 1, 2026 at 00:00 UTC.";
+const AGENT_LIMIT_TEXT = "This agent's monthly spend limit is reached ($25.00 of $25.00). It resets on December 1, 2026 at 00:00 UTC.";
+const errorItemsOf = result => result._meta?.['ai.wiro/errors'];
+
+test('run_model hands the client Wiro\'s own error items with a 92 or 93 refusal', async () => {
+  const originalFetch = globalThis.fetch;
+  const answer = { current: null };
+  globalThis.fetch = async url => {
+    const path = new URL(String(url)).pathname;
+    if (path === '/v1/Run/Release') return new Response(JSON.stringify({ result: true, errors: [], released: false }), { status: 200 });
+    if (path.startsWith('/v1/Run/')) return new Response(JSON.stringify(answer.current), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    throw new Error(`unexpected request to ${path}`);
+  };
+  try {
+    const run = async body => {
+      answer.current = body;
+      const server = new McpServer({ name: 'test-server', version: '1.0.0' });
+      registerRunModel(server, new WiroClient(`error-items-key-${Math.random()}`, undefined, 'https://api.example/v1'), { maxWaitMs: 600, retryAfterMs: 250, unansweredWindowMs: 5_000 }, undefined, { controls: true });
+      const client = new Client({ name: 'test-client', version: '1.0.0' });
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+      try {
+        await client.listTools();
+        return await client.callTool({ name: 'run_model', arguments: { model: 'openai/gpt-6-2-astra', params: { prompt: 'hello' }, wait: false } });
+      } finally {
+        await client.close();
+        await server.close();
+      }
+    };
+    for (const code of [92, '92']) {
+      const blocked = await run(refusal(RULE_TEXT, code));
+      assert.equal(blocked.isError, true);
+      assert.deepEqual(errorItemsOf(blocked), [{ code: 92, message: RULE_TEXT }]);
+      assert.equal(blocked.structuredContent, undefined);
+      assert.equal(textOf(blocked), `## Error\n\nFailed to run model: ${RULE_TEXT} ${MODEL_ACCESS_NOTE}`);
+    }
+    const limited = await run(refusal(LIMIT_TEXT, 93));
+    assert.deepEqual(errorItemsOf(limited), [{ code: 93, message: LIMIT_TEXT }]);
+    assert.equal(limited.structuredContent, undefined);
+    assert.equal(textOf(limited), `## Error\n\nFailed to run model: ${LIMIT_TEXT} ${spendLimitNote(LIMIT_TEXT, { controls: true })}`);
+    // Only the items that have a code go along, each with Wiro's sentence trimmed.
+    const mixed = await run({ result: false, errors: [{ message: 'Something else.' }, { code: 92, message: ` ${RULE_TEXT} ` }] });
+    assert.deepEqual(errorItemsOf(mixed), [{ code: 92, message: RULE_TEXT }]);
+    // Any other refusal carries none.
+    const balance = await run(refusal('Insufficient wallet balance.', 97));
+    assert.equal(balance.isError, true);
+    assert.equal(balance._meta, undefined);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('send_agent_message hands the client Wiro\'s own error items with a 92 or 93 refusal', async () => {
+  const cases = [
+    // Studio's chat model is blocked: the text lists the chat models the rules allow, and the items stay Wiro's own.
+    ['studio', { '/Studio/Message/Send': refusal(CHAT_TEXT), '/Studio/Status': houseStatus() }, [{ code: 92, message: CHAT_TEXT }]],
+    ['workflow-agent', { '/StudioWorkflow/Message/Send': refusal(LIMIT_TEXT, 93) }, [{ code: 93, message: LIMIT_TEXT }]],
+    // A deployed agent's own rule and its own limit.
+    ['ua-1', { '/UserAgent/Message/Send': refusal(AGENT_TEXT) }, [{ code: 92, message: AGENT_TEXT }]],
+    ['ua-1', { '/UserAgent/Message/Send': refusal(AGENT_LIMIT_TEXT, '93') }, [{ code: 93, message: AGENT_LIMIT_TEXT }]],
+  ];
+  for (const [agent, routes, items] of cases) {
+    const fake = fakeClient(routes);
+    await withClient(fake, async client => {
+      const result = await client.callTool({ name: 'send_agent_message', arguments: { agent, message: 'make a clip' } });
+      assert.equal(result.isError, true);
+      assert.deepEqual(errorItemsOf(result), items, textOf(result));
+      assert.equal(result.structuredContent, undefined);
+      assert.ok(textOf(result).startsWith(`## Error\n\n${items[0].message}\n\n`), textOf(result));
+    });
+  }
+  // Any other refusal carries none.
+  const balance = fakeClient({ '/Studio/Message/Send': { result: false, errors: [{ code: 97, message: 'Insufficient wallet balance.' }], walletUsd: 2, minTopup: 10 } });
+  await withClient(balance, async client => {
+    const result = await client.callTool({ name: 'send_agent_message', arguments: { agent: 'studio', message: 'make a clip' } });
+    assert.equal(result.isError, true);
+    assert.match(textOf(result), /needs at least \$10\.00/);
+    assert.equal(result._meta, undefined);
+  });
+});
+
 const AGENT_GUID = 'ua-1';
 const AGENT_DETAIL = {
   result: true,

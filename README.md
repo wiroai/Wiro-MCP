@@ -360,6 +360,12 @@ its summary showed: if the limit or rule changed in between, or the call asks fo
 else, nothing is saved and you get a new summary. A Model Access summary also warns when a
 wider rule still blocks a model the change allows.
 
+When a spend limit or a Model Access rule refuses a `run_model` run or a `send_agent_message`
+message, the tool error also carries Wiro's own error items in `_meta["ai.wiro/errors"]`,
+such as `[{ "code": 93, "message": "..." }]` (92 for Model Access), with Wiro's sentence and
+none of the server's note for the assistant. An app can tell the refusal by its code and show
+people Wiro's sentence.
+
 ### Account and guides
 
 | Tool | Description |

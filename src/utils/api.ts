@@ -182,6 +182,45 @@ export function modelAccessNote(options: RefusalNoteOptions = {}): string {
     + modelAccessAdvice(options);
 }
 
+/** The _meta key under which a tool error carries Wiro's own error items when the workspace's controls refused the work. */
+export const ERRORS_META_KEY = 'ai.wiro/errors';
+
+/** One of Wiro's error items, as a tool error's _meta carries it. */
+export interface WiroErrorItem {
+  code: number;
+  message: string;
+}
+
+/**
+ * Wiro's own error items when it refused the work by a Model Access rule (92) or a spend limit (93): each item that
+ * has a code, as { code, message }, the message being Wiro's sentence without this server's note. A client reads them
+ * from the tool error's _meta, so it can tell such a refusal by its code rather than by its text. Undefined for any
+ * other answer.
+ */
+export function controlsErrorItems(errors: unknown): WiroErrorItem[] | undefined {
+  const items = (Array.isArray(errors) ? errors : []).filter(isPlainObject).flatMap(item => {
+    const code = toNumber(item.code);
+    return code === null ? [] : [{ code, message: typeof item.message === 'string' ? item.message.trim() : '' }];
+  });
+  return items.some(item => item.code === MODEL_ACCESS_CODE || item.code === SPEND_LIMIT_CODE) ? items : undefined;
+}
+
+/** The _meta of a tool error that carries Wiro's own error items. */
+export function errorItemsMeta(items: WiroErrorItem[]): { [ERRORS_META_KEY]: WiroErrorItem[] } {
+  return { [ERRORS_META_KEY]: items };
+}
+
+/** A refusal by the workspace's controls (92 or 93), whose tool error carries Wiro's own error items in _meta. */
+export class ControlsRefusalError extends Error {
+  readonly items: WiroErrorItem[];
+
+  constructor(message: string, items: WiroErrorItem[]) {
+    super(message);
+    this.name = 'ControlsRefusalError';
+    this.items = items;
+  }
+}
+
 export function hasErrorCode(error: unknown, code: number | string): boolean {
   return error instanceof ApiResultError
     && error.codes.some(candidate => String(candidate) === String(code));
@@ -216,6 +255,7 @@ export function errorResult(error: unknown) {
   return {
     content: [{ type: 'text' as const, text: `## Error\n\n${errorText(error)}` }],
     isError: true,
+    ...(error instanceof ControlsRefusalError ? { _meta: errorItemsMeta(error.items) } : {}),
   };
 }
 

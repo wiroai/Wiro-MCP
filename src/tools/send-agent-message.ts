@@ -1,7 +1,14 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { WiroClient } from '../client.js';
-import { asString, errorResult, isPlainObject, type RefusalNoteOptions } from '../utils/api.js';
+import {
+  asString,
+  ControlsRefusalError,
+  controlsErrorItems,
+  errorResult,
+  isPlainObject,
+  type RefusalNoteOptions,
+} from '../utils/api.js';
 import { setupResultActed, toSetupResult } from '../utils/agent-setup.js';
 import { messageKind, SESSION_NAME_RULE } from '../utils/agent-message.js';
 import {
@@ -170,7 +177,10 @@ export function registerSendAgentMessage(server: McpServer, client: WiroClient, 
         }
 
         if (response?.result !== true) {
-          throw new Error(await explainSendRefusal(client, target, response ?? {}, resolved.session, extra.signal, notes));
+          const refusal = await explainSendRefusal(client, target, response ?? {}, resolved.session, extra.signal, notes);
+          // A refusal by the workspace's controls (92 or 93) also hands the client Wiro's own error items.
+          const items = controlsErrorItems(response?.errors);
+          throw items ? new ControlsRefusalError(refusal, items) : new Error(refusal);
         }
         const messageId = asString(response.messageguid);
         if (!messageId) throw sendWithoutIdError(target, resolved.session);
