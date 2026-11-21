@@ -170,6 +170,57 @@ function toCaller(value: unknown): Caller | undefined {
   };
 }
 
+// ------------------------------------------------------------- changed by
+
+/** Who changed a limit or a rule last, as Wiro names them. */
+export interface ChangedBy {
+  useruuid: string;
+  /** Their name or e-mail, or "the organization owner"; absent for someone who is no longer in the team. */
+  name?: string;
+}
+
+/** Wiro's label for an organization's owner who is not a member of the team. */
+const ORGANIZATION_OWNER = /^the organization owner$/i;
+
+export const changedBySchema = z.object({
+  useruuid: z.string(),
+  name: z.string().optional().describe('Their name or e-mail, or "the organization owner"; absent for someone who is no longer in the team.'),
+}).describe('Who changed it last. Absent when Wiro did not say, or when a change Wiro made itself was the last.');
+
+/** A row's updatedby: { useruuid, label } of a person, or null for a change Wiro made itself. */
+function toChangedBy(value: unknown): ChangedBy | undefined {
+  if (!isPlainObject(value)) return undefined;
+  const useruuid = textValue(value.useruuid, 64);
+  if (!useruuid || !UUID.test(useruuid)) return undefined;
+  const name = textValue(value.label);
+  return { useruuid, ...(name ? { name } : {}) };
+}
+
+/**
+ * "last changed by `Jane Doe` on November 18, 2026 at 14:02 UTC", or undefined when Wiro did not say who. A name
+ * people wrote stays in a code span; Wiro's own label for the organization's owner reads as words.
+ */
+export function changedByText(
+  row: { updatedBy?: ChangedBy; updatedAt?: number; createdAt?: number },
+  kind: ControlsWorkspace['kind'],
+  caller: Caller | undefined,
+): string | undefined {
+  const by = row.updatedBy;
+  if (!by) return undefined;
+  const name = by.name
+    ? ORGANIZATION_OWNER.test(by.name) ? 'the organization\'s owner' : quotedSpan(by.name)
+    : kind === 'team' ? `a former team member (user id ${quotedSpan(by.useruuid)})` : `user id ${quotedSpan(by.useruuid)}`;
+  const at = row.updatedAt ?? row.createdAt;
+  const self = isThisConnection('member', by.useruuid, caller) ? `, the person this connection acts as${at ? ',' : ''}` : '';
+  return `last changed by ${name}${self}${at ? ` on ${utcText(at)}` : ''}`;
+}
+
+/** The parenthesis a list line ends with: a guid and who changed the row last, each when known. */
+function lineTrailer(...parts: Array<string | undefined>): string {
+  const known = parts.filter((part): part is string => Boolean(part));
+  return known.length > 0 ? ` (${known.join('; ')})` : '';
+}
+
 /** Who may change controls, for a sentence after a refusal or in a read. */
 export function whoCanChange(kind: ControlsWorkspace['kind']): string {
   return kind === 'personal' ? 'the account owner' : 'a team admin or the organization\'s owner';
@@ -198,6 +249,7 @@ export interface LimitRow {
   resetsAt?: number;
   createdAt?: number;
   updatedAt?: number;
+  updatedBy?: ChangedBy;
 }
 
 /** A limit row of SpendLimit/List, /Preview or /Set, rebuilt from an allowlist. */
@@ -215,6 +267,7 @@ export function toLimitRow(row: Record<string, unknown>): LimitRow | null {
   const resetsAt = unixValue(row.resetsat);
   const createdAt = unixValue(row.createdat);
   const updatedAt = unixValue(row.updatedat);
+  const updatedBy = toChangedBy(row.updatedby);
   return {
     ...(guid ? { guid } : {}),
     scope,
@@ -229,6 +282,7 @@ export function toLimitRow(row: Record<string, unknown>): LimitRow | null {
     ...(resetsAt ? { resetsAt } : {}),
     ...(createdAt ? { createdAt } : {}),
     ...(updatedAt ? { updatedAt } : {}),
+    ...(updatedBy ? { updatedBy } : {}),
   };
 }
 
@@ -400,6 +454,7 @@ export const limitViewSchema = z.object({
   periodStart: z.string().optional(),
   resetsAt: z.string().optional(),
   updatedAt: z.number().int().optional().describe('When the limit last changed, in Unix seconds.'),
+  updatedBy: changedBySchema.optional(),
 });
 
 export type LimitView = z.infer<typeof limitViewSchema>;
@@ -424,6 +479,7 @@ export function limitView(row: LimitRow, caller: Caller | undefined): LimitView 
     ...(periodStart ? { periodStart } : {}),
     ...(resetsAt ? { resetsAt } : {}),
     ...(version ? { updatedAt: version } : {}),
+    ...(row.updatedBy ? { updatedBy: row.updatedBy } : {}),
   };
 }
 
@@ -440,8 +496,8 @@ export function spendingText(row: LimitRow): string {
 export function limitLine(row: LimitRow, kind: ControlsWorkspace['kind'], caller: Caller | undefined): string {
   const view = { scope: row.scope, target: row.target, targetName: row.targetName, thisConnection: isThisConnection(row.scope, row.target, caller) };
   const period = row.period === 'day' ? 'Daily' : 'Monthly';
-  const guid = row.guid ? ` (limit_guid ${quotedSpan(row.guid)})` : '';
-  return `- ${period} limit for ${targetText(view, kind)}: ${spendingText(row)}, ${alertText(row.alertPercent)}, ${resetText(row)}${guid}`;
+  const trailer = lineTrailer(row.guid ? `limit_guid ${quotedSpan(row.guid)}` : undefined, changedByText(row, kind, caller));
+  return `- ${period} limit for ${targetText(view, kind)}: ${spendingText(row)}, ${alertText(row.alertPercent)}, ${resetText(row)}${trailer}`;
 }
 
 // -------------------------------------------------------------------- rules
@@ -465,9 +521,10 @@ export interface RuleRow {
   models: RuleModelEntry[];
   createdAt?: number;
   updatedAt?: number;
+  updatedBy?: ChangedBy;
 }
 
-/** A rule row of ModelAccess/List, /Preview or /Set, rebuilt from an allowlist. */
+/** A rule row of ModelAccess/List, /Preview, /Set or /Check, rebuilt from an allowlist. */
 export function toRuleRow(row: Record<string, unknown>): RuleRow | null {
   const scope = row.scope;
   if (!isScope(scope)) return null;
@@ -490,6 +547,7 @@ export function toRuleRow(row: Record<string, unknown>): RuleRow | null {
   });
   const createdAt = unixValue(row.createdat);
   const updatedAt = unixValue(row.updatedat);
+  const updatedBy = toChangedBy(row.updatedby);
   return {
     ...(guid ? { guid } : {}),
     scope,
@@ -500,6 +558,7 @@ export function toRuleRow(row: Record<string, unknown>): RuleRow | null {
     models,
     ...(createdAt ? { createdAt } : {}),
     ...(updatedAt ? { updatedAt } : {}),
+    ...(updatedBy ? { updatedBy } : {}),
   };
 }
 
@@ -591,6 +650,7 @@ export const ruleViewSchema = z.object({
   })),
   summary: z.string().describe('The rule in plain words.'),
   updatedAt: z.number().int().optional().describe('When the rule last changed, in Unix seconds.'),
+  updatedBy: changedBySchema.optional(),
 });
 
 export type RuleView = z.infer<typeof ruleViewSchema>;
@@ -611,14 +671,15 @@ export function ruleView(rule: RuleRow, labels: CategoryLabels, caller: Caller |
     models: rule.models.map(entry => ({ id: entry.id, model: entry.model, ...(entry.title ? { title: entry.title } : {}), access: entry.access })),
     summary: ruleSummary(rule, labels),
     ...(version ? { updatedAt: version } : {}),
+    ...(rule.updatedBy ? { updatedBy: rule.updatedBy } : {}),
   };
 }
 
 /** One line of a rule list: at most ten models are named in the text. */
 export function ruleLine(rule: RuleRow, labels: CategoryLabels, kind: ControlsWorkspace['kind'], caller: Caller | undefined): string {
   const view = { scope: rule.scope, target: rule.target, targetName: rule.targetName, thisConnection: isThisConnection(rule.scope, rule.target, caller) };
-  const guid = rule.guid ? ` (rule_guid ${quotedSpan(rule.guid)})` : '';
-  return `- Rule for ${targetText(view, kind)}: ${ruleSummary(rule, labels, { quote: true, maxModels: 10 })}${guid}`;
+  const trailer = lineTrailer(rule.guid ? `rule_guid ${quotedSpan(rule.guid)}` : undefined, changedByText(rule, kind, caller));
+  return `- Rule for ${targetText(view, kind)}: ${ruleSummary(rule, labels, { quote: true, maxModels: 10 })}${trailer}`;
 }
 
 // ------------------------------------------------------------------ checks

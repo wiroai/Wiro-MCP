@@ -11,7 +11,10 @@ import {
   type ApiEnvelope,
 } from '../utils/api.js';
 import {
+  capitalized,
   CATEGORY_KEYS,
+  changedBySchema,
+  changedByText,
   CONTROL_SCOPES,
   decisionReason,
   isCategory,
@@ -123,6 +126,7 @@ export function registerCheckModelAccess(server: McpServer, client: WiroClient):
           by: z.enum(['model', 'category', 'default']).describe('What in the rule decides: the model\'s own entry, one of its categories, or what the rule gives every model it does not name.'),
           category: z.string().nullable(),
           summary: z.string(),
+          updatedBy: changedBySchema.optional(),
         })).describe('Every rule that applies to this run, widest first.'),
         canManage: z.boolean().describe('Whether this connection can change the rules.'),
         fixes: z.array(nextActionSchema).optional()
@@ -271,8 +275,10 @@ export function registerCheckModelAccess(server: McpServer, client: WiroClient):
           lines.push('', `**Rules that apply (${checked.length}), widest first:**`);
           for (const entry of checked) {
             const view = { scope: entry.rule.scope, target: entry.rule.target, targetName: entry.rule.targetName };
+            const changed = changedByText(entry.rule, kind, caller);
             lines.push(`- Rule for ${targetText(view, kind)}: ${entry.decides === 'block' ? 'blocks' : 'allows'} it, as it `
-              + `${decisionReason(entry, labels)}. The rule: ${ruleSummary(entry.rule, labels, { quote: true, maxModels: 10 })}.`);
+              + `${decisionReason(entry, labels)}. The rule: ${ruleSummary(entry.rule, labels, { quote: true, maxModels: 10 })}.`
+              + `${changed ? ` ${capitalized(changed)}.` : ''}`);
           }
         }
         if (!allowed) {
@@ -311,6 +317,7 @@ export function registerCheckModelAccess(server: McpServer, client: WiroClient):
               by: entry.by,
               category: entry.category,
               summary: ruleSummary(entry.rule, labels),
+              ...(entry.rule.updatedBy ? { updatedBy: entry.rule.updatedBy } : {}),
             })),
             canManage,
             ...(fixes.length > 0 ? { fixes, nextAction } : {}),

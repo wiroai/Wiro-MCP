@@ -1562,3 +1562,95 @@ test('get_controls words a personal account as such', async () => {
     assert.equal(fake.paths().includes('/Team/Member/List'), false);
   });
 });
+
+// ---------------------------------------------------------------- who changed it
+
+const CHANGED_AT = 1795096920; // 2026-11-19T14:02:00Z
+const GONE = '9b2f6c1e-2f3a-4c5d-9e8f-0a1b2c3d4e09';
+const OWNER = 'ab2f6c1e-2f3a-4c5d-9e8f-0a1b2c3d4e0a';
+
+test('get_controls says who changed each limit and rule last, and when', async () => {
+  const fake = fakeClient({
+    '/SpendLimit/List': limitList([
+      limitRow({ guid: 'l-acc', updatedat: CHANGED_AT, updatedby: { useruuid: JANE, label: 'Jane Doe' } }),
+      limitRow({
+        guid: 'l-key', scope: 'project', target: '7', targetlabel: 'Staging', period: 'day', amountusd: 5, spentusd: 1,
+        periodstart: DAY_START, resetsat: DAY_END, updatedat: CHANGED_AT, updatedby: { useruuid: OWNER, label: 'the organization owner' },
+      }),
+      // A change Wiro made itself names no one.
+      limitRow({ guid: 'l-web', scope: 'surface', target: 'web', amountusd: 50, spentusd: 0, updatedby: null }),
+      limitRow({ guid: 'l-bob', scope: 'member', target: BOB, targetlabel: 'Bob Roe', amountusd: 100, spentusd: 10, updatedat: CHANGED_AT, updatedby: { useruuid: BOB, label: 'Bob Roe' } }),
+    ]),
+    '/ModelAccess/List': ruleList([
+      ruleRow({ guid: 'r-acc', categories: [category('video', 'block')], updatedat: CHANGED_AT, updatedby: { useruuid: GONE, label: null } }),
+      ruleRow({ guid: 'r-api', scope: 'surface', target: 'api', access: 'block', categories: [category('image', 'allow')] }),
+    ]),
+    '/Organization/List': ORGS,
+    '/Project/List': { ...PROJECTS, project: PROJECTS.project.map(row => ({ ...row, uuid: row.id === '48211' ? BOB : JANE })) },
+  });
+  await withClient(fake, async client => {
+    const result = await client.callTool({ name: 'get_controls', arguments: {} });
+    assert.notEqual(result.isError, true, textOf(result));
+    const lines = linesOf(result);
+    for (const line of [
+      '- Monthly limit for the whole team: $248.70 of $500.00 used, $251.30 left, alert email at 80%, resets December 1, 2026 at 00:00 UTC (limit_guid `l-acc`; last changed by `Jane Doe` on November 19, 2026 at 14:02 UTC)',
+      '- Daily limit for the API key of project `Staging` (id `7`): $1.00 of $5.00 used, $4.00 left, alert email at 80%, resets November 21, 2026 at 00:00 UTC (limit_guid `l-key`; last changed by the organization\'s owner on November 19, 2026 at 14:02 UTC)',
+      '- Monthly limit for the dashboard (surface `web`): $0.00 of $50.00 used, $50.00 left, alert email at 80%, resets December 1, 2026 at 00:00 UTC (limit_guid `l-web`)',
+      `- Monthly limit for team member \`Bob Roe\` (user id \`${BOB}\`), the person this connection acts as: $10.00 of $100.00 used, $90.00 left, alert email at 80%, resets December 1, 2026 at 00:00 UTC (limit_guid \`l-bob\`; last changed by \`Bob Roe\`, the person this connection acts as, on November 19, 2026 at 14:02 UTC)`,
+      `- Rule for the whole team: Every model except Video Generation (rule_guid \`r-acc\`; last changed by a former team member (user id \`${GONE}\`) on November 19, 2026 at 14:02 UTC)`,
+      '- Rule for the API (surface `api`): Only Image Generation (rule_guid `r-api`)',
+    ]) assert.ok(lines.includes(line), `missing line: ${line}\n\n${textOf(result)}`);
+    const data = result.structuredContent;
+    assert.deepEqual(data.spendLimits.find(row => row.guid === 'l-acc').updatedBy, { useruuid: JANE, name: 'Jane Doe' });
+    assert.deepEqual(data.spendLimits.find(row => row.guid === 'l-key').updatedBy, { useruuid: OWNER, name: 'the organization owner' });
+    assert.equal(data.spendLimits.find(row => row.guid === 'l-web').updatedBy, undefined);
+    assert.deepEqual(data.modelAccessRules[0].updatedBy, { useruuid: GONE });
+    assert.equal(data.modelAccessRules[1].updatedBy, undefined);
+    const tool = (await client.listTools()).tools.find(candidate => candidate.name === 'get_controls');
+    assert.match(tool.description, /Each limit and rule says who changed it last, and when, where Wiro gives it\./);
+  });
+
+  // A name people wrote stays in a code span, and a malformed updatedby names no one.
+  const personal = fakeClient({
+    '/SpendLimit/List': limitList([
+      limitRow({ guid: 'l-acc', updatedat: CHANGED_AT, updatedby: { useruuid: JANE, label: 'me `x` @acme.test' } }),
+      limitRow({ guid: 'l-day', period: 'day', amountusd: 10, spentusd: 0, periodstart: DAY_START, resetsat: DAY_END, updatedby: { useruuid: 'not-a-uuid', label: 'Someone' } }),
+    ], PERSONAL),
+    '/ModelAccess/List': ruleList([], PERSONAL),
+    '/Organization/List': { result: true, errors: [], organizations: [] },
+  });
+  await withClient(personal, async client => {
+    const result = await client.callTool({ name: 'get_controls', arguments: {} });
+    assert.notEqual(result.isError, true, textOf(result));
+    assert.match(textOf(result), /\(limit_guid `l-acc`; last changed by ``me `x` @acme\.test`` on November 19, 2026 at 14:02 UTC\)/);
+    assert.match(textOf(result), /\(limit_guid `l-day`\)$/m);
+    assert.equal(result.structuredContent.spendLimits[1].updatedBy, undefined);
+  });
+});
+
+test('check_model_access and the change summaries carry who changed a rule or limit last', async () => {
+  const blockingAccount = ruleRow({ guid: 'r-acc', categories: [category('llm', 'block')], updatedat: CHANGED_AT, updatedby: { useruuid: JANE, label: 'Jane Doe' } });
+  const fake = fakeClient({
+    '/ModelAccess/List': ruleList([blockingAccount]),
+    '/ModelAccess/Check': checkAnswer([{ rule: blockingAccount, access: 'block', by: 'category', category: 'llm' }]),
+  });
+  await withClient(fake, async client => {
+    const result = await client.callTool({ name: 'check_model_access', arguments: { model: 'openai/gpt-6-2-astra' } });
+    assert.notEqual(result.isError, true, textOf(result));
+    assert.ok(linesOf(result).includes('- Rule for the whole team: blocks it, as it blocks LLM & Chat, and this model is in it. The rule: Every model except LLM & Chat. Last changed by `Jane Doe` on November 19, 2026 at 14:02 UTC.'), textOf(result));
+    assert.deepEqual(result.structuredContent.rules[0].updatedBy, { useruuid: JANE, name: 'Jane Doe' });
+  });
+
+  const held = limitRow({ guid: 'l-acc', updatedat: CHANGED_AT, updatedby: { useruuid: JANE, label: 'Jane Doe' } });
+  const limits = fakeClient({
+    '/SpendLimit/List': limitList([held]),
+    '/SpendLimit/Preview': body => limitPreview(held, 248.7)(body),
+  });
+  await withClient(limits, async client => {
+    const result = await client.callTool({ name: 'manage_spend_limit', arguments: { action: 'set', limit_guid: 'l-acc', amount_usd: 600 } });
+    assert.notEqual(result.isError, true, textOf(result));
+    assert.deepEqual(result.structuredContent.before.updatedBy, { useruuid: JANE, name: 'Jane Doe' });
+    // Preview's draft names no one.
+    assert.equal(result.structuredContent.after.updatedBy, undefined);
+  });
+});

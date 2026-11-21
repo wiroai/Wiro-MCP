@@ -344,7 +344,7 @@ calls with your API key, so it counts as the API.
 
 | Tool | Description |
 |------|-------------|
-| `get_controls` | Show the workspace's spend limits with what each used, what running work holds, what is left and when it resets (UTC), its Model Access rules in plain words, which of them cover this connection's own runs, and this month's or today's spending by way in, member, API key and agent |
+| `get_controls` | Show the workspace's spend limits with what each used, what running work holds, what is left and when it resets (UTC), its Model Access rules in plain words, who changed each limit and rule last, which of them cover this connection's own runs, and this month's or today's spending by way in, member, API key and agent |
 | `check_model_access` | Check how the rules decide one model for one run, rule by rule, and get the change summary that would allow it; nothing runs |
 | `manage_spend_limit` | Set, raise, lower or remove a monthly or daily spend limit, or change only its alert, after your confirmation |
 | `manage_model_access` | Update, replace or remove a Model Access rule, after your confirmation |
