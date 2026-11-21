@@ -1702,3 +1702,15 @@ test('manage_model_access warns when an agent\'s rule newly blocks its built-in 
     assert.match(tool.inputSchema.properties.agent.description, /its built-in voice \(voice notes and voice replies, which count as Audio & Speech\)/);
   });
 });
+
+test('manage_spend_limit says an agent pauses at its next step once its own limit is used up', async () => {
+  const preview = body => limitPreview(null, 0, { targetlabel: 'Sales Bot' })(body);
+  const fake = fakeClient({ '/SpendLimit/List': limitList([]), '/UserAgent/MyAgents': AGENTS, '/SpendLimit/Preview': preview, '/SpendLimit/Set': body => ({ ...preview(body), preview: undefined }) });
+  await withClient(fake, async client => {
+    const summary = await client.callTool({ name: 'manage_spend_limit', arguments: { action: 'set', scope: 'agent', agent: 'Sales Bot', amount_usd: 25 } });
+    assert.notEqual(summary.isError, true, textOf(summary));
+    const saved = await client.callTool({ name: 'manage_spend_limit', arguments: summary.structuredContent.nextAction.arguments });
+    assert.equal(saved.structuredContent.outcome, 'saved', textOf(saved));
+    assert.deepEqual(saved.structuredContent.notes, ['It applies from now on. Once it is used up, the agent pauses at its next step, even in the middle of a reply, a voice call it is on ends after the current turn, and its scheduled tasks pause, until the limit resets or is raised.']);
+  });
+});

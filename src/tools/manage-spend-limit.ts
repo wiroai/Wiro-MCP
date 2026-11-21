@@ -67,6 +67,10 @@ const REMOVE_UNKNOWN = 'The outcome is not known: the limit may or may not be re
 const ASK_REASON = 'Ask the user to confirm this change first.';
 const APPLIES_NOTE =
   'It applies to new work from now on. Work already running finishes and is charged, except a realtime session or a voice call, which ends after the turn that uses the limit up.';
+// An agent's own limit also stops the turn it is in: it is checked again at each of the agent's steps.
+const AGENT_APPLIES_NOTE = 'It applies from now on. Once it is used up, the agent pauses at its next step, even in the '
+  + 'middle of a reply, a voice call it is on ends after the current turn, and its scheduled tasks pause, until the limit '
+  + 'resets or is raised.';
 
 interface Args {
   action: 'set' | 'remove';
@@ -399,7 +403,7 @@ async function setLimit(client: WiroClient, args: Args, list: LimitList, signal:
   }
   const row = (isPlainObject(saved.limit) ? toLimitRow(saved.limit) : null) ?? after;
   const message = `Saved: ${amountPerPeriod(row.amountUsd, row.period)} for ${covers()}, ${alertText(row.alertPercent)}.`;
-  const savedNotes = [APPLIES_NOTE, ...(connection ? [connection] : [])];
+  const savedNotes = [target.scope === 'agent' ? AGENT_APPLIES_NOTE : APPLIES_NOTE, ...(connection ? [connection] : [])];
   return result({
     action: 'set',
     outcome: 'saved' satisfies Outcome,
