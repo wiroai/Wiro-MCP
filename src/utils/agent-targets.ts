@@ -327,9 +327,15 @@ const RESTARTING_PATTERN = /\brestarting\b/i;
 export interface SelectableModels {
   models: string[];
   defaultModel?: string;
+  /** A Model Access rule blocks the default chat model, so a message that names no model is refused with code 92. */
+  defaultBlocked?: boolean;
 }
 
-/** Chat models a caller may pick for Studio or the Workflow Agent. */
+/**
+ * Chat models a caller may pick for Studio or the Workflow Agent. Status marks a model the caller's Model Access
+ * rules block as not selectable, so it is left out. The default is the agent's own chat model, the one a message
+ * that names no model chats with.
+ */
 export async function readSelectableModels(
   client: WiroClient,
   target: AgentTarget,
@@ -337,19 +343,37 @@ export async function readSelectableModels(
 ): Promise<SelectableModels | null> {
   if (target.kind === 'deployed') return null;
   try {
-    const status = requireApiSuccess(await callAgent(client, target, 'status', {}, signal), '');
-    const rates = (status as Record<string, unknown>).tokenRates;
+    const status = requireApiSuccess(await callAgent(client, target, 'status', {}, signal), '') as Record<string, unknown>;
+    const rates = status.tokenRates;
     if (!isPlainObject(rates) || !isPlainObject(rates.models)) return null;
     const models = Object.entries(rates.models)
       .filter(([, meta]) => isPlainObject(meta) && meta.selectable === true)
       .map(([key]) => key);
-    const agentModel = (status as Record<string, unknown>).agentModel;
-    const defaultModel = asString(rates.default_model)
-      ?? (isPlainObject(agentModel) ? asString(agentModel.chatModel) : undefined);
-    return { models, ...(defaultModel ? { defaultModel } : {}) };
+    const agentModel = status.agentModel;
+    const chatModel = isPlainObject(agentModel) ? asString(agentModel.chatModel)?.trim() : undefined;
+    const defaultModel = chatModel || asString(rates.default_model);
+    return {
+      models,
+      ...(defaultModel ? { defaultModel } : {}),
+      ...(status.agentModelBlocked === true ? { defaultBlocked: true } : {}),
+    };
   } catch {
     return null;
   }
+}
+
+/** After a Model Access refusal of a message to Studio or the Workflow Agent: the chat models the rules leave open. */
+function openChatModelsText(target: AgentTarget, open: SelectableModels): string {
+  if (open.models.length === 0) {
+    return `The rules leave ${target.label} no chat model to use, so it cannot take a message until a rule allows one.`;
+  }
+  const fallback = !open.defaultModel
+    ? ''
+    : open.defaultBlocked
+      ? ` The default chat model, ${open.defaultModel}, is blocked, so leaving model out does not help.`
+      : ` Leaving model out uses the default, ${open.defaultModel}.`;
+  return `Chat models the rules allow for ${target.label}: ${open.models.join(', ')}. Send again with the one the user `
+    + `picks as model, only once they pick it.${fallback}`;
 }
 
 function formatUsd(value: number): string {
@@ -392,8 +416,14 @@ export async function explainSendRefusal(
   // The workspace's spend limit (Studio, the Workflow Agent) or the agent's own.
   if (hasErrorCode(error, SPEND_LIMIT_CODE)) return `${message}\n\n${spendLimitNote(message, notes)}`;
 
-  // A Model Access rule blocks the model the message asked for.
-  if (hasErrorCode(error, MODEL_ACCESS_CODE)) return `${message}\n\n${modelAccessNote(notes)}`;
+  // A Model Access rule blocks the model the message asked for. For Studio and the Workflow Agent that is the
+  // turn's chat model, the default one when the message names none.
+  if (hasErrorCode(error, MODEL_ACCESS_CODE)) {
+    const note = `${message}\n\n${modelAccessNote(notes)}`;
+    if (target.kind === 'deployed') return note;
+    const open = await readSelectableModels(client, target, signal);
+    return open ? `${note}\n\n${openChatModelsText(target, open)}` : note;
+  }
 
   if (target.kind !== 'deployed' && hasErrorCode(error, 97)) {
     const walletUsd = toNumber(response.walletUsd);
@@ -415,9 +445,11 @@ export async function explainSendRefusal(
     const selectable = await readSelectableModels(client, target, signal);
     if (selectable && selectable.models.length > 0) {
       lines.push(`Models you can choose: ${selectable.models.join(', ')}`
-        + (selectable.defaultModel ? ` (default: ${selectable.defaultModel}).` : '.'));
+        + (selectable.defaultModel && !selectable.defaultBlocked ? ` (default: ${selectable.defaultModel}).` : '.'));
     }
-    lines.push('Send again with one of these, or leave model out to use the default.');
+    lines.push(selectable?.defaultBlocked
+      ? 'Send again with one of these. A Model Access rule blocks the default chat model, so leaving model out does not help.'
+      : 'Send again with one of these, or leave model out to use the default.');
     return lines.join('\n');
   }
 

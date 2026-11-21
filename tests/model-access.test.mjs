@@ -136,14 +136,110 @@ test('run_workflow and resume_workflow_run add the note to a Model Access refusa
 
 test('send_agent_message adds the note when Studio or the Workflow Agent refuses with code 92', async () => {
   for (const [agent, route] of [['studio', '/Studio/Message/Send'], ['workflow-agent', '/StudioWorkflow/Message/Send']]) {
+    // Status cannot be read here, so only the note follows.
     const fake = fakeClient({ [route]: refusal(CATEGORY_TEXT) });
     await withClient(fake, async client => {
       const result = await client.callTool({ name: 'send_agent_message', arguments: { agent, message: 'make a clip' } });
       assert.equal(result.isError, true);
       assert.equal(textOf(result), `## Error\n\n${CATEGORY_TEXT}\n\n${MODEL_ACCESS_NOTE}`);
-      assert.equal(fake.calls.length, 1, 'nothing is sent again');
+      assert.equal(fake.calls.filter(call => call.path === route).length, 1, 'nothing is sent again');
     });
   }
+});
+
+// Studio's and the Workflow Agent's chat model follows the caller's rules: Send refuses a blocked one with 92,
+// the default included when the message names none. Status marks a blocked picker model selectable: false and
+// says whether the default is blocked, so the refusal can list the chat models the user may pick instead.
+const CHAT_TEXT = "This team can't use LLM & Chat models, and openai/gpt-5-6-sol is one of them. Model Access rules decide which models can run.";
+const NAMED_TEXT = "This team can't use claude/sonnet-5. Model Access rules decide which models can run.";
+
+function houseStatus(fields = {}) {
+  return {
+    result: true,
+    errors: [],
+    walletUsd: 50,
+    tokenRates: {
+      default_model: 'openai/gpt-5.6-terra',
+      models: {
+        'openai/gpt-5.6-sol': { selectable: false, blocked: true, label: 'GPT-5.6 Sol' },
+        'openai/gpt-5.6-luna': { selectable: true, label: 'GPT-5.6 Luna' },
+        'openai/gpt-5.6-terra': { selectable: true, label: 'GPT-5.6 Terra' },
+        'openai/gpt-5.2': { selectable: false, label: 'GPT-5.2' },
+      },
+    },
+    agentModel: { chatModel: 'openai/gpt-5.6-sol', cronModel: null, voicePrepModel: null, voicePostcallModel: null },
+    blockedModels: ['openai/gpt-5.6-sol'],
+    agentModelBlocked: true,
+    agentModelMessage: CHAT_TEXT,
+    ...fields,
+  };
+}
+
+test('a chat model refusal from Studio or the Workflow Agent lists the chat models the rules allow', async () => {
+  const targets = [
+    ['studio', '/Studio/Message/Send', '/Studio/Status', 'Studio'],
+    ['workflow-agent', '/StudioWorkflow/Message/Send', '/StudioWorkflow/Status', 'the Workflow Agent'],
+  ];
+  for (const [agent, route, statusRoute, label] of targets) {
+    // The default chat model is blocked, and the message names none.
+    const blockedDefault = fakeClient({ [route]: refusal(CHAT_TEXT), [statusRoute]: houseStatus() });
+    await withClient(blockedDefault, async client => {
+      const result = await client.callTool({ name: 'send_agent_message', arguments: { agent, message: 'make a clip' } });
+      assert.equal(result.isError, true);
+      assert.equal(textOf(result), `## Error\n\n${CHAT_TEXT}\n\n${MODEL_ACCESS_NOTE}\n\n`
+        + `Chat models the rules allow for ${label}: openai/gpt-5.6-luna, openai/gpt-5.6-terra. Send again with the one the `
+        + 'user picks as model, only once they pick it. The default chat model, openai/gpt-5.6-sol, is blocked, so leaving model out does not help.');
+      assert.deepEqual(blockedDefault.calls.map(call => call.path), [route, statusRoute], 'nothing is sent again');
+      assert.doesNotMatch(textOf(result), /openai\/gpt-5\.2/);
+    });
+
+    // A model the message named is blocked, and the default chat model is open.
+    const named = fakeClient({
+      [route]: refusal(NAMED_TEXT),
+      [statusRoute]: houseStatus({ agentModel: { chatModel: 'openai/gpt-5.6-terra' }, agentModelBlocked: false, agentModelMessage: null }),
+    });
+    await withClient(named, async client => {
+      const result = await client.callTool({ name: 'send_agent_message', arguments: { agent, message: 'make a clip', model: 'claude/sonnet-5' } });
+      assert.equal(result.isError, true);
+      assert.ok(textOf(result).endsWith(`Chat models the rules allow for ${label}: openai/gpt-5.6-luna, openai/gpt-5.6-terra. Send again with the one `
+        + 'the user picks as model, only once they pick it. Leaving model out uses the default, openai/gpt-5.6-terra.'), textOf(result));
+      assert.equal(named.calls.filter(call => call.path === route).length, 1);
+    });
+
+    // No chat model is left open.
+    const none = fakeClient({
+      [route]: refusal(CHAT_TEXT),
+      [statusRoute]: houseStatus({ tokenRates: { default_model: 'openai/gpt-5.6-sol', models: { 'openai/gpt-5.6-sol': { selectable: false, blocked: true } } } }),
+    });
+    await withClient(none, async client => {
+      const result = await client.callTool({ name: 'send_agent_message', arguments: { agent, message: 'make a clip' } });
+      assert.ok(textOf(result).endsWith(`The rules leave ${label} no chat model to use, so it cannot take a message until a rule allows one.`), textOf(result));
+    });
+  }
+
+  // A deployed agent's own rule decides its model: no Studio Status is read.
+  const deployed = fakeClient({ '/UserAgent/Message/Send': refusal(AGENT_TEXT) });
+  await withClient(deployed, async client => {
+    const result = await client.callTool({ name: 'send_agent_message', arguments: { agent: 'ua-1', message: 'hi' } });
+    assert.equal(result.isError, true);
+    assert.equal(textOf(result), `## Error\n\n${AGENT_TEXT}\n\n${MODEL_ACCESS_NOTE}`);
+    assert.deepEqual(deployed.calls.map(call => call.path), ['/UserAgent/Message/Send']);
+  });
+});
+
+test('an invalid model does not offer the default chat model when a rule blocks it', async () => {
+  const fake = fakeClient({
+    '/Studio/Message/Send': refusal('Invalid model: bad/model is not in the selectable model allowlist.', 0),
+    '/Studio/Status': houseStatus(),
+  });
+  await withClient(fake, async client => {
+    const result = await client.callTool({ name: 'send_agent_message', arguments: { agent: 'studio', message: 'hi', model: 'bad/model' } });
+    assert.equal(result.isError, true);
+    const text = textOf(result);
+    assert.match(text, /Models you can choose: openai\/gpt-5\.6-luna, openai\/gpt-5\.6-terra\.\n/);
+    assert.match(text, /Send again with one of these\. A Model Access rule blocks the default chat model, so leaving model out does not help\.$/);
+    assert.doesNotMatch(text, /default: |leave model out to use the default/);
+  });
 });
 
 const AGENT_GUID = 'ua-1';

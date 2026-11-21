@@ -96,7 +96,9 @@ export function registerSendAgentMessage(server: McpServer, client: WiroClient, 
           + `or to use a deployed agent's "default" session. ${SESSION_NAME_RULE} Studio refuses any other name: a session `
           + 'it has under another name can be read and deleted, not sent to.'),
         model: z.string().optional().describe('Studio and the Workflow Agent only: the chat model key for this '
-          + 'turn. Leave it out for the default; an unknown key is refused with the list of keys you can use. If '
+          + 'turn. Leave it out for the default; an unknown key is refused with the list of keys you can use. A chat '
+          + 'model a Model Access rule of the workspace blocks, the default included, is refused with error code 92 '
+          + 'and the chat models the rules allow: pass another only when the user picks it. If '
           + 'you set one, pass the same model on every later turn of the session; switching models reduces the '
           + 'agent\'s memory of the session to a summary.'),
         attachment_urls: z.array(z.url()).min(1).max(MAX_ATTACHMENTS).optional()
