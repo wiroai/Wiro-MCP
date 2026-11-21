@@ -682,6 +682,15 @@ export function ruleLine(rule: RuleRow, labels: CategoryLabels, kind: ControlsWo
   return `- Rule for ${targetText(view, kind)}: ${ruleSummary(rule, labels, { quote: true, maxModels: 10 })}${trailer}`;
 }
 
+/**
+ * Whether a rule blocks an agent's built-in voice. Its voice models count as Audio & Speech, so the rule's Audio &
+ * Speech entry decides them, else what it gives every other model. Allowing LLM & Chat does not open them.
+ */
+export function blocksVoice(rule: Pick<RuleRow, 'access' | 'categories'>): boolean {
+  const audio = rule.categories.audio;
+  return audio === 'block' || (audio === undefined && rule.access === 'block');
+}
+
 // ------------------------------------------------------------------ checks
 
 export type Decision = 'allow' | 'block';

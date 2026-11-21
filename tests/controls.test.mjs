@@ -1654,3 +1654,51 @@ test('check_model_access and the change summaries carry who changed a rule or li
     assert.equal(result.structuredContent.after.updatedBy, undefined);
   });
 });
+
+// ------------------------------------------------------------- an agent's voice
+
+test('manage_model_access warns when an agent\'s rule newly blocks its built-in voice', async () => {
+  const ids = { ...IDS, 'google/gemini-3-flash': { id: '701', model: 'google/gemini-3-flash' } };
+  const general = 'This rule also blocks Audio & Speech, which covers the agent\'s built-in voice: voice notes are not transcribed and voice replies go out as text. Allow Audio & Speech to keep them.';
+  const repliesOnly = 'This rule also blocks Audio & Speech, which covers the agent\'s voice replies, so they go out as text. Allow Audio & Speech to keep them.';
+  const run = async (args, { existing = null, chat = null } = {}) => {
+    const fake = fakeClient({
+      '/ModelAccess/List': ruleList(existing ? [existing] : []),
+      '/UserAgent/MyAgents': AGENTS,
+      '/ModelAccess/Preview': body => rulePreview(existing, ids, chat ? { agentchatmodel: chat } : {})(body),
+    });
+    let warnings;
+    await withClient(fake, async client => {
+      const result = await client.callTool({ name: 'manage_model_access', arguments: args });
+      assert.notEqual(result.isError, true, textOf(result));
+      assert.equal(result.structuredContent.outcome, 'preview', textOf(result));
+      warnings = result.structuredContent.warnings;
+    });
+    return warnings;
+  };
+  const onlyOne = { action: 'replace', scope: 'agent', agent: 'Sales Bot', everything_else: 'block', models: [{ model: 'google/nano-banana-2', access: 'allow' }] };
+
+  // Only one model: everything else, Audio & Speech included, is blocked.
+  assert.ok((await run(onlyOne)).includes(general));
+  // Audio & Speech blocked by name of the category, on a rule that allows every other model.
+  assert.ok((await run({ action: 'update', scope: 'agent', agent: 'Sales Bot', categories: [{ category: 'audio', access: 'block' }] })).includes(general));
+  // Audio & Speech allowed keeps the voice, and LLM & Chat allowed does not.
+  assert.equal((await run({ ...onlyOne, categories: [{ category: 'audio', access: 'allow' }] })).some(text => /Audio & Speech/.test(text)), false);
+  assert.ok((await run({ ...onlyOne, categories: [{ category: 'llm', access: 'allow' }] })).includes(general));
+  // A Gemini agent's voice notes go through the model the rule allows by name; its voice replies do not.
+  const gemini = { ref: 'google/gemini-3-flash-preview', model: 'google/gemini-3-flash', blocked: false };
+  const geminiOnly = { ...onlyOne, models: [{ model: 'google/gemini-3-flash', access: 'allow' }] };
+  assert.ok((await run(geminiOnly, { chat: gemini })).includes(repliesOnly));
+  // The same rule for an agent that chats on another provider stops its voice notes too.
+  assert.ok((await run(geminiOnly, { chat: { ref: 'openai/gpt-5.6-terra', model: 'openai/gpt-5-6-terra', blocked: true } })).includes(general));
+  // A rule that already blocked the voice says nothing new about it.
+  const blocking = ruleRow({ guid: 'r-agent', scope: 'agent', target: AGENT, targetlabel: 'Sales Bot', access: 'block', categories: [category('image', 'allow')] });
+  assert.equal((await run({ action: 'update', scope: 'agent', agent: 'Sales Bot', categories: [{ category: 'video', access: 'allow' }] }, { existing: blocking })).some(text => /Audio & Speech/.test(text)), false);
+  // Other scopes have no built-in voice.
+  assert.equal((await run({ action: 'replace', scope: 'surface', surface: 'mcp', everything_else: 'block', categories: [{ category: 'image', access: 'allow' }] })).some(text => /Audio & Speech/.test(text)), false);
+
+  await withClient(fakeClient({}), async client => {
+    const tool = (await client.listTools()).tools.find(candidate => candidate.name === 'manage_model_access');
+    assert.match(tool.inputSchema.properties.agent.description, /its built-in voice \(voice notes and voice replies, which count as Audio & Speech\)/);
+  });
+});

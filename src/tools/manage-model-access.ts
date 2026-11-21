@@ -13,6 +13,7 @@ import {
 } from '../utils/api.js';
 import {
   blocksSomething,
+  blocksVoice,
   CATEGORY_KEYS,
   changeFailure,
   checkTargetArguments,
@@ -65,6 +66,22 @@ const REMOVE_UNKNOWN = 'The outcome is not known: the rule may or may not be rem
 const ASK_REASON = 'Ask the user to confirm this change first.';
 const APPLIES_NOTE = 'It applies to runs that start from now on; work already running is not stopped.';
 const AGENT_NOTE = 'The agent follows a change to its own rule within about a minute.';
+
+// An agent that chats on Gemini has its voice notes transcribed by this model, so a rule can allow them by name.
+const GEMINI_VOICE_MODEL = 'google/gemini-3-flash';
+
+/**
+ * What a rule that newly blocks Audio & Speech does to an agent's built-in voice. Voice replies always stop; voice
+ * notes stay open only for an agent that chats on Gemini when the rule allows their model by name.
+ */
+function voiceWarning(rule: RuleRow, chatModel: string | undefined): string {
+  const notesOpen = chatModel?.toLowerCase().startsWith('google/') === true
+    && rule.models.some(entry => entry.access === 'allow' && entry.model?.toLowerCase() === GEMINI_VOICE_MODEL);
+  return notesOpen
+    ? 'This rule also blocks Audio & Speech, which covers the agent\'s voice replies, so they go out as text. Allow Audio & Speech to keep them.'
+    : 'This rule also blocks Audio & Speech, which covers the agent\'s built-in voice: voice notes are not transcribed and '
+      + 'voice replies go out as text. Allow Audio & Speech to keep them.';
+}
 
 type EntryAccess = Access | 'unset';
 
@@ -619,6 +636,9 @@ async function changeRule(client: WiroClient, args: Args, list: RuleList, signal
     warnings.push(`This rule also blocks ${quotedSpan(preview.chatModel.name)}, the chat model the agent answers with, so the agent `
       + 'would stop answering. Allow that model too, or allow LLM & Chat.');
   }
+  if (target.scope === 'agent' && blocksVoice(after) && !(before && blocksVoice(before))) {
+    warnings.push(voiceWarning(after, preview.chatModel?.name));
+  }
   if (!after.models.some(entry => entry.access === 'allow') && !Object.values(after.categories).includes('allow') && after.access === 'block') {
     warnings.push(`This rule blocks every model for ${covers()}.`);
   }
@@ -834,7 +854,7 @@ export function registerManageModelAccess(server: McpServer, client: WiroClient)
         surface: z.enum(SURFACES).optional()
           .describe('Scope surface: web (the dashboard), api (an API key, a local install of this server included), mcp (the hosted MCP server), llm-gateway, extension or agent.'),
         agent: z.string().trim().min(1).max(200).optional()
-          .describe('Scope agent: the deployed agent, by name or guid. Its rule also covers the chat model it answers with.'),
+          .describe('Scope agent: the deployed agent, by name or guid. Its rule also covers the chat model it answers with and its built-in voice (voice notes and voice replies, which count as Audio & Speech).'),
         everything_else: z.enum(['allow', 'block']).optional()
           .describe('What every model the rule names neither by category nor by name gets. allow: every model except what the rule blocks; block: only what the rule allows. update keeps it when left out; replace and a new rule default to allow.'),
         categories: z.array(z.object({
