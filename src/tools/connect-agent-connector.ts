@@ -425,9 +425,10 @@ async function connect(
   const plan = takesProject ? await projectPlan(context, input.projectId) : undefined;
   const project = plan?.project;
   if (previewing) {
+    // A connection that reads connected may still be one the service revoked, so nothing says it keeps working.
     const typedValues = connector.fields.some(field => !field.project);
     const replace = connectedNow
-      ? `${connector.title} is already connected${existing?.connectedAt ? ` (since ${existing.connectedAt})` : ''}. Connecting again replaces that connection${signIn ? ' once the new sign-in is approved; until then the current one keeps working' : typedValues ? ' and its saved values' : ''}.`
+      ? `${connector.title} is already connected${existing?.connectedAt ? ` (since ${existing.connectedAt})` : ''}. Connecting again replaces that connection${signIn ? ' once the new sign-in is approved; until then the current one stays as it is' : typedValues ? ' and its saved values' : ''}.`
       : '';
     const pays = plan ? projectPreviewText(connector.title, plan) : '';
     const sendAgain = Object.keys(values).length > 0 ? ' Repeat the call with confirm: true and the same values.' : '';

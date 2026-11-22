@@ -64,6 +64,32 @@ function isSignInGone(error: unknown): boolean {
   return error instanceof ApiResultError && SIGN_IN_GONE.test(error.message);
 }
 
+/**
+ * The answer to that refusal, with the connect that starts a new sign-in as its next step. When the service refused
+ * the sign-in itself, the connection still reads connected, so that connect first shows what it replaces; when Wiro
+ * could not refresh it, the connection reads reauth and the connect returns the link at once.
+ */
+function signInGoneResult(agentGuid: string, slug: string, title: string, mode: 'list' | 'set') {
+  const message = `The ${title} sign-in expired or was revoked at the service, so its accounts cannot be listed or saved, `
+    + 'and nothing was changed. Connect it again with connect_agent_connector, then choose the accounts. Action connect '
+    + 'returns a new sign-in link, or, while the connection still reads connected, first shows what it replaces; after '
+    + 'the user\'s yes, the same call with confirm: true returns the link.';
+  const nextAction = {
+    tool: 'connect_agent_connector',
+    arguments: { action: 'connect', agent_guid: agentGuid, connector: slug },
+    reason: `Connect ${title} again. While the connection still reads connected, this first shows what it replaces: `
+      + 'repeat it with confirm: true after the user\'s yes for the new sign-in link.',
+  };
+  return {
+    content: [{
+      type: 'text' as const,
+      text: `## Error\n\n${message}\n\nNext: call connect_agent_connector with ${jsonSpan(nextAction.arguments)}.`,
+    }],
+    structuredContent: { agentGuid, connector: slug, title, mode, message, nextAction },
+    isError: true,
+  };
+}
+
 function toPickers(value: unknown): Picker[] {
   return (Array.isArray(value) ? value : []).filter(isPlainObject).flatMap((picker) => {
     const key = asString(picker.key)?.trim();
@@ -156,9 +182,11 @@ export function registerSetAgentConnectorAccounts(server: McpServer, client: Wir
     async ({ agent_guid, connector: rawConnector, accounts }, extra) => {
       const agentGuid = agent_guid.trim();
       const slug = rawConnector.trim().toLowerCase();
+      let title = slug;
       try {
         const connector = await connectorOrError(client, slug, extra.signal);
         if (connector instanceof Error) return errorResult(connector);
+        title = connector.title;
         if (connector.accountPickers.length === 0) {
           return errorResult(new Error(`${connector.title} has no account choices to list or save here, and nothing was changed. `
             + 'If its setup steps (list_agent_connectors with its slug) name accounts the agent may act on, connect_agent_connector takes them in accounts.'));
@@ -233,11 +261,7 @@ export function registerSetAgentConnectorAccounts(server: McpServer, client: Wir
           const state = connections ? connectionOf(connections, slug)?.status : undefined;
           return errorResult(new Error(`${slug} is not connected to this agent${state && state !== 'connected' ? ` (${state})` : ''}, so its accounts cannot be listed. Connect it first with connect_agent_connector.`));
         }
-        if (isSignInGone(error)) {
-          return errorResult(new Error(`The ${slug} sign-in expired or was revoked at the service, so its accounts cannot be `
-            + 'listed or saved, and nothing was changed. Connect it again with connect_agent_connector (action connect '
-            + 'returns a new sign-in link), then choose the accounts.'));
-        }
+        if (isSignInGone(error)) return signInGoneResult(agentGuid, slug, title, accounts ? 'set' : 'list');
         return errorResult(error);
       }
     },

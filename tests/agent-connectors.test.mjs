@@ -873,14 +873,49 @@ test('a remote connector shows its account choices, asks for them once its sign-
     assert.equal(saved.structuredContent.message, 'Saved the TikTok Ads accounts (Advertisers: 1 chosen). The agent acts only on these. The running agent restarts to load them, which takes about a minute.');
   });
 
-  // The vendor refused the connection's sign-in while Wiro listed its accounts: connect it again, never "ask the operator".
+  // The vendor refused the connection's sign-in while Wiro listed its accounts: connect it again, never "ask the
+  // operator". Wiro leaves that connection reading connected, so the connect first shows what it replaces, and the
+  // link comes with confirm: true after the user's yes; nothing says the current one keeps working.
+  const refused = { result: false, errors: [{ code: 0, message: 'The sign-in for this connector expired or was revoked, so it has to be connected again. Ask the agent\'s operator to reconnect it.' }] };
   const gone = fakeClient(routes({
-    '/UserAgent/ConnectorAccounts': { result: false, errors: [{ code: 0, message: 'The sign-in for this connector expired or was revoked, so it has to be connected again. Ask the agent\'s operator to reconnect it.' }] },
+    '/UserAgent/ConnectorList': { result: true, errors: [], useragentconnectors: [connection(TIKTOK_ADS)] },
+    '/UserAgent/ConnectorAccounts': refused,
+    '/UserAgent/ConnectorSetAccounts': refused,
+    '/UserAgent/ConnectorConnect': { result: true, errors: [], status: 'pending', authorizeUrl: 'https://ads.example/authorize?state=new' },
   }));
   await withClient(gone, async client => {
-    const result = await call(client, 'set_agent_connector_accounts', { agent_guid: AGENT, connector: 'tiktok-ads' });
-    assert.equal(result.isError, true);
-    assert.equal(text(result), '## Error\n\nThe tiktok-ads sign-in expired or was revoked at the service, so its accounts cannot be listed or saved, and nothing was changed. Connect it again with connect_agent_connector (action connect returns a new sign-in link), then choose the accounts.');
+    const message = 'The TikTok Ads sign-in expired or was revoked at the service, so its accounts cannot be listed or saved, and nothing was changed. '
+      + 'Connect it again with connect_agent_connector, then choose the accounts. Action connect returns a new sign-in link, or, while the connection '
+      + 'still reads connected, first shows what it replaces; after the user\'s yes, the same call with confirm: true returns the link.';
+    const reconnect = { action: 'connect', agent_guid: AGENT, connector: 'tiktok-ads' };
+    for (const [args, mode] of [[{}, 'list'], [{ accounts: { advertisers: ['7001'] } }, 'set']]) {
+      const result = await call(client, 'set_agent_connector_accounts', { agent_guid: AGENT, connector: 'tiktok-ads', ...args });
+      assert.equal(result.isError, true);
+      assert.equal(text(result), `## Error\n\n${message}\n\nNext: call connect_agent_connector with \`${JSON.stringify(reconnect)}\`.`);
+      assert.deepEqual(result.structuredContent, {
+        agentGuid: AGENT,
+        connector: 'tiktok-ads',
+        title: 'TikTok Ads',
+        mode,
+        message,
+        nextAction: {
+          tool: 'connect_agent_connector',
+          arguments: reconnect,
+          reason: 'Connect TikTok Ads again. While the connection still reads connected, this first shows what it replaces: repeat it with confirm: true after the user\'s yes for the new sign-in link.',
+        },
+      });
+    }
+
+    // That connect: a preview first, then the link with confirm: true.
+    const preview = await call(client, 'connect_agent_connector', reconnect);
+    assert.equal(preview.structuredContent.state, 'confirm_needed');
+    assert.match(preview.structuredContent.message, /^TikTok Ads is already connected \(since .+\)\. Connecting again replaces that connection once the new sign-in is approved; until then the current one stays as it is\. Nothing has changed yet\. Ask the user to confirm\.$/);
+    assert.doesNotMatch(preview.structuredContent.message, /keeps working/);
+    assert.deepEqual(preview.structuredContent.nextAction.arguments, { ...reconnect, confirm: true });
+    assert.equal(gone.paths().includes('/UserAgent/ConnectorConnect'), false);
+    const link = await call(client, 'connect_agent_connector', preview.structuredContent.nextAction.arguments);
+    assert.equal(link.structuredContent.state, 'authorize_in_browser');
+    assert.equal(link.structuredContent.authorizeUrl, 'https://ads.example/authorize?state=new');
   });
 });
 
