@@ -42,6 +42,7 @@ import {
   type CatalogConnector,
   type ConnectMode,
   type ConnectorField,
+  type ConnectorPicker,
 } from '../utils/agent-connectors.js';
 import { DEFAULT_WAIT_SECONDS, MAX_WAIT_SECONDS, pollUntil, reportProgress } from '../utils/poll.js';
 import { jsonSpan } from '../utils/quoted-text.js';
@@ -204,9 +205,9 @@ function accountsRefusal(connector: CatalogConnector, accounts: Accounts): strin
   return single ? `${single.label} takes one account. Nothing was sent.` : null;
 }
 
-/** A connector's account choices by label: "Advertisers", "Facebook Pages and Instagram accounts". */
-function pickerLabels(connector: CatalogConnector): string {
-  return connector.accountPickers.map(picker => picker.label).join(' and ');
+/** Account choices by label: "Advertisers", "Facebook Pages and Instagram accounts". */
+function pickerLabels(pickers: readonly ConnectorPicker[]): string {
+  return pickers.map(picker => picker.label).join(' and ');
 }
 
 function fieldNeedLines(fields: ConnectorField[]): string[] {
@@ -483,12 +484,15 @@ async function connect(
     const after = input.redirectUrl
       ? `After approving, the browser goes to ${input.redirectUrl.trim()}.`
       : 'After approving, the browser lands on a page that says how it went.';
-    // A sign-in with account choices acts only on the accounts chosen, and they are listed once it finishes.
+    // A sign-in with account choices acts only on the accounts chosen, and they are listed once it finishes. Wiro keeps
+    // the accounts a connection holds through a new sign-in that sends none (a reconnect after it expired or was
+    // revoked, or a replace), so only a choice it lacks is asked for.
+    const toChoose = connector.accountPickers.filter(picker => !existing?.accounts[picker.key]?.length);
+    const kept = connector.accountPickers.filter(picker => !toChoose.includes(picker));
     const accountsLater = accounts
       ? ' The accounts given are saved with the connection once the sign-in finishes.'
-      : connector.accountPickers.length > 0
-        ? ` Once it finishes, choose the ${pickerLabels(connector)} it may act on: set_agent_connector_accounts lists the ones the sign-in reaches.`
-        : '';
+      : `${kept.length > 0 ? ` The ${pickerLabels(kept)} chosen before stay through the new sign-in, and set_agent_connector_accounts changes them once it finishes.` : ''}`
+        + `${toChoose.length > 0 ? ` Once it finishes, choose the ${pickerLabels(toChoose)} it may act on: set_agent_connector_accounts lists the ones the sign-in reaches.` : ''}`;
     return result('connect', context, 'authorize_in_browser',
       `The user must open this link in their own browser and approve access within ${SIGN_IN_LINK_TTL_SECONDS / 60} minutes. Never open it for them. ${consent} `
         + `${after}${accountsLater} Give the link to the user and check the status once they say they are done.`,

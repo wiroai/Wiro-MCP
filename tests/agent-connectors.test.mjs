@@ -985,6 +985,51 @@ test('a reconnect refusal Wiro marks with the code reauth leads to a connect tha
   }
 });
 
+// Wiro keeps the accounts a connection holds through a new sign-in that sends none: after the sign-in expired or was
+// revoked, after a link that expired unused (the connection then reads pending), and when a connected one is replaced.
+// The link says those stay, and asks only for a choice the connection lacks.
+test('a new sign-in says the account choices a connection holds stay, and asks only for the ones it lacks', async () => {
+  const BUSINESS = {
+    slug: 'google-business',
+    title: 'Google Business Profile',
+    description: 'Manage business locations.',
+    category: 'marketing',
+    authtype: 'oauth',
+    transport: 'streamable-http',
+    credentialfields: [],
+    accountpickers: [
+      { key: 'accounts', label: 'Business Profile accounts', description: '', multiple: true },
+      { key: 'locations', label: 'Business locations', description: '', multiple: true },
+    ],
+    scopes: [],
+    modes: [],
+    tools: [],
+    docs: null,
+  };
+  const keptAdvertisers = ' The Advertisers chosen before stay through the new sign-in, and set_agent_connector_accounts changes them once it finishes. Give the link to the user';
+  const cases = [
+    [connection(TIKTOK_ADS, { status: 'reauth', lasterror: 'unauthorized', accounts: { advertisers: ['7001'] } }), {}, keptAdvertisers],
+    [connection(TIKTOK_ADS, { status: 'pending', connectedat: null, accounts: { advertisers: ['7001'] } }), {}, keptAdvertisers],
+    [connection(TIKTOK_ADS, { accounts: { advertisers: ['7001', '7002'] } }), { confirm: true }, keptAdvertisers],
+    [connection(TIKTOK_ADS, { status: 'reauth', lasterror: 'unauthorized' }), {}, ' Once it finishes, choose the Advertisers it may act on: set_agent_connector_accounts lists the ones the sign-in reaches. Give the link to the user'],
+    [connection(BUSINESS, { status: 'reauth', accounts: { accounts: ['acc-1'] } }), {}, ' The Business Profile accounts chosen before stay through the new sign-in, and set_agent_connector_accounts changes them once it finishes. '
+      + 'Once it finishes, choose the Business locations it may act on: set_agent_connector_accounts lists the ones the sign-in reaches. Give the link to the user'],
+  ];
+  for (const [held, args, sentence] of cases) {
+    const fake = fakeClient(routes({
+      '/AgentConnector/Detail': body => (body.slug === BUSINESS.slug ? { result: true, errors: [], agentconnectors: [structuredClone(BUSINESS)] } : catalogDetail(body)),
+      '/UserAgent/ConnectorList': { result: true, errors: [], useragentconnectors: [held] },
+      '/UserAgent/ConnectorConnect': { result: true, errors: [], status: 'pending', authorizeUrl: 'https://vendor.example/authorize?state=again' },
+    }));
+    await withClient(fake, async client => {
+      const link = await call(client, 'connect_agent_connector', { agent_guid: AGENT, connector: held.slug, ...args });
+      assert.equal(link.structuredContent.state, 'authorize_in_browser', text(link));
+      assert.ok(link.structuredContent.message.includes(sentence), `${held.status}: ${link.structuredContent.message}`);
+      assert.deepEqual(fake.called('/UserAgent/ConnectorConnect').map(sent => sent.body), [{ useragentguid: AGENT, slug: held.slug }]);
+    });
+  }
+});
+
 // ---------------------------------------------------------------------------
 // disconnect_agent_connector
 // ---------------------------------------------------------------------------
