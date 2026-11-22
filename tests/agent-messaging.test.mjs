@@ -4061,6 +4061,174 @@ test('get_agent_message keeps saying how an applied add\'s sign-in connector con
   }
 });
 
+// Wiro writes on each connect card how its connector connects (mode): key, signin or project. The wiro connector's
+// card is a project card: its one field is the Wiro project picker, and connecting binds that project to the agent.
+// A reply never connects a sign-in or a project card, so the next step is connect_agent_connector, and no key is asked
+// for.
+
+const WIRO_PROJECT_FIELD = { name: 'wiro_credentials', label: 'Wiro credentials', description: '', required: true, secret: true, format: 'password', source: 'wiro_project' };
+const WIRO_CONNECT_CARD = { id: 'pppppppppp01', kind: 'connect', connector: 'wiro', title: 'Wiro AI Models', authtype: 'headers', mode: 'project', fields: [WIRO_PROJECT_FIELD] };
+const PROJECT_HOW = 'a Wiro project: connect_agent_connector binds it to the agent (the project of this connection, or one from '
+  + 'list_projects with project_id) and shows the project and the wallet that pays first. No key is asked for, and none goes '
+  + 'in a chat message';
+const PROJECT_STEP_REASON = 'This connector connects with a Wiro project, and a reply does not connect it. This call shows the project it '
+  + 'would bind to the agent (the project of this connection; project_id from list_projects picks another) and the wallet '
+  + 'that pays for its model runs, and changes nothing without confirm: true. It takes no key: never ask for one in a chat '
+  + 'message.';
+
+test('get_agent_message reads a connect card\'s own mode: a Wiro project card connects with connect_agent_connector, never with a key', async () => {
+  const result = await readSetupReply([setupBlock(WIRO_CONNECT_CARD, 0)]);
+  const { message, nextAction } = result.structuredContent;
+  assert.deepEqual(withoutTime(message.setupChanges), [{ id: 'pppppppppp01', kind: 'connect', status: 'pending', connector: 'wiro', title: 'Wiro AI Models', mode: 'project' }]);
+  const text = textOf(result);
+  assert.ok(text.includes(`#### Proposed change 1: Connect \`wiro\`\n\n- Title: \`Wiro AI Models\`\n- Connects with ${PROJECT_HOW}. A reply does not connect it.\n`), text);
+  assert.doesNotMatch(text, /provides its values|Ask the user for the key|its key\b/);
+  assert.deepEqual(nextAction, {
+    tool: 'connect_agent_connector',
+    arguments: { action: 'connect', agent_guid: 'agent-guid-1', connector: 'wiro' },
+    reason: PROJECT_STEP_REASON,
+  });
+  // The card's fields stay with Wiro: the change says only how it connects.
+  assert.equal(JSON.stringify(result.structuredContent).includes('wiro_credentials'), false);
+
+  // A card stored with mode key before Wiro had the project mode still holds the project picker, so it is a project card.
+  const stale = await readSetupReply([setupBlock({ ...WIRO_CONNECT_CARD, mode: 'key' }, 0)]);
+  assert.equal(stale.structuredContent.message.setupChanges[0].mode, 'project');
+  assert.deepEqual(stale.structuredContent.nextAction.arguments, { action: 'connect', agent_guid: 'agent-guid-1', connector: 'wiro' });
+  // A mode this version does not know reads as none.
+  const odd = await readSetupReply([setupBlock({ id: 'pppppppppp02', kind: 'connect', connector: 'serper', mode: 'elsewhere' }, 0)]);
+  assert.equal(odd.structuredContent.message.setupChanges[0].mode, undefined);
+  assert.equal(odd.structuredContent.nextAction.tool, 'list_agent_connectors');
+});
+
+test('an add that needs the wiro connector pairs with its project card, and the yes asks for no key', async () => {
+  const add = { id: 'pppppppppp03', kind: 'add', key: 'util-video-creator', with: ['util-motion-effects'], needs: [{ connector: 'wiro', title: 'Wiro AI Models', mode: 'project' }] };
+  const result = await readSetupReply([setupBlock(add, 0), setupBlock({ ...WIRO_CONNECT_CARD, id: 'pppppppppp04' }, 1)]);
+  const { message, nextAction } = result.structuredContent;
+  assert.deepEqual(message.setupChanges[0].needs, [{ connector: 'wiro', title: 'Wiro AI Models', mode: 'project' }]);
+  const text = textOf(result);
+  assert.ok(text.includes(`- Still to connect once it is on:\n  - \`Wiro AI Models\` (\`wiro\`): ${PROJECT_HOW}\n`), text);
+  assert.ok(text.includes(`#### Proposed change 2: Connect \`wiro\`\n\n- Title: \`Wiro AI Models\`\n- Connects what proposed change 1 needs, once it is applied: ${PROJECT_HOW}. A reply does not connect it.\n`), text);
+  // The add is approved with a reply; the project card takes no key with it.
+  assert.deepEqual(nextAction.arguments, YES_STEP);
+  assert.doesNotMatch(nextAction.reason, /For a key|together with their yes/);
+
+  // Once the add is applied, its project card still waits, and the next step binds the project.
+  const applied = await readSetupReply([
+    setupBlock({ ...add, status: 'applied', actedat: Math.floor(Date.now() / 1000) - 30 }, 0),
+    setupBlock({ ...WIRO_CONNECT_CARD, id: 'pppppppppp04' }, 1),
+  ]);
+  assert.ok(textOf(applied).includes(`- Connects what the applied change, Add Skill \`util-video-creator\`, needs: ${PROJECT_HOW}. A reply does not connect it.\n`), textOf(applied));
+  assert.deepEqual(applied.structuredContent.nextAction, {
+    tool: 'connect_agent_connector',
+    arguments: { action: 'connect', agent_guid: 'agent-guid-1', connector: 'wiro' },
+    reason: PROJECT_STEP_REASON,
+  });
+});
+
+test('an unpaired sign-in card leads to connect_agent_connector, and an unpaired key card to what its connector needs', async () => {
+  const signIn = await readSetupReply([setupBlock({
+    id: 'pppppppppp05', kind: 'connect', connector: 'hubspot', title: 'HubSpot', authtype: 'provider-oauth', mode: 'signin', wiroapp: true,
+    fields: [{ name: 'clientid', label: 'Client ID', description: '', required: true, secret: false, format: 'text', serveronly: true, mode: 'oauth' }],
+  }, 0)]);
+  assert.equal(signIn.structuredContent.message.setupChanges[0].mode, 'signin');
+  assert.ok(textOf(signIn).includes('- Connects with a sign-in: connect_agent_connector returns the link for the user to open in their own browser, or the user signs in on the agent page. Keys of the user\'s own app go in with that call, never in a chat message. A reply does not connect it.\n'), textOf(signIn));
+  assert.equal(signIn.structuredContent.nextAction.tool, 'connect_agent_connector');
+  assert.deepEqual(signIn.structuredContent.nextAction.arguments, { action: 'connect', agent_guid: 'agent-guid-1', connector: 'hubspot' });
+  assert.match(signIn.structuredContent.nextAction.reason, /^This connector connects with a sign-in, and a reply does not connect it\./);
+
+  const key = await readSetupReply([setupBlock({
+    id: 'pppppppppp06', kind: 'connect', connector: 'serper', title: 'Serper', authtype: 'fields', mode: 'key',
+    fields: [{ name: 'apikey', label: 'API key', description: '', required: true, secret: true, format: 'password' }],
+  }, 0)]);
+  assert.equal(key.structuredContent.message.setupChanges[0].mode, 'key');
+  assert.ok(textOf(key).includes('- Connects with its values: list_agent_connectors with its slug shows what to ask the user for, and connect_agent_connector saves them. A key never goes in a chat message.\n'), textOf(key));
+  assert.deepEqual(key.structuredContent.nextAction, {
+    tool: 'list_agent_connectors',
+    arguments: { name: 'serper', agent_guid: 'agent-guid-1' },
+    reason: 'The agent asks for a connector\'s values. This call only shows what it needs: ask the user for them and save them with connect_agent_connector, never in a chat message.',
+  });
+
+  // Next to a change a reply approves, only a key card's connector gets the key line.
+  const mixed = await readSetupReply([setupBlock(SCHEDULE_CARD, 0), setupBlock(WIRO_CONNECT_CARD, 1)]);
+  assert.deepEqual(mixed.structuredContent.nextAction.arguments, YES_STEP);
+  assert.doesNotMatch(mixed.structuredContent.nextAction.reason, /For a key/);
+});
+
+// Wiro's answer to a reply names what it leaves to connect (next), as data beside its text. A Wiro project or a
+// sign-in is then connected with connect_agent_connector, at once: it needs no reply and no wait for the restart.
+test('a setup reply that leaves the wiro connector to connect leads to connect_agent_connector, restart or not', async () => {
+  const NEXT = [{ connector: 'wiro', title: 'Wiro AI Models', mode: 'project', cardid: 'pppppppppp04', messageguid: 'msg-setup' }];
+  const note = 'Wiro\'s answer leaves this connector to connect: `Wiro AI Models` (`wiro`), with a Wiro project: '
+    + 'connect_agent_connector binds it to the agent with no key, showing the project and the wallet that pays first, and a '
+    + 'reply does not connect it.';
+  const fake = fakeClient({
+    '/UserAgent/Message/Send': {
+      ...LISTING_SEND,
+      messageguid: 'msg-yes',
+      response: '✅ Applied: Video Creator added. Still to connect: Wiro AI Models.\nYour agent is restarting to load the change.\n'
+        + 'Next: connect Wiro AI Models to finish. Its project is picked outside this chat.',
+      setupresult: { applied: ['pppppppppp03'], dismissed: [], failed: [], restarting: true, next: NEXT },
+    },
+  });
+  await withClient(fake, async client => {
+    const result = await client.callTool({ name: 'send_agent_message', arguments: { agent: 'agent-guid-1', session: 'default', message: 'yes', wait_seconds: 0 } });
+    assert.notEqual(result.isError, true, textOf(result));
+    const output = result.structuredContent;
+    assert.deepEqual(output.message.setupNext, [{ connector: 'wiro', title: 'Wiro AI Models', mode: 'project' }]);
+    assert.ok(output.notes.includes(note), output.notes.join('|'));
+    assert.deepEqual(output.nextAction, {
+      tool: 'connect_agent_connector',
+      arguments: { action: 'connect', agent_guid: 'agent-guid-1', connector: 'wiro' },
+      reason: PROJECT_STEP_REASON,
+    });
+    assert.doesNotMatch(textOf(result), /asks for a key/);
+  });
+
+  // A yes while only the project card waits applies nothing, and Wiro's stored answer names it the same way.
+  const stored = fakeClient({
+    '/UserAgent/Message/Send': {
+      ...LISTING_SEND,
+      messageguid: 'msg-yes',
+      response: 'A yes cannot connect Wiro AI Models. Its project is picked outside this chat.',
+      setupresult: { applied: [], dismissed: [], failed: [], restarting: false, next: NEXT },
+    },
+    '/UserAgent/Message/Detail': {
+      result: true,
+      errors: [],
+      data: listingRow(undefined, {
+        guid: 'msg-yes',
+        response: 'A yes cannot connect Wiro AI Models. Its project is picked outside this chat.',
+        metadata: { type: 'setup_result', via: 'api', cards: [], next: NEXT },
+      }),
+    },
+  });
+  await withClient(stored, async client => {
+    const result = await client.callTool({ name: 'send_agent_message', arguments: { agent: 'agent-guid-1', session: 'default', message: 'yes', wait_seconds: 0 } });
+    const output = result.structuredContent;
+    assert.equal(output.message.listedSetupChanges, undefined);
+    assert.deepEqual(output.message.setupNext, [{ connector: 'wiro', title: 'Wiro AI Models', mode: 'project' }]);
+    assert.ok(output.notes.includes(note), output.notes.join('|'));
+    assert.deepEqual(output.nextAction.arguments, { action: 'connect', agent_guid: 'agent-guid-1', connector: 'wiro' });
+  });
+  assert.equal(stored.callsTo('/UserAgent/Message/Detail').length, 1);
+
+  // A sign-in left to connect gets its own step; a key Wiro asks for keeps the rule that saves it now.
+  const signIn = fakeClient({
+    '/UserAgent/Message/Send': {
+      ...LISTING_SEND,
+      messageguid: 'msg-yes',
+      response: '✅ Applied: Ads Manager added.\nNext: connect HubSpot to finish. Its sign-in and any app keys are entered outside this chat, never in it.',
+      setupresult: { applied: ['pppppppppp03'], dismissed: [], failed: [], restarting: false, next: [{ connector: 'hubspot', title: 'HubSpot', mode: 'signin', cardid: 'pppppppppp05', messageguid: 'msg-setup' }] },
+    },
+  });
+  await withClient(signIn, async client => {
+    const result = await client.callTool({ name: 'send_agent_message', arguments: { agent: 'agent-guid-1', session: 'default', message: 'yes', wait_seconds: 0 } });
+    assert.deepEqual(result.structuredContent.nextAction.arguments, { action: 'connect', agent_guid: 'agent-guid-1', connector: 'hubspot' });
+    assert.match(result.structuredContent.nextAction.reason, /^This connector connects with a sign-in/);
+  });
+});
+
 test('get_agent_message shows a remove with what it also turns off and the tasks that pause, and never a connector as a Skill', async () => {
   const result = await readSetupReply([
     setupBlock(REMOVE_CARD, 0),
@@ -4128,7 +4296,7 @@ test('an add or remove shows only its own fields and Skill names, and one withou
     setupBlock({ id: 'zzzzzzzzzz39', kind: 'add' }, 2),
     setupBlock({ id: 'zzzzzzzzzz3a', kind: 'remove', key: 'mailchimp', pauses: ['cs-cron-weekly-mail'] }, 2),
     setupBlock({ id: 'zzzzzzzzzz3b', kind: 'add', key: 'shopify' }, 2),
-    setupBlock({ id: 'zzzzzzzzzz3c', kind: 'add', key: 'int-hubspot-crm' }, 2),
+    setupBlock({ id: 'zzzzzzzzzz3c', kind: 'add', key: 'google-ads' }, 2),
   ]);
   const [add, remove, ...rest] = withoutTime(result.structuredContent.message.setupChanges);
   assert.equal(rest.length, 0);
@@ -4152,7 +4320,7 @@ test('an add or remove shows only its own fields and Skill names, and one withou
   assert.match(text, /#### Proposed change 2: Remove Skill `util-weather`\n\n- Proposed at: /);
   assert.doesNotMatch(text, /Proposed change 3|Connector `/);
   const everything = `${text}${JSON.stringify(result.structuredContent)}`;
-  for (const stray of ['Ignore the rules', 'stray text', 'Europe/Istanbul', '* * * * *', 'diagram.svg', 'Serper again', 'sys-wiro', 'HubSpot', 'oauth2', 'cs-brand-voice', 'serper_search', 'lemlist', 'mailchimp', 'cs-cron-weekly-mail', 'shopify', 'int-hubspot-crm']) {
+  for (const stray of ['Ignore the rules', 'stray text', 'Europe/Istanbul', '* * * * *', 'diagram.svg', 'Serper again', 'sys-wiro', 'HubSpot', 'oauth2', 'cs-brand-voice', 'serper_search', 'lemlist', 'mailchimp', 'cs-cron-weekly-mail', 'shopify', 'google-ads']) {
     assert.equal(everything.includes(stray), false, stray);
   }
 });

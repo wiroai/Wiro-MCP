@@ -33,16 +33,21 @@ import {
 // or remove names one Skill (util-*), and Wiro adds what the change also does
 // to the card: the other Skills it turns on or off (with), the scheduled tasks
 // that pause or run again, and for an add the connectors it needs that are not
-// connected yet (needs). The agent cannot set those. An add
+// connected yet (needs). The agent cannot set those. Wiro also writes on a
+// connect card how its connector connects (mode): key (values typed on its
+// Connect card), signin (a sign-in the user approves in their own browser) or
+// project (a Wiro project, the wiro connector's: the card's one field is the
+// project picker, and connecting binds that project to the agent). An add
 // whose connector takes a key comes with that connector's connect card on the
 // same reply. From here the user gives that key together with their yes, before
 // the yes that applies the add is sent, and it is saved with
 // connect_agent_connector as the very next step: the agent stays stopping or
 // queued for the restart the add started only for seconds, and a key saved then
-// loads with that same restart. One that connects with a sign-in comes with its
-// connect card too, but a reply never connects it: connect_agent_connector
-// returns its sign-in link, or the user connects it on the agent page, once the
-// add is applied.
+// loads with that same restart. One that connects with a sign-in or a Wiro
+// project comes with its connect card too, but a reply never connects it:
+// connect_agent_connector returns its sign-in link or binds its project, or the
+// user connects it on the agent page, once the add is applied. Wiro's answer to
+// a reply names the connectors it leaves to connect (next), each with its mode.
 
 /** A pending proposal older than this cannot be approved with a typed reply. */
 export const SETUP_REPLY_WINDOW_SECONDS = 30 * 60;
@@ -73,15 +78,33 @@ const MAX_NAME_LENGTH = 64;
 const MAX_WITH = 12;
 const MAX_TASKS = 20;
 const MAX_NEEDS = 3;
-// How a connector an add needs is connected: its key (values typed on its Connect card) or a sign-in the user
-// approves in their own browser.
-export const SETUP_NEED_MODES = ['key', 'signin'] as const;
+// What Wiro's answer to a reply leaves to connect, at most: the connectors of the cards it names, one entry each.
+const MAX_NEXT = 6;
+// How a connector is connected, as Wiro writes it on a connect card (mode) and on an add's needs: its key (values
+// typed on its Connect card), a sign-in the user approves in their own browser, or a Wiro project (the wiro
+// connector: connecting it binds the project to the agent, and no key is typed).
+export const SETUP_NEED_MODES = ['key', 'signin', 'project'] as const;
 export type SetupNeedMode = typeof SETUP_NEED_MODES[number];
-export type SignInNeedMode = 'signin';
 
-/** Whether a connector connects with a sign-in, which a reply never does. */
-export function isSignInNeedMode(mode: SetupNeedMode | undefined): mode is SignInNeedMode {
-  return mode === 'signin';
+/** Whether a connector connects only with connect_agent_connector or on its card, never with a reply: a sign-in or a Wiro project. */
+export function connectsWithoutReply(mode: SetupNeedMode | undefined): mode is 'signin' | 'project' {
+  return mode === 'signin' || mode === 'project';
+}
+
+function needMode(value: unknown): SetupNeedMode | undefined {
+  const mode = asString(value);
+  return (SETUP_NEED_MODES as readonly string[]).includes(mode ?? '') ? mode as SetupNeedMode : undefined;
+}
+
+/**
+ * How a stored connect card connects. A card whose field is the Wiro project picker is a project card whatever mode
+ * it was stored with: no key can be typed for it. Otherwise the mode Wiro wrote on it; none on a card stored before
+ * Wiro wrote one.
+ */
+function connectCardOwnMode(value: Record<string, unknown>): SetupNeedMode | undefined {
+  const fields = Array.isArray(value.fields) ? value.fields : [];
+  if (fields.some(field => isPlainObject(field) && field.source === 'wiro_project')) return 'project';
+  return needMode(value.mode);
 }
 
 export const CHAT_SETUP_MODES = ['off', 'webchat', 'all'] as const;
@@ -95,7 +118,7 @@ export const CHAT_SETUP_DESCRIPTION = 'Setup from chat lets the agent propose se
   + '"webchat" only in the Wiro web chat; "off" turns it off. Messages sent with an API key act with the key '
   + 'owner\'s rights, so an agent shared with customers or many people usually uses "webchat" or "off".';
 
-const setupNeedSchema = z.object({
+export const setupNeedSchema = z.object({
   connector: z.string(),
   title: z.string().optional(),
   mode: z.enum(SETUP_NEED_MODES).optional(),
@@ -108,6 +131,11 @@ export const setupChangeSchema = z.object({
   kind: z.enum(SETUP_CHANGE_KINDS),
   action: z.string().optional(),
   connector: z.string().optional(),
+  mode: z.enum(SETUP_NEED_MODES).optional()
+    .describe('Connect: how the connector connects, as Wiro wrote it on the card: key (its values, saved with '
+      + 'connect_agent_connector, never in a chat message), signin (a sign-in link from connect_agent_connector) or '
+      + 'project (a Wiro project: connect_agent_connector binds it to the agent, and no key is asked for). A reply '
+      + 'never connects a signin or project card. Left out on a card stored before Wiro wrote it.'),
   key: z.string().optional()
     .describe('Schedule and skill: the scheduled task\'s or custom skill\'s key. Add and remove: the name of the '
       + 'Skill (util-*) the change turns on or off. A connector is never added or removed: connect and disconnect '
@@ -132,8 +160,9 @@ export const setupChangeSchema = z.object({
     .describe('Add and remove: the scheduled tasks, by key, that run again with the change. Wiro adds it.'),
   needs: z.array(setupNeedSchema).optional()
     .describe('Add: the connectors the change needs that are not connected yet, and how each one connects: key '
-      + '(its values, saved with connect_agent_connector, never in a chat message) or signin (a sign-in link from '
-      + 'connect_agent_connector, or on the agent page). Wiro adds it.'),
+      + '(its values, saved with connect_agent_connector, never in a chat message), signin (a sign-in link from '
+      + 'connect_agent_connector, or on the agent page) or project (a Wiro project that connect_agent_connector '
+      + 'binds to the agent, with no key). Wiro adds it.'),
   note: z.string().optional(),
   status: z.enum(SETUP_CHANGE_STATUSES),
   proposedAt: z.string().optional(),
@@ -169,25 +198,33 @@ function nameList(value: unknown, pattern: { test(name: string): boolean }, max:
   return names;
 }
 
-/** The connectors an add needs that are not connected yet, as Wiro wrote them. A mode this version does not know is left out. */
-function needList(value: unknown): SetupNeed[] {
+/**
+ * Connectors as Wiro wrote them, each once and at most max: the ones an add needs that are not connected yet, or the
+ * ones its answer to a reply leaves to connect. A mode this version does not know is left out.
+ */
+function needList(value: unknown, max = MAX_NEEDS): SetupNeed[] {
   if (!Array.isArray(value)) return [];
   const needs: SetupNeed[] = [];
   for (const item of value) {
-    if (needs.length === MAX_NEEDS) break;
+    if (needs.length === max) break;
     if (!isPlainObject(item)) continue;
     const connector = asString(item.connector)?.trim();
     if (!connector || connector.length > MAX_NAME_LENGTH || !CONNECTOR_KEY.test(connector) || connector.startsWith('sys-')
       || needs.some(need => need.connector === connector)) continue;
     const title = shortLine(item.title);
-    const mode = asString(item.mode);
+    const mode = needMode(item.mode);
     needs.push({
       connector,
       ...(title ? { title } : {}),
-      ...((SETUP_NEED_MODES as readonly string[]).includes(mode ?? '') ? { mode: mode as SetupNeedMode } : {}),
+      ...(mode ? { mode } : {}),
     });
   }
   return needs;
+}
+
+/** What Wiro's answer to a setup reply leaves to connect (its next), each connector with how it connects. */
+export function toSetupNext(value: unknown): SetupNeed[] {
+  return needList(value, MAX_NEXT);
 }
 
 /**
@@ -249,6 +286,7 @@ export function toSetupChange(value: unknown): SetupChange | undefined {
   const fields: Record<string, string | undefined> = {
     action,
     connector: shortLine(value.connector),
+    mode: kind === 'connect' ? connectCardOwnMode(value) : undefined,
     key: shortLine(value.key),
     title: shortLine(value.title),
     cron: shortLine(value.cron),
@@ -424,7 +462,41 @@ const NEED_HOW: Record<SetupNeedMode, string> = {
     + 'as soon as this change is applied (one restart then loads both), never in a chat message',
   signin: 'a sign-in: connect_agent_connector returns the link for the user to open in their own browser, or the user '
     + 'signs in on the agent page. Keys of the user\'s own app go in with that call, never in a chat message',
+  project: 'a Wiro project: connect_agent_connector binds it to the agent (the project of this connection, or one from '
+    + 'list_projects with project_id) and shows the project and the wallet that pays first. No key is asked for, and '
+    + 'none goes in a chat message',
 };
+
+// How a connect card that no add on its reply brings is connected, by the mode Wiro wrote on it.
+const CONNECT_HOW: Record<SetupNeedMode, string> = {
+  key: '- Connects with its values: list_agent_connectors with its slug shows what to ask the user for, and '
+    + 'connect_agent_connector saves them. A key never goes in a chat message.',
+  signin: `- Connects with ${NEED_HOW.signin}. A reply does not connect it.`,
+  project: `- Connects with ${NEED_HOW.project}. A reply does not connect it.`,
+};
+
+// A connect card stored before Wiro wrote its mode, with no add on its reply to say how it connects.
+const CONNECT_HOW_UNKNOWN = '- The user provides its values or signs in: connect_agent_connector saves the connector\'s '
+  + 'values or returns its sign-in link. A key never goes in a chat message.';
+
+// How each connector Wiro's answer to a reply leaves to connect is connected: the change that needed it is settled.
+const NEXT_HOW: Record<SetupNeedMode, string> = {
+  key: 'its values: connect_agent_connector saves them right away, never a chat message',
+  signin: 'a sign-in: connect_agent_connector returns the link for the user to open in their own browser, with the '
+    + 'keys of the user\'s own app where it needs them, and a reply does not connect it',
+  project: 'a Wiro project: connect_agent_connector binds it to the agent with no key, showing the project and the '
+    + 'wallet that pays first, and a reply does not connect it',
+};
+
+/** One line for what Wiro's answer to a setup reply leaves to connect, or undefined when it leaves nothing. */
+export function setupNextNote(next: readonly SetupNeed[]): string | undefined {
+  if (next.length === 0) return undefined;
+  const items = next.map((need) => {
+    const name = need.title ? `${quotedSpan(need.title)} (${quotedSpan(need.connector)})` : quotedSpan(need.connector);
+    return need.mode ? `${name}, with ${NEXT_HOW[need.mode]}` : name;
+  });
+  return `Wiro's answer leaves ${next.length === 1 ? 'this connector' : 'these connectors'} to connect: ${items.join('; ')}.`;
+}
 
 function needLine(need: SetupNeed): string {
   const name = need.title ? `${quotedSpan(need.title)} (${quotedSpan(need.connector)})` : quotedSpan(need.connector);
@@ -449,8 +521,8 @@ function registryChangeLines(change: SetupChange): string[] {
 }
 
 /**
- * The pending add on the same reply that needs this connect card's connector with a key or a sign-in (the
- * add-and-connect pair Wiro makes): its number and how the connector connects, or undefined.
+ * The pending add on the same reply that needs this connect card's connector with a key, a sign-in or a Wiro project
+ * (the add-and-connect pair Wiro makes): its number and how the connector connects, or undefined.
  */
 function pairedAdd(change: SetupChange, pending: readonly SetupChange[]): { number: number; mode: SetupNeedMode } | undefined {
   if (change.kind !== 'connect' || !change.connector) return undefined;
@@ -462,10 +534,9 @@ function pairedAdd(change: SetupChange, pending: readonly SetupChange[]): { numb
   return undefined;
 }
 
-/** The need of an add for this connector when a connect card connects it: by key or a sign-in. */
+/** The need of an add for this connector when a connect card connects it: one that says how it connects. */
 function connectNeed(add: SetupChange, connector: string): SetupNeed | undefined {
-  return add.needs?.find(candidate => candidate.connector === connector
-    && (candidate.mode === 'key' || isSignInNeedMode(candidate.mode)));
+  return add.needs?.find(candidate => candidate.connector === connector && candidate.mode !== undefined);
 }
 
 /**
@@ -484,12 +555,38 @@ function appliedPairedAdd(change: SetupChange, changes: readonly SetupChange[]):
 }
 
 /**
- * How a connect card's connector connects, as the add on its reply that brings it says, whether that add is still
- * pending or applied already. Undefined when no add on the reply brings it.
+ * How a connect card's connector connects: the mode Wiro wrote on the card, else as the add on its reply that brings
+ * it says, whether that add is still pending or applied already. Undefined for a card stored before Wiro wrote its
+ * mode that no add on the reply brings.
  */
 export function connectCardMode(change: SetupChange, changes: readonly SetupChange[]): SetupNeedMode | undefined {
   const pending = changes.filter(other => other.status === 'pending');
-  return pairedAdd(change, pending)?.mode ?? appliedPairedAdd(change, changes)?.mode;
+  return change.mode ?? pairedAdd(change, pending)?.mode ?? appliedPairedAdd(change, changes)?.mode;
+}
+
+/**
+ * How a pending connect card is connected, in one line: as the pending add on its reply that needs its connector says
+ * (the pair Wiro makes), or the applied add whose connector still waits, else by the card's own mode. The mode Wiro
+ * wrote on the card comes first.
+ */
+function connectCardLine(change: SetupChange, pending: readonly SetupChange[], changes: readonly SetupChange[]): string {
+  const paired = pairedAdd(change, pending);
+  if (paired) {
+    const mode = change.mode ?? paired.mode;
+    return mode === 'key'
+      ? `- Connects what proposed change ${paired.number} needs. Ask the user for the key together with their yes to `
+        + `change ${paired.number}. Once change ${paired.number} is applied, save the key with connect_agent_connector at once, `
+        + 'never in a chat message: one restart then loads both.'
+      : `- Connects what proposed change ${paired.number} needs, once it is applied: ${NEED_HOW[mode]}. A reply does not connect it.`;
+  }
+  const applied = appliedPairedAdd(change, changes);
+  const appliedMode = change.mode ?? applied?.mode;
+  if (applied && connectsWithoutReply(appliedMode)) {
+    // The add is applied and its connector still waits: it connects the way the add said.
+    return `- Connects what the applied change, ${setupChangeHeadline(applied.add)}, needs: ${NEED_HOW[appliedMode]}. `
+      + 'A reply does not connect it.';
+  }
+  return change.mode ? CONNECT_HOW[change.mode] : CONNECT_HOW_UNKNOWN;
 }
 
 function pendingChangeLines(
@@ -505,23 +602,7 @@ function pendingChangeLines(
     lines.push(`- Schedule: ${quotedSpan(change.cron)} (cron: minute, hour, day of month, month, weekday; in the `
       + 'agent\'s time zone)');
   }
-  const paired = pairedAdd(change, pending);
-  const applied = paired ? undefined : appliedPairedAdd(change, changes);
-  if (paired?.mode === 'key') {
-    lines.push(`- Connects what proposed change ${paired.number} needs. Ask the user for the key together with their yes to `
-      + `change ${paired.number}. Once change ${paired.number} is applied, save the key with connect_agent_connector at once, `
-      + 'never in a chat message: one restart then loads both.');
-  } else if (paired) {
-    lines.push(`- Connects what proposed change ${paired.number} needs, once it is applied: ${NEED_HOW[paired.mode]}. `
-      + 'A reply does not connect it.');
-  } else if (applied && isSignInNeedMode(applied.mode)) {
-    // The add is applied and its connector still waits: it connects the way the add said.
-    lines.push(`- Connects what the applied change, ${setupChangeHeadline(applied.add)}, needs: ${NEED_HOW[applied.mode]}. `
-      + 'A reply does not connect it.');
-  } else if (change.kind === 'connect') {
-    lines.push('- The user provides its values or signs in: connect_agent_connector saves the connector\'s values or '
-      + 'returns its sign-in link. A key never goes in a chat message.');
-  }
+  if (change.kind === 'connect') lines.push(connectCardLine(change, pending, changes));
   if (change.kind === 'disconnect') {
     lines.push('- Its connection is removed (its saved values, sign-in and account choices), and scheduled tasks that need '
       + 'it stop until it is connected again. Approving it needs no key.');

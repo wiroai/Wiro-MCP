@@ -34,7 +34,9 @@ export function registerGetAgentMessage(server: McpServer, client: WiroClient): 
         + 'still shows what it changed. An add or remove of a Skill also shows what Wiro says the change does with '
         + 'it: the other Skills that turn on or off (with), the scheduled tasks that pause or run again, and for an '
         + 'add the connectors still to connect (needs). Connectors are proposed with connect and disconnect '
-        + 'changes, never added or removed. On '
+        + 'changes, never added or removed. A connect change says how its connector connects (mode: key, signin or '
+        + 'project), and only connect_agent_connector connects a signin or project one, never a reply. Wiro\'s own '
+        + 'answer to a reply lists the connectors it leaves to connect (setupNext). On '
         + 'Wiro\'s own listing of a proposed change (listedSetupChanges), nothing is applied yet: show the listing, '
         + 'and send "yes" (or "yes N") again only after the user agrees to exactly that change, never on your own.',
       inputSchema: strictInput({

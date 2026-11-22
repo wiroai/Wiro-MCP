@@ -191,13 +191,17 @@ export function registerSendAgentMessage(server: McpServer, client: WiroClient, 
         const setupResult = target.kind === 'deployed' && response.status === 'agent_end'
           ? toSetupResult(response.setupresult)
           : undefined;
+        // What the answer leaves to connect comes with it, as on the row Wiro stores.
+        const setupNext = isPlainObject(response.setupresult) && Array.isArray(response.setupresult.next)
+          ? { next: response.setupresult.next }
+          : {};
         let handledRow: Record<string, unknown> | undefined = setupResult
           ? {
             guid: messageId,
             status: 'agent_end',
             content: asString(response.content) ?? message,
             response: asString(response.response) ?? '',
-            metadata: { type: 'setup_result' },
+            metadata: { type: 'setup_result', ...setupNext },
             createdat: sentAt,
             endedat: Math.floor(Date.now() / 1000),
           }

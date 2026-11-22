@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { asString, isPlainObject, toNumber, truncate, unixToIso } from './api.js';
 import { isWiroHostedFile, isWiroHostedUrl, listedAddress } from './media.js';
-import { listedSetupCount, setupChangeSchema, setupChangesFromBlocks } from './agent-setup.js';
+import { listedSetupCount, setupChangeSchema, setupChangesFromBlocks, setupNeedSchema, toSetupNext } from './agent-setup.js';
 import {
   AGENT_REPLY_LABEL,
   quotedBlock,
@@ -52,6 +52,10 @@ export const agentMessageSchema = z.object({
   listedSetupChanges: z.number().int().optional()
     .describe('Set on Wiro\'s own answer that lists the exact setup changes the agent proposed (in reply): how many '
       + 'it lists. Nothing is applied yet; a later "yes" (or "yes N") the user agreed to applies one.'),
+  setupNext: z.array(setupNeedSchema).optional()
+    .describe('Set on Wiro\'s own answer to a setup reply that leaves connectors to connect: each one with how it '
+      + 'connects, key (its values), signin (a sign-in) or project (a Wiro project bound to the agent). '
+      + 'connect_agent_connector connects each one; a reply never connects a signin or project one.'),
   attachments: z.array(z.object({
     url: z.string(),
     name: z.string().optional(),
@@ -270,12 +274,15 @@ export function toAgentMessage(
   const content = asString(row.content);
   const proposals = setupChanges(row.timeline);
   const listed = listedSetupCount(row);
+  const kind = messageKind(row);
+  // Wiro's answer to a setup reply names what it leaves to connect, beside its own text.
+  const next = kind === 'setup_result' && isPlainObject(row.metadata) ? toSetupNext(row.metadata.next) : [];
 
   return {
     messageId: asString(row.guid) ?? '',
     state: messageState(status),
     status,
-    kind: messageKind(row),
+    kind,
     ...(options.includeUserText && content ? { userText: truncate(content, 4_000) } : {}),
     ...(reply ? { reply } : {}),
     ...(reply.length < fullReply.length ? { replyTruncated: true } : {}),
@@ -283,6 +290,7 @@ export function toAgentMessage(
     toolsUsed: toolsUsed(row.timeline),
     ...(proposals.length > 0 ? { setupChanges: proposals } : {}),
     ...(listed > 0 ? { listedSetupChanges: listed } : {}),
+    ...(next.length > 0 ? { setupNext: next } : {}),
     attachments: attachments(row.attachments),
     ...(typeof row.model === 'string' && row.model ? { model: row.model } : {}),
     creditsUsed: credits,

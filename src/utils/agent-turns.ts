@@ -39,11 +39,13 @@ import {
   SETUP_REPLY_WINDOW_SECONDS,
   asksKeyAsReply,
   connectCardMode,
+  connectsWithoutReply,
   formatSetupChanges,
   isApprovableByReply,
-  isSignInNeedMode,
+  setupNextNote,
   setupResultActed,
   setupResultSchema,
+  type SetupNeedMode,
   type SetupResult,
 } from './agent-setup.js';
 import { createMediaContent, guessMimeType, isWiroHostedUrl, type MediaItem } from './media.js';
@@ -676,6 +678,8 @@ export async function collectTurn(options: CollectTurnOptions): Promise<AgentTur
         }
         if (keyAsked) notes.push(`Wiro's answer asks for a key as the next reply. ${SETUP_KEY_RULE}`);
       }
+      const leftToConnect = setupNextNote(result.message.setupNext ?? []);
+      if (leftToConnect) notes.push(leftToConnect);
       if (result.setupResult?.restarting) {
         notes.push('The agent restarts to load the change, which takes about a minute. Wiro still answers a reply to '
           + 'its setup proposals, such as "yes 2", during the restart; send any other message once the agent is '
@@ -852,16 +856,24 @@ function chooseNextAction(
  * connected with a key, the user gives that key together with their yes, so it
  * is saved as the very next step once the add is applied and the restart the
  * add started loads the key too. Wiro answers such replies whatever the agent's
- * status, restarts included.
+ * status, restarts included. A connector that connects with a sign-in or a Wiro
+ * project is never connected by a reply: its first step is
+ * connect_agent_connector, whether its card waits on the agent's reply or
+ * Wiro's answer to a reply leaves it to connect.
  */
 function setupNextAction(target: AgentTarget, result: AgentTurnResult): NextAction | undefined {
   const guid = target.agentGuid;
   if (target.kind !== 'deployed' || !guid || result.message.state !== 'completed') return undefined;
   const keyAsked = result.message.kind === 'setup_result' && asksKeyAsReply(result.message.reply);
+  // A connector Wiro's answer leaves to connect that only connect_agent_connector connects. It needs no wait for a
+  // restart: the connect takes effect whenever it is made.
+  const outside = (result.message.setupNext ?? []).find(need => connectsWithoutReply(need.mode));
+  const outsideStep = outside && connectsWithoutReply(outside.mode) ? connectStep(guid, outside.connector, outside.mode) : undefined;
   if (result.setupResult?.restarting) {
     // The key Wiro asks for next is saved now (the note says how), so it loads with this restart: waiting for the
     // agent first would restart it a second time.
     if (keyAsked) return undefined;
+    if (outsideStep) return outsideStep;
     return {
       tool: 'get_my_agent',
       arguments: { agent_guid: guid, wait_seconds: DEFAULT_WAIT_SECONDS },
@@ -885,7 +897,9 @@ function setupNextAction(target: AgentTarget, result: AgentTurnResult): NextActi
         + `yet. ${SETUP_LISTING_RULE}${several}${keyAsked ? ` ${SETUP_LISTING_KEY_RULE}` : ''}`,
     };
   }
-  const open = (result.message.setupChanges ?? []).filter(change => isApprovableByReply(change));
+  if (outsideStep) return outsideStep;
+  const changes = result.message.setupChanges ?? [];
+  const open = changes.filter(change => isApprovableByReply(change));
   if (open.length === 0) return undefined;
   // An add that needs a connector's key: the key comes with the user's yes and is saved once the add is applied,
   // while the agent is still stopping or queued for its restart, which lasts only seconds.
@@ -894,7 +908,8 @@ function setupNextAction(target: AgentTarget, result: AgentTurnResult): NextActi
     ? ' For a key, use connect_agent_connector instead of a chat message: ask the user for it together with their yes, '
       + 'and save it as soon as the change that needs its connector is applied, with no wait in between, so one '
       + 'restart loads both.'
-    : open.some(change => change.kind === 'connect')
+    // A sign-in or project card takes no key.
+    : open.some(change => change.kind === 'connect' && !connectsWithoutReply(connectCardMode(change, changes)))
       ? ' For a key, use connect_agent_connector instead of a chat message.'
       : '';
   if (open.some(change => change.kind !== 'connect')) {
@@ -912,26 +927,38 @@ function setupNextAction(target: AgentTarget, result: AgentTurnResult): NextActi
   }
   const card = open.find(change => change.kind === 'connect');
   const connector = card?.connector;
-  // A connector that an applied add needed keeps connecting the way the add said; a reply never connects it.
-  const mode = card ? connectCardMode(card, result.message.setupChanges ?? []) : undefined;
-  if (connector && isSignInNeedMode(mode)) return signInConnectStep(guid, connector);
+  // The mode Wiro wrote on the card, else the one the add that brings it says; a reply never connects a sign-in or a
+  // Wiro project.
+  const mode = card ? connectCardMode(card, changes) : undefined;
+  if (connector && connectsWithoutReply(mode)) return connectStep(guid, connector, mode);
   // The card names a catalog connector; the catalog read says what to ask for.
   return {
     tool: 'list_agent_connectors',
     arguments: { ...(connector ? { name: connector } : {}), agent_guid: guid },
-    reason: 'The agent asks for a key or sign-in. This call only shows what it needs: ask the user for the values and '
-      + 'save them with connect_agent_connector, never in a chat message.',
+    reason: card?.mode === 'key'
+      ? 'The agent asks for a connector\'s values. This call only shows what it needs: ask the user for them and save '
+        + 'them with connect_agent_connector, never in a chat message.'
+      : 'The agent asks for a key or sign-in. This call only shows what it needs: ask the user for the values and '
+        + 'save them with connect_agent_connector, never in a chat message.',
   };
 }
 
-/** The first step for a connect card's connector that connects with a sign-in: connect_agent_connector returns its link. */
-function signInConnectStep(guid: string, connector: string): NextAction {
+/**
+ * The first step for a connector that a reply never connects: connect_agent_connector returns a sign-in's link, or
+ * shows the Wiro project it would bind to the agent.
+ */
+function connectStep(guid: string, connector: string, mode: Extract<SetupNeedMode, 'signin' | 'project'>): NextAction {
   return {
     tool: 'connect_agent_connector',
     arguments: { action: 'connect', agent_guid: guid, connector },
-    reason: 'This connector connects with a sign-in, and a reply does not connect it. This call returns the sign-in '
-      + 'link for the user to open in their own browser, or lists the keys of the user\'s own app it needs first. The '
-      + 'user can also connect it on the agent page. Never ask for keys, tokens or passwords in a chat message.',
+    reason: mode === 'project'
+      ? 'This connector connects with a Wiro project, and a reply does not connect it. This call shows the project it '
+        + 'would bind to the agent (the project of this connection; project_id from list_projects picks another) and '
+        + 'the wallet that pays for its model runs, and changes nothing without confirm: true. It takes no key: never '
+        + 'ask for one in a chat message.'
+      : 'This connector connects with a sign-in, and a reply does not connect it. This call returns the sign-in '
+        + 'link for the user to open in their own browser, or lists the keys of the user\'s own app it needs first. The '
+        + 'user can also connect it on the agent page. Never ask for keys, tokens or passwords in a chat message.',
   };
 }
 
