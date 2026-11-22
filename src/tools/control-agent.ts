@@ -135,18 +135,10 @@ function setupRefusal(agent: AgentDetail, plainMember = false): Decision {
 /** Turns the known refusals of Start and Stop into advice. Anything else stays an error. */
 function interpretRefusal(error: ApiResultError, agent: AgentDetail): Decision | null {
   const message = error.message;
-  // A paused agent: its included usage is used up and the balance is short. Wiro says so with code 97 and the
-  // agent's usage (agentusage), in the sentence Send answers with too.
-  if (pausedUsage(error.body)) {
-    const current = asPlan(agent.tier);
-    const largest = current === AGENT_PLANS[AGENT_PLANS.length - 1];
-    return {
-      outcome: 'refused',
-      message: `Wiro refused the start: ${message} Nothing was charged. ${addFundsText(agent.workspace)} Then start it again.`
-        + (largest ? '' : ' A larger plan includes more AI usage each month: manage_agent_billing with action change_plan quotes a move.'),
-    };
-  }
-  if (/subscription required/i.test(message)) {
+  const paused = pausedUsage(error.body);
+  // An agent with no active plan: Wiro says so with "Subscription required", or with code 97 and the agent's usage
+  // (agentusage) paused for its plan. Funds do not run it; a plan does.
+  if (paused?.pausedReason === 'plan' || /subscription required/i.test(message)) {
     if (agent.subscription && isUnsettledPlan(agent.subscription)) {
       return {
         outcome: 'refused',
@@ -166,6 +158,17 @@ function interpretRefusal(error: ApiResultError, agent: AgentDetail): Decision |
         arguments: { agent_guid: agent.guid, action: renewable ? 'renew' : 'subscribe' },
         reason: 'This returns the price first; nothing is charged without confirm: true.',
       },
+    };
+  }
+  // A paused agent: its included usage is used up and the balance is short. Wiro says so with code 97 and the
+  // agent's usage (agentusage), in the sentence Send answers with too.
+  if (paused) {
+    const current = asPlan(agent.tier);
+    const largest = current === AGENT_PLANS[AGENT_PLANS.length - 1];
+    return {
+      outcome: 'refused',
+      message: `Wiro refused the start: ${message} Nothing was charged. ${addFundsText(agent.workspace)} Then start it again.`
+        + (largest ? '' : ' A larger plan includes more AI usage each month: manage_agent_billing with action change_plan quotes a move.'),
     };
   }
   if (/setup is not complete/i.test(message)) return setupRefusal(agent);

@@ -381,6 +381,13 @@ function formatUsd(value: number): string {
   return `$${value.toFixed(2)}`;
 }
 
+// What follows Wiro's refusal of a message to a deployed agent with no active plan: it does not run, so funds do not
+// help it.
+const NO_PLAN_NOTE = 'The message was not sent, and nothing was charged. The agent runs only with an active plan, so '
+  + 'adding funds does not run it. get_my_agent shows its plan: manage_agent_billing with action renew brings back an '
+  + 'expired plan, and action subscribe starts a new one; both quote the price first and charge nothing without '
+  + 'confirm: true. Once the plan is active, send the message again.';
+
 /**
  * What follows Wiro's refusal of a message to a deployed agent that has no AI usage it can pay for: nothing was sent
  * or charged, and the balance takes funds on wiro.ai. wallet: the balance that pays, when Wiro names it.
@@ -467,8 +474,10 @@ export async function explainSendRefusal(
 
   if (target.kind === 'deployed') {
     // The agent used the AI usage its plan includes and the balance is short: Wiro says so with code 97 and the
-    // agent's usage (agentusage), and its sentence names the amounts.
+    // agent's usage (agentusage), and its sentence names the amounts. An agent with no active plan gets the same
+    // code with pausedreason "plan": it runs only with a plan, whatever the balance holds.
     const paused = pausedUsage(response);
+    if (paused?.pausedReason === 'plan') return `${message}\n\n${NO_PLAN_NOTE}`;
     if (paused) return `${message}\n\n${noUsageLeftNote(paused.wallet)}`;
     // An older Wiro answers with the agent's credits, which count hundredths of a dollar.
     const balance = response.agentbalance;

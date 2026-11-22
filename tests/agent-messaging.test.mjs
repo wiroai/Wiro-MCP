@@ -529,6 +529,26 @@ test('send_agent_message follows Wiro\'s refusal of an agent with no AI usage it
     });
   }
 
+  // An agent with no active plan gets the same code, paused for its plan: funds do not run it, a plan does.
+  const noPlanSentence = 'My Bot has no active plan. Choose a plan to keep it running.';
+  const noPlan = fakeClient({
+    '/UserAgent/Message/Send': {
+      result: false,
+      errors: [{ code: 97, message: noPlanSentence }],
+      agentstatus: 4,
+      agentusage: { ...usage, includedusd: 0, usedusd: 0, renewalusd: 0, balanceusd: 42.1, wallet: 'personal', pausedreason: 'plan' },
+    },
+  });
+  await withClient(noPlan, async client => {
+    const result = await client.callTool({ name: 'send_agent_message', arguments: { agent: 'agent-guid-1', message: 'hello' } });
+    assert.equal(result.isError, true);
+    assert.equal(textOf(result), `## Error\n\n${noPlanSentence}\n\nThe message was not sent, and nothing was charged. The agent runs `
+      + 'only with an active plan, so adding funds does not run it. get_my_agent shows its plan: manage_agent_billing with '
+      + 'action renew brings back an expired plan, and action subscribe starts a new one; both quote the price first and '
+      + 'charge nothing without confirm: true. Once the plan is active, send the message again.');
+    assert.doesNotMatch(textOf(result), /Funds are added|change_plan/);
+  });
+
   // A refusal is a pause only with the agent's usage: a 97 without it keeps Wiro's own words.
   for (const message of ['Only a team admin can perform this action on a team-owned agent.', sentence]) {
     const member = fakeClient({ '/UserAgent/Message/Send': { result: false, errors: [{ code: 97, message }] } });

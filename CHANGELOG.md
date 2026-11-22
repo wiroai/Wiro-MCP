@@ -139,3 +139,7 @@ runs `npx @wiro-ai/wiro-mcp@latest` takes it at its next start.
   Limits, Model Access, Task/List) instead of `api`. A `WiroClient` that other code builds
   sends no such header. The header is the caller's own word: a limit or a rule that must hold
   for whoever holds the key belongs on the key (scope `project`).
+- An agent runs only with an active plan. One without reads as paused with `pausedReason`
+  `plan` in `get_my_agent` and `list_my_agents`, whatever the balance holds, and a message or
+  a start Wiro refuses for it (code 97 with `agentusage`) points to `manage_agent_billing`
+  with `renew` or `subscribe` instead of adding funds.

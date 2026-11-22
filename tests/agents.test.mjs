@@ -1957,6 +1957,22 @@ test('control_agent turns start refusals into the billing step to take', async (
     const result = await call(client, 'control_agent', { agent_guid: 'ua-1', action: 'start' });
     assert.match(result.structuredContent.message, /Funds are added at https:\/\/wiro\.ai\/panel\/wallet\/deposit\/credit-card \(select the agent's team in the dashboard first\)\. Then start it again\./);
   });
+  // An agent with no active plan: the same code, paused for its plan. A plan runs it, never funds.
+  const noPlanSentence = 'My Bot has no active plan. Choose a plan to keep it running.';
+  for (const [plan, action] of [[subscription({ status: 'expired' }), 'renew'], [null, 'subscribe']]) {
+    const noPlan = fakeClient({
+      '/UserAgent/Detail': detailResponse(agentRow({ status: 0, subscription: plan })),
+      '/UserAgent/Start': { result: false, errors: [{ code: 97, message: noPlanSentence }], agentusage: usageOf({ includedusd: 0, usedusd: 0, leftusd: 0, paused: true, pausedreason: 'plan' }) },
+    });
+    await withClient(noPlan, async client => {
+      const result = await call(client, 'control_agent', { agent_guid: 'ua-1', action: 'start' });
+      assert.notEqual(result.isError, true, textOf(result));
+      assert.equal(result.structuredContent.outcome, 'refused');
+      assert.match(result.structuredContent.message, /^Wiro refused the start: the agent has no active plan\. /);
+      assert.deepEqual(result.structuredContent.nextAction.arguments, { agent_guid: 'ua-1', action });
+      assert.doesNotMatch(textOf(result), /Funds are added|change_plan/);
+    });
+  }
   // The words alone, without the agent's usage, are no pause: the answer stays Wiro's error.
   const words = fakeClient({
     '/UserAgent/Detail': detailResponse(agentRow({ status: 0 })),
@@ -5492,6 +5508,13 @@ test('get_my_agent and list_my_agents show the AI usage, the balance after it an
   const limited = await read({ usage: usageOf({ paused: true, pausedreason: 'spendlimit' }) });
   assert.match(textOf(limited.detail), /\. Paused: a spend limit is reached, so it takes no new turns until the limit resets or is raised \(get_controls shows it\)$/m);
   assert.match(textOf(limited.list), /, paused \(spend limit reached\);/);
+
+  // An agent with no active plan does not run, whatever the balance holds: a plan, not funds, runs it again.
+  const noPlan = await read({ usage: usageOf({ includedusd: 0, usedusd: 0, leftusd: 0, renewalusd: 0, paused: true, pausedreason: 'plan' }) });
+  assert.equal(noPlan.detail.structuredContent.agent.usage.pausedReason, 'plan');
+  assert.match(textOf(noPlan.detail), /\. Paused: it has no active plan, so it takes no new turns until a plan is paid for: manage_agent_billing with action renew brings back an expired plan, and subscribe starts a new one\. Funds alone do not run it$/m);
+  assert.doesNotMatch(textOf(noPlan.detail), /no AI usage left|until its plan renews/);
+  assert.match(textOf(noPlan.list), /, paused \(no active plan\);/);
 
   // A plan change inside the period moves what this period includes; each renewal includes the plan's own amount.
   const moved = await read({ usage: usageOf({ includedusd: 12.4, usedusd: 1, leftusd: 11.4, renewalusd: 30, wallet: 'team' }), spend: undefined });

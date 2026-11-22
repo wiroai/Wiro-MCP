@@ -393,9 +393,9 @@ export const agentUsageSchema = z.object({
   minBalanceUsd: z.number().optional()
     .describe('Without included usage left, a new turn needs at least this much in the balance.'),
   paused: z.boolean()
-    .describe('Whether the agent takes no new turns now: its included usage is used up and the balance is under minBalanceUsd, or a spend limit is reached. A turn that is running finishes.'),
-  pausedReason: z.enum(['balance', 'spendlimit']).optional()
-    .describe('Why it is paused: balance (the included usage is used up and the balance is short) or spendlimit (a spend limit is reached).'),
+    .describe('Whether the agent takes no new turns now: it has no active plan, its included usage is used up and the balance is under minBalanceUsd, or a spend limit is reached. A turn that is running finishes.'),
+  pausedReason: z.enum(['plan', 'balance', 'spendlimit']).optional()
+    .describe('Why it is paused: plan (it has no active plan; an agent runs only with one, whatever the balance holds), balance (the included usage is used up and the balance is short) or spendlimit (a spend limit is reached).'),
   extraUsd: z.number().optional()
     .describe('Only in an answer from an older Wiro release: usage bought earlier for this agent that is left.'),
   legacy: z.boolean().optional()
@@ -438,7 +438,9 @@ export function toAgentUsage(row: Record<string, unknown>): AgentUsage {
     const balance = toNumber(usage.balanceusd);
     const wallet = usage.wallet === 'personal' || usage.wallet === 'team' ? usage.wallet : undefined;
     const minBalance = toNumber(usage.minbalanceusd);
-    const reason = usage.pausedreason === 'balance' || usage.pausedreason === 'spendlimit' ? usage.pausedreason : undefined;
+    const reason = usage.pausedreason === 'plan' || usage.pausedreason === 'balance' || usage.pausedreason === 'spendlimit'
+      ? usage.pausedreason
+      : undefined;
     return {
       ...(period ? { period } : {}),
       ...(resetsAt ? { resetsAt } : {}),
@@ -496,6 +498,10 @@ export function toAgentSpend(row: Record<string, unknown>): AgentSpend | undefin
 
 /** Why a paused agent takes no new turns, as a clause. */
 function pausedText(usage: AgentUsage): string {
+  if (usage.pausedReason === 'plan') {
+    return 'it has no active plan, so it takes no new turns until a plan is paid for: manage_agent_billing with action '
+      + 'renew brings back an expired plan, and subscribe starts a new one. Funds alone do not run it';
+  }
   if (usage.pausedReason === 'spendlimit') {
     return 'a spend limit is reached, so it takes no new turns until the limit resets or is raised (get_controls shows it)';
   }
@@ -525,7 +531,9 @@ export function aiUsageText(usage: AgentUsage): string {
 
 /** The agent's AI usage in a list row: "AI usage $12.40 of $30.00 included, balance $42.10, paused (balance short)". */
 export function aiUsageShortText(usage: AgentUsage): string {
-  const reason = usage.pausedReason === 'spendlimit' ? 'spend limit reached' : usage.pausedReason === 'balance' ? 'balance short' : 'no usage left';
+  const reason = usage.pausedReason === 'plan'
+    ? 'no active plan'
+    : usage.pausedReason === 'spendlimit' ? 'spend limit reached' : usage.pausedReason === 'balance' ? 'balance short' : 'no usage left';
   return `AI usage ${formatUsd(usage.usedUsd)} of ${formatUsd(usage.includedUsd)} included`
     + `${usage.extraUsd ? `, ${formatUsd(usage.extraUsd)} bought earlier left` : ''}`
     + `${usage.balanceUsd !== undefined ? `, balance ${formatUsd(usage.balanceUsd)}` : ''}`
