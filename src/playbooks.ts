@@ -720,8 +720,8 @@ Each limit and each rule covers one scope:
 - \`project\`: one API key, wherever it is used: in scripts, through this server, in the LLM gateway or by an agent connected to it. Name it by its project's name or id. Leave it out for this connection's own key.
 - \`surface\`: one way in, wherever the key or the person comes from. Work that fits more than one counts on the first that matches: who does it (Studio, the Workflow Agent or a deployed agent), then a workflow run, then the client, then the API key or the dashboard:
   - \`web\`: the Wiro dashboard.
-  - \`api\`: calls with an API key. A local install of this server counts as \`api\`.
-  - \`mcp\`: the hosted MCP server at mcp.wiro.ai, with the apps connected to it.
+  - \`api\`: calls with an API key.
+  - \`mcp\`: this MCP server, hosted at mcp.wiro.ai or run yourself, with the apps connected to it. A local install names itself to Wiro, so its runs count as \`mcp\`, not \`api\`.
   - \`llm-gateway\`: the OpenAI and Anthropic compatible LLM gateway.
   - \`extension\`: the Wiro browser extensions.
   - \`agent\`: what deployed agents do on their own: the runs they start and their chat model. Its spend limits also count their AI usage that the Wiro balance pays and their plan charges, renewals included.

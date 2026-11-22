@@ -871,7 +871,7 @@ export function registerManageModelAccess(server: McpServer, client: WiroClient)
         project: z.string().trim().min(1).max(200).optional()
           .describe('Scope project: the API key\'s project, by id or exact name. Left out, this connection\'s own key.'),
         surface: z.enum(SURFACES).optional()
-          .describe('Scope surface: web (the dashboard), api (an API key, a local install of this server included), mcp (the hosted MCP server), llm-gateway, extension, agent (deployed agents\' own runs), studio (messages to Studio and the models it runs), workflow-agent (messages to the Workflow Agent) or workflow (workflow runs and their steps, unless an agent, Studio or the Workflow Agent started them).'),
+          .describe('Scope surface: web (the dashboard), api (an API key), mcp (this server, hosted at mcp.wiro.ai or run yourself), llm-gateway, extension, agent (deployed agents\' own runs), studio (messages to Studio and the models it runs), workflow-agent (messages to the Workflow Agent) or workflow (workflow runs and their steps, unless an agent, Studio or the Workflow Agent started them).'),
         agent: z.string().trim().min(1).max(200).optional()
           .describe('Scope agent: the deployed agent, by name or guid. Its rule also covers the chat model it answers with and its built-in voice (voice notes and voice replies, which count as Audio & Speech).'),
         everything_else: z.enum(['allow', 'block']).optional()

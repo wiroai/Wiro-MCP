@@ -134,3 +134,8 @@ runs `npx @wiro-ai/wiro-mcp@latest` takes it at its next start.
   unless a project or a member is named. Studio's and the Workflow Agent's work is checked on the turn's
   project: the key the message came with, or the workspace's Studio project for a message
   sent on wiro.ai.
+- The `wiro-mcp-server` command names itself to Wiro with `x-wiro-client: wiro-mcp/<version>`,
+  so the runs of a local install, the Docker image included, count on the `mcp` surface (Spend
+  Limits, Model Access, Task/List) instead of `api`. A `WiroClient` that other code builds
+  sends no such header. The header is the caller's own word: a limit or a rule that must hold
+  for whoever holds the key belongs on the key (scope `project`).

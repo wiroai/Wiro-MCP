@@ -193,7 +193,7 @@ test('get_controls shows each limit with what is left, each rule in plain words,
       '## Controls of this workspace',
       '**Workspace:** team `Acme` (`Acme Inc`); this connection acts as a team admin',
       '**Changes:** this connection can change these Spend Limits and Model Access rules, with manage_spend_limit and manage_model_access. Every change shows a summary first and waits for the user\'s yes.',
-      '**This connection\'s runs count as:** surface `mcp` (the hosted MCP server at mcp.wiro.ai), with the API key of project id `48211`',
+      '**This connection\'s runs count as:** surface `mcp` (the hosted MCP server at mcp.wiro.ai, and this server when you run it yourself), with the API key of project id `48211`',
       '### Spend limits (2)',
       '- Monthly limit for the whole team: $248.70 of $500.00 used, $20.00 held by work still running, $231.30 left, alert email at 90%, resets December 1, 2026 at 00:00 UTC (limit_guid `l-acc`)',
       '- Daily limit for the API key of project `Production` (id `48211`), the key this connection uses: $5.20 of $5.00 used: used up, so new work it covers is refused until it resets, no alert email, resets November 21, 2026 at 00:00 UTC (limit_guid `l-key`)',
@@ -222,7 +222,9 @@ test('get_controls shows each limit with what is left, each rule in plain words,
       surface: 'studio', label: 'Studio', description: 'messages to Studio and the models it runs for a person, whichever way they come in',
     });
     assert.equal(data.surfaces.find(entry => entry.surface === 'web').description, 'the Wiro dashboard');
-    assert.match(data.surfaces.find(entry => entry.surface === 'api').description, /a local install of this server included/);
+    assert.equal(data.surfaces.find(entry => entry.surface === 'api').description, 'calls with an API key');
+    // This server names itself to Wiro, so a local install counts as mcp.
+    assert.match(data.surfaces.find(entry => entry.surface === 'mcp').description, /and this server when you run it yourself/);
     assert.deepEqual(data.dashboard, { spendLimits: SPEND_LIMITS_PAGE, modelAccess: MODEL_ACCESS_PAGE });
     assert.deepEqual(fake.paths().sort(), ['/ModelAccess/List', '/Organization/List', '/SpendLimit/List']);
 
@@ -355,7 +357,7 @@ test('get_controls marks the member limit and rule this connection acts under, f
     assert.notEqual(result.isError, true, textOf(result));
     const lines = linesOf(result);
     for (const line of [
-      `**This connection's runs count as:** surface \`mcp\` (the hosted MCP server at mcp.wiro.ai), with the API key of project id \`48211\`, as team member \`Bob Roe\` (user id \`${BOB}\`)`,
+      `**This connection's runs count as:** surface \`mcp\` (the hosted MCP server at mcp.wiro.ai, and this server when you run it yourself), with the API key of project id \`48211\`, as team member \`Bob Roe\` (user id \`${BOB}\`)`,
       `- Monthly limit for team member \`Bob Roe\` (user id \`${BOB}\`), the person this connection acts as: $100.00 of $100.00 used: used up, so new work it covers is refused until it resets, alert email at 80%, resets December 1, 2026 at 00:00 UTC (limit_guid \`l-bob\`)`,
       `- Monthly limit for team member \`Jane Doe\` (user id \`${JANE}\`): $100.00 of $100.00 used: used up, so new work it covers is refused until it resets, alert email at 80%, resets December 1, 2026 at 00:00 UTC (limit_guid \`l-jane\`)`,
       `- Rule for team member \`Bob Roe\` (user id \`${BOB}\`), the person this connection acts as: Every model except Video Generation (rule_guid \`r-bob\`)`,
@@ -455,7 +457,7 @@ test('check_model_access checks a run through this connection and offers the cha
     const lines = linesOf(result);
     for (const line of [
       '## Model Access check: `openai/gpt-6-2-astra`',
-      '**Run checked:** a run through this connection: surface `mcp` (the hosted MCP server at mcp.wiro.ai), with this connection\'s API key (project id `48211`)',
+      '**Run checked:** a run through this connection: surface `mcp` (the hosted MCP server at mcp.wiro.ai, and this server when you run it yourself), with this connection\'s API key (project id `48211`)',
       '**Categories of this model:** LLM & Chat',
       `**Blocked.** Wiro refuses such a run with error code 92 before it starts: ${BLOCKED_BY_KEY}`,
       '**Rules that apply (2), widest first:**',
@@ -614,7 +616,7 @@ test('check_model_access describes the run Wiro says it checked: a key counts as
     assert.notEqual(staging.isError, true, textOf(staging));
     const lines = linesOf(staging);
     for (const line of [
-      '**Run checked:** a run by team member `Bob Roe` through surface `api` (calls with an API key, a local install of this server included), with the API key of project `Staging` (id `7`)',
+      '**Run checked:** a run by team member `Bob Roe` through surface `api` (calls with an API key), with the API key of project `Staging` (id `7`)',
       'A run with an API key counts as the person who created the key, so this checked a run by team member `Bob Roe`, not by team member `Jane Doe`. For that member\'s own runs, name a key they created with project, or leave out project and agent.',
       '**Allowed.** No Model Access rule applies to this run, so every model can run.',
     ]) assert.ok(lines.includes(line), `missing line: ${line}\n\n${textOf(staging)}`);
@@ -626,7 +628,7 @@ test('check_model_access describes the run Wiro says it checked: a key counts as
 
     // A run through this connection names the member it counts as too.
     const own = await client.callTool({ name: 'check_model_access', arguments: { model: 'bytedance/seedance-v2-5-flash' } });
-    assert.ok(linesOf(own).includes('**Run checked:** a run through this connection: surface `mcp` (the hosted MCP server at mcp.wiro.ai), with this connection\'s API key (project id `48211`), as team member `Bob Roe`'), textOf(own));
+    assert.ok(linesOf(own).includes('**Run checked:** a run through this connection: surface `mcp` (the hosted MCP server at mcp.wiro.ai, and this server when you run it yourself), with this connection\'s API key (project id `48211`), as team member `Bob Roe`'), textOf(own));
     assert.deepEqual(own.structuredContent.context, { surface: 'mcp', project: { id: '48211', name: 'Production', thisConnection: true }, member: { uuid: BOB, name: 'Bob Roe' }, thisConnection: true });
   });
 });
@@ -1514,8 +1516,8 @@ test('the controls playbook teaches the rules, the roles, the surfaces and the r
     /A team: a team admin or the organization's owner\. The person who made the team is one of its admins\./,
     /cannot change any of them: not the whole team's, not their own member limit, and not the limits and rules of the keys and agents they created or deployed/,
     /A deployed agent can never change controls, not even its own\./,
-    /`mcp`: the hosted MCP server at mcp\.wiro\.ai/,
-    /A local install of this server counts as `api`\./,
+    /`api`: calls with an API key\.\n/,
+    /`mcp`: this MCP server, hosted at mcp\.wiro\.ai or run yourself, with the apps connected to it\. A local install names itself to Wiro, so its runs count as `mcp`, not `api`\./,
     /`studio`: Studio: the messages sent to it and the models it runs for a person, whichever way they come in/,
     /`workflow-agent`: the Workflow Agent: the messages sent to it/,
     /`workflow`: workflow runs and resumes and every step they run/,

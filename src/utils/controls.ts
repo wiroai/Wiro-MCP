@@ -65,14 +65,14 @@ export const SURFACE_LABELS: Record<Surface, string> = {
 };
 
 /**
- * What each way in covers. A local install of this server sends its calls with an API key, so it counts as api.
- * Work that fits more than one counts on the first that matches: who does it (Studio, the Workflow Agent or a
- * deployed agent), then a workflow run, then the client, then the API key or the dashboard.
+ * What each way in covers. This server's command names itself to Wiro (x-wiro-client), so a local install counts as
+ * mcp, like the hosted server. Work that fits more than one counts on the first that matches: who does it (Studio,
+ * the Workflow Agent or a deployed agent), then a workflow run, then the client, then the API key or the dashboard.
  */
 export const SURFACE_DESCRIPTIONS: Record<Surface, string> = {
   web: 'the Wiro dashboard',
-  api: 'calls with an API key, a local install of this server included',
-  mcp: 'the hosted MCP server at mcp.wiro.ai',
+  api: 'calls with an API key',
+  mcp: 'the hosted MCP server at mcp.wiro.ai, and this server when you run it yourself',
   'llm-gateway': 'the OpenAI and Anthropic compatible LLM gateway',
   extension: 'the Wiro browser extensions',
   agent: 'deployed agents\' own runs',

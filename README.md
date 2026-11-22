@@ -352,16 +352,16 @@ never in a message, and a sign-in or a Wiro project is never connected by a repl
 
 Spend Limits cap what a workspace spends in a month or a day, in USD, and Model Access
 rules allow or block models by category or one by one. Each covers the whole wallet, one
-team member, one API key, one way in (the dashboard, the API, the hosted MCP server, the LLM
-gateway, the browser extensions, agents, Studio, the Workflow Agent or workflows) or one
-agent, and every limit and rule that applies to a run must allow it. Work they refuse never
-runs and is never charged: error code 93 for a spend limit, 92 for a Model Access rule.
-Studio's and the Workflow Agent's chat model follows your rules too, like the models Studio
-runs, and an agent's own rule also covers the chat model it answers with and its built-in
-voice. A local install of this server sends its calls with your API key, so the models it
-runs count as the API. Messages to Studio and the Workflow Agent count as Studio and the
-Workflow Agent, with the models Studio runs for them, and workflow runs as workflows,
-whichever way they come in.
+team member, one API key, one way in (the dashboard, the API, MCP, the LLM gateway, the
+browser extensions, agents, Studio, the Workflow Agent or workflows) or one agent, and every
+limit and rule that applies to a run must allow it. Work they refuse never runs and is never
+charged: error code 93 for a spend limit, 92 for a Model Access rule. Studio's and the
+Workflow Agent's chat model follows your rules too, like the models Studio runs, and an
+agent's own rule also covers the chat model it answers with and its built-in voice. This
+server names itself to Wiro, so the models a local install runs count as MCP, like the
+hosted server's. Messages to Studio and the Workflow Agent count as Studio and the Workflow
+Agent, with the models Studio runs for them, and workflow runs as workflows, whichever way
+they come in.
 
 | Tool | Description |
 |------|-------------|

@@ -102,7 +102,7 @@ export function registerCheckModelAccess(server: McpServer, client: WiroClient):
         project: z.string().trim().min(1).max(200).optional()
           .describe('The API key the run uses, by its project id or exact name. Left out, this connection\'s own key when nothing else is named, or when surface is api, mcp, llm-gateway, extension, studio, workflow-agent or workflow and no member is named.'),
         surface: z.enum(SURFACES).optional()
-          .describe('The way in: web (the dashboard), api (an API key, a local install of this server included), mcp (the hosted MCP server), llm-gateway, extension, agent, studio (messages to Studio and the models it runs), workflow-agent (messages to the Workflow Agent) or workflow (workflow runs and their steps). Left out, the surface this connection counts as when nothing else is named, api with a project, and web for a member.'),
+          .describe('The way in: web (the dashboard), api (an API key), mcp (this server, hosted at mcp.wiro.ai or run yourself), llm-gateway, extension, agent, studio (messages to Studio and the models it runs), workflow-agent (messages to the Workflow Agent) or workflow (workflow runs and their steps). Left out, the surface this connection counts as when nothing else is named, api with a project, and web for a member.'),
         agent: z.string().trim().min(1).max(200).optional()
           .describe('A deployed agent, by name or guid: checks a run the agent starts (surface agent).'),
       }),

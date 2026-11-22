@@ -1,9 +1,13 @@
 #!/usr/bin/env node
 
+import { createRequire } from 'node:module';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { WiroClient } from './client.js';
 import { createMcpServer } from './server.js';
 import { parseToolsets } from './tools/index.js';
+
+const require = createRequire(import.meta.url);
+const { version } = require('../package.json') as { version: string };
 
 const apiKey = process.env['WIRO_API_KEY'];
 const apiSecret = process.env['WIRO_API_SECRET'];
@@ -25,6 +29,10 @@ if (!apiKey) {
 }
 
 const client = new WiroClient(apiKey, apiSecret, baseUrl, {
+  // Names this server to Wiro, so the runs of an install people run themselves count on the mcp surface.
+  // Only this command sends it: a program that builds its own WiroClient, the hosted server included, names
+  // itself or sends nothing.
+  requestHeaders: () => ({ 'x-wiro-client': `wiro-mcp/${version}` }),
   missingSecretHint: 'This project uses signature-based auth. '
     + 'Set WIRO_API_SECRET to the project\'s API secret in your MCP server config.',
 });
