@@ -45,6 +45,17 @@ jobs:
             }
           '
 
+      # CHANGELOG.md heads a version "## X.Y.Z (unreleased)" until it goes out, so the release
+      # dates that heading first: the tag and its notes never say unreleased.
+      - name: Check the CHANGELOG dates this release
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          if grep -Fiqx "## $version (unreleased)" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md still heads $version as unreleased. Date that heading, then release again."
+            exit 1
+          fi
+
       - name: Install latest npm
         run: npm install -g npm@latest
 

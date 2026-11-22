@@ -42,6 +42,17 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tags=$tags" >> "$GITHUB_OUTPUT"
 
+      # The same CHANGELOG check the npm workflow makes, so no image goes out for a version
+      # npm refuses.
+      - name: Check the CHANGELOG dates this release
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          if grep -Fiqx "## $version (unreleased)" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md still heads $version as unreleased. Date that heading, then release again."
+            exit 1
+          fi
+
       - name: Check the Docker Hub secrets
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
