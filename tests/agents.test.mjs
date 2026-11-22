@@ -1940,6 +1940,31 @@ test('control_agent turns start refusals into the billing step to take', async (
   });
 });
 
+// Wiro's Start refuses an agent in setup with "Agent setup is not complete. Fill in the agent's required settings
+// before starting." (it waits on required credentials only): read as stopped a moment before, the refusal still leads
+// to the setup step, never to a connector.
+test('control_agent reads Start\'s setup refusal as the setup step', async () => {
+  for (const message of [
+    'Agent setup is not complete. Fill in the agent\'s required settings before starting.',
+    'Agent setup is not complete. Please finish setting up your connectors before starting.',
+  ]) {
+    const fake = fakeClient({
+      '/UserAgent/Detail': detailResponse(agentRow({ status: 0, setuprequired: true })),
+      '/UserAgent/Start': { result: false, errors: [{ code: 0, message }] },
+    });
+    await withClient(fake, async client => {
+      const result = await call(client, 'control_agent', { agent_guid: 'ua-1', action: 'start' });
+      assert.notEqual(result.isError, true, textOf(result));
+      assert.equal(fake.called('/UserAgent/Start').length, 1);
+      assert.equal(result.structuredContent.outcome, 'refused');
+      assert.match(result.structuredContent.message, /^The agent cannot start until its setup is finished/);
+      assert.match(result.structuredContent.message, /After the credentials are set, call update_agent with only agent_guid to refresh its setup status, then start it\./);
+      assert.ok(['set_agent_credentials', 'update_agent'].includes(result.structuredContent.nextAction.tool), result.structuredContent.nextAction.tool);
+      assert.doesNotMatch(JSON.stringify(result.structuredContent), /connect_agent_connector/);
+    });
+  }
+});
+
 test('get_my_agent sends a stopped agent without a plan or extra credits to billing, not to start', async () => {
   const ended = { monthlycredits: 0, extracredits: 0, usedcredits: 0, remainingcredits: 0, credentials: {} };
   for (const [status, sub, action] of [

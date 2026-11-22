@@ -411,7 +411,7 @@ test('deployed agent refusals explain the fix and point to the right tool', asyn
         errors: [{ code: 0, message: 'Agent setup is incomplete. Complete the setup before sending messages.' }],
         agentstatus: 6,
       },
-      expect: /set_agent_credentials, connect_agent_connector or, for a Wiro project, bind_agent_project[\s\S]*manage_agent_billing \(action subscribe\)/,
+      expect: /get_my_agent lists the required settings that are missing; save them with set_agent_credentials or, for a Wiro project, bind_agent_project, then start the agent\. Connectors do not hold the start\.[\s\S]*manage_agent_billing \(action subscribe\)/,
     },
     {
       response: {
@@ -476,8 +476,8 @@ test('deployed agent refusals say who can act on a team agent without reading th
   const cases = [
     [0, 'Agent is stopped. Start it from the agent panel before sending messages.', /On a team agent, starting it needs a team admin or the person who deployed it\.$/],
     [5, 'Agent is in error state. Restart it from the agent panel before sending messages.', /On a team agent, both need a team admin or the person who deployed it\.$/],
-    // A team admin connects connectors too, as Wiro allows it.
-    [6, 'Agent setup is incomplete. Complete the setup before sending messages.', /On a team agent, a team admin or the person who deployed it saves credentials, connects connectors with connect_agent_connector and pays for the plan\.$/],
+    // Setup waits on credentials and the plan only: connectors do not hold an agent in setup.
+    [6, 'Agent setup is incomplete. Complete the setup before sending messages.', /On a team agent, a team admin or the person who deployed it saves credentials and pays for the plan\.$/],
   ];
   for (const [agentstatus, message, expect] of cases) {
     const fake = fakeClient({ '/UserAgent/Message/Send': { result: false, errors: [{ code: 0, message }], agentstatus } });
