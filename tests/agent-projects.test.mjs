@@ -1442,7 +1442,7 @@ test('the instructions, the playbooks and the prompts lead the same way', async 
   await withTools({}, async ({ client }) => {
     const prompt = await client.getPrompt({ name: 'deploy_agent', arguments: { goal: 'make images' } });
     assert.match(prompt.messages[0].content.text, /For a Wiro project \(`wiro`\), call `bind_agent_project` instead: it needs no key, shows me the project first and connects it only after my yes\./);
-    assert.match(prompt.messages[0].content.text, /The `wiro` connector, which gives the agent its model tools, runs with that same project: connecting it binds the project the same way\./);
+    assert.match(prompt.messages[0].content.text, /The Wiro AI Models connector \(`wiro`\), which gives the agent its model tools, runs with that same project: connecting it binds the project the same way\./);
 
     // No tool text sends model-run billing to a saved key any more.
     const { tools } = await client.listTools();

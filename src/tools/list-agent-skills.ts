@@ -155,7 +155,7 @@ export function registerListAgentSkills(server: McpServer, client: WiroClient): 
         name: z.string().min(1).max(100).optional()
           .describe('A skill name (for example "util-video-creator") returns the skill and the setup fields of every credential it needs. A credential or channel key (for example "telegram") returns that credential\'s setup.'),
         capability: z.string().max(100).optional()
-          .describe('Only skills with this capability, for example "image_generation". include_capabilities lists the names.'),
+          .describe('Only skills with this capability, for example "video_generation". include_capabilities lists the names.'),
         include_capabilities: z.boolean().default(false)
           .describe('Also return the list of capability names with descriptions.'),
         include_deprecated: z.boolean().default(false)

@@ -325,24 +325,24 @@ in AI usage each month; after that, they use your Wiro balance.
 | `update_agent` | Change an agent's name, description, time zone, models, chat commands and setup from chat |
 | `apply_agent_skills` | Turn skills on or off; every plan includes every skill, so a change costs nothing |
 | `set_agent_credentials` | Save an agent's chat channel keys (such as a Telegram bot token), Twilio Voice and settings |
-| `connect_agent_connector` | Connect a connector to an agent: save its keys, or start its sign-in, which you approve in your browser. The `wiro` connector, the agent's model and task tools, runs with the agent's own Wiro project: connecting it binds that project to the agent, after showing the project, what it replaces and its wallet |
+| `connect_agent_connector` | Connect a connector to an agent: save its keys, or start its sign-in, which you approve in your browser. The Wiro AI Models connector (`wiro`), the agent's model and task tools, runs with the agent's own Wiro project: connecting it binds that project to the agent, after showing the project, what it replaces and its wallet |
 | `set_agent_connector_accounts` | Choose the accounts a connected connector may act on, such as its ad accounts, pages or channels, or the advertisers a TikTok Ads sign-in reaches |
 | `disconnect_agent_connector` | Disconnect a connector from an agent, after your confirmation |
 | `list_projects` | List the projects of the connected project's workspace, to pick one for an agent; no keys are shown |
-| `bind_agent_project` | Set the Wiro project an agent's video and voice skills run models with, with no key in the chat; shows the project first, then asks for your confirmation. The agent's model tools come from the `wiro` connector, which runs with this same project and is connected with `connect_agent_connector` |
+| `bind_agent_project` | Set the Wiro project an agent's video and voice skills run models with, with no key in the chat; shows the project first, then asks for your confirmation. The agent's model tools come from the Wiro AI Models connector (`wiro`), which runs with this same project and is connected with `connect_agent_connector` |
 | `manage_agent_custom_skill` | Add, edit, schedule, restore or remove an agent's own instructions and scheduled tasks; turning off its approval policy or changing its rules needs your confirmation |
 | `manage_agent_billing` | Subscribe, move to another plan, cancel or renew, paid from your Wiro balance, after your confirmation |
 | `get_agent_activity` | Read what an agent spent and its ledger in dollars, and its activity logs, including who changed what on it |
 | `delete_agent` | Delete an agent, after your confirmation |
 
 A connector connects with a key typed on its Connect card, a sign-in you approve in your
-browser, or a Wiro project. The `wiro` connector gives the agent only Wiro's model, task and
-file upload tools, plus read-only docs search and playbooks. It always runs with the agent's
-own Wiro project, so its calls count as the agent's own: the agent's spend limits and Model
-Access rules apply, and account, agent and billing calls are refused. Connecting it binds the
-project to the agent, as `bind_agent_project` does: a new project turns on the scheduled tasks
-and custom skills that need one. While it is connected, binding another project moves its
-tools there too.
+browser, or a Wiro project. The Wiro AI Models connector (`wiro`) gives the agent only Wiro's
+model, task and file upload tools, plus read-only docs search and playbooks. It always runs
+with the agent's own Wiro project, so its calls count as the agent's own: the agent's spend
+limits and Model Access rules apply, and account, agent and billing calls are refused.
+Connecting it binds the project to the agent, as `bind_agent_project` does: a new project
+turns on the scheduled tasks and custom skills that need one. While it is connected, binding
+another project moves its tools there too.
 Where a connector has account choices, the agent acts only on the accounts you choose, also
 for a connector served by the service itself, such as TikTok Ads and its advertisers.
 When an agent proposes a connection in its chat, a key goes in with `connect_agent_connector`,
