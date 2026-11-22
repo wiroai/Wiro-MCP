@@ -32,15 +32,15 @@ import {
   workspaceHint,
   type CustomSkillEntry,
 } from '../utils/agent-config.js';
-import { bindProjectStep, outcomeUnknown, skillLabel, skillOffTasksNote, WIRO_PROJECT_CREDENTIAL } from '../utils/user-agent.js';
+import { AGENT_AI_USAGE, bindProjectStep, outcomeUnknown, skillLabel, skillOffTasksNote, WIRO_PROJECT_CREDENTIAL } from '../utils/user-agent.js';
 import { DEFAULT_WAIT_SECONDS } from '../utils/poll.js';
 import { isPlainTeamMember, teamAgentBillingRefused } from '../utils/workspace.js';
 import { nextActionSchema, strictInput } from './schemas.js';
 
 // Every plan includes every skill, so a skill change moves no money and leaves the plan as it is.
-const FREE_NOTE = 'A skill change costs nothing: the plan keeps its price and monthly credits.';
+const FREE_NOTE = 'A skill change costs nothing: the plan keeps its price and the AI usage it includes.';
 // Turning a skill on is free, but the work it does is not.
-const WORK_NOTE = 'The skills\' work uses the agent\'s credits, and model runs they start are billed to the wallet '
+const WORK_NOTE = `The skills' work uses ${AGENT_AI_USAGE}, and model runs they start are billed to the wallet `
   + 'of the workspace that owns the Wiro project connected to the agent.';
 
 const outputSchema = {
@@ -155,12 +155,12 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
       title: 'Change an agent\'s skills',
       description: 'Turn Skills on or off for a deployed agent. Outside services are Connectors and connect with '
         + 'connect_agent_connector instead. Every plan includes every skill, so a '
-        + 'skill change costs nothing: the plan keeps its price and monthly credits, and no active plan is '
+        + 'skill change costs nothing: the plan keeps its price and the AI usage it includes, and no active plan is '
         + 'needed. The change is applied on the first call, so tell the user what turns on or off and get '
         + 'their yes first. The tool checks the names and turns on the skills they depend on '
         + '(add_dependencies); the result lists them, the credentials the new skills still need and the '
         + 'scheduled tasks the change paused. A running agent restarts once when a skill turns on or off. '
-        + 'A skill\'s work uses the agent\'s credits, and model runs it starts are billed to the wallet of the '
+        + `A skill's work uses ${AGENT_AI_USAGE}, and model runs it starts are billed to the wallet of the `
         + 'workspace that owns the Wiro project connected to the agent. Newly enabled skills may still need '
         + 'credentials (set_agent_credentials, bind_agent_project for a Wiro project) and do '
         + 'not create scheduled tasks (manage_agent_custom_skill does). On a team agent only a team admin or the '
@@ -254,7 +254,7 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
         }
 
         // Every team member can read a team agent, but only a team admin or the person who deployed it can
-        // change its skills. The credit history check refuses the other members up front; the organization's
+        // change its skills. The transaction history check refuses the other members up front; the organization's
         // owner passes it and gets Wiro's own answer.
         if (skillsMove && await isPlainTeamMember(client, row, extra.signal)
           && await teamAgentBillingRefused(client, agent_guid, extra.signal)) {

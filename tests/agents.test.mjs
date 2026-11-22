@@ -665,7 +665,7 @@ test('list_agent_skills hides deprecated skills and lists channels', async () =>
     assert.match(textOf(result), /^- \*\*Voice Receptionist\*\* \(`util-voice-receptionist`\): needs `twilio-voice`$/m);
     assert.match(textOf(result), /^Outside services are Connectors: list_agent_connectors lists them\.$/m);
     assert.doesNotMatch(textOf(result), /per month|\bfree\b|\$\d/);
-    assert.equal(result.structuredContent.pricingNote, 'Every plan (Starter, Pro or Max) includes every skill and connector, so neither changes an agent\'s price: a custom build costs its plan\'s price, and turning a skill on or off later costs nothing. A skill\'s work uses the agent\'s credits, and model runs it starts are billed to the wallet of the workspace that owns the Wiro project connected to the agent. deploy_agent returns the exact quote before anything is charged.');
+    assert.equal(result.structuredContent.pricingNote, 'Every plan (Starter, Pro or Max) includes every skill and connector, so neither changes an agent\'s price: a custom build costs its plan\'s price, and turning a skill on or off later costs nothing. A skill\'s work uses the agent\'s AI usage (its plan first, then the workspace balance), and model runs it starts are billed to the wallet of the workspace that owns the Wiro project connected to the agent. deploy_agent returns the exact quote before anything is charged.');
     assert.deepEqual(result.structuredContent.channels[0].requiredFields, ['bottoken', 'allowedusers']);
     assert.equal(JSON.stringify(result.structuredContent).includes('credential_schema'), false);
     assert.deepEqual(result.structuredContent.nextAction.arguments, { name: 'util-voice-receptionist' });
@@ -1725,7 +1725,7 @@ test('turning on a scheduled task that waits for its skills says it is paused un
     assert.equal(out.entry.enabled, true);
     assert.equal(out.entry.skillOff, true);
     assert.deepEqual(out.entry.offSkills, [['util-ads-reporter']]);
-    assert.match(out.schedule.note, /Every run spends the agent's credits\. It is paused until Ads Reporter \(`util-ads-reporter`\) is on\./);
+    assert.match(out.schedule.note, /Every run uses the agent's AI usage \(its plan first, then the workspace balance\)\. It is paused until Ads Reporter \(`util-ads-reporter`\) is on\./);
     assert.doesNotMatch(out.schedule.note, /It is turned off/);
     assert.match(textOf(result), /\*\*Schedule:\*\* .*It is paused until Ads Reporter \(`util-ads-reporter`\) is on\./);
 

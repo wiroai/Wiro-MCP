@@ -63,7 +63,8 @@ export const agentMessageSchema = z.object({
     type: z.string().optional(),
   })),
   model: z.string().optional(),
-  creditsUsed: z.number().nullable().optional(),
+  aiUsageUsd: z.number().nullable().optional()
+    .describe('What the turn\'s AI usage cost, in USD, once it is recorded. A deployed agent pays it from its plan\'s included usage first, then from the Wiro balance of its workspace.'),
   createdAt: z.string().optional(),
   endedAt: z.string().optional(),
   endReason: z.enum(['spend_limit', 'balance']).optional()
@@ -271,7 +272,8 @@ export function toAgentMessage(
   }
   const fullReply = terminal || options.includePartial ? extractReply(row) : '';
   const reply = truncate(fullReply, MAX_REPLY_LENGTH);
-  const credits = toNumber(row.tokencost);
+  // Wiro records a turn's cost in hundredths of a dollar.
+  const cost = toNumber(row.tokencost);
   const content = asString(row.content);
   const proposals = setupChanges(row.timeline);
   const listed = listedSetupCount(row);
@@ -294,7 +296,7 @@ export function toAgentMessage(
     ...(next.length > 0 ? { setupNext: next } : {}),
     attachments: attachments(row.attachments),
     ...(typeof row.model === 'string' && row.model ? { model: row.model } : {}),
-    creditsUsed: credits,
+    aiUsageUsd: cost === null ? null : Math.round(cost * 10_000) / 1_000_000,
     ...(unixToIso(row.createdat) ? { createdAt: unixToIso(row.createdat) } : {}),
     ...(unixToIso(row.endedat) ? { endedAt: unixToIso(row.endedat) } : {}),
   };

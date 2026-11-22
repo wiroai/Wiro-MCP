@@ -818,7 +818,7 @@ test('a custom skill gated on the project: the summary says it turns on, confirm
     assert.equal(preview.structuredContent.state, 'preview');
     // Instead of the warning, it says what connecting does.
     assert.deepEqual(preview.structuredContent.warnings, []);
-    const note = 'Image Rules (`cs-image-rules`) and Weekly Images (`cs-cron-weekly-images`) turn on once the project is connected. Every run of a scheduled task uses credits; turn off any you do not want with manage_agent_custom_skill.';
+    const note = 'Image Rules (`cs-image-rules`) and Weekly Images (`cs-cron-weekly-images`) turn on once the project is connected. Every run of a scheduled task uses the agent\'s AI usage (its plan first, then the workspace balance); turn off any you do not want with manage_agent_custom_skill.';
     assert.doesNotMatch(text(preview), /No active skill/);
     assert.ok(preview.structuredContent.notes.includes(note));
     assert.ok(text(preview).includes(note));
@@ -849,7 +849,7 @@ test('bind_agent_project names what turns on: all on a first bind, what is off o
   const off = { ...gated, enabled: false };
   await withTools(routes({ '/UserAgent/Detail': detail({ ...NO_WIRO_SKILL, scheduledskills: [off], credentials: { wiro: wiroGroup(OTHER_KEY) } }) }), async ({ call }) => {
     const preview = await call('bind_agent_project', { agent_guid: AGENT });
-    assert.ok(preview.structuredContent.notes.includes('Weekly Images (`cs-cron-weekly-images`) turns on once the project is connected. Every run of a scheduled task uses credits; turn off any you do not want with manage_agent_custom_skill.'));
+    assert.ok(preview.structuredContent.notes.includes('Weekly Images (`cs-cron-weekly-images`) turns on once the project is connected. Every run of a scheduled task uses the agent\'s AI usage (its plan first, then the workspace balance); turn off any you do not want with manage_agent_custom_skill.'));
     const done = await call('bind_agent_project', preview.structuredContent.nextAction.arguments);
     assert.ok(done.structuredContent.notes.some(entry => /^Weekly Images \(`cs-cron-weekly-images`\) turns on now that the project is connected\./.test(entry)));
   });
@@ -882,7 +882,7 @@ test('bind_agent_project names the skill a task it turns on still waits for', as
     const preview = await call('bind_agent_project', { agent_guid: AGENT });
     assert.notEqual(preview.isError, true, text(preview));
     assert.equal(preview.structuredContent.state, 'preview');
-    const note = 'Weekly Images (`cs-cron-weekly-images`) and Monthly Images (`cs-cron-monthly-images`) turn on once the project is connected. Weekly Images (`cs-cron-weekly-images`) stays paused until Video Creator (`util-video-creator`) is on. Every run of a scheduled task uses credits; turn off any you do not want with manage_agent_custom_skill.';
+    const note = 'Weekly Images (`cs-cron-weekly-images`) and Monthly Images (`cs-cron-monthly-images`) turn on once the project is connected. Weekly Images (`cs-cron-weekly-images`) stays paused until Video Creator (`util-video-creator`) is on. Every run of a scheduled task uses the agent\'s AI usage (its plan first, then the workspace balance); turn off any you do not want with manage_agent_custom_skill.';
     assert.ok(preview.structuredContent.notes.includes(note), JSON.stringify(preview.structuredContent.notes));
     assert.ok(text(preview).includes(note));
   });
@@ -896,7 +896,7 @@ test('replacing a project names what is off and turns on again, and nothing else
   });
   await withTools(routes({ '/UserAgent/Detail': row }), async ({ call }) => {
     const summary = await call('bind_agent_project', { agent_guid: AGENT });
-    const before = 'Weekly Images (`cs-cron-weekly-images`) turns on once the project is connected. Every run of a scheduled task uses credits; turn off any you do not want with manage_agent_custom_skill.';
+    const before = 'Weekly Images (`cs-cron-weekly-images`) turns on once the project is connected. Every run of a scheduled task uses the agent\'s AI usage (its plan first, then the workspace balance); turn off any you do not want with manage_agent_custom_skill.';
     assert.equal(summary.structuredContent.state, 'preview');
     assert.ok(summary.structuredContent.replaces);
     assert.ok(summary.structuredContent.notes.includes(before));

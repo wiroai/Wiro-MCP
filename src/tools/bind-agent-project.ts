@@ -137,7 +137,7 @@ async function readBindPlan(client: WiroClient, agentGuid: string, projectId: st
   }
 
   // Every team member can read a team agent, but only a team admin or the
-  // person who deployed it can change it. As in apply_agent_skills, the credit
+  // person who deployed it can change it. As in apply_agent_skills, the transaction
   // history check refuses the other members up front; the organization's owner
   // passes it and gets Wiro's answer on confirm.
   const plainMember = await isPlainTeamMember(client, row, signal);
