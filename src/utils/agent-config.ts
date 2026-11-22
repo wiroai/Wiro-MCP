@@ -201,6 +201,8 @@ export interface RegistrySkill {
   replacement?: string;
   requiresCredentials: boolean;
   credentialKeys: string[];
+  /** The catalog connectors the skill works with (suggested_connectors). None connects by itself. */
+  suggestedConnectors: string[];
 }
 
 export interface RegistryChannel {
@@ -230,6 +232,7 @@ export function parseSkillRegistry(body: Row): SkillRegistry {
       ...(asString(raw.replacement) ? { replacement: asString(raw.replacement) } : {}),
       requiresCredentials: raw.requires_credentials === true,
       credentialKeys: [...(primary ? [primary] : []), ...stringList(raw.additional_credential_keys)],
+      suggestedConnectors: [...new Set(stringList(raw.suggested_connectors).filter(slug => CONNECTOR_SLUG.test(slug)))],
     });
   }
   const channels = new Map<string, RegistryChannel>();

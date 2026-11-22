@@ -93,7 +93,11 @@ runs `npx @wiro-ai/wiro-mcp@latest` takes it at its next start.
 - A message refused because the agent's setup is not finished names its missing settings
   only: connectors do not hold an agent's start. `control_agent` reads Start's new wording of
   that refusal as before.
-- The `deploy_agent` quote and result name the connectors a template suggests.
+- The `deploy_agent` quote and result name the connectors a template suggests, or a custom
+  build's skills work with. `list_agent_skills` names the Connectors each Skill works with
+  (`suggestedConnectors`), by their catalog titles; none connects by itself. `apply_agent_skills`
+  names the ones the skills it turned on work with that the agent has not connected
+  (`connectorsToConnect`), as an add card's `needs` does.
 - `manage_agent_custom_skill` says which connectors a scheduled task needs to run, and that
   a custom skill is how the agent learns to use a connector's tools.
 - The agents playbook, the server instructions, the `deploy_agent` prompt and the README

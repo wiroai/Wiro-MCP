@@ -20,7 +20,7 @@ import {
   type SkillSummary,
 } from '../utils/agent-catalog.js';
 import { loadSkillRegistry, registryTitles } from '../utils/agent-config.js';
-import { readConnector } from '../utils/agent-connectors.js';
+import { connectorLabel, listCatalog, readConnector } from '../utils/agent-connectors.js';
 import { AGENT_AI_USAGE, skillLabel, toStringArray } from '../utils/user-agent.js';
 import { nextActionSchema, strictInput } from './schemas.js';
 
@@ -62,9 +62,37 @@ function toChannels(value: unknown): Channel[] {
   });
 }
 
-function skillLine(skill: SkillSummary): string {
+/**
+ * The catalog's connectors by slug, read once when a listed skill works with any, so they are named by title. Null
+ * when none is needed or the catalog cannot be read.
+ */
+async function connectorCatalog(
+  client: WiroClient,
+  skills: SkillSummary[],
+  signal: AbortSignal,
+): Promise<Map<string, { slug: string; title: string }> | null> {
+  if (!skills.some(skill => skill.suggestedConnectors?.length)) return null;
+  const catalog = await listCatalog(client, {}, signal).catch(() => null);
+  return catalog ? new Map(catalog.map(connector => [connector.slug, { slug: connector.slug, title: connector.title }])) : null;
+}
+
+/**
+ * The Connectors a skill works with, by title: the ones the active catalog lists, as an add card names them. Unread,
+ * the catalog leaves them by slug.
+ */
+function worksWith(skill: SkillSummary, catalog: Map<string, { slug: string; title: string }> | null): string[] {
+  const slugs = skill.suggestedConnectors ?? [];
+  if (!catalog) return slugs.map(slug => connectorLabel({ slug }));
+  return slugs.flatMap(slug => {
+    const connector = catalog.get(slug);
+    return connector ? [connectorLabel(connector)] : [];
+  });
+}
+
+function skillLine(skill: SkillSummary, connectors: string[] = []): string {
   const notes = [
     skill.requiresCredentials && skill.credentialKey ? `needs \`${skill.credentialKey}\`` : null,
+    connectors.length > 0 ? `works with ${connectors.join(', ')}` : null,
     skill.deprecated ? `deprecated${skill.replacement ? ` (use ${skill.replacement})` : ''}` : null,
   ].filter(Boolean).join(', ');
   const description = skill.description ?? '';
@@ -115,7 +143,8 @@ export function registerListAgentSkills(server: McpServer, client: WiroClient): 
     {
       title: 'List Wiro agent skills',
       description: 'List the Skills a Wiro agent can have (how it works: reporting, copywriting, video, voice '
-        + 'calls and more), the skills they depend on, the credentials they need, and the chat channels. Every plan '
+        + 'calls and more), the skills they depend on, the credentials they need, the Connectors they work with '
+        + '(suggestedConnectors, none of which connects by itself), and the chat channels. Every plan '
         + 'includes every skill, so a skill has no price of its own. Use it to plan a custom build for deploy_agent or '
         + 'a skill change for apply_agent_skills. Outside services (ad accounts, stores, social accounts, mailboxes) '
         + 'are not skills but Connectors: list_agent_connectors lists them. Pass `name` with a skill name (or a '
@@ -200,12 +229,18 @@ export function registerListAgentSkills(server: McpServer, client: WiroClient): 
           }
 
           const lines: string[] = [];
+          const catalog = await connectorCatalog(client, skills, extra.signal);
           for (const skill of skills) lines.push(`## Skill`, '', skillLine(skill));
           if (skills[0]?.dependsOn.length) {
             const titles = await loadSkillRegistry(client, extra.signal).then(registryTitles).catch(() => new Map<string, string>());
             lines.push('', `Also enables: ${skills[0].dependsOn.map(name => skillLabel(name, titles)).join(', ')}`);
           }
           if (skills[0] && !skills[0].requiresCredentials) lines.push('', 'This skill needs no credentials.');
+          const connectors = skills[0] ? worksWith(skills[0], catalog) : [];
+          if (connectors.length > 0) {
+            lines.push('', `Works with these Connectors: ${connectors.join(', ')}. None connects by itself: `
+              + 'connect_agent_connector connects each one, and list_agent_connectors with its slug shows how.');
+          }
           for (const credential of credentials) lines.push('', ...setupLines(credential));
           lines.push('', PRICING_NOTE);
 
@@ -236,7 +271,8 @@ export function registerListAgentSkills(server: McpServer, client: WiroClient): 
 
         const lines = [`## Agent skills (${skills.length})`, ''];
         if (skills.length === 0) lines.push('No skills matched.');
-        for (const skill of skills) lines.push(skillLine(skill));
+        const catalog = await connectorCatalog(client, skills, extra.signal);
+        for (const skill of skills) lines.push(skillLine(skill, worksWith(skill, catalog)));
         if (channels.length > 0) {
           lines.push('', '### Chat channels', '', 'Channels are not skills. Each one turns on once its required fields are set with set_agent_credentials.');
           for (const channel of channels) lines.push(`- ${channel.title} (\`${channel.credentialKey}\`): ${channel.requiredFields.join(', ')}`);

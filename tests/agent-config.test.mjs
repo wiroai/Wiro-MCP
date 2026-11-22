@@ -412,6 +412,32 @@ test('apply_agent_skills names a credential by the title of its card, or of the 
   }
 });
 
+test('apply_agent_skills names the Connectors the skills it turned on work with that the agent has not connected', async () => {
+  const ads = { name: 'util-ads-manager-common', title: 'Ads Manager Common Rules', depends_on: [], conflicts_with: [], requires_credentials: false, pricing: {}, suggested_connectors: ['google-ads', 'meta-ads', 'tiktok-ads'] };
+  const fake = fakeClient(skillRoutes({
+    '/Skills/List': { ...skillList, skills: [...skillList.skills, ads] },
+    '/UserAgent/Detail': (_body, calls) => detail(calls.some(call => call.path === '/UserAgent/SkillsApply')
+      ? { skills: [...detailRow().skills, { name: 'util-ads-manager-common', enabled: true }] }
+      : {}),
+    '/UserAgent/SkillsApply': appliedAnswer({ pricing: { enabledSkills: ['util-ads-manager-common'] } }),
+    // Meta Ads is connected already, and TikTok Ads is not in the active catalog.
+    '/UserAgent/ConnectorList': { result: true, errors: [], useragentconnectors: [{ slug: 'meta-ads', title: 'Meta Ads', status: 'connected', authtype: 'oauth' }] },
+    '/AgentConnector/List': { result: true, errors: [], agentconnectors: [{ slug: 'google-ads', title: 'Google Ads' }, { slug: 'meta-ads', title: 'Meta Ads' }] },
+  }));
+  await withClient(fake, async client => {
+    const applied = await client.callTool({ name: 'apply_agent_skills', arguments: { agent_guid: AGENT, skills: { 'util-ads-manager-common': true } } });
+    assert.equal(applied.structuredContent.status, 'applied', text(applied));
+    assert.deepEqual(applied.structuredContent.connectorsToConnect, [{ connector: 'google-ads', title: 'Google Ads' }]);
+    assert.ok(text(applied).split('\n').includes('**Connectors to connect:** Google Ads (`google-ads`). The skills turned on work with them, and none connects by itself: connect_agent_connector connects each one.'), text(applied));
+    assert.deepEqual(applied.structuredContent.nextAction, {
+      tool: 'list_agent_connectors',
+      arguments: { name: 'google-ads', agent_guid: AGENT },
+      reason: 'See how this connector connects before asking the user for anything; connect_agent_connector connects it.',
+    });
+    assert.deepEqual(fake.called('/UserAgent/ConnectorList').map(call => call.body), [{ useragentguid: AGENT }]);
+  });
+});
+
 test('apply_agent_skills says when the skill change takes effect on an agent that is not running', async () => {
   for (const [status, restart] of [
     [6, 'The agent still needs setup; the skill change takes effect once it starts.'],

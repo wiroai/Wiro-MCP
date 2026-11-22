@@ -316,7 +316,7 @@ in AI usage each month; after that, they use your Wiro balance.
 |------|-------------|
 | `list_agent_templates` | Browse ready-made agent templates and the three monthly plans |
 | `get_agent_template` | Read a template's skills, plans, the connectors it suggests and the keys it needs |
-| `list_agent_skills` | Browse the skills an agent can have, and what each one needs to work |
+| `list_agent_skills` | Browse the skills an agent can have, what each one needs to work and the connectors it works with |
 | `list_agent_connectors` | Browse the connectors an agent can connect (ad accounts, stores, social accounts, mailboxes, data sources), what each one needs and the tools it gives the agent; with an agent, its connections |
 | `deploy_agent` | Deploy an agent from a template or build one from skills, on the Starter, Pro or Max plan; shows the plan's price, the wallet it charges and the other plans' prices, and asks before charging |
 | `list_my_agents` | List your agents with their status, plan, AI usage this month and what they spent |

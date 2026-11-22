@@ -743,6 +743,42 @@ test('list_agent_skills names the skills a skill turns on with it by their title
   }
 });
 
+test('list_agent_skills names the Connectors a skill works with, by their catalog titles', async () => {
+  const ads = { name: 'util-ads-manager-common', title: 'Ads Manager Common Rules', requires_credentials: false, depends_on: [], conflicts_with: [], pricing: {}, suggested_connectors: ['google-ads', 'meta-ads', 'tiktok-ads', 'Not A Slug', 'meta-ads'] };
+  const plain = { name: 'util-chat-markdown-reporting', title: 'Chat Reporting', requires_credentials: false, depends_on: [], conflicts_with: [], pricing: {} };
+  // TikTok Ads is not in the active catalog here, so it is not offered.
+  const catalog = { result: true, errors: [], agentconnectors: [{ slug: 'google-ads', title: 'Google Ads' }, { slug: 'meta-ads', title: 'Meta Ads' }] };
+  const routes = { '/Skills/List': { result: true, errors: [], skills: [ads, plain], channels: [] }, '/Skills/Detail': { result: true, errors: [], skill: ads } };
+  const fake = fakeClient({ ...routes, '/AgentConnector/List': catalog });
+  await withClient(fake, async client => {
+    const listed = await call(client, 'list_agent_skills', {});
+    assert.notEqual(listed.isError, true, textOf(listed));
+    assert.deepEqual(listed.structuredContent.skills[0].suggestedConnectors, ['google-ads', 'meta-ads', 'tiktok-ads']);
+    assert.equal('suggestedConnectors' in listed.structuredContent.skills[1], false);
+    const lines = textOf(listed).split('\n');
+    assert.ok(lines.includes('- **Ads Manager Common Rules** (`util-ads-manager-common`): works with Google Ads (`google-ads`), Meta Ads (`meta-ads`)'), textOf(listed));
+    assert.ok(lines.includes('- **Chat Reporting** (`util-chat-markdown-reporting`)'), textOf(listed));
+    assert.equal(fake.called('/AgentConnector/List').length, 1);
+
+    const detail = await call(client, 'list_agent_skills', { name: 'util-ads-manager-common' });
+    assert.notEqual(detail.isError, true, textOf(detail));
+    assert.ok(textOf(detail).split('\n').includes('Works with these Connectors: Google Ads (`google-ads`), Meta Ads (`meta-ads`). None connects by itself: '
+      + 'connect_agent_connector connects each one, and list_agent_connectors with its slug shows how.'), textOf(detail));
+  });
+  // Without the catalog the slugs stand in, and a skill with none reads no catalog.
+  const unread = fakeClient({ ...routes, '/AgentConnector/List': { result: false, errors: [{ code: 0, message: 'Busy' }] } });
+  await withClient(unread, async client => {
+    const listed = await call(client, 'list_agent_skills', {});
+    assert.ok(textOf(listed).split('\n').includes('- **Ads Manager Common Rules** (`util-ads-manager-common`): works with `google-ads`, `meta-ads`, `tiktok-ads`'), textOf(listed));
+  });
+  const none = fakeClient({ '/Skills/List': { result: true, errors: [], skills: [plain], channels: [] } });
+  await withClient(none, async client => {
+    const listed = await call(client, 'list_agent_skills', {});
+    assert.notEqual(listed.isError, true, textOf(listed));
+    assert.equal(none.called('/AgentConnector/List').length, 0);
+  });
+});
+
 test('list_agent_skills points an outside service to the connector tools', async () => {
   const fake = fakeClient({
     '/Skills/Detail': { result: false, errors: [{ code: 404, message: 'Skill not found' }] },
@@ -934,8 +970,8 @@ test('deploy_agent checks custom skills and prices them with a draft preview', a
 test('deploy_agent quotes the credentials of every skill in a custom build, dependencies included', async () => {
   const registry = {
     'util-phone-channel': { name: 'util-phone-channel', title: 'Phone Channel', requires_credentials: true, credential_key: 'twilio-voice', depends_on: ['util-voice-receptionist', 'util-voice-call-prep'], pricing: { monthly_price_weight_usd: 2 } },
-    'util-voice-receptionist': { name: 'util-voice-receptionist', title: 'Voice Receptionist Rules', requires_credentials: false, depends_on: ['util-wiro-models'], pricing: {} },
-    'util-voice-call-prep': { name: 'util-voice-call-prep', title: 'Voice Call Prep', requires_credentials: false, depends_on: [], pricing: {} },
+    'util-voice-receptionist': { name: 'util-voice-receptionist', title: 'Voice Receptionist Rules', requires_credentials: false, depends_on: ['util-wiro-models'], pricing: {}, suggested_connectors: ['hubspot', 'apollo'] },
+    'util-voice-call-prep': { name: 'util-voice-call-prep', title: 'Voice Call Prep', requires_credentials: false, depends_on: [], pricing: {}, suggested_connectors: ['hubspot'] },
     'util-wiro-models': { name: 'util-wiro-models', title: 'Wiro AI Models', requires_credentials: true, credential_key: 'wiro', depends_on: ['util-chat-markdown-reporting'], pricing: {} },
     'util-chat-markdown-reporting': { name: 'util-chat-markdown-reporting', title: 'Chat Reporting', requires_credentials: false, depends_on: [], pricing: {} },
   };
@@ -953,6 +989,9 @@ test('deploy_agent quotes the credentials of every skill in a custom build, depe
       { key: 'wiro', title: 'Wiro AI Models credentials' },
     ]);
     assert.match(textOf(quote), /- After deployment the user must provide: Phone Channel credentials \(`twilio-voice`\), Wiro AI Models credentials \(`wiro`\)\. bind_agent_project connects a project after deployment, with no key to paste\./);
+    // The connectors the build's skills work with, once each; the deploy connects none of them.
+    assert.deepEqual(quote.structuredContent.quote.connectorsSuggested, ['hubspot', 'apollo']);
+    assert.match(textOf(quote), /^- Connectors its skills work with: `hubspot`, `apollo`\. The deploy connects none of them: connect_agent_connector connects each one afterwards/m);
     // A voice build's calls run a model billed to the project's wallet, not to the plan.
     assert.match(textOf(quote), /Model runs it starts, for images, videos or voice calls, are billed to the wallet of the workspace that owns the Wiro project connected to the agent\./);
     // The named skills are checked first; the skills they bring are read once the build is known.

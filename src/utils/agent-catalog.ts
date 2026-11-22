@@ -272,6 +272,8 @@ export const skillSummarySchema = z.object({
   userInvocable: z.boolean().optional(),
   deprecated: z.boolean(),
   replacement: z.string().optional(),
+  suggestedConnectors: z.array(z.string()).optional()
+    .describe('The Connectors the skill works with, by slug. None connects by itself: connect_agent_connector connects each one.'),
 });
 
 export type SkillSummary = z.infer<typeof skillSummarySchema>;
@@ -282,6 +284,7 @@ export function toSkillSummary(skill: Record<string, unknown>): SkillSummary {
   const credentialKey = asString(skill.credential_key);
   const additional = toStringArray(skill.additional_credential_keys);
   const replacement = asString(skill.replacement);
+  const suggested = [...new Set(toStringArray(skill.suggested_connectors).filter(slug => CONNECTOR_SLUG.test(slug)))];
   return {
     name: asString(skill.name) ?? '',
     title: asString(skill.title) ?? asString(skill.name) ?? '',
@@ -296,6 +299,7 @@ export function toSkillSummary(skill: Record<string, unknown>): SkillSummary {
     ...(typeof skill.user_invocable === 'boolean' ? { userInvocable: skill.user_invocable } : {}),
     deprecated: skill.deprecated === true,
     ...(replacement ? { replacement } : {}),
+    ...(suggested.length > 0 ? { suggestedConnectors: suggested } : {}),
   };
 }
 

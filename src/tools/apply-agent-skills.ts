@@ -31,7 +31,9 @@ import {
   skillChangeDigest,
   workspaceHint,
   type CustomSkillEntry,
+  type SkillRegistry,
 } from '../utils/agent-config.js';
+import { connectionOf, connectorLabel, isLiveConnection, listCatalog, listConnections } from '../utils/agent-connectors.js';
 import { AGENT_AI_USAGE, bindProjectStep, outcomeUnknown, skillLabel, skillOffTasksNote, WIRO_PROJECT_CREDENTIAL } from '../utils/user-agent.js';
 import { DEFAULT_WAIT_SECONDS } from '../utils/poll.js';
 import { isPlainTeamMember, teamAgentBillingRefused } from '../utils/workspace.js';
@@ -63,6 +65,8 @@ const outputSchema = {
   })),
   pausedTasks: z.array(z.string()).optional()
     .describe('After an applied change: the scheduled tasks it paused, which wait for skills that are off. get_my_agent names those skills.'),
+  connectorsToConnect: z.array(z.object({ connector: z.string(), title: z.string().optional() })).optional()
+    .describe('After an applied change: the Connectors the skills it turned on work with that the agent has not connected. None connects by itself: connect_agent_connector connects each one.'),
   agentStatus: z.string(),
   restart: z.string(),
   error: z.object({
@@ -143,6 +147,32 @@ async function readAfterChange(
   return { holds: Object.entries(requested).every(([name, on]) => enabled.has(name) === on), live };
 }
 
+/**
+ * The Connectors the skills a change turned on work with, as an add card names them: the ones the active catalog
+ * lists, by title, and not connected to the agent. Null when the agent's connections cannot be read.
+ */
+async function connectorsToConnect(
+  client: WiroClient,
+  agentGuid: string,
+  enabled: string[],
+  registry: SkillRegistry,
+  signal: AbortSignal,
+): Promise<Array<{ connector: string; title?: string }> | null> {
+  const slugs = [...new Set(enabled.flatMap(name => registry.skills.get(name)?.suggestedConnectors ?? []))];
+  if (slugs.length === 0) return [];
+  const [connections, catalog] = await Promise.all([
+    listConnections(client, agentGuid, signal).catch(() => null),
+    listCatalog(client, {}, signal).catch(() => null),
+  ]);
+  if (!connections) return null;
+  const titles = catalog ? new Map(catalog.map(connector => [connector.slug, connector.title])) : null;
+  return slugs.flatMap(slug => {
+    if ((titles && !titles.has(slug)) || isLiveConnection(connectionOf(connections, slug))) return [];
+    const title = titles?.get(slug);
+    return [{ connector: slug, ...(title ? { title } : {}) }];
+  });
+}
+
 /** The line that names the tasks a change paused, with the skills each waits for. */
 async function pausedLine(client: WiroClient, paused: CustomSkillEntry[], signal: AbortSignal): Promise<string | null> {
   return paused.length > 0 ? `**Paused by this change:**${skillOffTasksNote(paused, await pausedSkillTitles(client, paused, signal), 'is paused')}` : null;
@@ -158,8 +188,9 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
         + 'skill change costs nothing: the plan keeps its price and the AI usage it includes, and no active plan is '
         + 'needed. The change is applied on the first call, so tell the user what turns on or off and get '
         + 'their yes first. The tool checks the names and turns on the skills they depend on '
-        + '(add_dependencies); the result lists them, the credentials the new skills still need and the '
-        + 'scheduled tasks the change paused. A running agent restarts once when a skill turns on or off. '
+        + '(add_dependencies); the result lists them, the credentials the new skills still need, the Connectors they '
+        + 'work with that the agent has not connected, and the scheduled tasks the change paused. A running agent '
+        + 'restarts once when a skill turns on or off. '
         + `A skill's work uses ${AGENT_AI_USAGE}, and model runs it starts are billed to the wallet of the `
         + 'workspace that owns the Wiro project connected to the agent. Newly enabled skills may still need '
         + 'credentials (set_agent_credentials, bind_agent_project for a Wiro project) and do '
@@ -421,6 +452,10 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
           ? `This change was already applied by an earlier call with this idempotency_key. ${FREE_NOTE}`
           : FREE_NOTE;
         const firstCredential = credentialsNeeded[0]?.credentials[0];
+        // The Connectors the skills turned on work with that the agent has not connected, as an add card's needs.
+        const toConnect = applied.noOp || replayed
+          ? []
+          : await connectorsToConnect(client, agent_guid, changes.enable, registry, extra.signal);
         const nextAction = applied.noOp || replayed
           ? undefined
           : firstCredential === WIRO_PROJECT_CREDENTIAL
@@ -431,13 +466,19 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
                 arguments: { agent_guid, credential: firstCredential },
                 reason: `See what ${firstCredential} needs before asking the user for it.`,
               }
-              : running && restarts
+              : toConnect?.[0]
                 ? {
-                  tool: 'get_my_agent',
-                  arguments: { agent_guid, wait_seconds: DEFAULT_WAIT_SECONDS },
-                  reason: 'Check that the agent is running again with the new skills.',
+                  tool: 'list_agent_connectors',
+                  arguments: { name: toConnect[0].connector, agent_guid },
+                  reason: 'See how this connector connects before asking the user for anything; connect_agent_connector connects it.',
                 }
-                : undefined;
+                : running && restarts
+                  ? {
+                    tool: 'get_my_agent',
+                    arguments: { agent_guid, wait_seconds: DEFAULT_WAIT_SECONDS },
+                    reason: 'Check that the agent is running again with the new skills.',
+                  }
+                  : undefined;
         // Read from the agent after the change: the tasks it paused.
         const paused = applied.noOp || replayed ? [] : newlyPaused(row, live);
         const warnings = warningsOf(applied);
@@ -459,6 +500,10 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
           credentialsNeeded.length > 0 && !applied.noOp && !replayed
             ? `**Still needed:** credentials for ${neededText(credentialsNeeded, row, titles, serviceTitles)}. ${stillNeededSteps(credentialsNeeded)}`
             : null,
+          toConnect && toConnect.length > 0
+            ? `**Connectors to connect:** ${toConnect.map(item => connectorLabel({ slug: item.connector, title: item.title })).join(', ')}. `
+              + 'The skills turned on work with them, and none connects by itself: connect_agent_connector connects each one.'
+            : null,
           warnings.length > 0 ? `**From Wiro:** ${warnings.join(' ')}` : null,
         ].filter((line): line is string => line !== null);
         return {
@@ -471,6 +516,7 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
             ...(enabledSkills ? { enabledSkills } : {}),
             restart,
             ...(paused.length > 0 ? { pausedTasks: paused.map(entry => entry.key) } : {}),
+            ...(toConnect && toConnect.length > 0 ? { connectorsToConnect: toConnect } : {}),
             ...(nextAction ? { nextAction } : {}),
           },
         };

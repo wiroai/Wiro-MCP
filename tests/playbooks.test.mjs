@@ -563,7 +563,7 @@ test('the agents playbook says the same as the tools about a Wiro project key, a
 
 test('the playbooks say what a deploy quote holds and how to read wallet rows', () => {
   const { agents, billing } = PLAYBOOKS;
-  assert.match(agents, /The quote gives the amount charged now, the AI usage the plan includes each month, the paying Wiro balance with what it holds, the other plans' prices and the connectors a template suggests\./);
+  assert.match(agents, /The quote gives the amount charged now, the AI usage the plan includes each month, the paying Wiro balance with what it holds, the other plans' prices and the connectors a template suggests or a custom build's skills work with\./);
   assert.match(agents, /In a team workspace the agent starts with collaborative chats, which every team member sees, and the quote says so: tell the user\. `update_agent` \(`team_session_mode`\) changes that after the deploy\./);
   assert.match(agents, /- Extra credit packs are retired: `buy_credits` says so and charges nothing\./);
   assert.match(agents, /A required credential field cannot be left empty, but saving a new value replaces the old one\./);

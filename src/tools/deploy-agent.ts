@@ -123,7 +123,7 @@ const quoteSchema = z.object({
   skills: z.array(z.string()).optional(),
   credentialsNeeded: z.array(z.object({ key: z.string(), title: z.string() })),
   connectorsSuggested: z.array(z.string()).optional()
-    .describe('The connectors the template suggests, by slug. The deploy connects none of them: connect_agent_connector connects each one afterwards.'),
+    .describe('The connectors the template suggests, or a custom build\'s skills work with, by slug. The deploy connects none of them: connect_agent_connector connects each one afterwards.'),
   customSkills: z.array(quoteCustomSkillSchema).optional(),
   approvalPolicy: quoteApprovalPolicySchema.optional()
     .describe('What custom_skills does to the agent\'s approval policy. Tell the user before they approve.'),
@@ -238,6 +238,11 @@ function credentialList(items: Array<{ key: string; title: string }>): string {
   return items.map(item => `${item.title} (\`${item.key}\`)`).join(', ');
 }
 
+/** Who names a quote's connectors: the template, or a custom build's skills. */
+function suggestedBy(quote: Quote): string {
+  return quote.kind === 'template' ? 'the template suggests' : 'its skills work with';
+}
+
 /** titles names a custom build's skills as people see them. */
 function quoteText(quote: Quote, credentials?: Record<string, unknown>, titles?: ReadonlyMap<string, string>): string {
   const what = quote.kind === 'template'
@@ -264,7 +269,7 @@ function quoteText(quote: Quote, credentials?: Record<string, unknown>, titles?:
     lines.push(`- Scheduled tasks: a custom build comes with the tasks its skills bring, and every run uses ${AGENT_AI_USAGE}. The deploy result names the tasks that are on, and they can be changed or turned off. A build whose skills bring none gets a starter task, which stays off until it is written and turned on with manage_agent_custom_skill.`);
   }
   if (quote.connectorsSuggested?.length) {
-    lines.push(`- Connectors the template suggests: ${quote.connectorsSuggested.map(slug => `\`${slug}\``).join(', ')}. The deploy connects none of them: connect_agent_connector connects each one afterwards, and list_agent_connectors with a slug shows what the user provides for it.`);
+    lines.push(`- Connectors ${suggestedBy(quote)}: ${quote.connectorsSuggested.map(slug => `\`${slug}\``).join(', ')}. The deploy connects none of them: connect_agent_connector connects each one afterwards, and list_agent_connectors with a slug shows what the user provides for it.`);
   }
   // Only the deploy result can say a carried credential is complete: it may need more fields.
   const toProvide = quote.credentialsNeeded.filter(item => !isFilledValue(credentials?.[item.key]));
@@ -358,7 +363,7 @@ function deployedText(
     lines.push(`- Missing credentials: ${agent.missingCredentials.map(item => `${item.title} (\`${item.key}\`)`).join(', ')}. Skills that need them fail until they are set.${bindAfterDeployNote(agent.missingCredentials)}`);
   }
   if (quote.connectorsSuggested?.length) {
-    lines.push(`- Connectors to connect: ${quote.connectorsSuggested.map(slug => `\`${slug}\``).join(', ')}, as the template suggests. connect_agent_connector connects each one; list_agent_connectors with a slug shows what the user provides.`);
+    lines.push(`- Connectors to connect: ${quote.connectorsSuggested.map(slug => `\`${slug}\``).join(', ')}, the ones ${suggestedBy(quote)}. connect_agent_connector connects each one; list_agent_connectors with a slug shows what the user provides.`);
   }
   lines.push(`- Dashboard: ${agent.dashboardUrl}`);
   return lines.join('\n');
@@ -382,7 +387,7 @@ export function registerDeployAgent(server: McpServer, client: WiroClient): void
         + 'add on wiro.ai. The '
         + 'agent starts on its own after deployment. Credentials can be added later with set_agent_credentials or, for '
         + 'a Wiro project, bind_agent_project, and outside services connected with connect_agent_connector (the quote '
-        + 'names the connectors a template suggests), but work that needs them does not run until then. A custom build also gets '
+        + 'names the connectors a template suggests or a custom build\'s skills work with), but work that needs them does not run until then. A custom build also gets '
         + 'the scheduled tasks its skills come with; the result names the ones that are on, and they can be changed or '
         + 'turned off. A build whose skills bring none gets a starter task, which stays off until it is written and turned '
         + 'on with manage_agent_custom_skill. The plan (tier) sets the price, which it also includes as AI usage each '
@@ -569,6 +574,8 @@ export function registerDeployAgent(server: McpServer, client: WiroClient): void
               credentialsNeeded.set(skill.credentialKey, `${skill.title} credentials`);
             }
           }
+          // The connectors the build's skills work with; the deploy connects none of them.
+          const connectorsSuggested = [...new Set(build.flatMap(name => found.get(name)?.suggestedConnectors ?? []))];
           // A draft preview lists every plan's price at once.
           const pricing = toPlanPricing(preview);
           quote = {
@@ -581,6 +588,7 @@ export function registerDeployAgent(server: McpServer, client: WiroClient): void
             ...(pricing ? { pricing } : {}),
             skills: build,
             credentialsNeeded: [...credentialsNeeded].map(([key, title]) => ({ key, title })),
+            ...(connectorsSuggested.length > 0 ? { connectorsSuggested } : {}),
           };
         }
 
