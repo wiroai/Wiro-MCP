@@ -375,7 +375,7 @@ Use it when the user wants help choosing models and wiring the steps. A question
 - The wallet of the connected project's workspace must hold at least $10 to send a message; otherwise the message is refused with the minimum and the wallet's balance, and nothing is charged.
 - $10 is a minimum to start, not a cap. Each turn's chat usage is billed to the same wallet after the turn, and the reply shows it as Agent usage, in dollars. If it is not in the reply yet, read the message again with \`get_agent_message\`.
 - The agent only reads the catalog, so its turns start no model runs. Running a saved workflow is billed separately.
-- The workspace's spend limits and Model Access rules cover the Workflow Agent like the user's own runs. A message is refused before anything is sent, and nothing is charged, when a limit is used up (error code 93) or a rule blocks the agent's chat model, the default included (error code 92). That refusal lists the chat models the rules allow: pass one as \`model\` only when the user picks it. Playbook \`controls\` explains both.
+- The workspace's spend limits and Model Access rules cover the Workflow Agent like the user's own runs, on the \`workflow-agent\` surface. A message is refused before anything is sent, and nothing is charged, when a limit is used up (error code 93) or a rule blocks the agent's chat model, the default included (error code 92). That refusal lists the chat models the rules allow: pass one as \`model\` only when the user picks it. Playbook \`controls\` explains both.
 - Before the first message, tell the user this in one line and check the balance with \`get_account\`.
 
 ## Write the first message
@@ -444,7 +444,7 @@ Studio is Wiro's creative agent. Describe what you want, such as an image, a sho
 - Each turn is billed after it ends: the chat part by token use, even when the turn fails, and each model run Studio started when it succeeds. The reply shows the chat part as Agent usage, in dollars. If it is not in the reply yet, read the message again with \`get_agent_message\`.
 - For a rough estimate before a turn, take a typical model for the job from \`search_models\`, multiply its price by the number of results, and add the chat part.
 - Before the first message, tell the user this in one line and check the balance with \`get_account\`. Before each message, wait for their yes, even when they asked for exactly this. For large or open-ended requests, such as many videos or long clips, agree on the scope first.
-- The workspace's spend limits and Model Access rules cover Studio like the user's own runs. A message is refused before anything is sent, and nothing is charged, when a limit is used up (error code 93) or a rule blocks Studio's chat model, the default included (error code 92). That refusal lists the chat models the rules allow: pass one as \`model\` only when the user picks it. Playbook \`controls\` explains both.
+- The workspace's spend limits and Model Access rules cover Studio like the user's own runs, on the \`studio\` surface. A message is refused before anything is sent, and nothing is charged, when a limit is used up (error code 93) or a rule blocks Studio's chat model, the default included (error code 92). That refusal lists the chat models the rules allow: pass one as \`model\` only when the user picks it. Playbook \`controls\` explains both.
 
 ## Send a request
 
@@ -718,16 +718,20 @@ Each limit and each rule covers one scope:
 - \`account\`: everything the wallet pays for. In a team, the whole team.
 - \`member\`: one team member's work in the team: their dashboard runs and every run with a key of a team project they created. Teams only. Name the member by e-mail or user id.
 - \`project\`: one API key, wherever it is used: in scripts, through this server, in the LLM gateway or by an agent connected to it. Name it by its project's name or id. Leave it out for this connection's own key.
-- \`surface\`: one way in, wherever the key or the person comes from:
-  - \`web\`: the Wiro dashboard, with Studio and the Workflow Agent used there.
+- \`surface\`: one way in, wherever the key or the person comes from. Work that fits more than one counts on the first that matches: who does it (Studio, the Workflow Agent or a deployed agent), then a workflow run, then the client, then the API key or the dashboard:
+  - \`web\`: the Wiro dashboard.
   - \`api\`: calls with an API key. A local install of this server counts as \`api\`.
   - \`mcp\`: the hosted MCP server at mcp.wiro.ai, with the apps connected to it.
   - \`llm-gateway\`: the OpenAI and Anthropic compatible LLM gateway.
   - \`extension\`: the Wiro browser extensions.
   - \`agent\`: what deployed agents do on their own: the runs they start and their chat model. Its spend limits also count their AI usage that the Wiro balance pays and their plan charges, renewals included.
+  - \`studio\`: Studio: the messages sent to it and the models it runs for a person, whichever way they come in, this server included.
+  - \`workflow-agent\`: the Workflow Agent: the messages sent to it, whichever way they come in.
+  - \`workflow\`: workflow runs and resumes and every step they run, also when this server starts them. A workflow that a deployed agent, Studio or the Workflow Agent starts keeps that surface instead.
+  - A limit or a rule on \`web\`, \`api\` or \`mcp\` does not cover the work of \`studio\`, \`workflow-agent\` or \`workflow\`.
 - \`agent\`: one deployed agent, by name or guid. It covers the models the agent runs through Wiro, the chat model it answers with and its built-in voice: transcribing the voice notes it gets and speaking its voice replies, which count as Audio & Speech. Its own rule, the whole account's rule and the \`agent\` surface's rule all cover its chat model; member and API key rules do not. Only the agent's own rule covers its voice. Its spend limit counts all its AI usage, what its plan includes as well as what the Wiro balance pays, and the model runs it starts.
 
-Studio and the Workflow Agent are not agents of the workspace. Their chat model and the models they run for a person are checked like that person's own runs, against the controls of the whole wallet, the member, the API key the message came with and the surface it came in on, and the cost of their chat counts toward the spend limits. Their chat model is an LLM & Chat model: a rule that blocks LLM & Chat blocks it unless it allows that model by name, and a rule that lets only some models run blocks it unless it allows LLM & Chat or that model. A message whose chat model is blocked, the default one included when the message names none, is refused with error code 92 before anything is sent, and the refusal lists the chat models the rules allow. The Workflow Agent runs only its chat model.
+Studio and the Workflow Agent are not agents of the workspace. Their chat model and the models they run for a person are checked like that person's own runs, against the controls of the whole wallet, the member, the turn's project (the API key the message came with, or the workspace's Studio project for a message sent on wiro.ai) and the \`studio\` or \`workflow-agent\` surface, and the cost of their chat counts toward the spend limits. Their chat model is an LLM & Chat model: a rule that blocks LLM & Chat blocks it unless it allows that model by name, and a rule that lets only some models run blocks it unless it allows LLM & Chat or that model. A message whose chat model is blocked, the default one included when the message names none, is refused with error code 92 before anything is sent, and the refusal lists the chat models the rules allow. The Workflow Agent runs only its chat model.
 
 To restrict one API key, give it its own limit or rule: that follows the key on every way in.
 
@@ -819,7 +823,7 @@ Block one model everywhere:
 Find why work was refused, and fix it:
 1. Read the refusal. Code 93 names the spend limit, what is left and when it resets. Code 92 names the rule that blocked the model.
 2. For 93, call \`get_controls\`: it shows the limit, what it used, what running work holds and when it resets, and it marks the limits that cover this connection's runs. If the refusal says the run costs more than is left, a cheaper run may fit: offer one with its price. If it says runs in progress hold part of the limit, the room frees up as that work ends. Otherwise the user waits for the reset, or someone who can change controls raises or removes the limit.
-3. For 92, call \`check_model_access\` with the model; for another run, add \`member\`, \`project\`, \`surface\` or \`agent\`. A run with a key counts as the person who created that key. It names every rule that blocks the model and why, and its \`nextAction\` is the change summary that would allow the model. For a message to Studio or the Workflow Agent, the blocked model is its chat model, and the refusal lists the chat models the rules allow.
+3. For 92, call \`check_model_access\` with the model; for another run, add \`member\`, \`project\`, \`surface\` or \`agent\`. A run with a key counts as the person who created that key. It names every rule that blocks the model and why, and its \`nextAction\` is the change summary that would allow the model. For a message to Studio or the Workflow Agent, the blocked model is its chat model: check it with \`surface\` studio or workflow-agent. The refusal lists the chat models the rules allow.
 4. Change only what the user asks for, through the change summary. A model the rules allow is the other way out: offer it, but do not switch on your own.
 5. Run the work again only after the change is saved, and only with the user's yes for that run.
 

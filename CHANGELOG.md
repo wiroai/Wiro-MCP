@@ -125,3 +125,12 @@ runs `npx @wiro-ai/wiro-mcp@latest` takes it at its next start.
   still lists them with their prompts, and only it reads Studio's older runs, which Studio ran
   on its own account. `list_tasks` also says that a deployed agent calling it through its
   Wiro AI Models connector sees only its own tasks.
+- Controls know nine surfaces: `studio`, `workflow-agent` and `workflow` join the six.
+  Messages to Studio and the Workflow Agent, the models Studio runs for a person and workflow
+  runs with their steps count on them, whichever way they come in, so a limit or a rule on
+  `web`, `api` or `mcp` does not cover that work. `get_controls` shows their spending, and
+  spend limits, Model Access rules and `check_model_access` can name them; `check_model_access`
+  checks a Studio or Workflow Agent message, and a workflow run, with this connection's key
+  unless a project or a member is named. Studio's and the Workflow Agent's work is checked on the turn's
+  project: the key the message came with, or the workspace's Studio project for a message
+  sent on wiro.ai.

@@ -35,7 +35,7 @@ export interface GetAccountOptions {
 const SPEND_LIMIT_SCOPES = ['account', 'member', 'project', 'surface', 'agent'] as const;
 
 const spendLimitSchema = z.object({
-  scope: z.enum(SPEND_LIMIT_SCOPES).describe('What the limit caps: the whole wallet (account), one team member, one API key (project), one way in (surface: web, api, mcp, llm-gateway, extension, agent) or one agent.'),
+  scope: z.enum(SPEND_LIMIT_SCOPES).describe('What the limit caps: the whole wallet (account), one team member, one API key (project), one way in (surface: web, api, mcp, llm-gateway, extension, agent, studio, workflow-agent, workflow) or one agent.'),
   target: z.string().optional().describe('The member\'s uuid, the project id, the surface or the agent guid; absent for the whole wallet.'),
   targetName: z.string().optional(),
   period: z.enum(['month', 'day']).describe('Monthly limits reset on the 1st, daily ones at 00:00 UTC.'),

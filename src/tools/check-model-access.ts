@@ -55,8 +55,10 @@ const FIX_REASON = 'Shows what allowing this model in that rule changes; nothing
 // Wiro's answer for a model it does not know, or a name that is not an owner/slug.
 const UNKNOWN_MODEL = / is not a model on Wiro\.?$| is not a model's owner\/slug or id\.?$/i;
 
-// The ways in that always come with an API key. A dashboard run has none, and an agent's run uses the agent's own.
-const KEY_SURFACES: ReadonlySet<Surface> = new Set<Surface>(['api', 'mcp', 'llm-gateway', 'extension']);
+// The ways in that always come with an API key: a Studio or Workflow Agent message runs on the key it came with, else on
+// the workspace's Studio project. A dashboard run has none, and an agent's run uses the agent's own. A workflow run comes
+// with a key only when one starts it, as this connection's do.
+const KEY_SURFACES: ReadonlySet<Surface> = new Set<Surface>(['api', 'mcp', 'llm-gateway', 'extension', 'studio', 'workflow-agent']);
 
 function memberText(member: { uuid: string; name?: string }): string {
   return `team member ${member.name ? quotedSpan(member.name) : `with user id ${quotedSpan(member.uuid)}`}`;
@@ -88,19 +90,19 @@ export function registerCheckModelAccess(server: McpServer, client: WiroClient):
         + 'each decides as it does (the model\'s own entry, one of its categories, or what the rule does with every '
         + 'model it does not name), and the refusal text a run would get (error code 92). Nothing runs and nothing is '
         + 'charged. With no member, project, surface or agent it checks a run through this connection. A way in that '
-        + 'comes with an API key (api, mcp, llm-gateway, extension) is checked with this connection\'s key unless project '
-        + 'names another, and a run with a key counts as the person who created that key. When the model is blocked and '
-        + 'this connection can change the rules, nextAction is the change summary that would allow it in the first rule '
-        + 'that blocks it.',
+        + 'comes with an API key (api, mcp, llm-gateway, extension, studio, workflow-agent) and a workflow run are checked '
+        + 'with this connection\'s key unless project names another, and a run with a key counts as the person who created '
+        + 'that key. When the model is blocked and this connection can change the rules, nextAction is the change summary '
+        + 'that would allow it in the first rule that blocks it.',
       inputSchema: strictInput({
         model: z.string().trim().min(1).max(200)
           .describe('The model, by owner/slug as search_models shows it, or by its id.'),
         member: z.string().trim().min(1).max(320).optional()
           .describe('Team only: the team member whose run to check, by e-mail or user id. Left out, the person who created the connected project. A run with an API key counts as the person who created the key, so with project or agent that person is checked.'),
         project: z.string().trim().min(1).max(200).optional()
-          .describe('The API key the run uses, by its project id or exact name. Left out, this connection\'s own key when nothing else is named, or when surface is api, mcp, llm-gateway or extension and no member is named.'),
+          .describe('The API key the run uses, by its project id or exact name. Left out, this connection\'s own key when nothing else is named, or when surface is api, mcp, llm-gateway, extension, studio, workflow-agent or workflow and no member is named.'),
         surface: z.enum(SURFACES).optional()
-          .describe('The way in: web (the dashboard), api (an API key, a local install of this server included), mcp (the hosted MCP server), llm-gateway, extension or agent. Left out, the surface this connection counts as when nothing else is named, api with a project, and web for a member.'),
+          .describe('The way in: web (the dashboard), api (an API key, a local install of this server included), mcp (the hosted MCP server), llm-gateway, extension, agent, studio (messages to Studio and the models it runs), workflow-agent (messages to the Workflow Agent) or workflow (workflow runs and their steps). Left out, the surface this connection counts as when nothing else is named, api with a project, and web for a member.'),
         agent: z.string().trim().min(1).max(200).optional()
           .describe('A deployed agent, by name or guid: checks a run the agent starts (surface agent).'),
       }),
@@ -167,9 +169,10 @@ export function registerCheckModelAccess(server: McpServer, client: WiroClient):
           const found = await resolveMember(client, member, workspace, signal);
           context.member = { uuid: found.uuid, ...(found.name ? { name: found.name } : {}) };
         }
-        // A run through the API, MCP, the LLM gateway or an extension always comes with a key: left out, this
-        // connection's. A member's own key is not known, so for a member that key's rule stays out of the check.
-        if (project !== undefined || !named || (keySurface && member === undefined)) {
+        // A run through the API, MCP, the LLM gateway, an extension, Studio or the Workflow Agent always comes with a
+        // key, and a workflow run started through this connection with its key: left out, this connection's. A
+        // member's own key is not known, so for a member that key's rule stays out of the check.
+        if (project !== undefined || !named || ((keySurface || surface === 'workflow') && member === undefined)) {
           const found = await resolveProject(client, project, caller, signal);
           context.project = { id: found.id, ...(found.name ? { name: found.name } : {}), ...(found.connected ? { thisConnection: true } : {}) };
         } else if (keySurface) {

@@ -28,7 +28,7 @@ import { canonicalStringify } from './workflow-artifacts.js';
 export const CONTROL_SCOPES = ['account', 'member', 'project', 'surface', 'agent'] as const;
 export type ControlScope = typeof CONTROL_SCOPES[number];
 
-export const SURFACES = ['web', 'api', 'mcp', 'llm-gateway', 'extension', 'agent'] as const;
+export const SURFACES = ['web', 'api', 'mcp', 'llm-gateway', 'extension', 'agent', 'studio', 'workflow-agent', 'workflow'] as const;
 export type Surface = typeof SURFACES[number];
 
 export const PERIODS = ['month', 'day'] as const;
@@ -59,16 +59,26 @@ export const SURFACE_LABELS: Record<Surface, string> = {
   'llm-gateway': 'the LLM gateway',
   extension: 'the browser extensions',
   agent: 'agents',
+  studio: 'Studio',
+  'workflow-agent': 'the Workflow Agent',
+  workflow: 'workflows',
 };
 
-/** What each way in covers. A local install of this server sends its calls with an API key, so it counts as api. */
+/**
+ * What each way in covers. A local install of this server sends its calls with an API key, so it counts as api.
+ * Work that fits more than one counts on the first that matches: who does it (Studio, the Workflow Agent or a
+ * deployed agent), then a workflow run, then the client, then the API key or the dashboard.
+ */
 export const SURFACE_DESCRIPTIONS: Record<Surface, string> = {
-  web: 'the Wiro dashboard, with Studio and the Workflow Agent used there',
+  web: 'the Wiro dashboard',
   api: 'calls with an API key, a local install of this server included',
   mcp: 'the hosted MCP server at mcp.wiro.ai',
   'llm-gateway': 'the OpenAI and Anthropic compatible LLM gateway',
   extension: 'the Wiro browser extensions',
   agent: 'deployed agents\' own runs',
+  studio: 'messages to Studio and the models it runs for a person, whichever way they come in',
+  'workflow-agent': 'messages to the Workflow Agent, whichever way they come in',
+  workflow: 'workflow runs and resumes and every step they run, unless a deployed agent, Studio or the Workflow Agent started the run',
 };
 
 /** Wiro's limit on one rule: it can name at most this many models. */
@@ -877,10 +887,11 @@ export function checkTargetArguments(args: TargetArgs): void {
 // Studio and the Workflow Agent are shared by every Wiro user, so no workspace has them as an agent of its own.
 const HOUSE_AGENTS = /^(wiro[ -]?)?(studio|workflow[ -]?agent)$/i;
 
-const HOUSE_AGENT_TEXT = 'Studio and the Workflow Agent are not agents of this workspace, so no limit or rule names them. '
-  + 'Their chat model and the models they run for a person are checked like that person\'s own runs, against the '
-  + 'controls of the whole wallet, the member, the API key the message came with and the surface it came in on. Use one '
-  + 'of those scopes instead.';
+const HOUSE_AGENT_TEXT = 'Studio and the Workflow Agent are not agents of this workspace, so scope agent does not name them. '
+  + 'To cap or restrict their work, use scope surface with surface studio or workflow-agent. Their chat model and the '
+  + 'models Studio runs for a person are also checked like that person\'s own runs, against the controls of the whole '
+  + 'wallet, the member in a team and the turn\'s project: the API key the message came with, or the workspace\'s Studio '
+  + 'project for a message sent from wiro.ai.';
 
 interface ProjectChoice {
   id: string;

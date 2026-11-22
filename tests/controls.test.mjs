@@ -217,7 +217,11 @@ test('get_controls shows each limit with what is left, each rule in plain words,
     assert.equal(data.modelAccessRules[1].summary, 'Only Image Generation and openai/gpt-6-2-astra, except model 202, no longer on Wiro');
     assert.deepEqual(data.modelAccessRules[1].models[1], { id: '202', model: null, access: 'block' });
     assert.equal(data.categories.length, 7);
-    assert.deepEqual(data.surfaces.map(entry => entry.surface), ['web', 'api', 'mcp', 'llm-gateway', 'extension', 'agent']);
+    assert.deepEqual(data.surfaces.map(entry => entry.surface), ['web', 'api', 'mcp', 'llm-gateway', 'extension', 'agent', 'studio', 'workflow-agent', 'workflow']);
+    assert.deepEqual(data.surfaces.find(entry => entry.surface === 'studio'), {
+      surface: 'studio', label: 'Studio', description: 'messages to Studio and the models it runs for a person, whichever way they come in',
+    });
+    assert.equal(data.surfaces.find(entry => entry.surface === 'web').description, 'the Wiro dashboard');
     assert.match(data.surfaces.find(entry => entry.surface === 'api').description, /a local install of this server included/);
     assert.deepEqual(data.dashboard, { spendLimits: SPEND_LIMITS_PAGE, modelAccess: MODEL_ACCESS_PAGE });
     assert.deepEqual(fake.paths().sort(), ['/ModelAccess/List', '/Organization/List', '/SpendLimit/List']);
@@ -240,12 +244,14 @@ test('get_controls lists the spending by way in, member, key and agent, and the 
         period: body.period,
         periodstart: MONTH_START,
         resetsat: MONTH_END,
-        totalusd: 412.3,
+        totalusd: 419.8,
         surfaces: [
           { surface: 'web', label: 'the dashboard', spentusd: 300.1 },
           { surface: 'api', label: 'the API', spentusd: 100 },
           { surface: 'mcp', label: 'MCP', spentusd: 12.2 },
           { surface: 'llm-gateway', label: 'the LLM gateway', spentusd: 0 },
+          { surface: 'studio', label: 'Studio', spentusd: 5 },
+          { surface: 'workflow', label: 'workflows', spentusd: 2.5 },
           { surface: 'nonsense', label: 'x', spentusd: 9 },
         ],
         members: [{ useruuid: JANE, label: 'Jane Doe', spentusd: 200 }],
@@ -263,8 +269,8 @@ test('get_controls lists the spending by way in, member, key and agent, and the 
       'No spend limits: nothing caps this workspace\'s spending beyond its balance.',
       'No Model Access rules: every model can run.',
       '### Spending this month (since November 1, 2026 at 00:00 UTC)',
-      '**Total:** $412.30',
-      '- By way in: the dashboard (`web`) $300.10, the API (`api`) $100.00, MCP (`mcp`) $12.20',
+      '**Total:** $419.80',
+      '- By way in: the dashboard (`web`) $300.10, the API (`api`) $100.00, MCP (`mcp`) $12.20, Studio (`studio`) $5.00, workflows (`workflow`) $2.50',
       '- By team member: `Jane Doe` $200.00',
       '- By API key: `Production` (id `48211`), this connection\'s key $100.00',
       '- By agent: `Sales Bot` $10.00',
@@ -272,8 +278,9 @@ test('get_controls lists the spending by way in, member, key and agent, and the 
       `- \`Jane Doe\` (member): user id \`${JANE}\``,
     ]) assert.ok(lines.includes(line), `missing line: ${line}\n\n${textOf(result)}`);
     const { usage, members } = result.structuredContent;
-    assert.equal(usage.totalUsd, 412.3);
-    assert.deepEqual(usage.surfaces.map(row => row.surface), ['web', 'api', 'mcp', 'llm-gateway']);
+    assert.equal(usage.totalUsd, 419.8);
+    // Studio's and workflows' spending stays in the breakdown; a surface Wiro does not name is left out.
+    assert.deepEqual(usage.surfaces.map(row => row.surface), ['web', 'api', 'mcp', 'llm-gateway', 'studio', 'workflow']);
     assert.deepEqual(usage.projects, [{ projectId: '48211', name: 'Production', thisConnection: true, spentUsd: 100 }]);
     assert.deepEqual(members, [{ useruuid: JANE, name: 'Jane Doe', role: 'member' }]);
     // The members' e-mail addresses stay out of the answer.
@@ -516,7 +523,7 @@ test('check_model_access finds a member by e-mail and an agent by name, and chec
     assert.deepEqual(member.calls.find(call => call.path === '/Team/Member/List').body, { teamguid: TEAM });
     // A member's own run: the dashboard, with no key, unless a project or surface is named.
     assert.deepEqual(member.calls.find(call => call.path === '/ModelAccess/Check').body, { model: 'openai/gpt-6-2-astra', surface: 'web', member: JANE });
-    assert.ok(linesOf(result).includes('**Run checked:** a run by team member `Jane Doe` through surface `web` (the Wiro dashboard, with Studio and the Workflow Agent used there)'), textOf(result));
+    assert.ok(linesOf(result).includes('**Run checked:** a run by team member `Jane Doe` through surface `web` (the Wiro dashboard)'), textOf(result));
   });
 
   const agent = fakeClient({ '/ModelAccess/List': ruleList([]), '/UserAgent/MyAgents': AGENTS, '/ModelAccess/Check': checkAnswer([], true) });
@@ -565,6 +572,21 @@ test('check_model_access checks a way in that comes with a key with this connect
     // The dashboard comes with no key, so none is added.
     await client.callTool({ name: 'check_model_access', arguments: { model: 'openai/gpt-6-2-astra', surface: 'web' } });
     assert.deepEqual(fake.calls.at(-1).body, { model: 'openai/gpt-6-2-astra', surface: 'web' });
+
+    // A message to Studio runs on the key it came with: left out, this connection's.
+    const studio = await client.callTool({ name: 'check_model_access', arguments: { model: 'openai/gpt-6-2-astra', surface: 'studio' } });
+    assert.notEqual(studio.isError, true, textOf(studio));
+    assert.deepEqual(fake.calls.at(-1).body, { model: 'openai/gpt-6-2-astra', surface: 'studio', project: '48211' });
+    assert.ok(linesOf(studio).includes('**Run checked:** a run through surface `studio` (messages to Studio and the models it runs for a person, whichever way they come in), with this connection\'s API key (project id `48211`)'), textOf(studio));
+    assert.equal(studio.structuredContent.context.surface, 'studio');
+
+    // A workflow run through this connection comes with its key; a member's, as from the dashboard, with none.
+    await client.callTool({ name: 'check_model_access', arguments: { model: 'openai/gpt-6-2-astra', surface: 'workflow' } });
+    assert.deepEqual(fake.calls.at(-1).body, { model: 'openai/gpt-6-2-astra', surface: 'workflow', project: '48211' });
+    const memberWorkflow = await client.callTool({ name: 'check_model_access', arguments: { model: 'openai/gpt-6-2-astra', member: 'jane@acme.test', surface: 'workflow' } });
+    assert.notEqual(memberWorkflow.isError, true, textOf(memberWorkflow));
+    assert.deepEqual(fake.calls.at(-1).body, { model: 'openai/gpt-6-2-astra', surface: 'workflow', member: JANE });
+    assert.equal(memberWorkflow.structuredContent.context.keyLeftOut, undefined);
   });
 });
 
@@ -766,6 +788,14 @@ test('manage_spend_limit asks for the period when a target has both, and warns w
     assert.deepEqual(lowered.structuredContent.warnings, ['It is used up at once: $60.00 was already spent this month, so new work it covers is refused until it resets December 1, 2026 at 00:00 UTC.']);
     assert.ok(lowered.structuredContent.notes.includes('The daily limit of $10.00 for the same target stays as it is, and both apply.'));
   });
+  // Studio, the Workflow Agent and workflow runs are ways in of their own.
+  const workflows = fakeClient({ '/SpendLimit/List': limitList([]), '/SpendLimit/Preview': body => limitPreview(null, 0, { targetlabel: 'workflows' })(body) });
+  await withClient(workflows, async client => {
+    const result = await client.callTool({ name: 'manage_spend_limit', arguments: { action: 'set', scope: 'surface', surface: 'workflow', amount_usd: 40 } });
+    assert.notEqual(result.isError, true, textOf(result));
+    assert.deepEqual(workflows.calls.at(-1).body, { scope: 'surface', target: 'workflow', period: 'month', amountusd: 40, alertpct: 80 });
+    assert.deepEqual(result.structuredContent.nextAction.arguments.surface, 'workflow');
+  });
   // A list that cannot be read stops the change before any summary.
   const unread = fakeClient({ '/SpendLimit/List': () => { throw new WiroApiError(502, 'Bad gateway'); } });
   await withClient(unread, async client => {
@@ -785,7 +815,7 @@ test('manage_spend_limit refuses an amount under a cent and arguments that do no
       [{ action: 'remove', scope: 'account', amount_usd: 5 }, 'remove takes no amount_usd or alert_percent. Nothing was changed.'],
       [{ action: 'set', amount_usd: 5 }, 'Name the limit: scope with its target (member, project, surface or agent), or limit_guid from get_controls. Nothing was changed.'],
       [{ action: 'set', scope: 'account', member: JANE, amount_usd: 5 }, 'Scope account covers the whole wallet and takes no `member`. For one member, use scope member. Nothing was changed.'],
-      [{ action: 'set', scope: 'surface', amount_usd: 5 }, 'Scope surface needs `surface`: one of web, api, mcp, llm-gateway, extension, agent. Nothing was changed.'],
+      [{ action: 'set', scope: 'surface', amount_usd: 5 }, 'Scope surface needs `surface`: one of web, api, mcp, llm-gateway, extension, agent, studio, workflow-agent, workflow. Nothing was changed.'],
       [{ action: 'set', scope: 'project', agent: AGENT, amount_usd: 5 }, '`agent` goes with scope agent, and this call has scope project: name its target with `project`. Nothing was changed.'],
     ];
     for (const [args, message] of cases) {
@@ -896,7 +926,8 @@ test('manage_spend_limit passes Wiro\'s refusals on, says when the outcome is un
     assert.match(result.structuredContent.alertRecipients, /and the person who deployed the agent$/);
     const house = await client.callTool({ name: 'manage_spend_limit', arguments: { action: 'set', scope: 'agent', agent: 'Studio', amount_usd: 25 } });
     assert.equal(house.isError, true);
-    assert.match(textOf(house), /Studio and the Workflow Agent are not agents of this workspace, so no limit or rule names them\./);
+    assert.match(textOf(house), /Studio and the Workflow Agent are not agents of this workspace, so scope agent does not name them\. To cap or restrict their work, use scope surface with surface studio or workflow-agent\./);
+    assert.match(textOf(house), /the turn's project: the API key the message came with, or the workspace's Studio project for a message sent from wiro\.ai\./);
   });
   // A workspace agent may be called Studio itself: then the name is that agent's.
   const named = fakeClient({
@@ -1485,6 +1516,11 @@ test('the controls playbook teaches the rules, the roles, the surfaces and the r
     /A deployed agent can never change controls, not even its own\./,
     /`mcp`: the hosted MCP server at mcp\.wiro\.ai/,
     /A local install of this server counts as `api`\./,
+    /`studio`: Studio: the messages sent to it and the models it runs for a person, whichever way they come in/,
+    /`workflow-agent`: the Workflow Agent: the messages sent to it/,
+    /`workflow`: workflow runs and resumes and every step they run/,
+    /A limit or a rule on `web`, `api` or `mcp` does not cover the work of `studio`, `workflow-agent` or `workflow`\./,
+    /the turn's project \(the API key the message came with, or the workspace's Studio project for a message sent on wiro\.ai\) and the `studio` or `workflow-agent` surface/,
     /The period is `month` or `day`, in UTC\./,
     /Every limit and every rule that applies to a run must allow it/,
     /A narrower rule cannot open what a wider one blocks\./,
@@ -1811,7 +1847,7 @@ test('Studio and the Workflow Agent are named as covered by the caller\'s own ru
   await withClient(fake, async client => {
     const result = await client.callTool({ name: 'manage_spend_limit', arguments: { action: 'set', scope: 'agent', agent: 'Workflow Agent', amount_usd: 25 } });
     assert.equal(result.isError, true);
-    assert.match(textOf(result), /Their chat model and the models they run for a person are checked like that person's own runs/);
+    assert.match(textOf(result), /use scope surface with surface studio or workflow-agent\. Their chat model and the models Studio runs for a person are also checked like that person's own runs/);
   });
 });
 
