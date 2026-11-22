@@ -21,12 +21,12 @@ import {
 } from '../utils/agent-catalog.js';
 import { loadSkillRegistry, registryTitles } from '../utils/agent-config.js';
 import { readConnector } from '../utils/agent-connectors.js';
-import { skillLabel, toStringArray } from '../utils/user-agent.js';
+import { AGENT_AI_USAGE, skillLabel, toStringArray } from '../utils/user-agent.js';
 import { nextActionSchema, strictInput } from './schemas.js';
 
 const PRICING_NOTE = 'Every plan (Starter, Pro or Max) includes every skill and connector, so neither changes an agent\'s '
   + 'price: a custom build costs its plan\'s price, and turning a skill on or off later costs nothing. A skill\'s '
-  + 'work uses the agent\'s credits, and model runs it starts are billed to the wallet of the workspace that owns '
+  + `work uses ${AGENT_AI_USAGE}, and model runs it starts are billed to the wallet of the workspace that owns `
   + 'the Wiro project connected to the agent. deploy_agent returns the exact quote before anything is charged.';
 
 const channelSchema = z.object({

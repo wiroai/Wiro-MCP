@@ -5,8 +5,10 @@ import { ApiResultError, errorResult, requireApiSuccess, type ApiEnvelope } from
 import { DEFAULT_WAIT_SECONDS, MAX_WAIT_SECONDS } from '../utils/poll.js';
 import {
   AGENT_PLANS,
+  addFundsText,
   agentStatusLabel,
   agentStatusLabelSchema,
+  aiUsageText,
   asPlan,
   agentSummarySchema,
   describeAgentStatus,
@@ -14,6 +16,7 @@ import {
   isUnsettledPlan,
   MEMBER_SETUP_HELP,
   missingCredentialStep,
+  pausedUsage,
   nextStepForAgent,
   readAgentDetail,
   readAgentStatus,
@@ -54,16 +57,14 @@ function planAfterStop(plan: AgentSubscription | null): string {
     return `The plan is already cancelled: it ends after ${periodEnd} and does not renew, so nothing starts the agent `
       + 'again by itself.';
   }
-  if (plan.switchingToWallet) {
-    return `Stopping does not pause the plan: it moves to wallet billing after ${periodEnd}, then renews from the wallet `
-      + 'every 30 days and starts the agent again. Once it is billed from the wallet, cancel it with manage_agent_billing to stop paying.';
-  }
   if (plan.billing === 'wallet') {
     return 'Stopping does not pause the plan: a wallet plan still renews every 30 days and starts the agent again. '
       + 'Cancel it with manage_agent_billing to stop paying.';
   }
-  const state = plan.atPeriodEnd === 'renews' ? `renews after ${periodEnd}` : `is paid through ${periodEnd}`;
-  return `Stopping does not pause the plan: it is billed by card and ${state}. Card plans are managed in the Wiro dashboard.`;
+  // A card plan is not renewed by card any more: it moves to the Wiro balance at its period end.
+  return `Stopping does not pause the plan: it is paid by card through ${periodEnd}, then moves to the Wiro balance `
+    + 'and renews from it every 30 days, which starts the agent again. Cancel it with manage_agent_billing to stop '
+    + 'paying: it then ends with its period.';
 }
 
 /** What a finished wait found, in words that fit the action. A stop that ended stopped needs none: the status line says so. */
@@ -132,42 +133,38 @@ function setupRefusal(agent: AgentDetail, plainMember = false): Decision {
 }
 
 /** Turns the known refusals of Start and Stop into advice. Anything else stays an error. */
-function interpretRefusal(message: string, agent: AgentDetail): Decision | null {
+function interpretRefusal(error: ApiResultError, agent: AgentDetail): Decision | null {
+  const message = error.message;
+  // A paused agent: its included usage is used up and the balance is short. Wiro says so with code 97 and the
+  // agent's usage (agentusage), in the sentence Send answers with too.
+  if (pausedUsage(error.body)) {
+    const current = asPlan(agent.tier);
+    const largest = current === AGENT_PLANS[AGENT_PLANS.length - 1];
+    return {
+      outcome: 'refused',
+      message: `Wiro refused the start: ${message} Nothing was charged. ${addFundsText(agent.workspace)} Then start it again.`
+        + (largest ? '' : ' A larger plan includes more AI usage each month: manage_agent_billing with action change_plan quotes a move.'),
+    };
+  }
   if (/subscription required/i.test(message)) {
     if (agent.subscription && isUnsettledPlan(agent.subscription)) {
       return {
         outcome: 'refused',
-        message: unsettledPlanText(agent.subscription, agent, 'Wiro refused the start: the plan is not active, and the agent has no extra credits left.'),
+        message: unsettledPlanText(agent.subscription, agent, 'Wiro refused the start: the plan is not active.'),
       };
     }
-    const renewable = agent.subscription?.status === 'expired' && agent.subscription.billing === 'wallet';
+    // An expired plan, a card plan's included, renews from the Wiro balance.
+    const renewable = agent.subscription?.status === 'expired';
     return {
       outcome: 'refused',
-      message: 'Wiro refused the start: the agent has no active plan and no extra credits left. '
+      message: 'Wiro refused the start: the agent has no active plan. '
         + (renewable
-          ? 'Its wallet plan has expired; manage_agent_billing with action renew restarts it.'
+          ? 'Its plan has expired; manage_agent_billing with action renew restarts it, paid from the Wiro balance.'
           : 'manage_agent_billing with action subscribe pays for a plan and starts the agent.'),
       nextAction: {
         tool: 'manage_agent_billing',
         arguments: { agent_guid: agent.guid, action: renewable ? 'renew' : 'subscribe' },
         reason: 'This returns the price first; nothing is charged without confirm: true.',
-      },
-    };
-  }
-  if (/no credits available/i.test(message)) {
-    // Every plan can buy packs; a larger plan, where there is one, also gives more credits each month.
-    const current = asPlan(agent.tier);
-    const largest = current === AGENT_PLANS[AGENT_PLANS.length - 1];
-    return {
-      outcome: 'refused',
-      message: 'Wiro refused the start: the agent has used all of its credits for this period. '
-        + (largest
-          ? 'Buy an extra credit pack, or wait for the plan to renew.'
-          : 'Buy an extra credit pack, move to a larger plan for more credits each month (manage_agent_billing with action change_plan), or wait for the plan to renew.'),
-      nextAction: {
-        tool: 'manage_agent_billing',
-        arguments: { agent_guid: agent.guid, action: 'buy_credits' },
-        reason: 'This lists the credit packs with their prices; nothing is charged without confirm: true.',
       },
     };
   }
@@ -199,14 +196,14 @@ export function registerControlAgent(server: McpServer, client: WiroClient): voi
     'control_agent',
     {
       title: 'Start, stop or restart a Wiro agent',
-      description: 'Start, stop or restart a deployed agent. Starting needs an active plan or credits left '
-        + 'and charges nothing by itself. Stopping does not pause the plan: a wallet plan that is not cancelled '
+      description: 'Start, stop or restart a deployed agent. Starting needs an active plan, with AI usage left '
+        + 'in it or the Wiro balance to pay for more, and charges nothing by itself. Stopping does not pause the '
+        + 'plan: a wallet plan that is not cancelled '
         + 'still renews every 30 days and starts the agent again, so cancel the plan with manage_agent_billing to '
         + 'stop paying. The result says what happens with this agent\'s plan. '
         + 'A restart reloads the agent with its current settings. The change finishes in the background: pass '
         + 'wait_seconds, or follow the returned nextAction, to see the result. When a start is refused, the '
-        + 'result says what to do next (subscribe, renew, buy credits, fix a card payment in the dashboard or '
-        + 'finish setup). On a team agent this '
+        + 'result says what to do next (subscribe, renew, add funds on wiro.ai or finish setup). On a team agent this '
         + 'needs a team admin or the person who deployed it; other team members can read the agent with '
         + 'get_my_agent and message it.',
       inputSchema: strictInput({
@@ -319,7 +316,7 @@ export function registerControlAgent(server: McpServer, client: WiroClient): voi
                 ...(closing ? { closing } : {}),
               };
             } else {
-              const refusal = error instanceof ApiResultError ? interpretRefusal(error.message, current) : null;
+              const refusal = error instanceof ApiResultError ? interpretRefusal(error, current) : null;
               if (!refusal) throw error;
               decision = refusal;
             }
@@ -376,7 +373,8 @@ export function registerControlAgent(server: McpServer, client: WiroClient): voi
           content: [{
             type: 'text' as const,
             text: `## ${action[0].toUpperCase()}${action.slice(1)}: ${result.outcome.replace('_', ' ')}\n\n${message}\n\n`
-              + `**Status:** ${describeAgentStatus(previous)} before, ${describeAgentStatus(status)} now.`,
+              + `**Status:** ${describeAgentStatus(previous)} before, ${describeAgentStatus(status)} now.\n`
+              + `**AI usage this month:** ${aiUsageText(afterView.usage)}`,
           }],
           structuredContent: {
             action,

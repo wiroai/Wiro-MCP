@@ -26,7 +26,7 @@ import {
 } from './agent-message.js';
 import { quotedSpan } from './quoted-text.js';
 import { fetchPublicFile } from './remote-file.js';
-import { isWalletNotRead, WALLET_NOT_READ_NOTE } from './user-agent.js';
+import { ADD_FUNDS_URL, centsToUsd, isWalletNotRead, pausedUsage, WALLET_NOT_READ_NOTE } from './user-agent.js';
 
 // Studio, the Workflow Agent and the user's own deployed agents speak the same
 // message protocol behind three route families. Everything that differs
@@ -381,6 +381,17 @@ function formatUsd(value: number): string {
   return `$${value.toFixed(2)}`;
 }
 
+/**
+ * What follows Wiro's refusal of a message to a deployed agent that has no AI usage it can pay for: nothing was sent
+ * or charged, and the balance takes funds on wiro.ai. wallet: the balance that pays, when Wiro names it.
+ */
+function noUsageLeftNote(wallet: 'personal' | 'team' | undefined): string {
+  const team = wallet === 'team' ? ' (select the agent\'s team in the dashboard first)' : wallet ? '' : ' (for a team agent, select its team in the dashboard first)';
+  return `The message was not sent, and nothing was charged. Funds are added at ${ADD_FUNDS_URL}${team}; then send `
+    + 'the message again. A larger plan includes more AI usage each month: manage_agent_billing with action change_plan '
+    + 'quotes a move. get_my_agent shows the agent\'s AI usage and the balance.';
+}
+
 /** Where to look before sending a message again whose fate is unknown. */
 function checkBeforeResending(target: AgentTarget, session: string): string {
   return `Check get_agent_conversation with agent "${target.agent}" and session ${quotedSpan(session)} before sending it again.`;
@@ -407,7 +418,7 @@ export async function explainSendRefusal(
   // A bare "temporarily unavailable" answer leaves open whether the turn was
   // queued, so the text says to check before sending again.
   if (BARE_UNAVAILABLE_PATTERN.test(message)
-    && response.agentstatus === undefined && response.agentbalance === undefined) {
+    && response.agentstatus === undefined && response.agentbalance === undefined && response.agentusage === undefined) {
     return `${target.name} is temporarily unavailable. The message may still have been queued. `
       + checkBeforeResending(target, session);
   }
@@ -455,17 +466,22 @@ export async function explainSendRefusal(
   }
 
   if (target.kind === 'deployed') {
+    // The agent used the AI usage its plan includes and the balance is short: Wiro says so with code 97 and the
+    // agent's usage (agentusage), and its sentence names the amounts.
+    const paused = pausedUsage(response);
+    if (paused) return `${message}\n\n${noUsageLeftNote(paused.wallet)}`;
+    // An older Wiro answers with the agent's credits, which count hundredths of a dollar.
     const balance = response.agentbalance;
     if (isPlainObject(balance)) {
       const monthly = toNumber(balance.monthlycredits);
-      const extra = toNumber(balance.extracredits);
       const used = toNumber(balance.usedcredits);
-      return 'Your agent has no credits left'
-        + (monthly !== null || extra !== null || used !== null
-          ? ` (monthly ${monthly ?? 0}, extra ${extra ?? 0}, used ${used ?? 0})`
+      return 'Your agent has no AI usage left this period'
+        + (monthly !== null && used !== null
+          ? ` (${formatUsd(centsToUsd(Math.min(used, monthly)))} of ${formatUsd(centsToUsd(monthly))} included used)`
           : '')
-        + '. Renew the subscription or buy a credit pack with manage_agent_billing, then send the message again. '
-        + 'On a team agent, paying needs a team admin, the organization\'s owner or the person who deployed it.';
+        + '. It takes new messages again when its plan renews; a larger plan includes more AI usage each month '
+        + '(manage_agent_billing with action change_plan quotes a move). On a team agent, paying needs a team admin, '
+        + 'the organization\'s owner or the person who deployed it.';
     }
     const status = toNumber(response.agentstatus);
     if (status === 1 && RESTARTING_PATTERN.test(message)) return RESTARTING_HELP;

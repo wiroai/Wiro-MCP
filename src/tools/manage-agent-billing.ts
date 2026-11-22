@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { WiroClient } from '../client.js';
@@ -7,6 +6,7 @@ import {
   asString,
   errorResult,
   errorText,
+  hasErrorCode,
   isPlainObject,
   requireApiSuccess,
   toNumber,
@@ -22,23 +22,27 @@ import {
   WALLET_NOT_READ_NOTE,
   agentDashboardUrl,
   agentSummarySchema,
+  addFundsText,
   asPlan,
-  chargeRoute,
+  balanceShortfall,
+  centsToUsd,
   comparePlans,
   formatAgentSummaryLines,
-  formatCredits,
   formatUsd,
   isTransitionalStatus,
   isUnsettledPlan,
   isWalletNotRead,
   outcomeUnknown,
+  planBalanceName,
   planLineText,
   planName,
   readAgentDetail,
   roundUsd,
   sameAmount,
+  shortBalanceNote,
   toAgentDetail,
   toAgentSummary,
+  toPlanPricing,
   unsettledPlanText,
   type AgentDetail,
   type AgentPlan,
@@ -48,6 +52,7 @@ import {
 } from '../utils/user-agent.js';
 import { nextActionSchema, strictInput } from './schemas.js';
 
+// buy_credits is retired with the extra credit packs: it is still answered, and charges nothing.
 const ACTIONS = ['subscribe', 'change_plan', 'cancel', 'renew', 'buy_credits'] as const;
 type BillingAction = typeof ACTIONS[number];
 type PaidFrom = 'personal_wallet' | 'team_wallet' | 'card';
@@ -58,10 +63,10 @@ const quoteSchema = z.object({
   estimated: z.boolean(),
   maxChargeUsd: z.number().optional(),
   recurringUsd: z.number().nullable().optional(),
-  monthlyCredits: z.number().nullable().optional(),
-  creditsNow: z.number().optional()
-    .describe('change_plan to a larger plan: the credits this period gains now. monthlyCredits is what every renewal gives.'),
-  creditsAdded: z.number().optional(),
+  includedUsageUsd: z.number().nullable().optional()
+    .describe('The AI usage the plan includes each month, in USD, from every renewal.'),
+  includedUsageNowUsd: z.number().optional()
+    .describe('change_plan to a larger plan: the included AI usage this period gains now, in USD. includedUsageUsd is what every renewal includes.'),
   paidFrom: z.enum(['personal_wallet', 'team_wallet', 'card']),
   plan: z.enum(AGENT_PLANS).optional()
     .describe('subscribe and change_plan: the plan this quote is for. renew: the plan it renews on.'),
@@ -69,7 +74,6 @@ const quoteSchema = z.object({
     .describe('change_plan: upgrade (a larger plan, now), downgrade (a smaller plan, from the next renewal) or undo_downgrade (keep the plan, and undo the move set for the next renewal).'),
   startsAt: z.string().optional()
     .describe('change_plan to a smaller plan: when the period ends; the new plan starts with the renewal after it.'),
-  pack: z.string().optional(),
 });
 
 type Quote = z.infer<typeof quoteSchema>;
@@ -77,10 +81,10 @@ type Quote = z.infer<typeof quoteSchema>;
 const resultSchema = z.object({
   chargedUsd: z.number().nullable().optional(),
   monthlyPriceUsd: z.number().optional(),
-  monthlyCredits: z.number().optional(),
-  creditsNow: z.number().optional()
-    .describe('change_plan to a larger plan: the credits this period gained with it. monthlyCredits is what every renewal gives.'),
-  creditsAdded: z.number().optional(),
+  includedUsageUsd: z.number().optional()
+    .describe('The AI usage the plan includes each month, in USD, from every renewal.'),
+  includedUsageNowUsd: z.number().optional()
+    .describe('change_plan to a larger plan: the included AI usage this period gained with it, in USD.'),
   plan: z.string().optional(),
   previousPlan: z.string().optional(),
   nextPlan: z.string().nullable().optional()
@@ -117,10 +121,6 @@ type BillingEnvelope = ApiEnvelope & Record<string, unknown>;
 
 const CHARGE_REASON = 'Ask the user to approve this charge first.';
 
-function newRequestId(): string {
-  return randomUUID().replace(/-/g, '');
-}
-
 function billingCall(guid: string, action: string, extra: Record<string, unknown> = {}): NextAction {
   return {
     tool: 'manage_agent_billing',
@@ -138,7 +138,7 @@ function waitAction(guid: string, reason: string): NextAction {
 }
 
 /**
- * The wait after a plan change, a pack or a renewal, which keep a running agent up:
+ * The wait after a plan change or a renewal, which keep a running agent up:
  * only an agent on its way, one that was stopping (it starts again) or one queued
  * or starting, is worth waiting for.
  */
@@ -156,8 +156,7 @@ function renewWait(agent: Pick<AgentDetail, 'guid' | 'status'>): NextAction | un
 
 /**
  * A new plan queues a stopped or failed agent, and one waiting for setup; a
- * running one keeps running, and one that was stopping starts again. An agent
- * without a plan runs only while extra credits last.
+ * running one keeps running, and one that was stopping starts again.
  */
 function subscribeStarts(status: number | null): boolean {
   return status !== 4;
@@ -182,13 +181,16 @@ function subscribeWait(agent: Pick<AgentDetail, 'guid' | 'status'>): NextAction 
   return subscribeStarts(agent.status) ? waitAction(agent.guid, 'Wait until the agent is running.') : undefined;
 }
 
-/** What a move to a larger plan does to this period's credits. An allowance above the new plan's is cut to it for the time left. */
-function upgradeCreditsText(creditsNow: number, renewal: string, done: boolean): string {
-  if (creditsNow > 0) {
-    return `${formatCredits(creditsNow)} credits ${done ? 'came with it' : 'come now'} for the rest of this period${renewal}. `;
+/**
+ * What a move to a larger plan does to this period's included AI usage, in USD. An amount above the new plan's is
+ * cut to it for the time left.
+ */
+function upgradeUsageText(nowUsd: number, renewal: string, done: boolean): string {
+  if (nowUsd > 0) {
+    return `${formatUsd(nowUsd)} of AI usage ${done ? 'came with it' : 'comes now'} for the rest of this period${renewal}. `;
   }
-  if (creditsNow < 0) return `This period ${done ? 'lost' : 'loses'} ${formatCredits(-creditsNow)} credits for the time left${renewal}. `;
-  return `This period ${done ? 'kept' : 'keeps'} the credits it ${done ? 'had' : 'has'}${renewal}. `;
+  if (nowUsd < 0) return `This period ${done ? 'lost' : 'loses'} ${formatUsd(-nowUsd)} of included AI usage for the time left${renewal}. `;
+  return `This period ${done ? 'kept' : 'keeps'} the AI usage it ${done ? 'included' : 'includes'}${renewal}. `;
 }
 
 /** What a change to the plan does to the agent: a running one keeps running, and one that was stopping starts again. */
@@ -205,13 +207,13 @@ function planChangeAgentNote(status: number | null, what: string, quote = false)
     case 2:
       return 'The agent is queued to start.';
     case 6:
-      return 'The agent still needs setup; the credits are there once it starts.';
+      return 'The agent still needs setup; the included AI usage is there once it starts.';
     case 0:
-      return 'The agent is stopped; the credits are there when it starts.';
+      return 'The agent is stopped; the included AI usage is there when it starts.';
     case 5:
-      return 'The agent stopped with an error; the credits are there when it starts.';
+      return 'The agent stopped with an error; the included AI usage is there when it starts.';
     default:
-      return 'The credits are there when the agent starts.';
+      return 'The included AI usage is there when the agent starts.';
   }
 }
 
@@ -234,9 +236,8 @@ async function readPlanPreview(client: WiroClient, guid: string, plan: AgentPlan
     const priced = asString(body.tier);
     if (priced !== undefined && priced !== plan) return null;
     const priceUsd = toNumber(body.totalPriceUsd);
-    const monthlyCredits = toNumber(body.totalMonthlyCredits);
     return {
-      price: priceUsd !== null && monthlyCredits !== null ? { priceUsd, monthlyCredits } : null,
+      price: priceUsd !== null ? { priceUsd, includedUsageUsd: toPlanPricing(body)?.[plan]?.includedUsageUsd ?? priceUsd } : null,
       change: readPlanChange(body.planChange),
     };
   } catch (error) {
@@ -245,9 +246,9 @@ async function readPlanPreview(client: WiroClient, guid: string, plan: AgentPlan
   }
 }
 
-/** A plan's price as said in a sentence: "$30.00 every 30 days with 3,000 monthly credits". */
+/** A plan's price as said in a sentence: "$30.00 every 30 days, including $30.00 of AI usage a month". */
 function planTerms(price: PlanPrice): string {
-  return `${formatUsd(price.priceUsd)} every 30 days with ${formatCredits(price.monthlyCredits)} monthly credits`;
+  return `${formatUsd(price.priceUsd)} every 30 days, including ${formatUsd(price.includedUsageUsd)} of AI usage a month`;
 }
 
 /**
@@ -309,17 +310,19 @@ function approvalProblem(action: BillingAction, quote: Quote | undefined, approv
 }
 
 /** The first lines of a new quote when the approved amount no longer fits. */
-function changedLead(action: BillingAction, quote: Quote | undefined, amount: number | null, approved: number | undefined, callerRequestId: string | undefined): string {
+function changedLead(action: BillingAction, quote: Quote | undefined, amount: number | null, approved: number | undefined): string {
   if (approvedAsCeiling(action, quote)) {
     return `The most this plan change can charge changed since the quote: it is now ${formatUsd(amount)}, and the user approved at most ${formatUsd(approved)}. Nothing was charged. Show the new amount to the user and ask again.`;
   }
-  const changed = `The amount changed since the quote: it is now ${formatUsd(amount)}, and the user approved ${formatUsd(approved)}.`;
-  if (action === 'buy_credits' && callerRequestId) {
-    // Wiro binds a purchase request id to the price of its first attempt.
-    return `${changed} Nothing was charged by this call. Show the new amount to the user and ask again. `
-      + `If an earlier call with request_id "${callerRequestId}" ended without a clear result, do not approve the new amount for it: this request id works only at its original price. Check get_my_agent and the wallet balance with get_account, and if the balance changed, contact Wiro support.`;
-  }
-  return `${changed} Nothing was charged. Show the new amount to the user and ask again.`;
+  return `The amount changed since the quote: it is now ${formatUsd(amount)}, and the user approved ${formatUsd(approved)}. Nothing was charged. Show the new amount to the user and ask again.`;
+}
+
+/** The answer to buy_credits, which charges nothing: the packs are retired, and the balance pays after the plan. */
+function packsRetiredText(agent: Pick<AgentDetail, 'workspace'>): string {
+  const balance = agent.workspace === 'team' ? 'the team\'s Wiro balance' : 'your Wiro balance';
+  return 'Extra credit packs are retired, and nothing was charged. The agent uses the AI usage its plan includes '
+    + `first, then ${balance}. To keep it running after the included usage, add funds to that balance on wiro.ai. `
+    + `${addFundsText(agent.workspace)} A larger plan includes more AI usage each month: action change_plan quotes a move.`;
 }
 
 /** The plans with their prices, for a call that did not name one, and the plan the agent is on. */
@@ -336,18 +339,22 @@ async function planFor(
   action: BillingAction,
   agent: AgentDetail,
   raw: Record<string, unknown> | null,
-  input: { plan?: AgentPlan; pack?: string; requestId: string },
+  input: { plan?: AgentPlan },
   signal: AbortSignal,
 ): Promise<Plan> {
   const guid = agent.guid;
   const active = raw?.status === 'active';
   const prepaid = raw?.provider === 'prepaid';
   const cancelled = raw?.pendingdowngrade === 'cancel';
-  const route = chargeRoute(raw);
+  // Agent plans are paid only from the Wiro balance of the agent's workspace: every new charge and every
+  // renewal. A card plan from before that is paid by card through its period, then moves to the balance.
   const paidFrom: PaidFrom = agent.workspace === 'team' ? 'team_wallet' : 'personal_wallet';
-  const wallet = agent.workspace === 'team' ? 'the team wallet' : 'the personal wallet';
+  const balance = planBalanceName(agent.workspace);
   const periodEnd = agent.subscription?.periodEndsAt ?? 'the end of the current period';
-  const cardPlan = (what: string) => `This plan is billed by card, and card payments are made in the Wiro dashboard. Nothing was charged here. To ${what}, open ${agent.dashboardUrl}`;
+  // An answer with a card checkout link instead of the change, which an older Wiro gave for a card plan. No
+  // checkout is opened here.
+  const checkoutAnswer = (what: string) => `Wiro did not ${what}: it answered with a card checkout, which is not opened `
+    + `here, and nothing was charged. Agent plans are paid from ${balance}; get_my_agent shows the plan as it is now.`;
   // A plan that has not ended and is not active, such as a card plan whose last payment did not go through
   // (past_due, then unpaid). Wiro counts every status but expired, cancelled and refunded as a plan that has
   // not ended: it starts no new plan beside one, and renews, changes, cancels and tops up only an active plan.
@@ -361,7 +368,7 @@ async function planFor(
       if (active) {
         return {
           outcome: 'refused',
-          message: 'This agent already has an active plan. Use renew to undo a cancellation, change_plan to move to another plan, or buy_credits for more credits.',
+          message: 'This agent already has an active plan. Use renew to undo a cancellation, or change_plan to move to another plan; a larger plan includes more AI usage each month.',
         };
       }
       // Its payment is fixed instead: a second plan would bill beside it.
@@ -377,11 +384,11 @@ async function planFor(
           chargeNowUsd: price.priceUsd,
           estimated: false,
           recurringUsd: price.priceUsd,
-          monthlyCredits: price.monthlyCredits,
+          includedUsageUsd: price.includedUsageUsd,
           paidFrom,
           plan,
         },
-        message: `Subscribe on ${planName(plan)}: ${formatUsd(price.priceUsd)} now from ${wallet}, then every 30 days until the plan is cancelled, with ${formatCredits(price.monthlyCredits)} credits per month. `
+        message: `Subscribe on ${planName(plan)}: ${formatUsd(price.priceUsd)} now, paid from ${balance}, then every 30 days until the plan is cancelled. It includes ${formatUsd(price.includedUsageUsd)} of AI usage a month; after it, the agent uses the same balance. `
           + subscribeQuoteNote(agent.status)
           + (missing.length > 0
             ? ` Missing credentials (${missing.map(item => item.title).join(', ')}) can be added afterwards; until then the skills that need them fail.`
@@ -397,12 +404,11 @@ async function planFor(
           );
           const monthly = toNumber(body.monthlypriceusd) ?? price.priceUsd;
           const paid = walletPaid(body, monthly);
-          const credits = toNumber(body.monthlycredits) ?? price.monthlyCredits;
           return {
             outcome: 'done',
-            message: `Subscribed on ${planName(plan)} and charged ${paid.text} from ${wallet}. The plan renews every 30 days until it is cancelled. `
+            message: `Subscribed on ${planName(plan)} and charged ${paid.text} from ${balance}. The plan renews from it every 30 days until it is cancelled. `
               + (subscribeStarts(agent.status) ? 'The agent is starting.' : 'The agent keeps running: a new plan does not restart it.'),
-            result: { chargedUsd: paid.chargedUsd, monthlyPriceUsd: monthly, monthlyCredits: credits, plan },
+            result: { chargedUsd: paid.chargedUsd, monthlyPriceUsd: monthly, includedUsageUsd: price.includedUsageUsd, plan },
             nextAction: subscribeWait(agent),
           };
         },
@@ -418,22 +424,16 @@ async function planFor(
         };
       }
       if (active) {
-        if (!prepaid) {
-          // A card plan can be set to stop at its period end.
-          const atPeriodEnd = agent.subscription?.atPeriodEnd;
+        // A card plan is not renewed by card any more: at its period end it moves to the balance by itself, and
+        // one that was cancelled moves there when the cancellation is undone.
+        const ends = cancelled || agent.subscription?.atPeriodEnd === 'ends';
+        if (!ends) {
           return {
-            outcome: 'refused',
-            message: atPeriodEnd === 'ends'
-              ? `This plan is billed by card and is set to stop renewing after ${periodEnd}. Card plans are managed `
-                + `from the dashboard, where it can be kept: ${agent.dashboardUrl}`
-              : atPeriodEnd === 'renews'
-                ? `This plan is billed by card and renews by itself. It is managed from the dashboard: ${agent.dashboardUrl}`
-                : `This plan is billed by card and is paid through ${periodEnd}. Card plans are renewed or cancelled `
-                  + `from the dashboard: ${agent.dashboardUrl}`,
+            outcome: 'not_needed',
+            message: prepaid
+              ? 'The plan is active and renews by itself. Nothing to do.'
+              : `This plan is paid by card through ${periodEnd}. Then it moves to ${balance} and renews from it every 30 days by itself. Nothing to do.`,
           };
-        }
-        if (!cancelled) {
-          return { outcome: 'not_needed', message: 'The plan is active and renews by itself. Nothing to do.' };
         }
         // A renewal charges the plan set for it, or the agent's own, at today's price. A wallet cancel keeps a
         // move set for the renewal, so the plan is named: it can be another plan than the agent's.
@@ -446,12 +446,13 @@ async function planFor(
             chargeNowUsd: 0,
             estimated: false,
             recurringUsd: amount,
-            monthlyCredits: next?.monthlyCredits ?? agent.credits.renewal ?? agent.credits.monthly,
+            includedUsageUsd: next?.includedUsageUsd ?? agent.usage.renewalUsd ?? agent.usage.includedUsd,
             paidFrom,
             ...(renewsOn ? { plan: renewsOn } : {}),
           },
-          message: `Undo the cancellation: nothing is charged now. The plan then renews${renewsOn ? ` on ${planName(renewsOn)}` : ''} from ${wallet} for ${formatUsd(amount)} after ${periodEnd} and every 30 days after that until it is cancelled.`,
-          confirmReason: 'Ask the user to confirm first: the plan will charge the wallet again at each renewal.',
+          message: `Undo the cancellation: nothing is charged now.${prepaid ? '' : ` The plan stays paid by card through ${periodEnd}.`} `
+            + `The plan then renews${renewsOn ? ` on ${planName(renewsOn)}` : ''} for ${formatUsd(amount)} after ${periodEnd} and every 30 days after that until it is cancelled, paid from ${balance}.`,
+          confirmReason: 'Ask the user to confirm first: the plan will charge the Wiro balance again at each renewal.',
           perform: async signal => {
             requireApiSuccess(
               await client.post<BillingEnvelope>('/UserAgent/RenewSubscription', { guid }, signal),
@@ -459,7 +460,9 @@ async function planFor(
             );
             return {
               outcome: 'done',
-              message: 'The cancellation was undone. The plan keeps renewing every 30 days.',
+              message: prepaid
+                ? 'The cancellation was undone. The plan keeps renewing every 30 days.'
+                : `The cancellation was undone. The plan is paid by card through ${periodEnd}, then renews from ${balance} every 30 days.`,
               result: { chargedUsd: 0, renewal: 'undo_cancel' },
             };
           },
@@ -474,20 +477,14 @@ async function planFor(
           nextAction: billingCall(guid, 'subscribe'),
         };
       }
-      if (!prepaid) {
-        return {
-          outcome: 'refused',
-          message: 'The expired plan was billed by card. Use action subscribe to start a new plan paid from the wallet.',
-          nextAction: billingCall(guid, 'subscribe'),
-        };
-      }
+      // A plan that ended by card starts again from the balance too.
       const own = agent.monthlyPriceUsd ?? toNumber(raw.amount);
       const planKey = asPlan(agent.nextPlan) ?? asPlan(agent.tier);
       // A renewal charges the plan set for it, or the agent's own, at its price today, which can differ
       // from the price the plan ended at.
       const today = renewalPlanPrice(agent);
       const earlier = today && own && own > 0 && !sameAmount(today.priceUsd, own)
-        ? ` The plan ended at ${formatUsd(own)} a month; it renews at the ${planName(planKey)} price today, with ${formatCredits(today.monthlyCredits)} credits per month.`
+        ? ` The plan ended at ${formatUsd(own)} a month; it renews at the ${planName(planKey)} price today, including ${formatUsd(today.includedUsageUsd)} of AI usage a month.`
         : '';
       const price = today?.priceUsd ?? own;
       if (!price || price <= 0) {
@@ -503,11 +500,11 @@ async function planFor(
           chargeNowUsd: price,
           estimated: false,
           recurringUsd: price,
-          monthlyCredits: today?.monthlyCredits ?? null,
+          includedUsageUsd: today?.includedUsageUsd ?? null,
           paidFrom,
           ...(planKey ? { plan: planKey } : {}),
         },
-        message: `Renew the expired plan${planKey ? ` on ${planName(planKey)}` : ''}: ${formatUsd(price)} now from ${wallet}, then every 30 days until it is cancelled.${earlier} A stopped or failed agent is queued to start again.`,
+        message: `Renew the expired plan${planKey ? ` on ${planName(planKey)}` : ''}: ${formatUsd(price)} now, paid from ${balance}, then every 30 days until it is cancelled.${earlier} A stopped or failed agent is queued to start again.`,
         perform: async signal => {
           const body = requireApiSuccess(
             await client.post<BillingEnvelope>('/UserAgent/RenewSubscription', { guid }, signal),
@@ -515,16 +512,16 @@ async function planFor(
           );
           const monthly = toNumber(body.amount) ?? price;
           const paid = walletPaid(body, monthly);
-          const credits = toNumber(body.monthlycredits);
           // The plan it renewed on, which the wallet line names too.
           const renewedOn = asPlan(body.tier) ?? planKey;
+          const included = renewedOn ? agent.pricing?.[renewedOn]?.includedUsageUsd : undefined;
           return {
             outcome: 'done',
-            message: `Renewed${renewedOn ? ` on ${planName(renewedOn)}` : ''} and charged ${paid.text} from ${wallet}. The plan renews every 30 days until it is cancelled.`,
+            message: `Renewed${renewedOn ? ` on ${planName(renewedOn)}` : ''} and charged ${paid.text} from ${balance}. The plan renews from it every 30 days until it is cancelled.`,
             result: {
               chargedUsd: paid.chargedUsd,
               monthlyPriceUsd: monthly,
-              ...(credits !== null ? { monthlyCredits: credits } : {}),
+              ...(included !== undefined ? { includedUsageUsd: included } : {}),
               ...(renewedOn ? { plan: renewedOn } : {}),
               renewal: 'renewed',
             },
@@ -559,26 +556,17 @@ async function planFor(
         };
       };
       if (!prepaid) {
-        // A plan moving to wallet billing has no cancel in the dashboard either: it can be cancelled once the wallet bills it.
-        if (raw?.nextprovider === 'prepaid') {
-          return {
-            outcome: 'refused',
-            message: `A switch to wallet billing is already scheduled for this plan, so it cannot be cancelled now. After ${periodEnd} it is billed from the wallet, and action cancel then stops its renewals.`,
-          };
-        }
-        if (agent.workspace === 'personal') {
-          return {
-            outcome: 'refused',
-            message: `This plan is billed by card. Card plans are cancelled from the dashboard: ${agent.dashboardUrl}`,
-          };
-        }
-        if (agent.subscription?.cancelAtPeriodEnd) {
+        // A card plan, its owner's or (on a team agent) a billing admin's to cancel: it ends with its period and
+        // no longer moves to the balance; renew undoes that before then.
+        if (cancelled || agent.subscription?.cancelAtPeriodEnd) {
           return { outcome: 'not_needed', message: `The plan is already set to end after ${periodEnd}.` };
         }
         return {
           outcome: 'quote',
           quote: { chargeNowUsd: 0, estimated: false, paidFrom: 'card' },
-          message: `Cancel the team's card plan at the end of the current period (${periodEnd}). Nothing is refunded.${dropsMove}`,
+          message: `Cancel the card plan at the end of its period (${periodEnd}): nothing is charged or refunded, and `
+            + `it does not move to ${balance}. The agent keeps working until then, then stops. Action renew undoes the `
+            + `cancellation before then.${dropsMove}`,
           confirmReason: 'Ask the user to confirm the cancellation first.',
           perform: performCancel,
         };
@@ -589,7 +577,7 @@ async function planFor(
       return {
         outcome: 'quote',
         quote: { chargeNowUsd: 0, estimated: false, paidFrom },
-        message: `Cancel the plan: nothing is refunded and it stops renewing. The agent keeps its monthly credits until about a day after ${periodEnd}; then the monthly credits end and the agent stops unless it has extra credits left. Action renew undoes the cancellation before then.${keepsMove}`,
+        message: `Cancel the plan: nothing is refunded and it stops renewing. The agent keeps its plan and the AI usage it includes until about a day after ${periodEnd}; then the plan ends and the agent stops. Action renew undoes the cancellation before then.${keepsMove}`,
         confirmReason: 'Ask the user to confirm the cancellation first.',
         perform: performCancel,
       };
@@ -613,11 +601,12 @@ async function planFor(
       if (!active) {
         const open = unsettled('A plan change needs an active plan.');
         if (open) return { outcome: 'refused', message: open };
-        // A wallet plan that ended comes back with renew on the plan set for its renewal, else on its own
-        // plan, so renew answers a target that is that plan; any other target takes a new plan. When the plan
-        // ends, Wiro writes that plan on the agent: the one set for its renewal, else the one nearest its last price.
+        // A plan that ended, by card or from the wallet, comes back from the balance with renew on the plan set
+        // for its renewal, else on its own plan, so renew answers a target that is that plan; any other target
+        // takes a new plan. When the plan ends, Wiro writes that plan on the agent: the one set for its renewal,
+        // else the one nearest its last price.
         const renewsOn = asPlan(agent.nextPlan) ?? current;
-        if (renewsOn === target && raw?.status === 'expired' && prepaid) {
+        if (renewsOn === target && raw?.status === 'expired') {
           return {
             outcome: 'refused',
             message: renewsOn === current
@@ -636,8 +625,6 @@ async function planFor(
       const next = asPlan(agent.nextPlan) ?? null;
       const when = agent.subscription?.periodEndsAt ? `the renewal after ${agent.subscription.periodEndsAt}` : 'the next renewal';
       const move = comparePlans(target, current);
-      // Wiro changes a team's card plan only in the dashboard, not with a project's key.
-      const teamCard = route === 'card' && agent.workspace === 'team';
 
       if (move === 0) {
         if (!next || next === current) {
@@ -648,9 +635,7 @@ async function planFor(
               : `The agent is already on ${planName(current)}. Nothing to do.`,
           };
         }
-        // A move to another plan is set for the next renewal: keeping this one undoes it. A team's card
-        // plan changes only in the dashboard.
-        if (teamCard) return { outcome: 'refused', message: cardPlan(`keep it on ${planName(current)}`) };
+        // A move to another plan is set for the next renewal: keeping this one undoes it.
         const keep = agent.pricing?.[current];
         return {
           outcome: 'quote',
@@ -658,8 +643,8 @@ async function planFor(
             chargeNowUsd: 0,
             estimated: false,
             recurringUsd: keep?.priceUsd ?? null,
-            monthlyCredits: keep?.monthlyCredits ?? null,
-            paidFrom: route === 'card' ? 'card' : paidFrom,
+            includedUsageUsd: keep?.includedUsageUsd ?? null,
+            paidFrom,
             plan: current,
             change: 'undo_downgrade',
           },
@@ -671,14 +656,13 @@ async function planFor(
               await client.post<BillingEnvelope>('/UserAgent/UpgradeTier', { guid, targetTier: current }, signal),
               'The move set for the next renewal could not be undone.',
             );
-            if (asString(body.url)) return { outcome: 'refused', message: cardPlan(`keep it on ${planName(current)}`) };
+            if (asString(body.url)) return { outcome: 'refused', message: checkoutAnswer(`keep the plan on ${planName(current)}`) };
             // An agent on a price from before the plans keeps its plan with that plan set for its renewal, so
             // the renewal bills the plan's own price.
             if (asPlan(body.nextplan) === current) {
               const at = unixToIso(body.startsAt ?? body.periodEnd) ?? agent.subscription?.periodEndsAt;
               const priceUsd = toNumber(body.newPriceUsd) ?? keep?.priceUsd;
-              const monthlyCredits = toNumber(body.newMonthlyCredits) ?? keep?.monthlyCredits;
-              const terms = priceUsd !== undefined && monthlyCredits !== undefined ? `, ${planTerms({ priceUsd, monthlyCredits })}` : '';
+              const terms = priceUsd !== undefined ? `, ${planTerms({ priceUsd, includedUsageUsd: keep?.includedUsageUsd ?? priceUsd })}` : '';
               return {
                 outcome: 'done',
                 message: `The move to ${planName(next)} is undone. The agent stays on ${planName(current)}, and nothing was charged. `
@@ -700,29 +684,27 @@ async function planFor(
       }
 
       if (move > 0) {
-        // No checkout pages are opened for card plans: the user pays them in the dashboard.
-        if (route === 'card') return { outcome: 'refused', message: cardPlan(`move it to ${planName(target)}`) };
         const preview = await readPlanPreview(client, guid, target, signal);
         const targetPrice = preview?.price ?? agent.pricing?.[target];
         if (!targetPrice) throw new Error(`The ${planName(target)} price of this agent is not available right now. Try again later.`);
         const ending = `The plan is cancelled, so it ends about a day after ${periodEnd} and does not renew on ${planName(target)}; this charge covers only the time left. To keep the plan, undo the cancellation first with action renew.`;
         const currentPrice = agent.monthlyPriceUsd || agent.subscription?.amountUsd || 0;
         const fullDifference = roundUsd(Math.max(0, targetPrice.priceUsd - currentPrice));
-        // A wallet plan pays the amount Wiro works out on it now. A card plan moving to wallet billing is
-        // charged from the wallet for the time left of its card period, which Wiro works out at the change.
+        // A wallet plan pays the amount Wiro works out on it now. A card plan is charged from the balance for
+        // the time left of its card period, which Wiro works out at the change.
         const change = preview?.change?.wallet ? preview.change : null;
         const exact = change?.chargeNowUsd ?? null;
-        const renewalCredits = change?.creditsFromRenewal ?? targetPrice.monthlyCredits;
-        const creditsNow = change?.creditsNow ?? null;
+        const renewalUsd = change?.includedFromRenewalUsd ?? targetPrice.includedUsageUsd;
+        const nowUsd = change?.includedNowUsd ?? null;
         const days = daysLeftText(change?.secondsLeft ?? null);
         const undoes = next && next !== current ? ` This also undoes the move to ${planName(next)} set for the next renewal.` : '';
         const money = exact !== null
-          ? `Move to ${planName(target)}: ${formatUsd(exact)} now from ${wallet} for the rest of this period`
+          ? `Move to ${planName(target)}: ${formatUsd(exact)} now, paid from ${balance}, for the rest of this period`
             + `${exact > 0 && underOneDayLeft(change?.secondsLeft ?? null) ? ', at the one-day minimum' : days ? ` (${days})` : ''}. `
-          : `Move to ${planName(target)}: the difference for the rest of this period is taken from ${wallet} now. Wiro works it out from the time left when the plan changes, and it is never more than ${formatUsd(fullDifference)}, so that is the amount to approve. `;
-        const credits = creditsNow !== null
-          ? upgradeCreditsText(creditsNow, cancelled ? '' : `, and every renewal gives ${formatCredits(renewalCredits)}`, false)
-          : `The added credits come for the time left in this period${cancelled ? '' : `, and every renewal gives ${formatCredits(renewalCredits)}`}. `;
+          : `Move to ${planName(target)}: the difference for the rest of this period is paid from ${balance} now. Wiro works it out from the time left when the plan changes, and it is never more than ${formatUsd(fullDifference)}, so that is the amount to approve. `;
+        const usage = nowUsd !== null
+          ? upgradeUsageText(nowUsd, cancelled ? '' : `, and every renewal includes ${formatUsd(renewalUsd)}`, false)
+          : `The added AI usage comes for the time left in this period${cancelled ? '' : `, and every renewal includes ${formatUsd(renewalUsd)}`}. `;
         return {
           outcome: 'quote',
           quote: {
@@ -730,13 +712,13 @@ async function planFor(
             estimated: exact === null,
             maxChargeUsd: exact ?? fullDifference,
             recurringUsd: cancelled ? null : targetPrice.priceUsd,
-            monthlyCredits: renewalCredits,
-            ...(creditsNow !== null ? { creditsNow } : {}),
+            includedUsageUsd: renewalUsd,
+            ...(nowUsd !== null ? { includedUsageNowUsd: nowUsd } : {}),
             paidFrom,
             plan: target,
             change: 'upgrade',
           },
-          message: money + credits
+          message: money + usage
             + (cancelled ? `${ending} ` : `From the next renewal the plan costs ${formatUsd(targetPrice.priceUsd)} every 30 days. `)
             + `${planChangeAgentNote(agent.status, 'the plan change', true)}${undoes} A move to a smaller plan later starts at the renewal after it is asked for, with nothing refunded.`,
           perform: async signal => {
@@ -744,20 +726,20 @@ async function planFor(
               await client.post<BillingEnvelope>('/UserAgent/UpgradeTier', { guid, targetTier: target }, signal),
               'The plan could not be changed.',
             );
-            if (asString(body.url)) {
-              // A checkout link means the plan is paid by card, and card payments are made in the dashboard.
-              return { outcome: 'refused', message: cardPlan(`move it to ${planName(target)}`) };
-            }
+            if (asString(body.url)) return { outcome: 'refused', message: checkoutAnswer(`move the plan to ${planName(target)}`) };
             const charged = toNumber(body.proratedCharge) ?? toNumber(body.chargedUsd);
             const newPrice = toNumber(body.newPriceUsd) ?? targetPrice.priceUsd;
-            const fromRenewal = toNumber(body.creditsFromRenewal) ?? toNumber(body.newMonthlyCredits) ?? renewalCredits;
-            const came = toNumber(body.creditsNow);
+            // Wiro answers the included usage in hundredths of a dollar.
+            const fromRenewalCents = toNumber(body.creditsFromRenewal) ?? toNumber(body.newMonthlyCredits);
+            const fromRenewal = fromRenewalCents !== null ? centsToUsd(fromRenewalCents) : renewalUsd;
+            const cameCents = toNumber(body.creditsNow);
+            const came = cameCents !== null ? centsToUsd(cameCents) : null;
             const previous = asString(body.previousTier);
             return {
               outcome: 'done',
-              message: `Moved to ${planName(target)} and charged ${formatUsd(charged ?? 0)} from ${wallet}. `
+              message: `Moved to ${planName(target)} and charged ${formatUsd(charged ?? 0)} from ${balance}. `
                 + (came !== null
-                  ? upgradeCreditsText(came, cancelled ? '' : `, and every renewal gives ${formatCredits(fromRenewal)}`, true)
+                  ? upgradeUsageText(came, cancelled ? '' : `, and every renewal includes ${formatUsd(fromRenewal)}`, true)
                   : '')
                 + (cancelled
                   ? `The plan is still cancelled and ends about a day after ${periodEnd}; action renew undoes the cancellation. `
@@ -766,8 +748,8 @@ async function planFor(
               result: {
                 chargedUsd: charged,
                 monthlyPriceUsd: newPrice,
-                monthlyCredits: fromRenewal,
-                ...(came !== null ? { creditsNow: came } : {}),
+                includedUsageUsd: fromRenewal,
+                ...(came !== null ? { includedUsageNowUsd: came } : {}),
                 plan: target,
                 ...(previous ? { previousPlan: previous } : {}),
                 change: 'upgrade',
@@ -783,22 +765,18 @@ async function planFor(
       if (cancelled || agent.subscription?.atPeriodEnd === 'ends') {
         return {
           outcome: 'refused',
-          message: `The plan is set to end after ${periodEnd}, so it does not renew on another plan. To keep the agent on ${planName(target)}, `
-            + (route === 'card' && !cancelled
-              ? `keep the plan in the dashboard first (${agent.dashboardUrl}), then change the plan.`
-              : 'undo the cancellation first with action renew, then change the plan.'),
-          ...(cancelled ? { nextAction: billingCall(guid, 'renew') } : {}),
+          message: `The plan is set to end after ${periodEnd}, so it does not renew on another plan. To keep the agent on `
+            + `${planName(target)}, undo the cancellation first with action renew, then change the plan.`,
+          nextAction: billingCall(guid, 'renew'),
         };
       }
       if (next === target) {
         return {
           outcome: 'not_needed',
-          message: `The move to ${planName(target)} is already set: it starts with ${when}. Until then the agent keeps ${planName(current)} and its credits.`,
+          message: `The move to ${planName(target)} is already set: it starts with ${when}. Until then the agent keeps ${planName(current)} and the AI usage it includes.`,
         };
       }
-      if (teamCard) return { outcome: 'refused', message: cardPlan(`move it to ${planName(target)}`) };
       const smaller = agent.pricing?.[target];
-      const card = route === 'card';
       const startsAt = agent.subscription?.periodEndsAt;
       return {
         outcome: 'quote',
@@ -806,16 +784,16 @@ async function planFor(
           chargeNowUsd: 0,
           estimated: false,
           recurringUsd: smaller?.priceUsd ?? null,
-          monthlyCredits: smaller?.monthlyCredits ?? null,
-          paidFrom: card ? 'card' : paidFrom,
+          includedUsageUsd: smaller?.includedUsageUsd ?? null,
+          paidFrom,
           plan: target,
           change: 'downgrade',
           ...(startsAt ? { startsAt } : {}),
         },
-        message: `Move to ${planName(target)} at the next renewal: nothing is charged or refunded now. The agent keeps ${planName(current)} and its credits until ${periodEnd}. `
-          + `From ${when} the plan is ${planName(target)}${smaller ? `, ${planTerms(smaller)}` : ''}, ${card ? 'paid by card' : `paid from ${wallet}`}. `
+        message: `Move to ${planName(target)} at the next renewal: nothing is charged or refunded now. The agent keeps ${planName(current)} and the AI usage it includes until ${periodEnd}. `
+          + `From ${when} the plan is ${planName(target)}${smaller ? `, ${planTerms(smaller)}` : ''}, paid from ${balance}. `
           + `Asking for ${planName(current)} again before then undoes the move.`,
-        confirmReason: 'Ask the user to confirm first: from the next renewal the agent has the smaller plan\'s credits.',
+        confirmReason: 'Ask the user to confirm first: from the next renewal the agent has the smaller plan\'s included AI usage.',
         perform: async signal => {
           // Wiro moves an agent to a smaller plan only when the request says so: a bare smaller plan is
           // refused, so an older client that asks for one as an upgrade changes nothing.
@@ -823,11 +801,11 @@ async function planFor(
             await client.post<BillingEnvelope>('/UserAgent/UpgradeTier', { guid, targetTier: target, allowDowngrade: true }, signal),
             'The move to the smaller plan could not be set.',
           );
-          if (asString(body.url)) return { outcome: 'refused', message: cardPlan(`move it to ${planName(target)}`) };
+          if (asString(body.url)) return { outcome: 'refused', message: checkoutAnswer(`move the plan to ${planName(target)}`) };
           const at = unixToIso(body.startsAt ?? body.effectiveAt ?? body.periodEnd) ?? startsAt;
           return {
             outcome: 'done',
-            message: `The move to ${planName(target)} is set: it starts with the renewal after ${at ?? 'this period'}. Until then the agent keeps ${planName(current)} and its credits. Nothing was charged or refunded.`,
+            message: `The move to ${planName(target)} is set: it starts with the renewal after ${at ?? 'this period'}. Until then the agent keeps ${planName(current)} and the AI usage it includes. Nothing was charged or refunded.`,
             result: { chargedUsd: 0, plan: current, nextPlan: target, change: 'downgrade', ...(at ? { startsAt: at } : {}) },
           };
         },
@@ -835,102 +813,22 @@ async function planFor(
       };
     }
 
-    case 'buy_credits': {
-      if (!active) {
-        const open = unsettled('Extra credits need an active plan.');
-        return { outcome: 'refused', message: open ?? 'Extra credits need an active plan. Use action subscribe or renew first.' };
-      }
-      if (route === 'card') return { outcome: 'refused', message: cardPlan('buy the pack') };
-      const packs = agent.extraCreditPacks;
-      const packList = packs.map(item => `${item.pack} (${formatCredits(item.credits)} credits for ${formatUsd(item.priceUsd)})`).join(', ');
-      if (!input.pack) {
-        return {
-          outcome: 'refused',
-          ...(packs.length > 0 ? { heading: 'Available packs' } : {}),
-          message: packs.length > 0 ? `Choose a pack: ${packList}.` : 'No extra credit packs are available for this agent yet.',
-          ...(packs[0] ? { nextAction: billingCall(guid, 'buy_credits', { pack: packs[0].pack }) } : {}),
-        };
-      }
-      const chosen = packs.find(item => item.pack === input.pack);
-      if (!chosen) {
-        return {
-          outcome: 'refused',
-          message: `The ${input.pack} pack is not available for this agent.${packList ? ` Available: ${packList}.` : ''}`,
-        };
-      }
-      return {
-        outcome: 'quote',
-        quote: { chargeNowUsd: chosen.priceUsd, estimated: false, creditsAdded: chosen.credits, paidFrom, pack: chosen.pack },
-        message: `Buy the ${chosen.pack} pack: ${formatUsd(chosen.priceUsd)} now from ${wallet} for ${formatCredits(chosen.credits)} extra credits, added at once. Extra credits are used after the monthly credits, do not reset each month and end 6 months (180 days) after purchase. ${planChangeAgentNote(agent.status, 'a credit pack', true)} This is a one-time charge.`,
-        perform: async signal => {
-          const body = requireApiSuccess(
-            await client.post<BillingEnvelope>('/UserAgent/CreateExtraCreditCheckout', {
-              useragentguid: guid,
-              pack: chosen.pack,
-              requestid: input.requestId,
-            }, signal),
-            'The credit pack could not be bought.',
-          );
-          if (asString(body.url)) return { outcome: 'refused', message: cardPlan('buy the pack') };
-          return {
-            outcome: 'done',
-            message: `Bought the ${chosen.pack} pack: ${formatCredits(chosen.credits)} credits for ${formatUsd(chosen.priceUsd)} from ${wallet}. The credits are added. ${planChangeAgentNote(agent.status, 'a credit pack')}`,
-            result: { chargedUsd: chosen.priceUsd, creditsAdded: chosen.credits },
-            nextAction: waitIfStarting(agent),
-          };
-        },
-      };
-    }
+    case 'buy_credits':
+      // Retired: nothing is quoted, sent or charged.
+      return { outcome: 'refused', heading: 'Retired', message: packsRetiredText(agent) };
   }
 }
 
 /** The arguments that repeat a quoted action with the user's approval. */
-function confirmArguments(guid: string, action: BillingAction, quote: Quote | undefined, requestId: string | undefined): Record<string, unknown> {
+function confirmArguments(guid: string, action: BillingAction, quote: Quote | undefined): Record<string, unknown> {
   const amount = approvalAmountOf(action, quote);
   return {
     agent_guid: guid,
     action,
     ...((action === 'subscribe' || action === 'change_plan') && quote?.plan ? { plan: quote.plan } : {}),
-    ...(quote?.pack ? { pack: quote.pack } : {}),
-    ...(requestId ? { request_id: requestId } : {}),
     ...(amount !== null ? { confirm_charge_usd: amount } : {}),
     confirm: true,
   };
-}
-
-function retryPurchaseText(guid: string, quote: Quote | undefined, requestId: string): string {
-  const amount = chargeOf(quote);
-  return `To retry, call manage_agent_billing again with agent_guid "${guid}", action buy_credits, pack "${quote?.pack ?? ''}", request_id "${requestId}"${amount !== null ? `, confirm_charge_usd ${amount}` : ''} and confirm: true. That request id never charges twice, and repeating it completes this same purchase. Do not get a new quote for this purchase: a new request id is a new purchase.`
-    + (amount !== null ? ` This request id works only while the pack costs ${formatUsd(amount)}. If the price changes, do not buy again: check get_my_agent and the wallet balance with get_account, and if the balance changed, contact Wiro support.` : '');
-}
-
-/**
- * Whether the agent's packs show an active one of this size bought since
- * the request was sent, or null when they cannot be read. A lot is dated
- * when the purchase starts, before the wallet is charged; the margin covers
- * a local clock that differs from Wiro's.
- */
-async function freshPackShows(
-  client: WiroClient,
-  guid: string,
-  credits: number,
-  sentAtMs: number,
-  signal: AbortSignal,
-): Promise<boolean | null> {
-  try {
-    const ledger = requireApiSuccess(
-      await client.post<BillingEnvelope>('/UserAgent/TransactionList', { useragentguid: guid, limit: 1, start: 0 }, signal),
-      'The credit history could not be read.',
-    );
-    const summary = isPlainObject(ledger.summary) ? ledger.summary : {};
-    const lots = Array.isArray(summary.extrapacks) ? summary.extrapacks.filter(isPlainObject) : [];
-    const since = sentAtMs / 1000 - 900;
-    return lots.some(lot => lot.status === 'active'
-      && toNumber(lot.credits) === credits
-      && (toNumber(lot.purchasedat) ?? 0) >= since);
-  } catch {
-    return null;
-  }
 }
 
 interface Observation {
@@ -951,8 +849,6 @@ async function observeOpenOutcome(
   action: BillingAction,
   before: AgentDetail,
   quote: Quote | undefined,
-  requestId: string | undefined,
-  sentAtMs: number,
   signal: AbortSignal,
 ): Promise<Observation> {
   let row: Record<string, unknown>;
@@ -1007,37 +903,6 @@ async function observeOpenOutcome(
           : `The agent still shows ${planName(after.tier) || 'its earlier plan'}. Check get_my_agent and the wallet balance with get_account before trying again; if the balance changed, contact Wiro support.`,
       };
     }
-    case 'buy_credits': {
-      const credits = quote?.creditsAdded ?? 0;
-      const rose = after.credits.extra - before.credits.extra;
-      const bought: Result = { chargedUsd: charged, creditsAdded: credits };
-      if (credits > 0 && rose >= credits / 2) {
-        return {
-          happened: true,
-          row,
-          text: `The agent's extra credits rose by ${formatCredits(rose)}, so the purchase went through. Do not buy it again.`,
-          result: bought,
-          nextAction: waitIfStarting(before),
-        };
-      }
-      const fresh = await freshPackShows(client, before.guid, credits, sentAtMs, signal);
-      if (fresh) {
-        // The pack shows on the agent. If its credits do not show yet, the same
-        // request id completes the purchase without a second charge.
-        return {
-          happened: true,
-          row,
-          text: 'A new pack of that size shows on the agent, so the purchase went through. Do not buy it again. '
-            + `If get_my_agent does not show its credits in a few minutes, repeat this purchase with the same request_id "${requestId ?? ''}" and confirm_charge_usd ${charged ?? ''}; that request id never charges twice.`,
-          result: bought,
-          nextAction: waitAction(before.guid, 'Check that the pack\'s credits show on the agent.'),
-        };
-      }
-      return {
-        happened: false,
-        text: fresh === false ? 'No new pack shows on the agent yet.' : 'The agent\'s packs could not be read to check it.',
-      };
-    }
     default:
       return { happened: false, text: '' };
   }
@@ -1054,21 +919,20 @@ const SMALLER_PLAN_REFUSAL = /^The \w+ plan is smaller than this agent's \w+ pla
 // Code 104: another payment from the same wallet, or another change to the agent's plan, was going through.
 const BUSY_NOTE = 'Nothing was charged or changed, and it is not a low balance. Offer to try again in a minute.';
 
-function annotateKnownRefusal(error: ApiResultError, requestId?: string): Error {
+/** workspace: the agent's, whose Wiro balance pays for its plan. */
+function annotateKnownRefusal(error: ApiResultError, workspace: 'personal' | 'team' | undefined): Error {
   const text = error.message;
-  if (error.codes.some(code => Number(code) === 104)) {
-    return new Error(`${text}\n\n${BUSY_NOTE}${requestId ? ` To try again, repeat the call with request_id "${requestId}"; that request id never charges twice.` : ''}`);
-  }
+  if (hasErrorCode(error, 104)) return new Error(`${text}\n\n${BUSY_NOTE}`);
   if (isWalletNotRead(error)) return new Error(`${text}\n\n${WALLET_NOT_READ_NOTE}`);
   if (SMALLER_PLAN_REFUSAL.test(text)) {
     // A move this server sent as one to a larger plan: the agent's plan moved up after it was read.
     return new Error(`${text}\n\nNothing was charged: the agent's plan changed after it was read. get_my_agent shows the plan it is on now, and change_plan quotes a move from it.`);
   }
-  if (/insufficient wallet balance/i.test(text)) {
-    return new Error(`${text}\n\nNothing was charged. Funds are added at https://wiro.ai/panel/wallet/deposit/credit-card (for a team project, select that team in the dashboard first); once the user has added them and says yes, try again. get_account shows the balance.`);
-  }
-  if (/purchase request id was already used/i.test(text)) {
-    return new Error(`${text}\n\nNothing was charged now. This request id belongs to an earlier purchase of another pack or at another price. For a new purchase, get a new quote without request_id. If the earlier purchase with this id ended without a clear result, do not buy again: check get_my_agent and the wallet balance with get_account, and if the balance changed, contact Wiro support.`);
+  const short = balanceShortfall(error);
+  if (short) {
+    const team = workspace === 'team' ? 'select the agent\'s team in the dashboard first' : workspace ? '' : 'for a team agent, select its team in the dashboard first';
+    return new Error(`${text}\n\n${shortBalanceNote(short.neededUsd, team)} Once the user has added them and says yes, `
+      + 'confirm the same quote again. get_account shows the balance.');
   }
   const hint = workspaceHint(text);
   if (hint) return new Error(`${text}\n\n${hint}`);
@@ -1079,10 +943,11 @@ export function registerManageAgentBilling(server: McpServer, client: WiroClient
   server.registerTool(
     'manage_agent_billing',
     {
-      title: 'Manage a Wiro agent\'s plan and credits',
-      description: 'Pay for, renew, change or cancel a deployed agent\'s plan, or buy extra credits. An agent has '
-        + 'one of three plans, smallest first: Starter, Pro or Max. Each has a fixed monthly price and monthly credits, '
-        + 'and every plan includes every skill. Charges come from the Wiro wallet of the agent\'s workspace (the team '
+      title: 'Manage a Wiro agent\'s plan',
+      description: 'Pay for, renew, change or cancel a deployed agent\'s plan. An agent has '
+        + 'one of three plans, smallest first: Starter, Pro or Max. Each has a fixed monthly price that it also '
+        + 'includes as AI usage each month, and every plan includes every '
+        + 'skill. After the included usage, the agent uses the Wiro balance of its workspace. Charges come from the Wiro balance of the agent\'s workspace (the team '
         + 'wallet for a team agent); the connected project must belong to that same workspace. Every call without '
         + 'confirm: true only returns what will happen and the amount (for a move to a larger plan, the prorated '
         + 'amount Wiro works out, or the most it can charge when that is worked out only at the change). Show it to '
@@ -1091,34 +956,32 @@ export function registerManageAgentBilling(server: McpServer, client: WiroClient
         + 'between, nothing is charged and a new quote comes back. Never repeat a confirmed charge that failed or '
         + 'timed out without checking get_my_agent first. '
         + 'subscribe starts a plan for an agent without one; renew undoes a cancellation or renews an expired '
-        + 'wallet plan; change_plan moves to another plan: a larger plan starts now and charges the prorated '
+        + 'plan; change_plan moves to another plan: a larger plan starts now and charges the prorated '
         + 'difference for the rest of the period, a smaller plan starts with the next renewal and charges or refunds '
-        + 'nothing, and asking for the plan the agent is on undoes a move set for the next renewal; buy_credits adds '
-        + 'a credit pack, on any plan; cancel stops renewals with no refund. Plans renew every 30 days until '
-        + 'cancelled. Renewals, plan changes and packs leave a running agent running. An agent whose plan is billed '
-        + 'by card moves to a larger plan and is topped up in the Wiro dashboard, and a personal card plan is '
-        + 'cancelled there; the tool returns the link and charges nothing. A personal card plan can move to a smaller '
-        + 'plan here: the card pays the smaller plan from the next renewal; a team\'s card plan changes plans in the '
-        + 'dashboard. A card plan that is moving to wallet billing '
-        + 'pays change_plan and buy_credits from the wallet, and cancel works once the wallet bills it. A card plan '
-        + 'whose last payment did not go through has not ended and takes no new plan: the payment is fixed from '
-        + 'Billing in the dashboard, in the personal workspace of the person whose card pays for the plan, and the '
-        + 'plan then renews by itself. On a team '
+        + 'nothing, and asking for the plan the agent is on undoes a move set for the next renewal; cancel stops '
+        + 'renewals with no refund. Extra credit packs are retired: buy_credits only says so and charges nothing, and '
+        + 'funds are added to the balance on wiro.ai. Plans renew every 30 days until '
+        + 'cancelled. Renewals and plan changes leave a running agent running. Agent plans are paid only from the '
+        + 'Wiro balance: no card payment is taken, and a quote refused because the balance is short says how much '
+        + 'to add on wiro.ai, with nothing charged. A card plan from before that is paid by card through its period, '
+        + 'then moves to the balance and renews from it; its plan changes are paid from the balance, cancel ends it '
+        + 'with its period instead, and renew undoes that, or brings back a card plan that ended, from the balance. A '
+        + 'card plan whose last payment did not go through has not ended and takes no new plan until it ends. On a team '
         + 'agent only a team admin, the organization\'s owner or the person who deployed the agent can pay for it or '
         + 'change its plan; other members are refused and nothing is charged.',
       inputSchema: strictInput({
         agent_guid: z.string().min(1).max(100)
           .describe('The deployed agent\'s guid, from list_my_agents or deploy_agent.'),
         action: z.enum(ACTIONS)
-          .describe('subscribe, change_plan, cancel, renew or buy_credits.'),
+          .describe('subscribe, change_plan, cancel or renew. buy_credits is retired: it says so and charges nothing.'),
         plan: z.enum(AGENT_PLANS).optional()
           .describe('subscribe: the plan to pay for (default: the agent\'s current plan, else starter). change_plan: the plan to move to; leave it out to get the plans with their prices.'),
         pack: z.enum(['small', 'medium', 'large']).optional()
-          .describe('buy_credits only: the credit pack to buy. Leave it out to get the packs with their credits and prices.'),
+          .describe('Retired with buy_credits: extra credit packs are no longer sold. Ignored.'),
         request_id: z.string().regex(/^[A-Za-z0-9_-]{8,128}$/).optional()
-          .describe('buy_credits only: the id returned by the quote. Repeating a purchase with the same id never charges twice. Every new purchase needs a new quote; an id whose purchase already completed buys nothing.'),
+          .describe('Retired with buy_credits. Ignored.'),
         confirm_charge_usd: z.number().min(0).max(100_000).optional()
-          .describe('With confirm: true, the amount the user approved, from the quote\'s nextAction (quote.chargeNowUsd, or quote.maxChargeUsd for a move to a larger plan). Required for every action that charges: subscribe, change_plan to a larger plan, buy_credits and renewing an expired plan. If a fresh quote no longer matches it, nothing is charged and the new quote is returned. For a move to a larger plan it is the most the user agreed to pay now.'),
+          .describe('With confirm: true, the amount the user approved, from the quote\'s nextAction (quote.chargeNowUsd, or quote.maxChargeUsd for a move to a larger plan). Required for every action that charges: subscribe, change_plan to a larger plan and renewing an expired plan. If a fresh quote no longer matches it, nothing is charged and the new quote is returned. For a move to a larger plan it is the most the user agreed to pay now.'),
         confirm: z.boolean().default(false)
           .describe('false returns only the quote. true performs the action. Set it only after the user approved it.'),
       }, 'The plan to pay for or move to is the argument plan: starter, pro or max.'),
@@ -1129,7 +992,6 @@ export function registerManageAgentBilling(server: McpServer, client: WiroClient
         quote: quoteSchema.optional(),
         priceChanged: z.boolean().optional(),
         result: resultSchema.optional(),
-        requestId: z.string().optional(),
         dashboardUrl: z.string(),
         agent: agentSummarySchema,
         message: z.string(),
@@ -1142,9 +1004,8 @@ export function registerManageAgentBilling(server: McpServer, client: WiroClient
         openWorldHint: true,
       },
     },
-    async ({ agent_guid, action, plan: planInput, pack, request_id, confirm_charge_usd, confirm }, extra) => {
+    async ({ agent_guid, action, plan: planInput, confirm_charge_usd, confirm }, extra) => {
       const guid = agent_guid.trim();
-      const requestId = action === 'buy_credits' ? request_id ?? newRequestId() : undefined;
       let sentAtMs = 0;
       let before: AgentDetail | undefined;
       let plan: Plan | undefined;
@@ -1159,7 +1020,6 @@ export function registerManageAgentBilling(server: McpServer, client: WiroClient
         result?: Result;
         nextAction?: NextAction;
         agentRow: Record<string, unknown>;
-        withRequestId?: boolean;
         /** The row is from before the change, so only its identity line is shown. */
         agentStale?: boolean;
       }) => {
@@ -1191,7 +1051,6 @@ export function registerManageAgentBilling(server: McpServer, client: WiroClient
             ...(payload.quote ? { quote: payload.quote } : {}),
             ...(payload.priceChanged ? { priceChanged: true } : {}),
             ...(payload.result ? { result: payload.result } : {}),
-            ...(requestId && payload.withRequestId ? { requestId } : {}),
             dashboardUrl,
             agent: summary,
             message: payload.message,
@@ -1204,7 +1063,6 @@ export function registerManageAgentBilling(server: McpServer, client: WiroClient
       const quoteResponse = (quoted: Plan, lead: string, row: Record<string, unknown>, priceChanged: boolean) => {
         const amount = approvalAmountOf(action, quoted.quote);
         const additions = [
-          ...(requestId ? [`request_id "${requestId}"`] : []),
           ...(amount !== null ? [`confirm_charge_usd ${amount}`] : []),
           'confirm: true',
         ];
@@ -1215,11 +1073,10 @@ export function registerManageAgentBilling(server: McpServer, client: WiroClient
           ...(priceChanged ? { priceChanged: true } : {}),
           nextAction: {
             tool: 'manage_agent_billing',
-            arguments: confirmArguments(guid, action, quoted.quote, requestId),
+            arguments: confirmArguments(guid, action, quoted.quote),
             reason: quoted.confirmReason ?? CHARGE_REASON,
           },
           agentRow: row,
-          withRequestId: true,
         });
       };
 
@@ -1233,7 +1090,7 @@ export function registerManageAgentBilling(server: McpServer, client: WiroClient
           const row = await readAgentDetail(client, guid, extra.signal);
           const agent = toAgentDetail(row);
           const raw = isPlainObject(row.subscription) ? row.subscription : null;
-          const again = await planFor(client, action, agent, raw, { plan: planInput, pack, requestId: requestId ?? '' }, extra.signal);
+          const again = await planFor(client, action, agent, raw, { plan: planInput }, extra.signal);
           if (again.outcome !== 'quote' || !again.perform) {
             return respond({
               outcome: again.outcome,
@@ -1263,7 +1120,7 @@ export function registerManageAgentBilling(server: McpServer, client: WiroClient
         before = agent;
         plainMember = await isPlainTeamMember(client, row, extra.signal);
         const raw = isPlainObject(row.subscription) ? row.subscription : null;
-        plan = await planFor(client, action, agent, raw, { plan: planInput, pack, requestId: requestId ?? '' }, extra.signal);
+        plan = await planFor(client, action, agent, raw, { plan: planInput }, extra.signal);
 
         if (plan.outcome !== 'quote' || !plan.perform) {
           return respond({ outcome: plan.outcome, heading: plan.heading, message: plan.message, nextAction: plan.nextAction, agentRow: row });
@@ -1283,7 +1140,7 @@ export function registerManageAgentBilling(server: McpServer, client: WiroClient
         if (!confirm || problem) {
           const amount = approvalAmountOf(action, plan.quote);
           const lead = problem === 'changed'
-            ? `${changedLead(action, plan.quote, amount, confirm_charge_usd, request_id)}\n\n`
+            ? `${changedLead(action, plan.quote, amount, confirm_charge_usd)}\n\n`
             : problem === 'missing'
               ? 'Nothing was charged: confirm_charge_usd is missing. It is the amount the user approved, and it must be sent with confirm: true.\n\n'
               : '';
@@ -1301,49 +1158,6 @@ export function registerManageAgentBilling(server: McpServer, client: WiroClient
           // The action went through; the earlier snapshot still identifies the agent.
         }
 
-        // A request id that already completed a purchase is answered with
-        // success again, without a new charge or new credits. An older pack can
-        // end at the same moment, so the extra credits can grow by less than
-        // the pack, and the agent's packs decide.
-        const credits = plan.quote?.creditsAdded ?? 0;
-        const extraBefore = toNumber(row.extracredits);
-        const extraAfter = afterRead ? toNumber(after.extracredits) : null;
-        if (action === 'buy_credits' && performed.outcome === 'done' && credits > 0
-          && extraBefore !== null && extraAfter !== null && extraAfter - extraBefore < credits / 2) {
-          const fresh = await freshPackShows(client, guid, credits, sentAtMs, extra.signal);
-          if (fresh === false) {
-            return respond({
-              outcome: 'not_needed',
-              message: `Wiro answered request id "${requestId}" with a purchase that had already completed: the agent's extra credits did not grow and no new pack shows, so nothing new was bought or charged now. For another pack, get a new quote without request_id.`,
-              nextAction: billingCall(guid, 'buy_credits', { pack: plan.quote?.pack }),
-              agentRow: after,
-            });
-          }
-          // A repeat adds no credits. A new pack can add none only when an older
-          // pack ends at the same moment with at least as many left, so an answer
-          // with no growth says only what holds in both cases.
-          if (fresh && extraAfter <= extraBefore) {
-            return respond({
-              outcome: 'done',
-              heading: 'Pack in place',
-              message: `The ${plan.quote?.pack} pack is in place: ${formatCredits(credits)} credits for ${formatUsd(plan.quote?.chargeNowUsd)} from ${agent.workspace === 'team' ? 'the team wallet' : 'the personal wallet'}. This request id is charged only once. The agent's extra credits did not grow in this call, so if the id had already completed in an earlier call, nothing new was bought or charged now. ${planChangeAgentNote(agent.status, 'a credit pack')} For another pack, get a new quote without request_id.`,
-              quote: plan.quote,
-              result: { chargedUsd: null },
-              nextAction: performed.nextAction,
-              agentRow: after,
-            });
-          }
-          return respond({
-            outcome: 'done',
-            message: fresh
-              ? `${performed.message} The agent's extra credits grew by less than the pack, which happens when an older pack expires at the same moment. If this request id had already completed in an earlier call, it was charged only that once.`
-              : `Wiro accepted request id "${requestId}", but the agent's extra credits did not grow by the pack size and its packs could not be read, so it is not confirmed whether this bought a new pack or repeated a purchase that had already completed. Check get_my_agent and the wallet balance with get_account before buying again.`,
-            quote: plan.quote,
-            result: fresh ? performed.result : { chargedUsd: null },
-            nextAction: performed.nextAction,
-            agentRow: after,
-          });
-        }
         // Without the read-back, the row shows the agent as it was before the change.
         const stale = !afterRead && performed.outcome === 'done';
         // A change the agent read again does not show yet is said, so the result never claims more than it shows.
@@ -1351,7 +1165,7 @@ export function registerManageAgentBilling(server: McpServer, client: WiroClient
         return respond({
           outcome: performed.outcome,
           message: stale
-            ? `${performed.message} The agent could not be read afterwards; get_my_agent shows its new status, plan and credits.`
+            ? `${performed.message} The agent could not be read afterwards; get_my_agent shows its new status, plan and AI usage.`
             : notShown ? `${performed.message} ${notShown}` : performed.message,
           quote: plan.quote,
           result: performed.result,
@@ -1360,9 +1174,6 @@ export function registerManageAgentBilling(server: McpServer, client: WiroClient
           agentStale: stale,
         });
       } catch (error) {
-        if (error instanceof ApiResultError && requestId && /still pending\. Retry with the same request id/i.test(error.message)) {
-          return errorResult(new Error(`${error.message}\n\n${retryPurchaseText(guid, plan?.quote, requestId)}`));
-        }
         const repriced = action === 'renew' && sentAtMs > 0 && error instanceof ApiResultError
           ? RENEWAL_REPRICED.exec(error.message.trim())
           : null;
@@ -1373,7 +1184,7 @@ export function registerManageAgentBilling(server: McpServer, client: WiroClient
           if (chargeOf(quote) === null || !before) {
             return errorResult(new Error(`${text}\n\nThe request was sent, so it may have taken effect. Check get_my_agent before trying again.`));
           }
-          const observed = await observeOpenOutcome(client, action, before, quote, requestId, sentAtMs, extra.signal);
+          const observed = await observeOpenOutcome(client, action, before, quote, extra.signal);
           if (observed.happened && observed.row) {
             return respond({
               outcome: 'done',
@@ -1384,12 +1195,9 @@ export function registerManageAgentBilling(server: McpServer, client: WiroClient
               agentRow: observed.row,
             });
           }
-          const retry = action === 'buy_credits' && requestId
-            ? retryPurchaseText(guid, quote, requestId)
-            : 'Do not repeat the call until this is checked.';
-          return errorResult(new Error(`${text}\n\nThe request was sent and the answer does not show whether it went through. ${observed.text} ${retry}`));
+          return errorResult(new Error(`${text}\n\nThe request was sent and the answer does not show whether it went through. ${observed.text} Do not repeat the call until this is checked.`));
         }
-        if (error instanceof ApiResultError) return errorResult(annotateKnownRefusal(error, sentAtMs > 0 ? requestId : undefined));
+        if (error instanceof ApiResultError) return errorResult(annotateKnownRefusal(error, before?.workspace));
         return errorResult(error);
       }
     },

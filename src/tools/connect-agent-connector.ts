@@ -46,7 +46,7 @@ import {
 } from '../utils/agent-connectors.js';
 import { DEFAULT_WAIT_SECONDS, MAX_WAIT_SECONDS, pollUntil, reportProgress } from '../utils/poll.js';
 import { jsonSpan } from '../utils/quoted-text.js';
-import { taskLabel, taskNamedByWiro } from '../utils/user-agent.js';
+import { AGENT_AI_USAGE, taskLabel, taskNamedByWiro } from '../utils/user-agent.js';
 import {
   agentProjectState,
   CANNOT_BIND_TEXT,
@@ -525,7 +525,7 @@ async function connect(
   const message = [
     `${connector.title} is connected${accounts ? ' with the accounts given' : ''}.`,
     restartText(restart, applied),
-    tasks.length > 0 ? `Scheduled tasks that need it run once it is loaded: ${tasks.join(', ')}. Every run uses the agent's credits.` : '',
+    tasks.length > 0 ? `Scheduled tasks that need it run once it is loaded: ${tasks.join(', ')}. Every run uses ${AGENT_AI_USAGE}.` : '',
     unpicked.length > 0 ? `Choose the ${unpicked.map(picker => picker.label).join(' and ')} it may act on with set_agent_connector_accounts.` : '',
     project
       ? `The agent's own Wiro project is now ${projectLabel(project)}: its model tools and its video and voice skills run `

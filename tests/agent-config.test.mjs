@@ -319,7 +319,7 @@ function applyReceptionist(client, extra = {}) {
   return client.callTool({ name: 'apply_agent_skills', arguments: { agent_guid: AGENT, skills: { 'util-voice-receptionist': true }, ...extra } });
 }
 
-const FREE_NOTE = 'A skill change costs nothing: the plan keeps its price and monthly credits.';
+const FREE_NOTE = 'A skill change costs nothing: the plan keeps its price and the AI usage it includes.';
 
 test('apply_agent_skills applies on the first call, adds dependencies, costs nothing and returns a key', async () => {
   const fake = fakeClient(skillRoutes({ '/UserAgent/Detail': detailAfterApply(), '/UserAgent/SkillsApply': appliedAnswer() }));
@@ -344,7 +344,7 @@ test('apply_agent_skills applies on the first call, adds dependencies, costs not
     });
     // No price, plan or billing comes with a skill change, and nothing is quoted first.
     for (const field of ['pricing', 'billing', 'tier']) assert.equal(field in out, false, field);
-    assert.ok(text(result).split('\n').includes(`**Cost:** ${FREE_NOTE} The skills' work uses the agent's credits, and model runs they start are billed to the wallet of the workspace that owns the Wiro project connected to the agent.`), text(result));
+    assert.ok(text(result).split('\n').includes(`**Cost:** ${FREE_NOTE} The skills' work uses the agent's AI usage (its plan first, then the workspace balance), and model runs they start are billed to the wallet of the workspace that owns the Wiro project connected to the agent.`), text(result));
     assert.doesNotMatch(text(result), /\$\d|charged|prorat|confirm/i);
     assert.deepEqual(fake.paths().filter(path => path !== '/Credentials/Detail'), ['/Skills/List', '/UserAgent/Detail', '/UserAgent/SkillsApply', '/UserAgent/Detail']);
     const [apply] = fake.called('/UserAgent/SkillsApply');
@@ -366,7 +366,7 @@ test('apply_agent_skills takes no confirm and no tier, and points a plan change 
     const { tools } = await client.listTools();
     const tool = tools.find(candidate => candidate.name === 'apply_agent_skills');
     assert.deepEqual(Object.keys(tool.inputSchema.properties).sort(), ['add_dependencies', 'agent_guid', 'idempotency_key', 'skills']);
-    assert.match(tool.description, /Every plan includes every skill, so a skill change costs nothing: the plan keeps its price and monthly credits, and no active plan is needed\./);
+    assert.match(tool.description, /Every plan includes every skill, so a skill change costs nothing: the plan keeps its price and the AI usage it includes, and no active plan is needed\./);
     assert.match(tool.description, /The change is applied on the first call, so tell the user what turns on or off and get their yes first\./);
     assert.match(tool.description, /A running agent restarts once when a skill turns on or off\./);
     assert.match(tool.description, /To change the plan, use manage_agent_billing \(change_plan\)\./);
@@ -1500,7 +1500,7 @@ test('manage_agent_custom_skill creates a scheduled task under its canonical key
     assert.equal(out.schedule.interval, '0 10 * * 1');
     assert.equal(out.schedule.timeZone, 'Europe/Istanbul');
     assert.match(out.schedule.note, /Mondays at 10:00/);
-    assert.match(out.schedule.note, /spends the agent's credits/);
+    assert.match(out.schedule.note, /uses the agent's AI usage \(its plan first, then the workspace balance\)/);
     assert.equal(out.entry.description, 'Weekly report');
     assert.match(out.restart, /restarts/);
   });

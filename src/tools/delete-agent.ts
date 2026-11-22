@@ -29,7 +29,8 @@ export function registerDeleteAgent(server: McpServer, client: WiroClient): void
       title: 'Delete a Wiro agent',
       description: 'Delete a deployed agent. This cannot be undone: the agent disappears from every list at '
         + 'once, its data is removed later and there is no restore. The order is: cancel the plan with manage_agent_billing (no '
-        + 'refund for the rest of the period), stop the agent with control_agent, then delete it. Without '
+        + 'refund for the rest of the period), stop the agent with control_agent, then delete it. A card plan has to '
+        + 'end first: cancel it, and delete the agent once its period has ended. Without '
         + 'confirm: true the tool only checks what is still in the way and describes the deletion; repeat '
         + 'the call with confirm: true after the user agrees. On a team agent this needs a team admin or the '
         + 'person who deployed it.',
@@ -78,10 +79,16 @@ export function registerDeleteAgent(server: McpServer, client: WiroClient): void
               arguments: { agent_guid: guid, action: 'cancel' },
               reason: 'Cancel the plan before deleting the agent.',
             };
-          } else if (subscription?.nextprovider === 'prepaid') {
-            blockers.push(`The plan is billed by card and moves to wallet billing after ${agent.subscription?.periodEndsAt ?? 'this period'}, when it renews from the wallet. Once it is billed from the wallet, cancel it with manage_agent_billing action cancel, then delete the agent; the rest of the paid period is not refunded.`);
+          } else if (subscription?.pendingdowngrade === 'cancel' || agent.subscription?.cancelAtPeriodEnd) {
+            // A card plan has to end before the agent can be deleted, cancelled or not.
+            blockers.push(`The card plan is cancelled and ends after ${agent.subscription?.periodEndsAt ?? 'this period'}. The agent can be deleted once it has ended; the rest of the paid period is not refunded.`);
           } else {
-            blockers.push(`The plan is billed by card and still active. It has to end first; cancel it from the dashboard (${agent.dashboardUrl}) and delete the agent after the period ends.`);
+            blockers.push(`The plan is paid by card through ${agent.subscription?.periodEndsAt ?? 'this period'}, then moves to the Wiro balance and renews from it. Cancel it first with manage_agent_billing action cancel: it then ends with its period, and the agent can be deleted once it has ended. The rest of the paid period is not refunded.`);
+            nextAction = {
+              tool: 'manage_agent_billing',
+              arguments: { agent_guid: guid, action: 'cancel' },
+              reason: 'Cancel the plan before deleting the agent.',
+            };
           }
         }
         if (status === 1 || status === 2 || status === 3 || status === 4) {

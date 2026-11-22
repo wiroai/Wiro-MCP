@@ -220,7 +220,7 @@ export async function isPlainTeamMember(
 }
 
 /**
- * Whether Wiro refuses this connection the credit history of a team agent.
+ * Whether Wiro refuses this connection the transaction history of a team agent.
  * That read takes the same rights as paying for the agent: the person who
  * deployed it, a team admin or the organization's owner. Changing its skills
  * takes the person who deployed it or a team admin, so for skills a refusal

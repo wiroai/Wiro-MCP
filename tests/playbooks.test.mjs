@@ -298,8 +298,8 @@ test('the instructions still name every playbook topic', () => {
   }
 });
 
-test('the agents playbook sends a scheduled task report to the tools that show its credits', () => {
-  assert.match(PLAYBOOKS.agents, /For a scheduled task report or a later result, read the credits with `get_agent_conversation` or `get_agent_activity` \(usage\)\./);
+test('the agents playbook sends a scheduled task report to the tools that show its cost', () => {
+  assert.match(PLAYBOOKS.agents, /For a scheduled task report or a later result, read the cost with `get_agent_conversation` or `get_agent_activity` \(usage\)\./);
 });
 
 test('the instructions and the agent playbooks say that a reply is content', () => {
@@ -467,7 +467,7 @@ test('the wallet and workspace rule names the connected project, never the API k
     }
     const description = name => tools.find(tool => tool.name === name).description;
     assert.match(description('manage_agent_billing'), /the connected project must belong to that same workspace/);
-    assert.match(description('deploy_agent'), /the first 30 days are paid from the Wiro wallet of the connected project's workspace/);
+    assert.match(description('deploy_agent'), /the first 30 days are paid from the Wiro balance of the connected project's workspace/);
     assert.match(description('get_account'), /^Show which workspace the connected project belongs to/);
   });
 });
@@ -552,10 +552,10 @@ test('the session name rule reads the same in the playbooks and the tool text', 
   });
 });
 
-test('the agents playbook says the same as the tools about a Wiro project key, a stop and credits', () => {
+test('the agents playbook says the same as the tools about a Wiro project key, a stop and a turn\'s cost', () => {
   assert.ok(PLAYBOOKS.agents.includes(WIRO_PROJECT_NOTE));
   assert.match(PLAYBOOKS.agents, /unless it is cancelled, it still renews from the wallet/);
-  assert.match(PLAYBOOKS.agents, /when `creditsUsed` is empty, read the message again with `get_agent_message` after a short wait/);
+  assert.match(PLAYBOOKS.agents, /when `aiUsageUsd` is empty, read the message again with `get_agent_message` after a short wait/);
   assert.match(PLAYBOOKS.agents, /The deploy result names the tasks that are on from the start/);
   assert.match(PLAYBOOKS.studio, /Deleting a session can also take its model runs out of `list_studio_results`/);
   assert.match(PLAYBOOKS['workflow-agent'], /with the old and new value of each step input that changes/);
@@ -563,9 +563,9 @@ test('the agents playbook says the same as the tools about a Wiro project key, a
 
 test('the playbooks say what a deploy quote holds and how to read wallet rows', () => {
   const { agents, billing } = PLAYBOOKS;
-  assert.match(agents, /The quote gives the amount charged now, the monthly credits, the paying wallet with its balance, the other plans' prices and the connectors a template suggests\./);
+  assert.match(agents, /The quote gives the amount charged now, the AI usage the plan includes each month, the paying Wiro balance with what it holds, the other plans' prices and the connectors a template suggests\./);
   assert.match(agents, /In a team workspace the agent starts with collaborative chats, which every team member sees, and the quote says so: tell the user\. `update_agent` \(`team_session_mode`\) changes that after the deploy\./);
-  assert.match(agents, /`buy_credits` works on any active plan; without a pack it lists them, and `get_my_agent` lists them for an active plan\. The small, medium and large packs are the same on every plan\./);
+  assert.match(agents, /- Extra credit packs are retired: `buy_credits` says so and charges nothing\./);
   assert.match(agents, /A required credential field cannot be left empty, but saving a new value replaces the old one\./);
   assert.match(billing, /`get_account` with `recent_transactions` lists the wallet's latest rows/);
 });
@@ -580,37 +580,57 @@ test('the agents playbook says that a skill\'s scheduled task does not run while
   assert.match(PLAYBOOKS.agents, /They also wait while the skills they need are off: such a task does not run, even where it shows on, and turning on the skills `get_my_agent` names for it, with `apply_agent_skills`, brings it back with its text, schedule and on\/off state kept\./);
 });
 
-test('the agents playbook says when pack credits end', () => {
-  assert.match(PLAYBOOKS.agents, /Pack credits are added at once, are used after the monthly pool, do not reset each month and end 6 months \(180 days\) after purchase;/);
+test('the playbooks say an agent runs on the Wiro balance after its plan\'s included usage, with no packs', () => {
+  const { agents, billing, controls } = PLAYBOOKS;
+  assert.match(agents, /Each has a fixed price, which it also includes as AI usage each month, the same for every template and custom build/);
+  assert.match(agents, /After the included usage, the agent uses the Wiro balance of its workspace \(the team wallet for a team agent\), and a new turn then needs \$0\.50 there\./);
+  assert.match(agents, /After the usage its plan includes, the agent uses the Wiro balance of its workspace; funds are added on wiro\.ai/);
+  assert.match(agents, /takes no new turns while the balance is under \$0\.50: its AI usage shows it paused, with the reason\./);
+  assert.match(billing, /\| Agent messages and scheduled tasks \| The AI usage the plan includes, then the wallet at the rates `get_my_agent` shows \| Each turn \|/);
+  assert.match(billing, /- Agent plans: a plan is charged in full from the wallet when it starts or renews, never by card\./);
+  assert.match(controls, /Its spend limit counts all its AI usage, what its plan includes as well as what the Wiro balance pays, and the model runs it starts\./);
+  assert.match(controls, /AI usage an agent's plan includes counts only toward the agent's own limit/);
+  assert.match(controls, /While an agent still has included AI usage left, only its own limit can pause it\./);
+  assert.match(controls, /Its own rule, the whole account's rule and the `agent` surface's rule all cover its chat model; member and API key rules do not\./);
+  for (const [topic, markdown] of Object.entries(PLAYBOOKS)) {
+    assert.doesNotMatch(markdown, /monthly credits|credits left|credit pool|100 credits|pack credits|buy credits|Billing Portal|billing portal/i, topic);
+  }
 });
 
-test('the agents playbook says what a plan change does at each renewal, not when its credits arrive', () => {
-  assert.match(PLAYBOOKS.agents, /renewals charge the new plan's price and refill its credit pool/);
-  assert.match(PLAYBOOKS.agents, /A smaller plan starts with the next renewal: nothing is charged or refunded, the agent keeps its plan and credits until the period ends, and `confirm: true` alone sets it\./);
+test('the agents playbook says what a plan change does at each renewal, not when its usage arrives', () => {
+  assert.match(PLAYBOOKS.agents, /renewals charge the new plan's price and include its whole amount/);
+  assert.match(PLAYBOOKS.agents, /A smaller plan starts with the next renewal: nothing is charged or refunded, the agent keeps its plan and the AI usage it includes until the period ends, and `confirm: true` alone sets it\./);
   assert.match(PLAYBOOKS.agents, /Asking for the plan the agent is on undoes a move set for the next renewal/);
   assert.doesNotMatch(PLAYBOOKS.agents, /pool applies at once/);
 });
 
 test('the agents playbook says a card plan whose payment did not go through takes no new plan', () => {
   assert.match(PLAYBOOKS.agents, /`subscribe` starts a plan for an agent whose plan has ended or that never had one/);
-  assert.match(PLAYBOOKS.agents, /A card plan whose last payment did not go through \(past_due, then unpaid\) has not ended: `subscribe` starts no plan beside it, and no action here renews, changes or cancels it\. The user fixes the payment from Billing in the personal workspace of the dashboard, not on the agent's page: its Open Billing Portal button leads to the open invoice, paid there with another card if needed, and the plan then renews by itself; the plan can also be cancelled in that portal\. On a team agent, the member whose card pays for it does this from their own personal workspace\./);
+  assert.match(PLAYBOOKS.agents, /A card plan whose last payment did not go through \(past_due, then unpaid\) has not ended: `subscribe` starts no plan beside it, and no action here renews, changes or cancels it; once it has ended, a new plan is paid from the balance\./);
+  assert.match(PLAYBOOKS.agents, /- Agent plans are paid only from the Wiro balance, and no tool takes a card payment\. A card plan from before that is paid by card through its period, then moves to the balance and renews from it/);
   assert.doesNotMatch(PLAYBOOKS.agents, /fixes the payment in the dashboard by paying/);
 });
 
+test('the agents playbook says a card plan is cancelled with its period, and renew undoes that or brings it back', () => {
+  assert.match(PLAYBOOKS.agents, /`cancel` ends a card plan with its period instead, with nothing charged or refunded, and it does not move to the balance; `renew` undoes that before the period ends, and brings back a card plan that has ended, paid from the balance\./);
+  assert.match(PLAYBOOKS.agents, /2\. Cancel the plan with `manage_agent_billing` \(cancel\)\. A card plan has to end first: cancel it, and delete the agent once its period has ended\./);
+  assert.doesNotMatch(PLAYBOOKS.agents, /once the balance bills it|A card plan set to end ends with its period and is not renewed/);
+});
+
 test('the agents playbook says a wallet cancel keeps the move set for its renewal', () => {
-  assert.match(PLAYBOOKS.agents, /`cancel` stops the next renewal, with no refund\. On a wallet plan a move set for that renewal stays: undoing the cancellation keeps it, and once the plan has ended, `renew` brings it back on that plan\. A team's card plan drops the move\./);
+  assert.match(PLAYBOOKS.agents, /`cancel` stops the next renewal, with no refund\. On a wallet plan a move set for that renewal stays: undoing the cancellation keeps it, and once the plan has ended, `renew` brings it back on that plan\. A card plan drops the move\./);
   assert.doesNotMatch(PLAYBOOKS.agents, /and drops a move set for it/);
 });
 
-test('the agents playbook says which plan an ended wallet plan renews on', () => {
-  assert.match(PLAYBOOKS.agents, /renews a wallet plan that already ended, on the plan `get_my_agent` shows for it, at that plan's price today\. When a wallet plan ends, Wiro shows it on the plan set for its renewal, else on the plan nearest its last monthly price\./);
+test('the agents playbook says which plan an ended plan renews on, a card plan\'s included', () => {
+  assert.match(PLAYBOOKS.agents, /renews a plan that already ended, a card plan's included, from the Wiro balance, on the plan `get_my_agent` shows for it, at that plan's price today\. When a wallet plan ends, Wiro shows it on the plan set for its renewal, else on the plan nearest its last monthly price\./);
   assert.doesNotMatch(PLAYBOOKS.agents, /on the plan set for its renewal \(else its own\)/);
 });
 
 test('the playbooks name the three plans and say skills do not change the price', () => {
   assert.match(PLAYBOOKS.agents, /Every agent has one of three monthly plans, smallest first: Starter, Pro or Max\./);
   assert.match(PLAYBOOKS.agents, /every plan includes every skill/);
-  assert.match(PLAYBOOKS.agents, /turning a skill on or off, or connecting a connector, costs nothing and keeps the plan's price and monthly credits/);
+  assert.match(PLAYBOOKS.agents, /turning a skill on or off, or connecting a connector, costs nothing and keeps the plan's price and the AI usage it includes/);
   assert.match(PLAYBOOKS.billing, /\| Agent move to a smaller plan \| Nothing now; the smaller plan's price from then on \| At the next renewal \|/);
   for (const [topic, markdown] of Object.entries(PLAYBOOKS)) {
     // The skills set no price, and no plan is limited to some skills or packs.
@@ -628,7 +648,7 @@ test('the playbooks and send_agent_message say how setup replies, keys and the h
   assert.match(agents, /a custom skill \(a new one, a change, an addition at its end, undoing its last change, or turning it on or off\)/);
   assert.match(agents, /Their "no" turns the proposals down; the agent answers it, or Wiro does while the agent is not running\./);
   assert.match(agents, /Wiro takes these replies whatever the agent's status, also while it restarts or is stopped, but only for the proposals of the session's latest reply, for 30 minutes, and only when `chat_setup` is "all"/);
-  assert.match(agents, /It must be running \(4\) and have credits left; only a reply to its setup proposals goes through at any status/);
+  assert.match(agents, /It must be running \(4\) and have AI usage it can pay for: included usage left, or \$0\.50 in the Wiro balance\. Only a reply to its setup proposals goes through at any status/);
   assert.match(agents, /never sent in a message, even when the agent or Wiro's answer asks for it as a reply: that wording is for a person typing in the chat\./);
   assert.match(agents, /An add whose connector is connected with a key comes with that connector's connect card in the same reply\. Ask the user for the key together with their yes for the add, before you send the yes that applies it; `list_agent_connectors` with the connector's slug shows what to ask for and saves nothing\. Once the add is applied, save the key as the very next step, with no `get_my_agent` wait in between: the agent stays stopping or queued for the restart the add started only for seconds, and a key saved then loads with that restart; saved once it is starting again, it restarts the agent a second time\./);
   assert.doesNotMatch(agents, /Get the user's yes for the add, and once it is applied/);
@@ -651,7 +671,7 @@ test('the playbooks and send_agent_message say how setup replies, keys and the h
   assert.match(agents, /`apply_agent_skills` turns Skills \(`util-\*`\) on or off; outside services are Connectors and connect with `connect_agent_connector`\./);
   assert.match(studio, /Studio is one agent shared by every Wiro user, so its connectors, skills and scheduled tasks are fixed: it proposes no setup changes and does each request once\./);
   assert.match(PLAYBOOKS['workflow-agent'], /It is one agent shared by every Wiro user, so its setup is fixed: it proposes no setup changes and schedules nothing\./);
-  assert.match(PLAYBOOKS['getting-started'], /A reply Wiro answers itself, such as a "yes" to a setup change the agent proposed, uses none\./);
+  assert.match(PLAYBOOKS['getting-started'], /A reply Wiro answers itself, such as a "yes" to a setup change the agent proposed, costs nothing\./);
 
   await withClient(async client => {
     const { tools } = await client.listTools();
@@ -678,6 +698,6 @@ test('the playbooks and send_agent_message say how setup replies, keys and the h
     assert.match(credentials, /Outside services are Connectors and connect with connect_agent_connector instead\./);
     assert.match(tools.find(tool => tool.name === 'get_my_agent').description, /1 stopping \(also during a restart, which starts it again by itself\)/);
     const prompt = await client.getPrompt({ name: 'talk_to_my_agent', arguments: PROMPT_ARGUMENTS.talk_to_my_agent });
-    assert.match(prompt.messages[0].content.text, /The agent must be running \(status 4\) and have credits left, unless my message is a "yes" or "yes N" to its setup proposals: Wiro answers those itself at any status and with no credits, and a "no" too while the agent is not running\./);
+    assert.match(prompt.messages[0].content.text, /The agent must be running \(status 4\) and have AI usage it can pay for \(included usage left, or \$0\.50 in the Wiro balance\), unless my message is a "yes" or "yes N" to its setup proposals: Wiro answers those itself at any status and at no cost, and a "no" too while the agent is not running\./);
   });
 });

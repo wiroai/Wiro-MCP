@@ -16,7 +16,7 @@ import {
   type AgentConnection,
 } from './agent-connectors.js';
 import { quotedSpan } from './quoted-text.js';
-import { skillOffTasksNote, taskLabel, taskNamedByWiro, WIRO_PROJECT_CREDENTIAL } from './user-agent.js';
+import { AGENT_AI_USAGE, skillOffTasksNote, taskLabel, taskNamedByWiro, WIRO_PROJECT_CREDENTIAL } from './user-agent.js';
 
 // The Wiro projects of the connected project's workspace. What tools show of a
 // project is built field by field: no key and no address on its IP list is ever
@@ -142,7 +142,7 @@ export function projectTurnsOnNote(
   if (entries.length === 0) return null;
   const sentence = `${keyList(entries.map(entry => taskLabel(entry.key, taskNamedByWiro(entry))))} ${entries.length > 1 ? 'turn' : 'turns'} on ${when} the project is connected.${skillOffTasksNote(entries, titles)}`;
   return entries.some(entry => entry.kind === 'scheduled_task')
-    ? `${sentence} Every run of a scheduled task uses credits; turn off any you do not want with manage_agent_custom_skill.`
+    ? `${sentence} Every run of a scheduled task uses ${AGENT_AI_USAGE}; turn off any you do not want with manage_agent_custom_skill.`
     : sentence;
 }
 

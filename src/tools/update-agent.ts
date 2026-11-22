@@ -78,7 +78,7 @@ export function registerUpdateAgent(server: McpServer, client: WiroClient, notes
         team_session_mode: z.enum(['private', 'collaborative']).optional()
           .describe('private gives each person their own chat history; collaborative shares one history in team chats.'),
         chat_model: z.string().max(200).nullable().optional()
-          .describe('Model for chat turns: a slug from the model list in get_my_agent, which shows each model\'s credits per 1M tokens. null resets to the default. The plan price stays the same.'),
+          .describe('Model for chat turns: a slug from the model list in get_my_agent, which shows what each model costs in USD per 1M tokens. null resets to the default. The plan price stays the same.'),
         cron_model: z.string().max(200).nullable().optional()
           .describe('Model for scheduled tasks; same rules as chat_model.'),
         voice_prep_model: z.string().max(200).nullable().optional()

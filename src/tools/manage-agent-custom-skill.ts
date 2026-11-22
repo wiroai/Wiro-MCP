@@ -35,7 +35,7 @@ import {
   type CustomSkillKind,
 } from '../utils/agent-config.js';
 import { textBlock } from '../utils/quoted-text.js';
-import { skillOffText } from '../utils/user-agent.js';
+import { AGENT_AI_USAGE, skillOffText } from '../utils/user-agent.js';
 import { nextActionSchema, strictInput } from './schemas.js';
 
 const MAX_VALUE_ECHO = 1_500;
@@ -223,7 +223,7 @@ function scheduleInfo(row: Row, interval: string, isDefault: boolean, entry: Cus
   const timeZone = asString(row.timezone)?.trim() || 'UTC';
   const parts = [
     `Runs on the cron schedule "${interval}"${isDefault ? ' (the default: Mondays at 10:00)' : ''} in the agent's time zone, ${timeZone}. The time zone can be changed with update_agent.`,
-    'Every run spends the agent\'s credits.',
+    `Every run uses ${AGENT_AI_USAGE}.`,
     entry.enabled ? '' : 'It is turned off, so it does not run.',
     entry.skillOff ? skillOffSentence(entry, titles) : '',
     connectionNeededText(row, entry),
@@ -665,7 +665,7 @@ export function registerManageAgentCustomSkill(server: McpServer, client: WiroCl
         + '"cs-cron-my-scheduled-task" gives starter templates); revert restores the template default '
         + 'or an earlier version (needs confirm: true). Schedules use the agent\'s time zone, which is '
         + 'UTC unless it was set with update_agent; a new task without interval runs Mondays at 10:00. '
-        + 'Every scheduled run spends the agent\'s credits, so confirm the schedule with the user. '
+        + `Every scheduled run uses ${AGENT_AI_USAGE}, so confirm the schedule with the user. `
         + 'Entries from the agent\'s template, cs-approval-policy and the scheduled tasks its skills '
         + 'brought cannot be deleted or renamed: set enabled false instead. Turning off cs-approval-policy '
         + 'or changing its text also needs confirm: true: off, or a text that allows it, lets the agent act '

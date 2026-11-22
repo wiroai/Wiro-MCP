@@ -53,7 +53,7 @@ import { connectionOf, connectorLabel, listConnections, type AgentConnection } f
 import { createMediaContent, guessMimeType, isWiroHostedUrl, type MediaItem } from './media.js';
 import { DEFAULT_WAIT_SECONDS, defaultInterval, pollUntil, reportProgress, type ToolCallContext } from './poll.js';
 import { AGENT_REPLY_LABEL, jsonSpan, quotedBlock, quotedSpan, quotedSubItem } from './quoted-text.js';
-import { formatCredits, readAgentDetail } from './user-agent.js';
+import { formatRateUsd, readAgentDetail } from './user-agent.js';
 import {
   STUDIO_RUNS_MAX,
   formatStudioRun,
@@ -234,8 +234,8 @@ export function isCostPending(row: Record<string, unknown>, justEnded = false): 
 export function costPendingNote(target: AgentTarget, status: unknown): string {
   const when = status === 'agent_cancel' ? 'in about a minute' : 'in a few seconds';
   return target.kind === 'deployed'
-    ? `The credits this turn used are not recorded yet. Read it again with get_agent_message ${when}; `
-      + 'get_agent_activity (usage) lists them too.'
+    ? `The AI usage of this turn is not recorded yet. Read it again with get_agent_message ${when}; `
+      + 'get_agent_activity (usage) lists it too.'
     : `The cost of this turn is not recorded yet. Read it again with get_agent_message ${when}.`;
 }
 
@@ -664,7 +664,7 @@ export async function collectTurn(options: CollectTurnOptions): Promise<AgentTur
     }
     if (result.message.kind === 'setup_result') {
       notes.push('Wiro answered this message itself as the user\'s answer to a setup change the agent proposed, so the '
-        + 'agent took no turn and no credits were used.');
+        + 'agent took no turn, and it cost nothing.');
       // Wiro words its answer for a person typing in the chat, who may paste a key as the reply.
       const keyAsked = asksKeyAsReply(result.message.reply);
       if (result.message.listedSetupChanges) {
@@ -1087,8 +1087,8 @@ export function formatTurn(target: AgentTarget, result: AgentTurnResult): string
   if (result.llmCostUsd !== undefined && result.llmCostUsd !== null && result.llmCostUsd > 0) {
     lines.push(`**Agent usage:** $${result.llmCostUsd}`);
   }
-  if (target.kind === 'deployed' && (result.message.creditsUsed ?? 0) > 0) {
-    lines.push(`**Credits used:** ${formatCredits(result.message.creditsUsed)}`);
+  if (target.kind === 'deployed' && (result.message.aiUsageUsd ?? 0) > 0) {
+    lines.push(`**AI usage:** ${formatRateUsd(result.message.aiUsageUsd ?? 0)}`);
   }
   if (result.modelChange?.toModel) {
     lines.push(`**Model:** switched to \`${result.modelChange.toModel}\` for this session`);

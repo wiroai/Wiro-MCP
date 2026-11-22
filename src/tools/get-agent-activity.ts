@@ -15,8 +15,9 @@ import {
 import { DEFAULT_WAIT_SECONDS } from '../utils/poll.js';
 import { oneLine, quotedBlock } from '../utils/quoted-text.js';
 import {
-  formatCredits,
-  monthlyCreditsText,
+  centsToUsd,
+  formatCount,
+  formatUsd,
   nextStepForAgent,
   readAgentDetail,
   readStatusAdvice,
@@ -39,45 +40,62 @@ const tokenCountsSchema = z.object({
   total: z.number().optional(),
 });
 
+const tokenCostsSchema = z.object({
+  input: z.number().optional(),
+  cacheRead: z.number().optional(),
+  cacheWrite: z.number().optional(),
+  output: z.number().optional(),
+});
+
+const LEDGER_KINDS = ['all', 'ai-usage', 'model-run', 'plan', 'funds'] as const;
+
+const ledgerEntrySchema = z.object({
+  createdAt: z.string().optional(),
+  kind: z.string()
+    .describe('ai-usage (the agent\'s chat and scheduled tasks), model-run (a model the agent ran), plan (a plan payment) or funds (funds added from the agent\'s page). A row from an older Wiro release keeps the type it was recorded with.'),
+  title: z.string().optional(),
+  model: z.string().optional(),
+  tokens: tokenCountsSchema.optional(),
+  costs: tokenCostsSchema.optional()
+    .describe('What each kind of token cost, in USD, before the row was rounded to whole cents.'),
+  amountUsd: z.number(),
+  direction: z.enum(['out', 'in']).optional()
+    .describe('out for spending, in for funds added.'),
+  paidFrom: z.string().optional()
+    .describe('plan (the usage the plan includes), balance (the Wiro balance), card or coupon.'),
+  surface: z.string().optional(),
+  legacy: z.boolean().optional()
+    .describe('A row recorded before agents were billed in USD, shown in USD.'),
+});
+
+type LedgerEntry = z.infer<typeof ledgerEntrySchema>;
+
+const ledgerSummarySchema = z.object({
+  month: z.string().optional(),
+  includedUsd: z.number().optional()
+    .describe('The AI usage the plan includes this period.'),
+  aiUsagePlanUsd: z.number().optional()
+    .describe('AI usage this month that the plan included.'),
+  aiUsageBalanceUsd: z.number().optional()
+    .describe('AI usage this month paid from the Wiro balance.'),
+  modelRunsUsd: z.number().optional()
+    .describe('Model runs the agent started this month.'),
+  fundsAddedUsd: z.number().optional()
+    .describe('Funds added to the balance from the agent\'s page this month.'),
+  legacy: z.boolean().optional()
+    .describe('true when Wiro answered without these amounts, so they were worked out from its older fields.'),
+});
+
+type LedgerSummary = z.infer<typeof ledgerSummarySchema>;
+
 const usageSchema = z.object({
   total: z.number().int().nonnegative(),
   start: z.number().int().nonnegative(),
   limit: z.number().int().positive(),
   nextStart: z.number().int().nonnegative().nullable(),
-  balance: z.object({
-    monthlyCredits: z.number()
-      .describe('The monthly credits this period grants. A plan change inside a period moves it for the time left.'),
-    renewalCredits: z.number().optional()
-      .describe('The monthly credits each renewal grants.'),
-    extraCredits: z.number(),
-    usedCredits: z.number(),
-    remainingCredits: z.number(),
-    period: z.string().optional(),
-  }),
-  extraPacks: z.array(z.object({
-    credits: z.number(),
-    remainingCredits: z.number(),
-    status: z.string().optional(),
-    purchasedAt: z.string().optional(),
-  })),
-  byModel: z.array(z.object({
-    model: z.string(),
-    tokens: tokenCountsSchema,
-    credits: z.number(),
-    turns: z.number(),
-  })),
-  transactions: z.array(z.object({
-    type: z.string(),
-    action: z.string().optional(),
-    credits: z.number(),
-    balanceAfter: z.number().nullable(),
-    description: z.string().optional(),
-    createdAt: z.string().optional(),
-    paidBy: z.string().optional(),
-    model: z.string().optional(),
-    tokens: tokenCountsSchema.optional(),
-    processedMs: z.number().optional(),
-  })),
+  entries: z.enum(LEDGER_KINDS),
+  summary: ledgerSummarySchema,
+  transactions: z.array(ledgerEntrySchema),
 });
 
 const logEventSchema = z.object({
@@ -98,9 +116,9 @@ const logEventSchema = z.object({
   processedMs: z.number().optional(),
   model: z.string().optional(),
   tokens: z.record(z.string(), z.number()).optional(),
-  credits: z.number().optional(),
+  costUsd: z.number().optional()
+    .describe('What the event cost, in USD.'),
   trigger: z.string().optional(),
-  remainingCredits: z.number().optional(),
 });
 
 const logsSchema = z.object({
@@ -151,21 +169,131 @@ function tokenCounts(row: Record<string, unknown>): z.infer<typeof tokenCountsSc
   return out;
 }
 
-// A ledger row's text in this form already names each kind of token it billed.
+/** A ledger row's tokens by kind, from its tokens object, or from the token columns of an older row. */
+function ledgerTokens(row: Record<string, unknown>): z.infer<typeof tokenCountsSchema> {
+  if (!isPlainObject(row.tokens)) return tokenCounts(row);
+  const out: z.infer<typeof tokenCountsSchema> = {};
+  for (const key of ['input', 'cacheRead', 'cacheWrite', 'output', 'total'] as const) {
+    const count = toNumber(row.tokens[key]);
+    if (count !== null) out[key] = count;
+  }
+  return out;
+}
+
+function ledgerCosts(value: unknown): z.infer<typeof tokenCostsSchema> | undefined {
+  if (!isPlainObject(value)) return undefined;
+  const out: z.infer<typeof tokenCostsSchema> = {};
+  for (const key of ['input', 'cacheRead', 'cacheWrite', 'output'] as const) {
+    const cost = toNumber(value[key]);
+    if (cost !== null) out[key] = cost;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+// How an older row says who paid: its plan's provider.
+const OLDER_PAYERS: Record<string, string> = { prepaid: 'balance', stripe: 'card' };
+
+/**
+ * One ledger row. A row from an older Wiro release has no amountusd: its amount counts hundredths of a dollar,
+ * signed, and its type and action stand for the kind.
+ */
+function toLedgerEntry(row: Record<string, unknown>): LedgerEntry {
+  const amountUsd = toNumber(row.amountusd);
+  const older = amountUsd === null;
+  const signed = amountUsd ?? centsToUsd(toNumber(row.amount) ?? 0);
+  const type = asString(row.type);
+  const action = asString(row.action);
+  const kind = asString(row.kind) ?? (type ? `${type}${action ? `/${action}` : ''}` : 'unknown');
+  const title = asString(row.title) ?? asString(row.description);
+  const usage = isPlainObject(row.usage) ? row.usage : {};
+  const model = asString(row.model) ?? asString(usage.model);
+  const tokens = ledgerTokens(row);
+  const costs = ledgerCosts(row.costs ?? usage.costs);
+  const direction = row.direction === 'in' || row.direction === 'out' ? row.direction : signed < 0 ? 'out' : older ? 'in' : undefined;
+  const paidFrom = asString(row.paidfrom) ?? OLDER_PAYERS[asString(row.provider) ?? ''];
+  const surface = asString(row.surface);
+  const createdAt = unixToIso(row.createdat);
+  return {
+    ...(createdAt ? { createdAt } : {}),
+    kind,
+    ...(title ? { title: truncate(title, 200) } : {}),
+    ...(model ? { model } : {}),
+    ...(Object.keys(tokens).length > 0 ? { tokens } : {}),
+    ...(costs ? { costs } : {}),
+    amountUsd: Math.abs(signed),
+    ...(direction ? { direction } : {}),
+    ...(paidFrom ? { paidFrom } : {}),
+    ...(surface ? { surface } : {}),
+    ...(row.legacy === true || older ? { legacy: true } : {}),
+  };
+}
+
+/** This month's totals in USD, or, in an answer from an older Wiro release, the period's included usage. */
+function toLedgerSummary(summary: Record<string, unknown>): LedgerSummary {
+  const fields: Array<[keyof LedgerSummary, unknown]> = [
+    ['includedUsd', summary.includedusd],
+    ['aiUsagePlanUsd', summary.aiusageplanusd],
+    ['aiUsageBalanceUsd', summary.aiusagebalanceusd],
+    ['modelRunsUsd', summary.modelrunsusd],
+    ['fundsAddedUsd', summary.fundsaddedusd],
+  ];
+  const out: LedgerSummary = {};
+  for (const [key, value] of fields) {
+    const amount = toNumber(value);
+    if (amount !== null) (out as Record<string, number>)[key] = amount;
+  }
+  const month = asString(summary.month);
+  if (Object.keys(out).length > 0) return { ...(month ? { month } : {}), ...out };
+  const monthly = toNumber(summary.monthlycredits);
+  if (monthly === null) return {};
+  const used = toNumber(summary.usedcredits) ?? 0;
+  const period = asString(summary.creditperiod);
+  return {
+    ...(period ? { month: period } : {}),
+    includedUsd: centsToUsd(monthly),
+    aiUsagePlanUsd: centsToUsd(Math.min(Math.max(0, used), monthly)),
+    legacy: true,
+  };
+}
+
+// A ledger row's title in this form already names each kind of token it billed.
 const NAMES_ITS_TOKENS = /\b(uncached in|cached in|cache write) \d/;
 
-/** A ledger row's cached input tokens, as the end of its line, unless its text already names them. */
-function cachedTokensText(tokens: z.infer<typeof tokenCountsSchema> | undefined, description: string | undefined): string {
-  if (description && NAMES_ITS_TOKENS.test(description)) return '';
-  const read = tokens?.cacheRead ?? 0;
-  const written = tokens?.cacheWrite ?? 0;
-  if (read <= 0 && written <= 0) return '';
+/** A ledger row's tokens by kind, as the end of its line, unless its title already names them. */
+function ledgerTokensText(tokens: LedgerEntry['tokens'], title: string | undefined): string {
+  if (!tokens || (title && NAMES_ITS_TOKENS.test(title))) return '';
   const parts = [
-    ...(read > 0 ? [`${formatCredits(read)} read`] : []),
-    ...(written > 0 ? [`${formatCredits(written)} written`] : []),
+    ...(tokens.input ? [`${formatCount(tokens.input)} input`] : []),
+    ...(tokens.cacheRead ? [`${formatCount(tokens.cacheRead)} cache read`] : []),
+    ...(tokens.cacheWrite ? [`${formatCount(tokens.cacheWrite)} cache write`] : []),
+    ...(tokens.output ? [`${formatCount(tokens.output)} output`] : []),
   ];
-  const total = tokens?.total ? ` (${formatCredits(tokens.total)} tokens in all)` : '';
-  return `, plus cached input tokens: ${parts.join(' and ')}${total}`;
+  return parts.length > 0 ? `, tokens: ${parts.join(', ')}` : '';
+}
+
+const PAID_FROM_TEXT: Record<string, string> = { plan: 'the plan', balance: 'the balance', card: 'a card', coupon: 'coupon credit' };
+
+/** One ledger row as a line: "- <time> ai-usage: $0.03 from the plan, <title>, tokens: ...". */
+function ledgerLine(entry: LedgerEntry): string {
+  const amount = `${entry.direction === 'in' ? '+' : ''}${formatUsd(entry.amountUsd)}`;
+  const paid = entry.paidFrom && entry.direction !== 'in' ? ` from ${PAID_FROM_TEXT[entry.paidFrom] ?? entry.paidFrom}` : '';
+  const model = entry.model && !entry.title?.includes(entry.model) ? `, ${entry.model}` : '';
+  return oneLine(`- ${entry.createdAt ?? ''} ${entry.kind}: ${amount}${paid}${entry.title ? `, ${entry.title}` : ''}${model}`
+    + `${ledgerTokensText(entry.tokens, entry.title)}${entry.legacy ? ' (recorded before agents were billed in USD)' : ''}`);
+}
+
+/** This month's totals as a line, or null when Wiro sent none. */
+function ledgerSummaryLine(summary: LedgerSummary): string | null {
+  const parts = [
+    ...(summary.aiUsagePlanUsd !== undefined
+      ? [`AI usage ${formatUsd(summary.aiUsagePlanUsd)} within the plan${summary.includedUsd !== undefined ? `'s ${formatUsd(summary.includedUsd)}` : ''}`]
+      : summary.includedUsd !== undefined ? [`the plan includes ${formatUsd(summary.includedUsd)} of AI usage`] : []),
+    ...(summary.aiUsageBalanceUsd !== undefined ? [`AI usage from the balance ${formatUsd(summary.aiUsageBalanceUsd)}`] : []),
+    ...(summary.modelRunsUsd !== undefined ? [`model runs ${formatUsd(summary.modelRunsUsd)}`] : []),
+    ...(summary.fundsAddedUsd !== undefined ? [`funds added ${formatUsd(summary.fundsAddedUsd)}`] : []),
+  ];
+  if (parts.length === 0) return null;
+  return `**${summary.legacy ? 'This period' : 'This month'}${summary.month ? ` (${summary.month})` : ''}:** ${parts.join('; ')}`;
 }
 
 function eventTime(value: unknown): string | undefined {
@@ -235,10 +363,9 @@ function toLogEvent(event: Record<string, unknown>): z.infer<typeof logEventSche
   if (processed !== null) out.processedMs = processed;
   const tokens = numericRecord(event.tokens);
   if (tokens) out.tokens = tokens;
-  const credits = isPlainObject(event.cost) ? toNumber(event.cost.credits) : toNumber(event.tokencost);
-  if (credits !== null) out.credits = credits;
-  const remaining = toNumber(event.remainingcredits);
-  if (remaining !== null) out.remainingCredits = remaining;
+  // A cost in a log line counts hundredths of a dollar.
+  const cost = isPlainObject(event.cost) ? toNumber(event.cost.credits) : toNumber(event.tokencost);
+  if (cost !== null) out.costUsd = centsToUsd(cost);
   return out;
 }
 
@@ -292,14 +419,16 @@ export function registerGetAgentActivity(server: McpServer, client: WiroClient):
     'get_agent_activity',
     {
       title: 'Get a Wiro agent\'s usage or activity log',
-      description: 'Read what a deployed agent has done and spent. kind usage returns the credit balance, '
-        + 'usage per model for the current period and the credit ledger (charges, renewals, packs and token '
-        + 'usage per turn; 100 credits = 1 USD). kind logs returns the activity log for one day, newest first: the '
+      description: 'Read what a deployed agent has done and spent. kind usage returns this month\'s spending in USD '
+        + '(AI usage within the plan and from the Wiro balance, model runs, funds added) and the agent\'s ledger, '
+        + 'newest first: AI usage with its model and tokens by kind, the model runs it started, plan payments and funds '
+        + 'added from its page, each with its amount and what paid it (the plan, the balance, a card or a coupon). '
+        + 'kind logs returns the activity log for one day, newest first: the '
         + 'agent\'s own turns, tool calls, scheduled runs and errors, plus who changed what on the agent, in names and '
         + 'amounts such as the fields saved, a new title or time zone and a plan\'s price, never a credential value or an '
         + 'instruction\'s text. Plan events Wiro records by itself show there too, without a person\'s name, such as '
-        + 'a renewal with the amount charged, a card payment, a cancellation in the billing portal or a plan that ended '
-        + 'and why. Who changed what can be read while the agent is stopped. Its own lines can be read '
+        + 'a renewal with the amount charged or a plan that ended and why. Who changed what can be read while the agent '
+        + 'is stopped. Its own lines can be read '
         + 'while it is running or in error, and the first row says when they cannot be read or were deleted (start it '
         + 'only if the user agrees). kind log_dates lists the days that have a log, and says when the list may be '
         + 'missing days. A person\'s name shows only on a row that says who changed the agent, when Wiro sends one; '
@@ -309,7 +438,7 @@ export function registerGetAgentActivity(server: McpServer, client: WiroClient):
         agent_guid: z.string().min(1).max(100)
           .describe('The deployed agent\'s guid, from list_my_agents or deploy_agent.'),
         kind: z.enum(['usage', 'logs', 'log_dates']).default('usage')
-          .describe('usage for credits and spending, logs for one day of activity, log_dates for the days that have a log.'),
+          .describe('usage for spending and the ledger, logs for one day of activity, log_dates for the days that have a log.'),
         date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
           .describe('logs only: the UTC day as YYYY-MM-DD (default today).'),
         lines: z.number().int().min(1).max(MAX_LOG_EVENTS).default(100)
@@ -318,6 +447,8 @@ export function registerGetAgentActivity(server: McpServer, client: WiroClient):
           .describe('usage only: offset into the ledger, newest first (default 0).'),
         limit: z.number().int().min(1).max(200).default(50)
           .describe('usage only: ledger rows to return (default 50, max 200).'),
+        entries: z.enum(LEDGER_KINDS).default('all')
+          .describe('usage only: which ledger rows: all (default), ai-usage, model-run, plan or funds.'),
       }),
       outputSchema: {
         kind: z.enum(['usage', 'logs', 'log_dates']),
@@ -334,87 +465,36 @@ export function registerGetAgentActivity(server: McpServer, client: WiroClient):
         openWorldHint: true,
       },
     },
-    async ({ agent_guid, kind, date, lines, start, limit }, extra) => {
+    async ({ agent_guid, kind, date, lines, start, limit, entries }, extra) => {
       const guid = agent_guid.trim();
       try {
         if (kind === 'usage') {
           const body = requireApiSuccess(
-            await client.post<Envelope>('/UserAgent/TransactionList', { useragentguid: guid, limit, start }, extra.signal),
+            await client.post<Envelope>('/UserAgent/TransactionList', {
+              useragentguid: guid,
+              limit,
+              start,
+              ...(entries !== 'all' ? { kind: entries } : {}),
+            }, extra.signal),
             'The usage of this agent could not be read.',
           );
-          const summary = isPlainObject(body.summary) ? body.summary : {};
           const rows = Array.isArray(body.transactions) ? body.transactions.filter(isPlainObject) : [];
           const total = Math.max(0, Math.trunc(toNumber(body.total) ?? rows.length));
-          const period = asString(summary.creditperiod);
-          const renewalCredits = toNumber(summary.renewalcredits);
           const usage: z.infer<typeof usageSchema> = {
             total,
             start,
             limit,
             nextStart: start + rows.length < total ? start + rows.length : null,
-            balance: {
-              monthlyCredits: toNumber(summary.monthlycredits) ?? 0,
-              ...(renewalCredits !== null ? { renewalCredits } : {}),
-              extraCredits: toNumber(summary.extracredits) ?? 0,
-              usedCredits: toNumber(summary.usedcredits) ?? 0,
-              remainingCredits: toNumber(summary.remainingcredits) ?? 0,
-              ...(period ? { period } : {}),
-            },
-            extraPacks: (Array.isArray(summary.extrapacks) ? summary.extrapacks : []).filter(isPlainObject).map(pack => {
-              const status = asString(pack.status);
-              const purchasedAt = unixToIso(pack.purchasedat);
-              return {
-                credits: toNumber(pack.credits) ?? 0,
-                remainingCredits: toNumber(pack.remainingcredits) ?? 0,
-                ...(status ? { status } : {}),
-                ...(purchasedAt ? { purchasedAt } : {}),
-              };
-            }),
-            byModel: (Array.isArray(summary.byModel) ? summary.byModel : []).filter(isPlainObject).map(entry => ({
-              model: asString(entry.model) ?? 'unknown',
-              tokens: tokenCounts(entry),
-              credits: toNumber(entry.tokencost) ?? 0,
-              turns: toNumber(entry.turncount) ?? 0,
-            })),
-            transactions: rows.map(row => {
-              const action = asString(row.action);
-              const description = asString(row.description);
-              const createdAt = unixToIso(row.createdat);
-              const provider = asString(row.provider);
-              const model = asString(row.model);
-              const tokens = tokenCounts(row);
-              const processedMs = toNumber(row.processedms);
-              return {
-                type: asString(row.type) ?? 'unknown',
-                ...(action ? { action } : {}),
-                credits: toNumber(row.amount) ?? 0,
-                balanceAfter: toNumber(row.balanceafter),
-                ...(description ? { description: truncate(description, 200) } : {}),
-                ...(createdAt ? { createdAt } : {}),
-                ...(provider ? { paidBy: provider === 'prepaid' ? 'wallet' : provider === 'stripe' ? 'card' : provider } : {}),
-                ...(model ? { model } : {}),
-                ...(Object.keys(tokens).length > 0 ? { tokens } : {}),
-                ...(processedMs !== null ? { processedMs } : {}),
-              };
-            }),
+            entries,
+            summary: toLedgerSummary(isPlainObject(body.summary) ? body.summary : {}),
+            transactions: rows.map(toLedgerEntry),
           };
 
-          const text = [
-            `## Usage of agent \`${guid}\``,
-            '',
-            `**Balance:** ${formatCredits(usage.balance.remainingCredits)} credits left (${monthlyCreditsText({ monthly: usage.balance.monthlyCredits, renewal: usage.balance.renewalCredits })}, extra ${formatCredits(usage.balance.extraCredits)}, used ${formatCredits(usage.balance.usedCredits)}${period ? `, period ${period}` : ''})`,
-          ];
-          if (usage.byModel.length > 0) {
-            text.push('', '### This period by model', '');
-            for (const entry of usage.byModel) {
-              text.push(`- ${entry.model}: ${formatCredits(entry.credits)} credits over ${formatCredits(entry.turns)} turns, ${formatCredits(entry.tokens.total ?? 0)} tokens`);
-            }
-          }
-          text.push('', `### Ledger (${rows.length} of ${total}, newest first)`, '');
+          const summaryLine = ledgerSummaryLine(usage.summary);
+          const text = [`## Usage of agent \`${guid}\``, ...(summaryLine ? ['', summaryLine] : [])];
+          text.push('', `### Ledger${entries !== 'all' ? `: ${entries}` : ''} (${rows.length} of ${total}, newest first)`, '');
           if (usage.transactions.length === 0) text.push('No entries.');
-          for (const entry of usage.transactions) {
-            text.push(`- ${entry.createdAt ?? ''} ${entry.type}${entry.action ? `/${entry.action}` : ''}: ${entry.credits} credits${entry.description ? `, ${entry.description}` : ''}${cachedTokensText(entry.tokens, entry.description)}`);
-          }
+          for (const entry of usage.transactions) text.push(ledgerLine(entry));
           if (usage.nextStart !== null) text.push('', `More entries: call get_agent_activity with kind usage and start ${usage.nextStart}.`);
 
           return {
@@ -427,7 +507,7 @@ export function registerGetAgentActivity(server: McpServer, client: WiroClient):
                 ? {
                   nextAction: {
                     tool: 'get_agent_activity',
-                    arguments: { agent_guid: guid, kind: 'usage', start: usage.nextStart, limit },
+                    arguments: { agent_guid: guid, kind: 'usage', start: usage.nextStart, limit, ...(entries !== 'all' ? { entries } : {}) },
                     reason: 'Read the next page of the ledger.',
                   },
                 }

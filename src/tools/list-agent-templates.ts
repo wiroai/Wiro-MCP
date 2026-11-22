@@ -24,9 +24,10 @@ export function registerListAgentTemplates(server: McpServer, client: WiroClient
       title: 'List Wiro agent templates',
       description: 'Browse the catalog of ready-made Wiro agents (templates) that deploy_agent can deploy. '
         + 'Every template is deployed on one of the plans, Starter, Pro or Max, each with a fixed price in USD '
-        + 'per month and a monthly credit pool that pays for the agent\'s chat and scheduled tasks (100 credits = '
-        + '1 USD), the same for every template, and every plan includes all of a template\'s skills. The list shows '
-        + 'the plans once when every template has the same. Model runs an agent starts, for '
+        + 'per month that it also includes as AI usage each month for the agent\'s chat and scheduled tasks, the '
+        + 'same for every template, and every plan includes all of a '
+        + 'template\'s skills. After the included usage, the agent uses the Wiro balance of its workspace. The list '
+        + 'shows the plans once when every template has the same. Model runs an agent starts, for '
         + 'images, videos or voice calls, are billed to the wallet of the workspace that owns the Wiro project connected to the agent. '
         + 'A template whose pricing is null '
         + 'cannot be priced right now: do not quote or deploy it. Call get_agent_template next for the '
@@ -64,7 +65,7 @@ export function registerListAgentTemplates(server: McpServer, client: WiroClient
       try {
         const order = SORTS[sort];
         const body = requireApiSuccess(
-          await client.post<ApiEnvelope & { agents?: unknown; total?: unknown }>('/Agent/List', {
+          await client.post<ApiEnvelope & { agents?: unknown; total?: unknown; plans?: unknown }>('/Agent/List', {
             ...(search?.trim() ? { search: search.trim() } : {}),
             ...(category?.trim() ? { category: category.trim() } : {}),
             sort: order.sort,
@@ -75,7 +76,8 @@ export function registerListAgentTemplates(server: McpServer, client: WiroClient
           'The agent catalog could not be read.',
         );
         const rows = Array.isArray(body.agents) ? body.agents.filter(isPlainObject) : [];
-        const templates = rows.map(toTemplateSummary).filter(template => template.guid && template.slug);
+        // The plans are named once for the whole list.
+        const templates = rows.map(row => toTemplateSummary(row, body.plans)).filter(template => template.guid && template.slug);
         const total = Math.max(0, Math.trunc(toNumber(body.total) ?? templates.length));
         const nextStart = start + rows.length < total ? start + rows.length : null;
         const first = templates[0];

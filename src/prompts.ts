@@ -50,12 +50,12 @@ function deployAgentText(goal: string | undefined): string {
     '',
     'Plan:',
     '1. Look for a template with `list_agent_templates` and read the best matches with `get_agent_template`. If none fits, suggest a custom build from `list_agent_skills`, with the outside services it works with from `list_agent_connectors`.',
-    '2. Show me the options: the plan (Starter, Pro or Max) with its monthly price and monthly credits, the connectors and credentials it needs and how each one connects, and its chat channels. Every plan includes every skill and connector. Let me choose.',
+    '2. Show me the options: the plan (Starter, Pro or Max) with its monthly price and the AI usage it includes, the connectors and credentials it needs and how each one connects, and its chat channels. Every plan includes every skill and connector. Let me choose.',
     '3. Call `get_account` to check the balance and which wallet will pay.',
     '4. Call `deploy_agent` without confirm to get the quote. Show me the amount, the wallet, and that the plan renews every 30 days until it is cancelled. Only after I say yes, repeat the call as the quote\'s `nextAction` shows: `confirm: true` with `confirm_charge_usd` set to the quoted amount. If the price changed in between, nothing is charged: show me the new quote.',
     '5. Wait with `get_my_agent` until the agent is running (status 4). It starts even while credentials are missing.',
     '6. Set it up: ask me for each required credential and save it with `set_agent_credentials`. For a Wiro project (`wiro`), call `bind_agent_project` instead: it needs no key, shows me the project first and connects it only after my yes. The `wiro` connector, which gives the agent its model tools, runs with that same project: connecting it binds the project the same way. Connect each outside service with `connect_agent_connector`: ask me for the values its Connect card needs, or give me its sign-in link to open myself, wait for me, then check the status. Where it has account choices, let me pick them with `set_agent_connector_accounts`.',
-    '7. Tell me what works now and what still needs setup. Offer a short test message with `send_agent_message`; each message uses the agent\'s credits.',
+    '7. Tell me what works now and what still needs setup. Offer a short test message with `send_agent_message`; each message uses the agent\'s AI usage.',
     '',
     'Confirm every charge with me before it happens. Never repeat secret values back to me. If a deploy fails or times out, check `list_my_agents` before trying again.',
   ].join('\n');
@@ -88,12 +88,12 @@ function talkToMyAgentText(agentName: string | undefined, message: string | unde
     '',
     'Plan:',
     '1. Call `list_my_agents` and find the agent by name. If there is no clear match, show me the list and ask.',
-    '2. Call `get_my_agent`. The agent must be running (status 4) and have credits left, unless my message is a "yes" or "yes N" to its setup proposals: Wiro answers those itself at any status and with no credits, and a "no" too while the agent is not running. If it is stopped, ask me before starting it with `control_agent`, then wait until it runs. If it has no credits, tell me and stop there.',
+    '2. Call `get_my_agent`. The agent must be running (status 4) and have AI usage it can pay for (included usage left, or $0.50 in the Wiro balance), unless my message is a "yes" or "yes N" to its setup proposals: Wiro answers those itself at any status and at no cost, and a "no" too while the agent is not running. If it is stopped, ask me before starting it with `control_agent`, then wait until it runs. If its AI usage is paused, tell me why and stop there.',
     '3. Call `send_agent_message` with agent set to the agent\'s guid and the message. Use its main session ("default") unless I name another one.',
     '4. If the reply is not ready, follow its `nextAction` with `get_agent_message`. If the agent moves the work to the background, read the result later with `get_agent_conversation`, unless the turn\'s notes say it will not appear for this project.',
     '5. Show me the reply and any files.',
     '',
-    'Each message uses the agent\'s credits, except a reply Wiro answers itself. Confirm with me before any action that costs money, such as buying credits or renewing the plan.',
+    'Each message uses the agent\'s AI usage, except a reply Wiro answers itself. Confirm with me before any action that costs money, such as a plan change or renewing the plan.',
   ].join('\n');
 }
 

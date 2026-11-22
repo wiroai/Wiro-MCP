@@ -34,8 +34,8 @@ function formatTemplate(template: TemplateDetail): string {
   const plans = template.pricing ? planLineText(template.pricing) : '';
   if (plans) {
     lines.push(
-      `**Plans:** ${plans}. Every plan includes all of this template's skills, and any plan can buy extra credit packs.`,
-      'Prices are paid from the Wiro wallet when deploying and renew every 30 days until the plan is cancelled. Credits pay for the agent\'s chat and scheduled tasks (100 credits = 1 USD). Model runs it starts, for images, videos or voice calls, are billed to the wallet of the workspace that owns the Wiro project connected to the agent.',
+      `**Plans:** ${plans}. Every plan includes all of this template's skills.`,
+      'Plans are paid from the Wiro balance when deploying and renew from it every 30 days until the plan is cancelled. The AI usage a plan includes pays for the agent\'s chat and scheduled tasks; after it, the agent uses the same Wiro balance. Model runs it starts, for images, videos or voice calls, are billed to the wallet of the workspace that owns the Wiro project connected to the agent.',
     );
   } else {
     lines.push('**Pricing:** unavailable right now. Do not deploy this template until it can be priced.');
@@ -64,7 +64,7 @@ function formatTemplate(template: TemplateDetail): string {
     const { default: defaultModel, selectable } = template.models;
     const defaultName = defaultModel ? selectable.find(model => model.slug === defaultModel)?.label ?? defaultModel : null;
     lines.push('', `**Chat models:** ${defaultName ? `default ${defaultName}. ` : ''}`
-      + `Models it can use, in credits per 1M input and output tokens: ${formatModelRates(selectable)}.`);
+      + `Models it can use, in USD per 1M input and output tokens: ${formatModelRates(selectable)}.`);
   }
   // Only a read with include_tasks returns these.
   if (template.scheduledTasks) {
@@ -91,8 +91,8 @@ export function registerGetAgentTemplate(server: McpServer, client: WiroClient):
       title: 'Get a Wiro agent template',
       description: 'Read one agent template before deploying it: its skills, the credentials the user must '
         + 'provide (with the field labels to ask for), the connectors it suggests, the optional chat channels, the selectable chat models '
-        + 'with their token rates in credits per 1M tokens, and the plans (Starter, Pro and Max) with the '
-        + 'exact prices and monthly credits that deploy_agent charges. Every plan includes every skill and connector. Required '
+        + 'with their token rates in USD per 1M tokens, and the plans (Starter, Pro and Max) with the '
+        + 'exact prices that deploy_agent charges and the AI usage each includes a month. Every plan includes every skill and connector. Required '
         + 'credentials and the connectors can be added after deployment, but work that needs them does not run until then.',
       inputSchema: strictInput({
         template: z.string().min(1).max(200)

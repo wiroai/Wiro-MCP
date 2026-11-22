@@ -108,13 +108,13 @@ export function isTransitionalStatus(status: number | null | undefined): boolean
 }
 
 // ---------------------------------------------------------------------------
-// Prices, plans and credits
+// Prices, plans and AI usage
 // ---------------------------------------------------------------------------
 
 /**
- * The plans an agent can have, smallest first. Every plan includes every skill,
- * and each has a fixed monthly price and monthly credits, the same for every
- * template and custom build. The numbers come from Wiro, never from here.
+ * The plans an agent can have, smallest first. Every plan includes every skill, and each has a fixed monthly
+ * price that it also includes as AI usage each month, the same for every template and custom build. After the
+ * included usage, the agent uses the Wiro balance of its workspace. The numbers come from Wiro, never from here.
  */
 export const AGENT_PLANS = ['starter', 'pro', 'max'] as const;
 export type AgentPlan = typeof AGENT_PLANS[number];
@@ -137,8 +137,10 @@ export function comparePlans(a: AgentPlan, b: AgentPlan): number {
 }
 
 export const planPriceSchema = z.object({
-  priceUsd: z.number(),
-  monthlyCredits: z.number(),
+  priceUsd: z.number()
+    .describe('What the plan costs every 30 days.'),
+  includedUsageUsd: z.number()
+    .describe('The AI usage the plan includes each month, in USD.'),
 });
 
 export type PlanPrice = z.infer<typeof planPriceSchema>;
@@ -151,21 +153,33 @@ export const planPricingSchema = z.object({
 
 export type PlanPricing = z.infer<typeof planPricingSchema>;
 
+/** One plan's price; the AI usage it includes is its own price when Wiro does not name it. */
 function toPlanPrice(value: unknown): PlanPrice | null {
   if (!isPlainObject(value)) return null;
   const priceUsd = toNumber(value.priceUsd);
-  const credits = toNumber(value.credits);
-  if (priceUsd === null || credits === null) return null;
-  return { priceUsd, monthlyCredits: credits };
+  if (priceUsd === null) return null;
+  return { priceUsd, includedUsageUsd: toNumber(value.includedUsageUsd) ?? priceUsd };
 }
 
-/** Each plan's price and monthly credits as Wiro lists them (its tiers), or null when it lists none. */
-export function toPlanPricing(value: unknown): PlanPricing | null {
-  if (!isPlainObject(value)) return null;
+/**
+ * Each plan's price and the AI usage it includes, as an answer lists them, or null when it lists none. source
+ * holds the plans as plans ([{ key, priceUsd, includedUsageUsd }]) or, in their older form, as tiers
+ * ({ starter: { priceUsd }, ... }).
+ */
+export function toPlanPricing(source: unknown): PlanPricing | null {
+  if (!isPlainObject(source)) return null;
   const pricing: PlanPricing = {};
-  for (const plan of AGENT_PLANS) {
-    const price = toPlanPrice(value[plan]);
-    if (price) pricing[plan] = price;
+  for (const entry of Array.isArray(source.plans) ? source.plans.filter(isPlainObject) : []) {
+    const plan = asPlan(entry.key);
+    const price = toPlanPrice(entry);
+    if (plan && price && !pricing[plan]) pricing[plan] = price;
+  }
+  if (Object.keys(pricing).length === 0 && isPlainObject(source.tiers)) {
+    const tiers = source.tiers;
+    for (const plan of AGENT_PLANS) {
+      const price = toPlanPrice(tiers[plan]);
+      if (price) pricing[plan] = price;
+    }
   }
   return Object.keys(pricing).length > 0 ? pricing : null;
 }
@@ -175,21 +189,20 @@ export function formatPlanUsd(value: number): string {
   return Number.isInteger(value) ? `$${value}` : `$${value.toFixed(2)}`;
 }
 
-/** One plan with its price and credits: "Pro $30 (3,000 credits)". */
+/** One plan with its price and the AI usage it includes: "Pro $30 a month, includes $30 of AI usage". */
 export function planPriceText(plan: AgentPlan, price: PlanPrice): string {
-  return `${PLAN_NAMES[plan]} ${formatPlanUsd(price.priceUsd)} (${formatCredits(price.monthlyCredits)} credits)`;
+  return `${PLAN_NAMES[plan]} ${formatPlanUsd(price.priceUsd)} a month, includes ${formatPlanUsd(price.includedUsageUsd)} of AI usage`;
 }
 
 /**
- * The plans Wiro lists, smallest first, as one line: "Starter $5 (500 credits), Pro $30 (3,000 credits),
- * Max $100 (10,000 credits) per month". except leaves one plan out, such as the one a quote is for.
+ * The plans Wiro lists, smallest first, as one line: "Starter $5 a month, includes $5 of AI usage; Pro $30 a
+ * month, includes $30 of AI usage; ...". except leaves one plan out, such as the one a quote is for.
  */
 export function planLineText(pricing: PlanPricing, except?: AgentPlan): string {
-  const listed = AGENT_PLANS.flatMap(plan => {
+  return AGENT_PLANS.flatMap(plan => {
     const price = pricing[plan];
     return price && plan !== except ? [planPriceText(plan, price)] : [];
-  });
-  return listed.length > 0 ? `${listed.join(', ')} per month` : '';
+  }).join('; ');
 }
 
 export function formatUsd(value: number | null | undefined): string {
@@ -197,13 +210,55 @@ export function formatUsd(value: number | null | undefined): string {
   return `$${value.toFixed(2)}`;
 }
 
-export function formatCredits(value: number | null | undefined): string {
+/** A whole count, such as tokens or turns: 50,147. */
+export function formatCount(value: number | null | undefined): string {
   if (value === null || value === undefined || !Number.isFinite(value)) return 'unknown';
   return Math.round(value).toLocaleString('en-US');
 }
 
 export function roundUsd(value: number): number {
   return Math.round(value * 100) / 100;
+}
+
+/** Without included AI usage left, an agent's new turn needs this much in the Wiro balance. */
+export const MIN_RUN_BALANCE_USD = 0.5;
+
+/** What pays for an agent's chat and scheduled tasks, for a sentence such as "every run uses ...". */
+export const AGENT_AI_USAGE = 'the agent\'s AI usage (its plan first, then the workspace balance)';
+
+/** The Wiro dashboard page where funds are added to a balance. No tool adds funds. */
+export const ADD_FUNDS_URL = 'https://wiro.ai/panel/wallet/deposit/credit-card';
+
+/** Where funds are added, as a sentence. A team agent's balance is its team's wallet. */
+export function addFundsText(workspace: 'personal' | 'team'): string {
+  return `Funds are added at ${ADD_FUNDS_URL}${workspace === 'team' ? ' (select the agent\'s team in the dashboard first)' : ''}.`;
+}
+
+/**
+ * What Wiro says is missing from the balance for a plan payment it refused: its neededusd, the amount to add in USD
+ * (rounded up to the cent, at least the deposit minimum), or the older "Insufficient wallet balance" answer. A
+ * refusal for a paused agent carries agentusage instead, and any other refusal, a 97 that refuses a team member
+ * included, is null.
+ */
+export function balanceShortfall(error: unknown): { neededUsd: number | null } | null {
+  if (!(error instanceof ApiResultError)) return null;
+  const needed = toNumber(error.body.neededusd);
+  if (needed !== null) return { neededUsd: needed > 0 ? needed : null };
+  return /insufficient wallet balance/i.test(error.message) ? { neededUsd: null } : null;
+}
+
+/** The agent's AI usage a refusal carries (agentusage), when Wiro refused it because the agent is paused. */
+export function pausedUsage(body: Record<string, unknown>): AgentUsage | null {
+  return isPlainObject(body.agentusage) ? toAgentUsage({ usage: body.agentusage }) : null;
+}
+
+/**
+ * The words after a plan payment refused for a short balance: what was not done, how much to add, and where.
+ * teamHint says which team to select in the dashboard, when one is to be selected.
+ */
+export function shortBalanceNote(neededUsd: number | null, teamHint: string, nothingDone = 'Nothing was charged.'): string {
+  return `${nothingDone} ${neededUsd !== null ? `Add at least ${formatUsd(neededUsd)} to the Wiro balance on wiro.ai. ` : ''}`
+    + `Funds are added at ${ADD_FUNDS_URL}${teamHint ? ` (${teamHint})` : ''}.`;
 }
 
 // A confirmed charge goes ahead only when a fresh quote still matches the
@@ -224,7 +279,7 @@ export const subscriptionSchema = z.object({
   daysRemaining: z.number().nullable(),
   cancelAtPeriodEnd: z.boolean(),
   atPeriodEnd: z.enum(['renews', 'ends', 'unknown']).optional()
-    .describe('For an active plan, what happens at periodEndsAt: it renews, it ends, or unknown for a card plan whose renewal is managed in the Wiro dashboard.'),
+    .describe('For an active plan, what happens at periodEndsAt: it renews, it ends, or unknown for a card plan from before agent plans were paid from the Wiro balance only.'),
 });
 
 export type AgentSubscription = z.infer<typeof subscriptionSchema>;
@@ -232,7 +287,7 @@ export type AgentSubscription = z.infer<typeof subscriptionSchema>;
 /**
  * Whether a plan ends with its current period: true when it ends, false when
  * it renews, null when that is not known. A wallet plan says so itself, and a
- * card plan moving to wallet billing renews from the wallet, even though its
+ * card plan moving to the wallet renews from the Wiro balance, even though its
  * card subscription is set to end with the period. Any other card plan is
  * known only when the row carries its card state (cardEnds).
  */
@@ -262,13 +317,6 @@ export function toSubscription(value: unknown, cardEnds?: unknown): AgentSubscri
   };
 }
 
-/** How a new charge for this plan is paid right now. */
-export function chargeRoute(subscription: unknown): 'wallet' | 'card' | null {
-  if (!isPlainObject(subscription)) return null;
-  if (subscription.nextprovider === 'prepaid' || subscription.provider === 'prepaid') return 'wallet';
-  return 'card';
-}
-
 // The plan statuses Wiro counts as ended. Every other status is a plan that has not ended, a card plan
 // whose renewal payment did not go through included, and Wiro starts no second plan beside it.
 const ENDED_PLAN_STATUSES: ReadonlySet<string> = new Set(['expired', 'cancelled', 'refunded']);
@@ -286,16 +334,16 @@ export function isUnsettledPlan(plan: Pick<AgentSubscription, 'status'> | null |
   return Boolean(plan) && plan?.status !== 'active' && isLivePlanStatus(plan?.status);
 }
 
-// Billing in the dashboard's personal workspace. Its Open Billing Portal button is where a card plan whose last
-// payment did not go through is paid or cancelled: the agent's page offers the billing portal only for an active
-// plan, and a team workspace has no billing portal, since a team's card plans are billed to the member who pays.
-const BILLING_PAGE_URL = 'https://wiro.ai/panel/billing';
+/** The Wiro balance that pays for an agent's plan: the personal wallet, or the team wallet for a team agent. */
+export function planBalanceName(workspace: 'personal' | 'team'): string {
+  return workspace === 'team' ? 'the team\'s Wiro balance' : 'your Wiro balance';
+}
 
 /**
- * What to do about a plan that has not ended and is not active. Wiro starts no new plan beside it, and renews,
- * changes, cancels and adds packs only to an active plan, so the dashboard settles it: a card plan whose last
- * payment did not go through renews by itself once its open invoice is paid in the billing portal, which Billing
- * opens in the personal workspace of whoever pays for the plan. lead says what the call could not do, after the
+ * What to do about a plan that has not ended and is not active, such as a card plan from before agent plans were
+ * paid from the Wiro balance only, whose last payment did not go through. Wiro starts no new plan beside it, and
+ * renews, changes and cancels only an active plan, and no card payment is taken here, so nothing here settles it:
+ * once a card plan has ended, a new plan is paid from the balance. lead says what the call could not do, after the
  * plan's state.
  */
 export function unsettledPlanText(
@@ -307,46 +355,195 @@ export function unsettledPlanText(
   const state = failed
     ? `The last payment for this card plan did not go through (${plan.status}), so the plan has not ended.`
     : `This ${plan.billing === 'card' ? 'card ' : ''}plan is ${plan.status}, so it has not ended.`;
-  const fix = failed
-    ? 'To fix the payment, open Billing in the personal workspace of the Wiro dashboard and choose Open Billing Portal. '
-      + 'Pay the open invoice there, with another card if needed, and the plan renews by itself. The plan can also be cancelled there. '
-      + (agent.workspace === 'team' ? 'On a team agent, the member whose card pays for the plan does this, from their own personal workspace. ' : '')
-      + BILLING_PAGE_URL
+  const fix = plan.billing === 'card'
+    ? 'Agent plans are paid from the Wiro balance now, and no card payment is taken here: once this card plan has ended, '
+      + `a new plan is paid from ${planBalanceName(agent.workspace)}. The agent's page: ${agentDashboardUrl(agent.guid)}`
     : `It is managed in the Wiro dashboard: ${agentDashboardUrl(agent.guid)}`;
   return [state, lead, fix].filter(Boolean).join(' ');
 }
 
-export const creditsSchema = z.object({
-  monthly: z.number()
-    .describe('The monthly credits this period grants. A plan change inside a period moves it for the time left, so it can differ from renewal.'),
-  renewal: z.number().optional()
-    .describe('The monthly credits each renewal grants.'),
-  extra: z.number(),
-  used: z.number(),
-  remaining: z.number(),
-  period: z.string().optional(),
+// ---------------------------------------------------------------------------
+// AI usage and spending
+// ---------------------------------------------------------------------------
+
+/** Wiro keeps some amounts in hundredths of a dollar; this is the same amount in USD. */
+export function centsToUsd(value: number): number {
+  return Math.round(value * 10_000) / 1_000_000;
+}
+
+export const agentUsageSchema = z.object({
+  period: z.string().optional()
+    .describe('The plan period the amounts belong to, such as 2026-11.'),
+  resetsAt: z.string().optional()
+    .describe('When the included AI usage starts again: the plan\'s next renewal.'),
+  includedUsd: z.number()
+    .describe('The AI usage the plan includes this period, in USD. A plan change inside a period moves it for the time left, so it can differ from renewalUsd.'),
+  usedUsd: z.number()
+    .describe('The included AI usage used this period.'),
+  leftUsd: z.number()
+    .describe('The included AI usage left this period.'),
+  renewalUsd: z.number().optional()
+    .describe('The AI usage each renewal includes.'),
+  fromBalanceUsd: z.number().optional()
+    .describe('The AI usage paid from the workspace balance this period, after the included usage ran out.'),
+  balanceUsd: z.number().optional()
+    .describe('What the Wiro balance that pays after the included usage holds now: the personal wallet, or the team wallet for a team agent.'),
+  wallet: z.enum(['personal', 'team']).optional()
+    .describe('Which Wiro balance pays after the included usage.'),
+  minBalanceUsd: z.number().optional()
+    .describe('Without included usage left, a new turn needs at least this much in the balance.'),
+  paused: z.boolean()
+    .describe('Whether the agent takes no new turns now: its included usage is used up and the balance is under minBalanceUsd, or a spend limit is reached. A turn that is running finishes.'),
+  pausedReason: z.enum(['balance', 'spendlimit']).optional()
+    .describe('Why it is paused: balance (the included usage is used up and the balance is short) or spendlimit (a spend limit is reached).'),
+  extraUsd: z.number().optional()
+    .describe('Only in an answer from an older Wiro release: usage bought earlier for this agent that is left.'),
+  legacy: z.boolean().optional()
+    .describe('true when Wiro answered without these amounts, so they were worked out from its older fields.'),
 });
 
-export type AgentCredits = z.infer<typeof creditsSchema>;
+export type AgentUsage = z.infer<typeof agentUsageSchema>;
 
-export function toCredits(row: Record<string, unknown>): AgentCredits {
-  const period = asString(row.creditperiod);
+export const agentSpendSchema = z.object({
+  month: z.string().optional()
+    .describe('The calendar month (UTC), such as 2026-11.'),
+  totalUsd: z.number()
+    .describe('What the agent cost this month: its plan, its AI usage paid from the balance and the model runs it started.'),
+  planUsd: z.number(),
+  aiUsageBalanceUsd: z.number()
+    .describe('AI usage paid from the balance.'),
+  aiUsagePlanUsd: z.number()
+    .describe('AI usage the plan included, already paid with the plan and not in totalUsd.'),
+  modelRunsUsd: z.number(),
+  fundsAddedUsd: z.number()
+    .describe('Funds added to the balance from this agent\'s page. Not spending, so not in totalUsd.'),
+});
+
+export type AgentSpend = z.infer<typeof agentSpendSchema>;
+
+/**
+ * The agent's AI usage in USD from its row: Wiro's usage object, or, in an answer from an older Wiro release, its
+ * credit fields, which count hundredths of a dollar.
+ */
+export function toAgentUsage(row: Record<string, unknown>): AgentUsage {
+  const usage = isPlainObject(row.usage) ? row.usage : null;
+  const included = usage ? toNumber(usage.includedusd) : null;
+  if (usage && included !== null) {
+    const used = toNumber(usage.usedusd) ?? 0;
+    const left = toNumber(usage.leftusd) ?? Math.max(0, roundUsd(included - used));
+    const period = asString(usage.period);
+    const resetsAt = unixToIso(usage.resetsat);
+    const renewal = toNumber(usage.renewalusd);
+    const fromBalance = toNumber(usage.frombalanceusd);
+    const balance = toNumber(usage.balanceusd);
+    const wallet = usage.wallet === 'personal' || usage.wallet === 'team' ? usage.wallet : undefined;
+    const minBalance = toNumber(usage.minbalanceusd);
+    const reason = usage.pausedreason === 'balance' || usage.pausedreason === 'spendlimit' ? usage.pausedreason : undefined;
+    return {
+      ...(period ? { period } : {}),
+      ...(resetsAt ? { resetsAt } : {}),
+      includedUsd: included,
+      usedUsd: used,
+      leftUsd: left,
+      ...(renewal !== null ? { renewalUsd: renewal } : {}),
+      ...(fromBalance !== null ? { fromBalanceUsd: fromBalance } : {}),
+      ...(balance !== null ? { balanceUsd: balance } : {}),
+      ...(wallet ? { wallet } : {}),
+      ...(minBalance !== null ? { minBalanceUsd: minBalance } : {}),
+      paused: usage.paused === true || reason !== undefined,
+      ...(reason ? { pausedReason: reason } : {}),
+    };
+  }
+  // An older answer: the plan's part comes first, and what is left beyond it was bought apart from the plan.
+  const monthly = Math.max(0, toNumber(row.monthlycredits) ?? 0);
+  const used = Math.max(0, toNumber(row.usedcredits) ?? 0);
+  const remaining = toNumber(row.remainingcredits);
   const renewal = toNumber(row.renewalcredits);
+  const period = asString(row.creditperiod);
+  const includedLeft = Math.max(0, monthly - used);
+  const extraLeft = remaining !== null ? Math.max(0, remaining - includedLeft) : Math.max(0, toNumber(row.extracredits) ?? 0);
+  const active = isPlainObject(row.subscription) && row.subscription.status === 'active';
   return {
-    monthly: toNumber(row.monthlycredits) ?? 0,
-    ...(renewal !== null ? { renewal } : {}),
-    extra: toNumber(row.extracredits) ?? 0,
-    used: toNumber(row.usedcredits) ?? 0,
-    remaining: toNumber(row.remainingcredits) ?? 0,
     ...(period ? { period } : {}),
+    includedUsd: centsToUsd(monthly),
+    usedUsd: centsToUsd(Math.min(used, monthly)),
+    leftUsd: centsToUsd(includedLeft),
+    ...(renewal !== null ? { renewalUsd: centsToUsd(renewal) } : {}),
+    paused: active && includedLeft + extraLeft <= 0,
+    ...(extraLeft > 0 ? { extraUsd: centsToUsd(extraLeft) } : {}),
+    legacy: true,
   };
 }
 
-/** The monthly credits as said in a line: those of this period, and those of each renewal when they differ. */
-export function monthlyCreditsText(credits: Pick<AgentCredits, 'monthly' | 'renewal'>): string {
-  return credits.renewal !== undefined && credits.renewal !== credits.monthly
-    ? `${formatCredits(credits.monthly)} credits this period, ${formatCredits(credits.renewal)} from each renewal`
-    : `monthly ${formatCredits(credits.monthly)}`;
+/** What the agent cost this calendar month, or undefined when Wiro does not say. */
+export function toAgentSpend(row: Record<string, unknown>): AgentSpend | undefined {
+  if (!isPlainObject(row.spend)) return undefined;
+  const spend = row.spend;
+  const planUsd = toNumber(spend.planusd) ?? 0;
+  const aiUsageBalanceUsd = toNumber(spend.aiusagebalanceusd) ?? 0;
+  const modelRunsUsd = toNumber(spend.modelrunsusd) ?? 0;
+  const month = asString(spend.month);
+  return {
+    ...(month ? { month } : {}),
+    totalUsd: toNumber(spend.totalusd) ?? roundUsd(planUsd + aiUsageBalanceUsd + modelRunsUsd),
+    planUsd,
+    aiUsageBalanceUsd,
+    aiUsagePlanUsd: toNumber(spend.aiusageplanusd) ?? 0,
+    modelRunsUsd,
+    fundsAddedUsd: toNumber(spend.fundsaddedusd) ?? 0,
+  };
+}
+
+/** Why a paused agent takes no new turns, as a clause. */
+function pausedText(usage: AgentUsage): string {
+  if (usage.pausedReason === 'spendlimit') {
+    return 'a spend limit is reached, so it takes no new turns until the limit resets or is raised (get_controls shows it)';
+  }
+  if (usage.pausedReason === 'balance') {
+    return `its included usage is used up and the balance is under ${formatUsd(usage.minBalanceUsd ?? MIN_RUN_BALANCE_USD)}, `
+      + 'so it takes no new turns until funds are added on wiro.ai or the plan renews';
+  }
+  return 'it has no AI usage left, so it takes no new turns until its plan renews';
+}
+
+/**
+ * The agent's AI usage this period as said in a line: "$12.40 of $30.00 included; then the workspace balance
+ * ($42.10)", with what the balance paid so far and why the agent is paused when it is.
+ */
+export function aiUsageText(usage: AgentUsage): string {
+  const renewal = usage.renewalUsd !== undefined && !sameAmount(usage.renewalUsd, usage.includedUsd)
+    ? ` (${formatUsd(usage.renewalUsd)} from each renewal)`
+    : '';
+  const parts = [`${formatUsd(usage.usedUsd)} of ${formatUsd(usage.includedUsd)} included${renewal}`];
+  if (usage.extraUsd) parts.push(`${formatUsd(usage.extraUsd)} bought earlier left`);
+  if (!usage.legacy) {
+    parts.push(`then the workspace balance${usage.balanceUsd !== undefined ? ` (${formatUsd(usage.balanceUsd)})` : ''}`);
+  }
+  if (usage.fromBalanceUsd) parts.push(`${formatUsd(usage.fromBalanceUsd)} paid from the balance so far`);
+  return `${parts.join('; ')}${usage.paused ? `. Paused: ${pausedText(usage)}` : ''}`;
+}
+
+/** The agent's AI usage in a list row: "AI usage $12.40 of $30.00 included, balance $42.10, paused (balance short)". */
+export function aiUsageShortText(usage: AgentUsage): string {
+  const reason = usage.pausedReason === 'spendlimit' ? 'spend limit reached' : usage.pausedReason === 'balance' ? 'balance short' : 'no usage left';
+  return `AI usage ${formatUsd(usage.usedUsd)} of ${formatUsd(usage.includedUsd)} included`
+    + `${usage.extraUsd ? `, ${formatUsd(usage.extraUsd)} bought earlier left` : ''}`
+    + `${usage.balanceUsd !== undefined ? `, balance ${formatUsd(usage.balanceUsd)}` : ''}`
+    + `${usage.paused ? `, paused (${reason})` : ''}`;
+}
+
+/** What the agent cost this month as said in a line: "$33.20 (plan $30.00, model runs $3.20); ...". */
+export function spendText(spend: AgentSpend): string {
+  const parts = [
+    ...(spend.planUsd > 0 ? [`plan ${formatUsd(spend.planUsd)}`] : []),
+    ...(spend.aiUsageBalanceUsd > 0 ? [`AI usage from the balance ${formatUsd(spend.aiUsageBalanceUsd)}`] : []),
+    ...(spend.modelRunsUsd > 0 ? [`model runs ${formatUsd(spend.modelRunsUsd)}`] : []),
+  ];
+  return [
+    `${formatUsd(spend.totalUsd)}${parts.length > 0 ? ` (${parts.join(', ')})` : ''}`,
+    ...(spend.aiUsagePlanUsd > 0 ? [`its plan covered ${formatUsd(spend.aiUsagePlanUsd)} of AI usage`] : []),
+    ...(spend.fundsAddedUsd > 0 ? [`funds added from its page ${formatUsd(spend.fundsAddedUsd)}`] : []),
+  ].join('; ');
 }
 
 // ---------------------------------------------------------------------------
@@ -554,17 +751,13 @@ const modelSettingsSchema = z.object({
 const selectableModelSchema = z.object({
   slug: z.string(),
   label: z.string().optional(),
-  inputCreditsPer1M: z.number().optional(),
-  outputCreditsPer1M: z.number().optional(),
+  inputUsdPer1M: z.number().optional()
+    .describe('What 1M input tokens cost, in USD.'),
+  outputUsdPer1M: z.number().optional()
+    .describe('What 1M output tokens cost, in USD.'),
 });
 
 type SelectableModel = z.infer<typeof selectableModelSchema>;
-
-export const extraCreditPackSchema = z.object({
-  pack: z.string(),
-  credits: z.number(),
-  priceUsd: z.number(),
-});
 
 export const agentSummarySchema = z.object({
   guid: z.string(),
@@ -580,7 +773,10 @@ export const agentSummarySchema = z.object({
   nextPlan: z.string().nullable().optional()
     .describe('The plan the agent moves to at its next renewal, when a move is set: another plan, or its own plan at today\'s price. null when none is set; left out when Wiro does not say.'),
   monthlyPriceUsd: z.number().nullable(),
-  credits: creditsSchema,
+  usage: agentUsageSchema
+    .describe('The agent\'s AI usage this period in USD: what its plan includes, used and left, then the Wiro balance that pays after it.'),
+  spend: agentSpendSchema.optional()
+    .describe('What the agent cost this calendar month. Left out when Wiro does not say.'),
   subscription: subscriptionSchema.nullable(),
   timezone: z.string().nullable().optional(),
   teamSessionMode: z.string().optional(),
@@ -598,9 +794,7 @@ export const agentDetailSchema = agentSummarySchema.extend({
   cover: z.string().optional(),
   categories: z.array(z.string()),
   pricing: planPricingSchema.nullable()
-    .describe('Each plan\'s price and monthly credits, the same for every agent. null when Wiro could not list them.'),
-  extraCreditPacks: z.array(extraCreditPackSchema)
-    .describe('The extra credit packs this agent can buy, the same on every plan. Only an agent with an active plan can buy them, so any other agent lists none.'),
+    .describe('Each plan\'s price and the AI usage it includes, the same for every agent. null when Wiro could not list them.'),
   models: modelSettingsSchema.optional(),
   selectableModels: z.array(selectableModelSchema).optional(),
   enabledCommands: z.array(z.string()).nullable(),
@@ -670,9 +864,9 @@ export function readNextPlan(row: Record<string, unknown>): AgentPlan | null | u
   return asPlan(value);
 }
 
-/** The plans' prices on an agent row (its agent's tiers), or null when it lists none. */
+/** The plans' prices on an agent row (its agent's plans), or null when it lists none. */
 export function rowPlanPricing(row: Record<string, unknown>): PlanPricing | null {
-  return toPlanPricing(isPlainObject(row.agent) ? row.agent.tiers : undefined);
+  return toPlanPricing(row.agent);
 }
 
 /**
@@ -698,6 +892,7 @@ export function toAgentSummary(row: Record<string, unknown>): AgentSummary {
   const nextPlan = readNextPlan(row);
   const timezone = row.timezone === null ? null : asString(row.timezone);
   const sessionMode = asString(row.teamsessionmode);
+  const spend = toAgentSpend(row);
   return {
     guid: asString(row.guid) ?? '',
     title: asString(row.title) ?? '',
@@ -709,7 +904,8 @@ export function toAgentSummary(row: Record<string, unknown>): AgentSummary {
     ...(tier ? { tier } : {}),
     ...(nextPlan !== undefined ? { nextPlan } : {}),
     monthlyPriceUsd: toNumber(row.monthlypriceusd),
-    credits: toCredits(row),
+    usage: toAgentUsage(row),
+    ...(spend ? { spend } : {}),
     subscription: planOf(row),
     ...(timezone !== undefined ? { timezone } : {}),
     ...(sessionMode ? { teamSessionMode: sessionMode } : {}),
@@ -718,7 +914,10 @@ export function toAgentSummary(row: Record<string, unknown>): AgentSummary {
   };
 }
 
-/** The models an agent can switch to, with their credits per 1M input and output tokens when Wiro lists them. */
+/**
+ * The models an agent can switch to, with what 1M input and output tokens cost in USD when Wiro lists it. Wiro
+ * lists the rates in hundredths of a dollar.
+ */
 function selectableModels(tokenRates: unknown): SelectableModel[] {
   if (!isPlainObject(tokenRates) || !isPlainObject(tokenRates.models)) return [];
   return Object.entries(tokenRates.models)
@@ -731,8 +930,8 @@ function selectableModels(tokenRates: unknown): SelectableModel[] {
       return {
         slug,
         ...(label ? { label } : {}),
-        ...(input !== null ? { inputCreditsPer1M: input } : {}),
-        ...(output !== null ? { outputCreditsPer1M: output } : {}),
+        ...(input !== null ? { inputUsdPer1M: centsToUsd(input) } : {}),
+        ...(output !== null ? { outputUsdPer1M: centsToUsd(output) } : {}),
       };
     });
 }
@@ -772,7 +971,7 @@ export function credentialKeysSetupWaitsFor(row: Record<string, unknown>): Set<s
 
 /**
  * The full view of one deployed agent (Detail, Deploy and Update rows): its
- * status, plan, prices, credits and settings, and the state of each
+ * status, plan, prices, AI usage and settings, and the state of each
  * credential and channel.
  */
 export function toAgentDetail(row: Record<string, unknown>): AgentDetail {
@@ -789,24 +988,13 @@ export function toAgentDetail(row: Record<string, unknown>): AgentDetail {
   const agentModel = isPlainObject(row.agentModel) ? row.agentModel : undefined;
   const models = selectableModels(row.tokenRates);
   const chatSetup = readChatSetupMode(row.chatSetup);
-  // Every plan can buy packs, but only while it is active, so only an active plan lists them.
-  const canBuyPacks = summary.subscription?.status === 'active';
-  const packs = canBuyPacks && Array.isArray(agent.extracreditpacks)
-    ? agent.extracreditpacks.filter(isPlainObject).filter(pack => pack.enabled !== false)
-    : [];
 
   return {
     ...summary,
     ...(description ? { description: truncate(description, 2_000) } : {}),
     ...(cover ? { cover } : {}),
     categories: toStringArray(row.categories),
-    pricing: toPlanPricing(agent.tiers),
-    extraCreditPacks: packs.flatMap(pack => {
-      const name = asString(pack.packkey);
-      const credits = toNumber(pack.credits);
-      const priceUsd = toNumber(pack.priceusd);
-      return name && credits !== null && priceUsd !== null ? [{ pack: name, credits, priceUsd }] : [];
-    }),
+    pricing: toPlanPricing(agent),
     ...(agentModel
       ? {
         models: {
@@ -846,7 +1034,7 @@ export function formatSubscriptionLine(subscription: AgentSubscription | null, p
   }
   const parts = [`${subscription.status}, billed ${subscription.billing === 'wallet' ? 'from the wallet' : 'by card'}`];
   if (subscription.amountUsd !== null) {
-    parts.push(subscription.status === 'expired' && subscription.billing === 'wallet'
+    parts.push(subscription.status === 'expired'
       ? `a new period costs ${formatUsd(subscription.amountUsd)} per 30 days`
       : `${formatUsd(subscription.amountUsd)} per 30 days`);
   }
@@ -868,33 +1056,37 @@ export function formatSubscriptionLine(subscription: AgentSubscription | null, p
       parts.push(`paid through ${subscription.periodEndsAt}`);
     }
   }
-  if (subscription.switchingToWallet) parts.push('switching to wallet billing at period end');
+  if (subscription.switchingToWallet) parts.push('moves to the Wiro balance at period end');
   return parts.join(', ');
 }
 
-/** Without an active plan, an agent starts only on the extra credits it has left. */
-export function startNeedsPlan(agent: Pick<AgentSummary, 'subscription' | 'credits'>): boolean {
-  return agent.subscription?.status !== 'active' && agent.credits.extra <= 0;
+/**
+ * An agent starts only with an active plan. An answer from an older Wiro release can still show usage bought
+ * earlier, on which an agent without a plan starts too.
+ */
+export function startNeedsPlan(agent: Pick<AgentSummary, 'subscription' | 'usage'>): boolean {
+  return agent.subscription?.status !== 'active' && (agent.usage.extraUsd ?? 0) <= 0;
 }
 
 /**
- * renew brings back an expired wallet plan; any other agent without an active plan takes a new one. A plan that
- * has not ended, such as a card plan whose last payment did not go through, takes neither: null.
+ * renew brings back an expired plan, a card plan's included, from the Wiro balance; any other agent without an
+ * active plan takes a new one. A plan that has not ended, such as a card plan whose last payment did not go
+ * through, takes neither: null.
  */
 function planActionForStart(agent: Pick<AgentSummary, 'subscription'>): 'renew' | 'subscribe' | null {
   if (isUnsettledPlan(agent.subscription)) return null;
-  return agent.subscription?.status === 'expired' && agent.subscription.billing === 'wallet' ? 'renew' : 'subscribe';
+  return agent.subscription?.status === 'expired' ? 'renew' : 'subscribe';
 }
 
-const NO_PLAN_TO_START = 'It has no active plan and no extra credits left, so it cannot start.';
+const NO_PLAN_TO_START = 'It has no active plan, so it cannot start.';
 
 function noPlanStartHint(agent: Pick<AgentSummary, 'guid' | 'workspace' | 'subscription'>): string {
   if (agent.subscription && isUnsettledPlan(agent.subscription)) {
-    return unsettledPlanText(agent.subscription, agent, 'The agent cannot start until the plan is active again, since it has no extra credits left.');
+    return unsettledPlanText(agent.subscription, agent, 'The agent cannot start until the plan is active again.');
   }
   return `${NO_PLAN_TO_START} `
     + (planActionForStart(agent) === 'renew'
-      ? 'Its wallet plan has expired; manage_agent_billing with action renew restarts it.'
+      ? 'Its plan has expired; manage_agent_billing with action renew restarts it, paid from the Wiro balance.'
       : 'manage_agent_billing with action subscribe pays for a plan and starts the agent.');
 }
 
@@ -930,13 +1122,16 @@ export function formatAgentSummaryLines(agent: AgentSummary, plainMember = false
     : `template ${agent.template.title ?? agent.template.slug ?? agent.template.guid}`;
   const hint = !plainMember && (agent.status === 0 || agent.status === 5) && startNeedsPlan(agent)
     ? `${agent.status === 5 ? 'The start failed or the agent stopped unexpectedly.' : 'It is not running.'} ${noPlanStartHint(agent)}`
-    : agentStatusHint(agent.status, plainMember);
+    : agent.status === 4 && agent.usage.paused
+      ? 'It is running, but paused: it takes no new turns now (see AI usage).'
+      : agentStatusHint(agent.status, plainMember);
   const next = nextPlanText(agent);
   return [
     `**Agent:** ${agentTitleSpan(agent.title)} (\`${agent.guid}\`), ${template}, ${agent.workspace} workspace`,
     `**Status:** ${describeAgentStatus(agent.status)}. ${hint}`,
     `**Plan:** ${agent.tier ? planName(agent.tier) : 'no plan'}; ${formatSubscriptionLine(agent.subscription, plainMember)}${next ? `; ${next}` : ''}`,
-    `**Credits:** ${formatCredits(agent.credits.remaining)} left (${monthlyCreditsText(agent.credits)}, extra ${formatCredits(agent.credits.extra)}, used ${formatCredits(agent.credits.used)})`,
+    `**AI usage this month:** ${aiUsageText(agent.usage)}`,
+    ...(agent.spend ? [`**Spent this month:** ${spendText(agent.spend)}`] : []),
   ];
 }
 
@@ -1090,16 +1285,17 @@ export function formatCustomInstructionLine(task: AgentTask, shortenedNote = '')
   return `- ${taskLabel(task.key, taskNamedByWiro(task))} ${task.enabled ? 'on' : 'off'}${task.description ? `: ${quotedSpan(task.description)}` : ''}${task.instructionsTruncated ? shortenedNote : ''}`;
 }
 
-function formatRate(credits: number): string {
-  return credits.toLocaleString('en-US', { maximumFractionDigits: 3 });
+/** A rate in USD per 1M tokens, with cents and up to four decimals: $6.25, $0.125. */
+export function formatRateUsd(value: number): string {
+  return `$${value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 4 })}`;
 }
 
-/** Each model with its credits per 1M input and output tokens, separated by semicolons. */
-export function formatModelRates(models: readonly SelectableModel[]): string {
+/** Each model with what 1M input and output tokens cost in USD, separated by semicolons. */
+export function formatModelRates(models: ReadonlyArray<{ slug: string; label?: string; inputUsdPer1M?: number; outputUsdPer1M?: number }>): string {
   return models.map(model => {
     const name = model.label ? `${model.label} (${model.slug})` : model.slug;
-    return model.inputCreditsPer1M !== undefined && model.outputCreditsPer1M !== undefined
-      ? `${name} ${formatRate(model.inputCreditsPer1M)} and ${formatRate(model.outputCreditsPer1M)}`
+    return model.inputUsdPer1M !== undefined && model.outputUsdPer1M !== undefined
+      ? `${name} ${formatRateUsd(model.inputUsdPer1M)} and ${formatRateUsd(model.outputUsdPer1M)}`
       : `${name} rate unknown`;
   }).join('; ');
 }
@@ -1111,7 +1307,7 @@ function formatModelsLine(agent: AgentDetail): string | null {
   const parts: string[] = [];
   if (agent.models) parts.push(`chat ${nameOf(agent.models.chat)}, scheduled tasks ${nameOf(agent.models.cron)}.`);
   if (choices.length > 0) {
-    parts.push(`Models you can switch to, in credits per 1M input and output tokens: ${formatModelRates(choices)}.`);
+    parts.push(`Models you can switch to, in USD per 1M input and output tokens: ${formatModelRates(choices)}.`);
   }
   return parts.length > 0 ? `**Models:** ${parts.join(' ')}` : null;
 }
@@ -1130,7 +1326,7 @@ export function formatAgentDetail(
   if (plans) {
     // The plans' prices today, the same for every agent. A plan that started at
     // another price keeps it until a change or a renewal moves it.
-    lines.push(`**Plans:** ${plans}. Every plan includes every skill. A move to a larger plan starts now, and a move to a smaller one at the next renewal.`);
+    lines.push(`**Plans:** ${plans}. Every plan includes every skill. After the included AI usage, the agent uses the workspace's Wiro balance. A move to a larger plan starts now, and a move to a smaller one at the next renewal.`);
   }
   const models = formatModelsLine(agent);
   if (models) lines.push(models);
@@ -1338,7 +1534,7 @@ export function nextStepForAgent(agent: AgentDetail, waitSeconds: number, plainM
       ? {
         tool: 'manage_agent_billing',
         arguments: { agent_guid: agent.guid, action },
-        reason: 'The agent has no active plan and no extra credits left, so it cannot start. This returns the price; nothing is charged without confirm: true.',
+        reason: 'The agent has no active plan, so it cannot start. This returns the price; nothing is charged without confirm: true.',
       }
       : undefined;
   }
@@ -1352,7 +1548,8 @@ export function nextStepForAgent(agent: AgentDetail, waitSeconds: number, plainM
   return undefined;
 }
 
-// Refusals known to leave the wallet untouched (93: a spend limit refused the purchase).
+// Refusals known to leave the wallet untouched (93: a spend limit refused the purchase; 97: among others, a
+// balance too short for a plan payment).
 const PRE_CHARGE_CODES = new Set([93, 95, 96, 97, 99, 101, 102, 103, 104, 105, 106, 107, 108, 109]);
 
 const WALLET_NOT_READ = /could not retrieve wallet balance/i;
@@ -1373,8 +1570,6 @@ const PRE_CHARGE_REFUSALS: RegExp[] = [
   /already on (the )?(starter|pro|max) (tier|plan)/i,
   /no active subscription|active subscription required|no expired subscription found/i,
   /stripe subscriptions must be/i,
-  /extra credit pack|pack key required|purchase request id/i,
-  /could not (initialize|resume) prepaid credit purchase|prepaid credit purchase cannot be resumed/i,
   /downgrading to starter is not supported|targettier must be|tier must be 'starter'|change the plan with upgradetier/i,
   /failed to compute (target-tier )?pricing|must be greater than \$0|failed to apply pricing snapshot/i,
   /failed to create subscription record|subscription record returned invalid id/i,
@@ -1447,8 +1642,8 @@ export function outcomeUnknown(error: unknown): boolean {
   return true;
 }
 
-/** Advice for a status reached after a start, renew or deploy. With the agent, a failed agent without a plan or extra credits is sent to billing. */
-export function settledStatusAdvice(status: number | null, plainMember = false, agent?: Pick<AgentSummary, 'guid' | 'workspace' | 'subscription' | 'credits'>): string {
+/** Advice for a status reached after a start, renew or deploy. With the agent, a failed agent without a plan is sent to billing. */
+export function settledStatusAdvice(status: number | null, plainMember = false, agent?: Pick<AgentSummary, 'guid' | 'workspace' | 'subscription' | 'usage'>): string {
   if (!plainMember && agent && status === 5 && startNeedsPlan(agent)) {
     return `The agent failed to start. ${noPlanStartHint(agent)}`;
   }
@@ -1464,7 +1659,7 @@ export function settledStatusAdvice(status: number | null, plainMember = false, 
     case 5:
       return 'The agent failed to start. get_agent_activity with kind logs may show why, and control_agent with action start retries.';
     case 0:
-      return 'The agent is stopped. Right after a start this means it has no active plan and no credits left, or someone stopped it.';
+      return 'The agent is stopped. Right after a start this means it has no active plan, or someone stopped it.';
     case 6:
       return 'The agent needs setup: it has no paid plan, or required credentials are missing.';
     default:
@@ -1473,7 +1668,7 @@ export function settledStatusAdvice(status: number | null, plainMember = false, 
 }
 
 /** Advice for a read, which cannot tell whether a start came first: a stopped agent gets what holds now. */
-export function readStatusAdvice(agent: Pick<AgentSummary, 'guid' | 'workspace' | 'status' | 'subscription' | 'credits'>, plainMember = false): string {
+export function readStatusAdvice(agent: Pick<AgentSummary, 'guid' | 'workspace' | 'status' | 'subscription' | 'usage'>, plainMember = false): string {
   if (agent.status !== 0) return settledStatusAdvice(agent.status, plainMember, agent);
   if (plainMember) return `The agent is stopped. On this team agent, ${TEAM_AGENT_MANAGERS} can start it.`;
   return startNeedsPlan(agent)

@@ -309,7 +309,8 @@ under another name can be read and deleted, and to go on with it you start a new
 | `list_studio_results` | List the images, videos and other results Studio generated for you |
 
 **Studio** is Wiro's creative agent: it picks and runs models for you and charges
-your wallet after each reply. Your own agents run on a monthly plan with credits.
+your wallet after each reply. Your own agents run on a monthly plan that includes its own price
+in AI usage each month; after that, they use your Wiro balance.
 
 | Tool | Description |
 |------|-------------|
@@ -318,8 +319,8 @@ your wallet after each reply. Your own agents run on a monthly plan with credits
 | `list_agent_skills` | Browse the skills an agent can have, and what each one needs to work |
 | `list_agent_connectors` | Browse the connectors an agent can connect (ad accounts, stores, social accounts, mailboxes, data sources), what each one needs and the tools it gives the agent; with an agent, its connections |
 | `deploy_agent` | Deploy an agent from a template or build one from skills, on the Starter, Pro or Max plan; shows the plan's price, the wallet it charges and the other plans' prices, and asks before charging |
-| `list_my_agents` | List your agents with their status, plan and credits |
-| `get_my_agent` | Read one agent's setup, plan and credits; can wait until it is running |
+| `list_my_agents` | List your agents with their status, plan, AI usage this month and what they spent |
+| `get_my_agent` | Read one agent's setup, plan, AI usage in dollars and the balance after it; can wait until it is running |
 | `control_agent` | Start, stop or restart an agent |
 | `update_agent` | Change an agent's name, description, time zone, models, chat commands and setup from chat |
 | `apply_agent_skills` | Turn skills on or off; every plan includes every skill, so a change costs nothing |
@@ -330,8 +331,8 @@ your wallet after each reply. Your own agents run on a monthly plan with credits
 | `list_projects` | List the projects of the connected project's workspace, to pick one for an agent; no keys are shown |
 | `bind_agent_project` | Set the Wiro project an agent's video and voice skills run models with, with no key in the chat; shows the project first, then asks for your confirmation. The agent's model tools come from the `wiro` connector, which runs with this same project and is connected with `connect_agent_connector` |
 | `manage_agent_custom_skill` | Add, edit, schedule, restore or remove an agent's own instructions and scheduled tasks; turning off its approval policy or changing its rules needs your confirmation |
-| `manage_agent_billing` | Subscribe, move to another plan, cancel, renew or buy extra credits from your wallet, after your confirmation |
-| `get_agent_activity` | Read an agent's credit usage and activity logs, including who changed what on it |
+| `manage_agent_billing` | Subscribe, move to another plan, cancel or renew, paid from your Wiro balance, after your confirmation |
+| `get_agent_activity` | Read what an agent spent and its ledger in dollars, and its activity logs, including who changed what on it |
 | `delete_agent` | Delete an agent, after your confirmation |
 
 A connector connects with a key typed on its Connect card, a sign-in you approve in your
@@ -414,8 +415,9 @@ group that is not loaded, the server instructions tell the assistant to say so.
 ### Paid and irreversible actions
 
 Running a model or workflow, sending a message to Studio or the Workflow Agent,
-and messages to your own agents (which use the agent's credits) cost money. Agent
-plans, moves to a larger plan and credit packs are charged to your wallet, so
+and messages to your own agents (which use the AI usage their plan includes, then
+your Wiro balance) cost money. Agent plans and moves to a larger plan are charged
+to your Wiro balance, never by card, so
 those tools first return the price (for a move inside a billing period, the
 amount Wiro works out for the time left) and only act when called again with
 `confirm: true` and `confirm_charge_usd`, the approved amount, after you agree.
@@ -432,8 +434,8 @@ replacing a workflow's steps with `update_workflow` or
 and new value of each step input that changes. Changing a spend limit or a Model
 Access rule also waits for `confirm: true`: you see the old and new values and
 what was spent this period first. No tool adds
-funds or takes a card payment: funds are added in the Wiro dashboard, and an
-agent plan paid by card moves to a larger plan or is topped up there. The connected project
+funds or takes a card payment: funds are added in the Wiro dashboard, and a
+charge your balance cannot cover says how much to add, with nothing charged. The connected project
 decides the workspace: a personal project uses your personal wallet, a team
 project uses the team wallet.
 
@@ -565,7 +567,7 @@ Wiro AI also hosts the same tools at `https://mcp.wiro.ai/v1` over streamable HT
 - [Tasks](https://wiro.ai/docs/tasks): task lifecycle, statuses, determining success
 - [Concurrency Limits](https://wiro.ai/docs/concurrency-limits): concurrent task limits based on balance
 - [Error Reference](https://wiro.ai/docs/error-reference): error codes and handling
-- [Agents Overview](https://wiro.ai/docs/agent-overview): templates, plans, credits and the agent lifecycle
+- [Agents Overview](https://wiro.ai/docs/agent-overview): templates, plans and the AI usage they include, and the agent lifecycle
 - [Agent Builder](https://wiro.ai/docs/agent-builder): build an agent from skills instead of a template
 - [Agent Connectors](https://wiro.ai/docs/agent-connectors): the connector catalog, connecting with keys or a sign-in, account choices and disconnecting
 - [Agent Skills](https://wiro.ai/docs/agent-skills) and [Agent Credentials](https://wiro.ai/docs/agent-credentials): what each skill needs, chat channels and the Wiro project

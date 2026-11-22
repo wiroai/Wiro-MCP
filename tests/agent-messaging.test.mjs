@@ -420,7 +420,8 @@ test('deployed agent refusals explain the fix and point to the right tool', asyn
         agentstatus: 4,
         agentbalance: { monthlycredits: 1000, extracredits: 0, usedcredits: 1000, remainingcredits: 0 },
       },
-      expect: /no credits left \(monthly 1000, extra 0, used 1000\).*manage_agent_billing/,
+      // An older Wiro's answer counts hundredths of a dollar.
+      expect: /no AI usage left this period \(\$10\.00 of \$10\.00 included used\)\. It takes new messages again when its plan renews; .*manage_agent_billing/,
     },
     {
       response: { result: false, errors: [{ code: 0, message: 'Agent not found or access denied' }] },
@@ -498,9 +499,45 @@ test('deployed agent refusals say who can act on a team agent without reading th
   });
   await withClient(credits, async client => {
     const result = await client.callTool({ name: 'send_agent_message', arguments: { agent: 'agent-guid-1', message: 'hello' } });
-    assert.match(textOf(result), /then send the message again\. On a team agent, paying needs a team admin, the organization's owner or the person who deployed it\.$/);
+    assert.match(textOf(result), /\(manage_agent_billing with action change_plan quotes a move\)\. On a team agent, paying needs a team admin, the organization's owner or the person who deployed it\.$/);
+    assert.doesNotMatch(textOf(result), /credit|pack|buy_credits/i);
     assert.equal(credits.calls.length, 1);
   });
+});
+
+test('send_agent_message follows Wiro\'s refusal of an agent with no AI usage it can pay for: add funds on wiro.ai', async () => {
+  const sentence = 'My Bot used the $30.00 of AI usage its plan includes this month, and your balance is under $0.50. '
+    + 'Add funds to keep it running, or it starts again when the plan renews on Nov 30.';
+  const usage = { period: '2026-11', includedusd: 30, usedusd: 30, leftusd: 0, renewalusd: 30, frombalanceusd: 0, balanceusd: 0.2, minbalanceusd: 0.5, paused: true, pausedreason: 'balance' };
+  for (const [agentusage, team] of [
+    [{ ...usage, wallet: 'personal' }, ''],
+    [{ ...usage, wallet: 'team' }, ' (select the agent\'s team in the dashboard first)'],
+    [{ ...usage, wallet: undefined }, ' (for a team agent, select its team in the dashboard first)'],
+  ]) {
+    const fake = fakeClient({
+      '/UserAgent/Message/Send': { result: false, errors: [{ code: 97, message: sentence }], agentstatus: 4, agentusage },
+    });
+    await withClient(fake, async client => {
+      const result = await client.callTool({ name: 'send_agent_message', arguments: { agent: 'agent-guid-1', message: 'hello' } });
+      assert.equal(result.isError, true);
+      assert.equal(textOf(result), `## Error\n\n${sentence}\n\nThe message was not sent, and nothing was charged. `
+        + `Funds are added at https://wiro.ai/panel/wallet/deposit/credit-card${team}; then send the message again. `
+        + 'A larger plan includes more AI usage each month: manage_agent_billing with action change_plan quotes a move. '
+        + 'get_my_agent shows the agent\'s AI usage and the balance.');
+      assert.doesNotMatch(textOf(result), /credit pack|buy_credits|temporarily unavailable/);
+      assert.deepEqual(fake.calls.map(call => call.path), ['/UserAgent/Message/Send']);
+    });
+  }
+
+  // A refusal is a pause only with the agent's usage: a 97 without it keeps Wiro's own words.
+  for (const message of ['Only a team admin can perform this action on a team-owned agent.', sentence]) {
+    const member = fakeClient({ '/UserAgent/Message/Send': { result: false, errors: [{ code: 97, message }] } });
+    await withClient(member, async client => {
+      const result = await client.callTool({ name: 'send_agent_message', arguments: { agent: 'agent-guid-1', message: 'hello' } });
+      assert.doesNotMatch(textOf(result), /Funds are added/);
+      assert.ok(textOf(result).includes(message), textOf(result));
+    });
+  }
 });
 
 test('Studio wallet and availability refusals say what to do without repeating credit numbers', async () => {
@@ -912,7 +949,9 @@ test('get_agent_message reads a deployed agent message without secrets and expla
     assert.equal(output.agentKind, 'deployed');
     assert.equal(output.message.userText, 'Render the intro');
     assert.deepEqual(output.message.mediaUrls, ['https://cdn1.wiro.ai/intro.mp4']);
-    assert.equal(output.message.creditsUsed, 7);
+    // Wiro records a turn's cost in hundredths of a dollar.
+    assert.equal(output.message.aiUsageUsd, 0.07);
+    assert.equal('creditsUsed' in output.message, false);
     assert.equal(output.llmCostUsd, undefined);
     assert.deepEqual(
       result.content.filter(block => block.type === 'resource_link').map(link => [link.uri, link.mimeType]),
@@ -2765,7 +2804,7 @@ test('a finished Workflow Agent turn is read again for its cost, and the send re
     const output = result.structuredContent;
     assert.equal(output.done, true);
     assert.equal(output.llmCostUsd, 0.89);
-    assert.equal(output.message.creditsUsed, 89);
+    assert.equal(output.message.aiUsageUsd, 0.89);
     assert.deepEqual(output.notes, []);
     assert.equal(output.workflows.length, 1);
     assert.equal(output.nextAction.tool, 'save_workflow_from_agent');
@@ -2795,7 +2834,7 @@ test('a finished turn stays within the wait while its cost is on its way, and sa
   });
 });
 
-test('a finished deployed agent turn shows its credits, or says to read it again after a short wait', async () => {
+test('a finished deployed agent turn shows its AI usage in dollars, or says to read it again after a short wait', async () => {
   const arriving = fakeClient({
     '/UserAgent/Message/Detail': (_body, count) => ({
       result: true,
@@ -2808,9 +2847,10 @@ test('a finished deployed agent turn shows its credits, or says to read it again
       name: 'get_agent_message',
       arguments: { agent: 'agent-guid-1', message_id: 'msg-1', wait_seconds: 5 },
     });
-    assert.equal(result.structuredContent.message.creditsUsed, 28);
+    assert.equal(result.structuredContent.message.aiUsageUsd, 0.28);
     assert.deepEqual(result.structuredContent.notes, []);
-    assert.match(textOf(result), /\*\*Credits used:\*\* 28/);
+    assert.match(textOf(result), /\*\*AI usage:\*\* \$0\.28\n/);
+    assert.doesNotMatch(textOf(result), /credit/i);
   });
 
   const missing = fakeClient({
@@ -2822,11 +2862,11 @@ test('a finished deployed agent turn shows its credits, or says to read it again
       arguments: { agent: 'agent-guid-1', message_id: 'msg-1', wait_seconds: 0 },
     });
     const output = result.structuredContent;
-    assert.equal(output.message.creditsUsed, null);
-    assert.ok(output.notes.some(note => /credits this turn used are not recorded yet.*get_agent_message in a few seconds/.test(note)), output.notes.join('|'));
+    assert.equal(output.message.aiUsageUsd, null);
+    assert.ok(output.notes.some(note => /AI usage of this turn is not recorded yet.*get_agent_message in a few seconds/.test(note)), output.notes.join('|'));
     assert.equal(output.nextAction, undefined, 'a note, not a call to repeat');
     assert.equal(missing.callsTo('/UserAgent/Message/Detail').length, 1, 'wait_seconds 0 is one read');
-    assert.doesNotMatch(textOf(result), /Credits used/);
+    assert.doesNotMatch(textOf(result), /\*\*AI usage:\*\*/);
   });
 });
 
@@ -2872,7 +2912,7 @@ test('a finished turn keeps its reply when the read for its cost fails', async (
   });
 });
 
-test('cancel_agent_message says when the credits of a cancelled turn appear', async () => {
+test('cancel_agent_message says when the AI usage of a cancelled turn appears', async () => {
   const now = Math.floor(Date.now() / 1000);
   // A long turn: it started well before the cancel, and the row shows no end time yet.
   const started = messageRow({ status: 'agent_cancel', response: 'Request cancelled.', createdat: String(now - 3_000), startedat: String(now - 2_990) });
@@ -2887,7 +2927,7 @@ test('cancel_agent_message says when the credits of a cancelled turn appear', as
     });
     assert.notEqual(result.isError, true, textOf(result));
     assert.equal(result.structuredContent.finalState, 'cancelled');
-    assert.ok(result.structuredContent.notes.some(note => /credits this turn used are not recorded yet.*in about a minute/.test(note)), result.structuredContent.notes.join('|'));
+    assert.ok(result.structuredContent.notes.some(note => /AI usage of this turn is not recorded yet.*in about a minute/.test(note)), result.structuredContent.notes.join('|'));
     assert.match(textOf(result), /in about a minute/);
   });
 

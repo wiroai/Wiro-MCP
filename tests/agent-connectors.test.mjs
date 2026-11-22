@@ -368,7 +368,7 @@ test('connect_agent_connector lists what is missing and sends nothing, then conn
     assert.equal(out.applied, 1);
     assert.equal(out.restart, 'scheduled');
     assert.deepEqual(out.connection.savedFields, ['apikey']);
-    assert.match(out.message, /^Serper is connected\. A running agent restarts to load it, which takes about a minute\. Scheduled tasks that need it run once it is loaded: Weekly Search \(`cs-cron-weekly-search`\)\. Every run uses the agent's credits\.$/);
+    assert.match(out.message, /^Serper is connected\. A running agent restarts to load it, which takes about a minute\. Scheduled tasks that need it run once it is loaded: Weekly Search \(`cs-cron-weekly-search`\)\. Every run uses the agent's AI usage \(its plan first, then the workspace balance\)\.$/);
     assert.equal(out.nextAction, undefined);
     assert.equal(JSON.stringify(result).includes(KEY), false);
   });
@@ -598,7 +598,7 @@ test('connect_agent_connector names what a Wiro project turns on, before the yes
     scheduledskills: tasks,
     customskills: [rules],
   })] });
-  const credits = 'Every run of a scheduled task uses credits; turn off any you do not want with manage_agent_custom_skill.';
+  const credits = 'Every run of a scheduled task uses the agent\'s AI usage (its plan first, then the workspace balance); turn off any you do not want with manage_agent_custom_skill.';
 
   // A new project: what is off now turns on, the task the user turned off included; what is on stays out of it.
   const fake = fakeClient(routes({
