@@ -634,8 +634,10 @@ test('the playbooks and send_agent_message say how setup replies, keys and the h
   assert.doesNotMatch(agents, /Get the user's yes for the add, and once it is applied/);
   // Wiro pairs a connect card with an add for a sign-in too, and a reply never connects it.
   assert.match(agents, /A connector connected with a sign-in comes with its connect card too, but a reply never connects it: once the add is applied, `connect_agent_connector` returns its link \(with the keys of the user's own app where it needs them\), or the user connects it on the agent page\./);
-  // A Wiro project is never picked by a reply either, and Wiro's answer to a reply names what is left to connect.
-  assert.match(agents, /The `wiro` connector, which connects with a Wiro project, is the same: a reply never connects it, and `connect_agent_connector` binds its project with no key\. Wiro's answer to a reply names the connectors it leaves to connect \(`setupNext`\), each with how it connects\. A disconnect needs no key/);
+  // A Wiro project is never picked by a reply either, at any age of its card, and send_agent_message returns what
+  // Wiro's answer leaves to connect: Wiro's message reads do not return it.
+  assert.match(agents, /The `wiro` connector, which connects with a Wiro project, is the same: a reply never connects it, and `connect_agent_connector` binds its project with no key\. A sign-in or a Wiro project card is connected that way at any age, and a connector that is connected already needs nothing more, even while its card reads pending\. `send_agent_message` returns the connectors Wiro's answer to a reply leaves to connect \(`setupNext`\), each with how it connects\. A disconnect needs no key/);
+  assert.doesNotMatch(agents, /Wiro's answer to a reply names the connectors it leaves to connect/);
   // Every connector an add needs gets its connect card, and a proposal never names a chat channel.
   assert.doesNotMatch(agents, /gets no connect card|any other setup on the agent page|Connector or a chat channel/);
   assert.match(agents, /A key is saved with `connect_agent_connector`, never sent in a message, even when the agent or Wiro's answer asks for it as a reply: that wording is for a person typing in the chat\. A proposal never names a chat channel: channels are set up with `set_agent_credentials`\./);

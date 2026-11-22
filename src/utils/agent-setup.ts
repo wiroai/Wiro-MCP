@@ -618,7 +618,10 @@ function pendingChangeLines(
   }
   if (change.note) lines.push(`- Note from the agent: ${quotedSpan(change.note)}`);
   if (change.proposedAt) lines.push(`- Proposed at: ${change.proposedAt}`);
-  if (!isApprovableByReply(change, nowMs)) {
+  // A reply never connects a sign-in or a Wiro project, so the card's age changes nothing: connect_agent_connector
+  // connects it at any age.
+  const connectsOutside = change.kind === 'connect' && connectsWithoutReply(connectCardMode(change, changes));
+  if (!connectsOutside && !isApprovableByReply(change, nowMs)) {
     lines.push(`- Older than ${SETUP_REPLY_WINDOW_SECONDS / 60} minutes, so a reply can no longer approve it. The user `
       + 'can still apply it in the agent\'s chat on wiro.ai, or ask the agent again.');
   }

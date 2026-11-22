@@ -89,7 +89,9 @@ export function registerSendAgentMessage(server: McpServer, client: WiroClient, 
         + 'it without an agent turn, whatever the agent\'s status, also while it restarts. The first "yes" sent from '
         + 'here applies nothing; Wiro answers with its own '
         + 'listing of the exact change (listedSetupChanges). Show that listing, and send "yes" (or "yes N" for change '
-        + 'N) again only after the user agrees to exactly that change. Their "no" turns the proposals down. A key is '
+        + 'N) again only after the user agrees to exactly that change. Their "no" turns the proposals down. Wiro\'s '
+        + 'answer to a reply lists the connectors it leaves to connect (setupNext); connect_agent_connector connects '
+        + 'them, and a reply never connects a sign-in or a Wiro project. A key is '
         + 'saved with connect_agent_connector, never sent in a message, even when the agent or Wiro asks for it as a '
         + 'reply. For an add that needs a connector\'s key, ask the user for that key together with their yes, and '
         + 'save it as soon as the add is applied, with no wait in between, so the restart the add started loads it '
@@ -191,7 +193,8 @@ export function registerSendAgentMessage(server: McpServer, client: WiroClient, 
         const setupResult = target.kind === 'deployed' && response.status === 'agent_end'
           ? toSetupResult(response.setupresult)
           : undefined;
-        // What the answer leaves to connect comes with it, as on the row Wiro stores.
+        // What the answer leaves to connect comes only with Send's answer: Wiro stores it on the row, but its message
+        // reads leave it out of the metadata they return.
         const setupNext = isPlainObject(response.setupresult) && Array.isArray(response.setupresult.next)
           ? { next: response.setupresult.next }
           : {};
@@ -211,7 +214,10 @@ export function registerSendAgentMessage(server: McpServer, client: WiroClient, 
           // stored row says so. One read; if it fails, Send's own answer is shown as it is.
           try {
             const stored = await readAgentMessage(client, target, messageId, resolved.session, extra.signal);
-            if (stored.status === 'agent_end' && messageKind(stored) === 'setup_result') handledRow = stored;
+            if (stored.status === 'agent_end' && messageKind(stored) === 'setup_result') {
+              // The stored row keeps Send's next, which the read does not return.
+              handledRow = { ...stored, metadata: { ...(isPlainObject(stored.metadata) ? stored.metadata : {}), ...setupNext } };
+            }
           } catch (error) {
             if (extra.signal.aborted) throw error;
           }

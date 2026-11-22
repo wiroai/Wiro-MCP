@@ -62,9 +62,11 @@ runs `npx @wiro-ai/wiro-mcp@latest` takes it at its next start.
   Model Access rules apply, and account, agent and billing calls are refused.
 - `send_agent_message` and `get_agent_message`: a proposed connect change carries how its
   connector connects (`mode`). A sign-in or a Wiro project is never connected by a reply, so
-  its next step is `connect_agent_connector`; a key card's is what its connector needs. Wiro's
-  answer to a reply lists the connectors it leaves to connect (`setupNext`), and the next step
-  connects a sign-in or a Wiro project among them without waiting for a restart.
+  its next step is `connect_agent_connector`, whatever the card's age; a key card's is what
+  its connector needs. A connector that reads connected already gets no step.
+  `send_agent_message` also returns the connectors Wiro's answer to a reply leaves to connect
+  (`setupNext`), and its next step connects a sign-in or a Wiro project among them without
+  waiting for a restart.
 - A message refused because the agent's setup is not finished names its missing settings
   only: connectors do not hold an agent's start. `control_agent` reads Start's new wording of
   that refusal as before.

@@ -3634,9 +3634,15 @@ test('when the stored answer cannot be read, send_agent_message shows Send\'s an
 const DISCONNECT_CARD = { id: 'iiiiiiiiii09', kind: 'disconnect', connector: 'serper', note: 'You asked to stop using web search' };
 const SKILL_TEXT = 'Write in a warm tone.\nKeep posts under 900 words.';
 
-async function readSetupReply(blocks) {
+// The agent's connections as /UserAgent/ConnectorList shows them, which a sign-in or Wiro project step is checked against.
+function connectorListRoute(connections = []) {
+  return typeof connections === 'function' ? connections : { result: true, errors: [], useragentconnectors: connections };
+}
+
+async function readSetupReply(blocks, connections = []) {
   const fake = fakeClient({
     '/UserAgent/Message/Detail': { result: true, errors: [], data: setupReplyRow(blocks) },
+    '/UserAgent/ConnectorList': connectorListRoute(connections),
   });
   let result;
   await withClient(fake, async client => {
@@ -4170,6 +4176,7 @@ test('a setup reply that leaves the wiro connector to connect leads to connect_a
         + 'Next: connect Wiro AI Models to finish. Its project is picked outside this chat.',
       setupresult: { applied: ['pppppppppp03'], dismissed: [], failed: [], restarting: true, next: NEXT },
     },
+    '/UserAgent/ConnectorList': connectorListRoute(),
   });
   await withClient(fake, async client => {
     const result = await client.callTool({ name: 'send_agent_message', arguments: { agent: 'agent-guid-1', session: 'default', message: 'yes', wait_seconds: 0 } });
@@ -4185,7 +4192,8 @@ test('a setup reply that leaves the wiro connector to connect leads to connect_a
     assert.doesNotMatch(textOf(result), /asks for a key/);
   });
 
-  // A yes while only the project card waits applies nothing, and Wiro's stored answer names it the same way.
+  // A yes while only the project card waits applies nothing, so the stored row is read for a listing. Wiro's message
+  // reads return only the type of that row's metadata, never its next: Send's next stays with the answer.
   const stored = fakeClient({
     '/UserAgent/Message/Send': {
       ...LISTING_SEND,
@@ -4199,9 +4207,10 @@ test('a setup reply that leaves the wiro connector to connect leads to connect_a
       data: listingRow(undefined, {
         guid: 'msg-yes',
         response: 'A yes cannot connect Wiro AI Models. Its project is picked outside this chat.',
-        metadata: { type: 'setup_result', via: 'api', cards: [], next: NEXT },
+        metadata: { type: 'setup_result' },
       }),
     },
+    '/UserAgent/ConnectorList': connectorListRoute(),
   });
   await withClient(stored, async client => {
     const result = await client.callTool({ name: 'send_agent_message', arguments: { agent: 'agent-guid-1', session: 'default', message: 'yes', wait_seconds: 0 } });
@@ -4209,9 +4218,18 @@ test('a setup reply that leaves the wiro connector to connect leads to connect_a
     assert.equal(output.message.listedSetupChanges, undefined);
     assert.deepEqual(output.message.setupNext, [{ connector: 'wiro', title: 'Wiro AI Models', mode: 'project' }]);
     assert.ok(output.notes.includes(note), output.notes.join('|'));
-    assert.deepEqual(output.nextAction.arguments, { action: 'connect', agent_guid: 'agent-guid-1', connector: 'wiro' });
+    assert.deepEqual(output.nextAction, {
+      tool: 'connect_agent_connector',
+      arguments: { action: 'connect', agent_guid: 'agent-guid-1', connector: 'wiro' },
+      reason: PROJECT_STEP_REASON,
+    });
+    assert.match(textOf(result), /A yes cannot connect Wiro AI Models\./);
+
+    // A later read of that answer gets the same row, which names no next: nothing is made up for it.
+    const read = await client.callTool({ name: 'get_agent_message', arguments: { agent: 'agent-guid-1', message_id: 'msg-yes', wait_seconds: 0 } });
+    assert.equal(read.structuredContent.message.setupNext, undefined);
   });
-  assert.equal(stored.callsTo('/UserAgent/Message/Detail').length, 1);
+  assert.equal(stored.callsTo('/UserAgent/Message/Detail').length, 2);
 
   // A sign-in left to connect gets its own step; a key Wiro asks for keeps the rule that saves it now.
   const signIn = fakeClient({
@@ -4221,12 +4239,80 @@ test('a setup reply that leaves the wiro connector to connect leads to connect_a
       response: '✅ Applied: Ads Manager added.\nNext: connect HubSpot to finish. Its sign-in and any app keys are entered outside this chat, never in it.',
       setupresult: { applied: ['pppppppppp03'], dismissed: [], failed: [], restarting: false, next: [{ connector: 'hubspot', title: 'HubSpot', mode: 'signin', cardid: 'pppppppppp05', messageguid: 'msg-setup' }] },
     },
+    '/UserAgent/ConnectorList': connectorListRoute(),
   });
   await withClient(signIn, async client => {
     const result = await client.callTool({ name: 'send_agent_message', arguments: { agent: 'agent-guid-1', session: 'default', message: 'yes', wait_seconds: 0 } });
     assert.deepEqual(result.structuredContent.nextAction.arguments, { action: 'connect', agent_guid: 'agent-guid-1', connector: 'hubspot' });
     assert.match(result.structuredContent.nextAction.reason, /^This connector connects with a sign-in/);
   });
+});
+
+// A reply never connects a sign-in or a Wiro project card, so the 30 minutes a reply has do not apply to it: its step is
+// connect_agent_connector at any age. Wiro keeps such a card pending after its connector is connected another way, so
+// the step is checked against the agent's connections, read once: one that reads connected gets a note, not a step.
+test('a sign-in or Wiro project card leads to connect_agent_connector at any age, and one already connected gets no step', async () => {
+  const old = Math.floor(Date.now() / 1000) - 31 * 60;
+  const HUBSPOT_CARD = { id: 'pppppppppp07', kind: 'connect', connector: 'hubspot', title: 'HubSpot', authtype: 'provider-oauth', mode: 'signin', fields: [] };
+  const SERPER_CARD = { id: 'pppppppppp08', kind: 'connect', connector: 'serper', title: 'Serper', authtype: 'fields', mode: 'key', fields: [{ name: 'apikey', label: 'API key', description: '', required: true, secret: true, format: 'password' }] };
+  const view = (slug, title, overrides = {}) => ({ slug, title, authtype: 'headers', status: 'connected', catalogstatus: 'active', accounts: {}, wiroprojectid: null, savedvariables: [], connectedat: old, ...overrides });
+  const connectTo = connector => ({ action: 'connect', agent_guid: 'agent-guid-1', connector });
+
+  // Older than the reply window: a sign-in and a project card still get their step, and no line says a reply is late.
+  for (const card of [HUBSPOT_CARD, WIRO_CONNECT_CARD]) {
+    const result = await readSetupReply([setupBlock({ ...card, createdat: old }, 0)]);
+    assert.equal(result.structuredContent.nextAction.tool, 'connect_agent_connector', card.connector);
+    assert.deepEqual(result.structuredContent.nextAction.arguments, connectTo(card.connector));
+    assert.doesNotMatch(textOf(result), /Older than 30 minutes/, card.connector);
+  }
+  // A key card that old still waits for a reply that can no longer approve it.
+  const lateKey = await readSetupReply([setupBlock({ ...SERPER_CARD, createdat: old }, 0)]);
+  assert.equal(lateKey.structuredContent.nextAction, undefined);
+  assert.match(textOf(lateKey), /Older than 30 minutes, so a reply can no longer approve it\./);
+
+  // Connected already: a note instead of a step, and the next card in order takes the step.
+  const connectedNote = 'HubSpot (`hubspot`) is already connected to the agent, so it needs no connect step, even where a proposal to connect it still reads pending.';
+  const signedIn = await readSetupReply([setupBlock(HUBSPOT_CARD, 0)], [view('hubspot', 'HubSpot', { authtype: 'provider-oauth', authmode: 'own' })]);
+  assert.equal(signedIn.structuredContent.nextAction, undefined);
+  assert.ok(signedIn.structuredContent.notes.includes(connectedNote), signedIn.structuredContent.notes.join('|'));
+  const thenKey = await readSetupReply([setupBlock(HUBSPOT_CARD, 0), setupBlock(SERPER_CARD, 1)], [view('hubspot', 'HubSpot', { authtype: 'provider-oauth', authmode: 'own' })]);
+  assert.deepEqual(thenKey.structuredContent.nextAction.arguments, { name: 'serper', agent_guid: 'agent-guid-1' });
+  // A connection that needs a new sign-in is not connected.
+  const expired = await readSetupReply([setupBlock(HUBSPOT_CARD, 0)], [view('hubspot', 'HubSpot', { status: 'reauth' })]);
+  assert.deepEqual(expired.structuredContent.nextAction.arguments, connectTo('hubspot'));
+
+  // The wiro connector counts as connected only while the agent has a project: until then connecting it binds one.
+  const withProject = await readSetupReply([setupBlock(WIRO_CONNECT_CARD, 0)], [view('wiro', 'Wiro AI Models', { wiroprojectid: '111' })]);
+  assert.equal(withProject.structuredContent.nextAction, undefined);
+  assert.ok(withProject.structuredContent.notes.some(entry => entry.startsWith('Wiro AI Models (`wiro`) is already connected to the agent')));
+  const noProject = await readSetupReply([setupBlock(WIRO_CONNECT_CARD, 0)], [view('wiro', 'Wiro AI Models')]);
+  assert.deepEqual(noProject.structuredContent.nextAction, { tool: 'connect_agent_connector', arguments: connectTo('wiro'), reason: PROJECT_STEP_REASON });
+  assert.equal(noProject.structuredContent.notes.some(entry => /already connected/.test(entry)), false);
+
+  // A read that fails keeps the step.
+  const unread = await readSetupReply([setupBlock(HUBSPOT_CARD, 0)], () => { throw new Error('socket hang up'); });
+  assert.deepEqual(unread.structuredContent.nextAction.arguments, connectTo('hubspot'));
+
+  // A connector Wiro's answer leaves to connect is checked the same way: a restart is then waited for as usual.
+  for (const restarting of [false, true]) {
+    const fake = fakeClient({
+      '/UserAgent/Message/Send': {
+        ...LISTING_SEND,
+        messageguid: 'msg-yes',
+        response: '✅ Applied: Ads Manager added.\nNext: connect HubSpot to finish. Its sign-in and any app keys are entered outside this chat, never in it.',
+        setupresult: { applied: ['pppppppppp03'], dismissed: [], failed: [], restarting, next: [{ connector: 'hubspot', title: 'HubSpot', mode: 'signin', cardid: 'pppppppppp07', messageguid: 'msg-setup' }] },
+      },
+      '/UserAgent/ConnectorList': connectorListRoute([view('hubspot', 'HubSpot', { authtype: 'provider-oauth', authmode: 'own' })]),
+    });
+    await withClient(fake, async client => {
+      const result = await client.callTool({ name: 'send_agent_message', arguments: { agent: 'agent-guid-1', session: 'default', message: 'yes', wait_seconds: 0 } });
+      const output = result.structuredContent;
+      assert.deepEqual(output.message.setupNext, [{ connector: 'hubspot', title: 'HubSpot', mode: 'signin' }]);
+      assert.ok(output.notes.includes(connectedNote), output.notes.join('|'));
+      assert.equal(output.nextAction?.tool, restarting ? 'get_my_agent' : undefined, String(restarting));
+    });
+    assert.equal(fake.callsTo('/UserAgent/ConnectorList').length, 1);
+  }
 });
 
 test('get_agent_message shows a remove with what it also turns off and the tasks that pause, and never a connector as a Skill', async () => {
