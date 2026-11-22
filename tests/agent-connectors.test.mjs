@@ -874,8 +874,9 @@ test('a remote connector shows its account choices, asks for them once its sign-
   });
 
   // The vendor refused the connection's sign-in while Wiro listed its accounts: connect it again, never "ask the
-  // operator". Wiro leaves that connection reading connected, so the connect first shows what it replaces, and the
-  // link comes with confirm: true after the user's yes; nothing says the current one keeps working.
+  // operator". An answer without the code reauth, from a Wiro API before it, is known by its words. Such an API leaves
+  // that connection reading connected, so the connect first shows what it replaces, and the link comes with confirm:
+  // true after the user's yes; nothing says the current one keeps working.
   const refused = { result: false, errors: [{ code: 0, message: 'The sign-in for this connector expired or was revoked, so it has to be connected again. Ask the agent\'s operator to reconnect it.' }] };
   const gone = fakeClient(routes({
     '/UserAgent/ConnectorList': { result: true, errors: [], useragentconnectors: [connection(TIKTOK_ADS)] },
@@ -917,6 +918,71 @@ test('a remote connector shows its account choices, asks for them once its sign-
     assert.equal(link.structuredContent.state, 'authorize_in_browser');
     assert.equal(link.structuredContent.authorizeUrl, 'https://ads.example/authorize?state=new');
   });
+});
+
+// Wiro marks that refusal with the code reauth, whatever its words, and the connection reads reauth from then on (as
+// does one that already needed a new sign-in). It is not connected, so the connect needs no confirm: it returns the new
+// sign-in link at once, or first lists the keys of the user's own app the sign-in needs.
+test('a reconnect refusal Wiro marks with the code reauth leads to a connect that returns the new sign-in at once', async () => {
+  const reauth = message => ({ result: false, errors: [{ code: 'reauth', message, time: NOW }] });
+  const RECONNECT_WORDS = 'The sign-in for this connector expired or was revoked, so it has to be connected again. Ask the agent\'s operator to reconnect it.';
+  for (const words of [RECONNECT_WORDS, 'Reconnect this connector.']) {
+    const fake = fakeClient(routes({
+      '/UserAgent/ConnectorList': { result: true, errors: [], useragentconnectors: [connection(TIKTOK_ADS, { status: 'reauth', lasterror: 'unauthorized', accounts: { advertisers: ['7001'] } })] },
+      '/UserAgent/ConnectorAccounts': reauth(words),
+      '/UserAgent/ConnectorSetAccounts': reauth(words),
+      '/UserAgent/ConnectorConnect': { result: true, errors: [], status: 'pending', authorizeUrl: 'https://ads.example/authorize?state=again' },
+    }));
+    await withClient(fake, async client => {
+      const message = 'The TikTok Ads sign-in expired or was revoked at the service, so its accounts cannot be listed or saved, and nothing was changed. '
+        + 'Wiro now reads the connection as needing a new sign-in, so connect_agent_connector with action connect needs no confirm: it returns a new '
+        + 'sign-in link at once, or lists the keys of the user\'s own app it needs first. Once the user has signed in again, choose the accounts.';
+      const reconnect = { action: 'connect', agent_guid: AGENT, connector: 'tiktok-ads' };
+      for (const [args, mode] of [[{}, 'list'], [{ accounts: { advertisers: ['7001'] } }, 'set']]) {
+        const result = await call(client, 'set_agent_connector_accounts', { agent_guid: AGENT, connector: 'tiktok-ads', ...args });
+        assert.equal(result.isError, true);
+        assert.equal(text(result), `## Error\n\n${message}\n\nNext: call connect_agent_connector with \`${JSON.stringify(reconnect)}\`.`, words);
+        assert.deepEqual(result.structuredContent, {
+          agentGuid: AGENT,
+          connector: 'tiktok-ads',
+          title: 'TikTok Ads',
+          mode,
+          message,
+          nextAction: {
+            tool: 'connect_agent_connector',
+            arguments: reconnect,
+            reason: 'Connect TikTok Ads again. This returns the sign-in link for the user to open in their own browser, or lists the keys of the user\'s own app it needs first.',
+          },
+        });
+      }
+
+      // That connect: the link at once, with no preview first.
+      const link = await call(client, 'connect_agent_connector', reconnect);
+      assert.equal(link.structuredContent.state, 'authorize_in_browser', text(link));
+      assert.equal(link.structuredContent.authorizeUrl, 'https://ads.example/authorize?state=again');
+      assert.deepEqual(fake.called('/UserAgent/ConnectorConnect').map(sent => sent.body), [{ useragentguid: AGENT, slug: 'tiktok-ads' }]);
+      assert.equal(link.structuredContent.nextAction.arguments.since_connected_at, '');
+    });
+  }
+
+  // A sign-in with the user's own app: its keys saved with the connection take the connect to the link at once; a
+  // connection that holds none lists them first, still with nothing to confirm.
+  for (const [saved, state] of [[['appid', 'appsecret'], 'authorize_in_browser'], [[], 'setup_needed']]) {
+    const fake = fakeClient(routes({
+      '/UserAgent/ConnectorList': { result: true, errors: [], useragentconnectors: [connection(FACEBOOK, { status: 'reauth', lasterror: 'invalid_grant', authmode: saved.length > 0 ? 'own' : 'wiro', savedvariables: saved, accounts: { pages: ['123'] } })] },
+      '/UserAgent/ConnectorAccounts': reauth(RECONNECT_WORDS),
+      '/UserAgent/ConnectorConnect': { result: true, errors: [], status: 'pending', authorizeUrl: 'https://www.facebook.com/dialog/oauth?state=again' },
+    }));
+    await withClient(fake, async client => {
+      const refused = await call(client, 'set_agent_connector_accounts', { agent_guid: AGENT, connector: 'facebook-pages' });
+      assert.equal(refused.isError, true);
+      assert.match(refused.structuredContent.message, /^The Facebook Pages sign-in expired or was revoked at the service, .* needs no confirm: it returns a new sign-in link at once/);
+      const next = await call(client, 'connect_agent_connector', refused.structuredContent.nextAction.arguments);
+      assert.equal(next.structuredContent.state, state, text(next));
+      assert.equal(fake.called('/UserAgent/ConnectorConnect').length, state === 'authorize_in_browser' ? 1 : 0);
+      if (state === 'setup_needed') assert.deepEqual(next.structuredContent.missing, ['appid', 'appsecret']);
+    });
+  }
 });
 
 // ---------------------------------------------------------------------------

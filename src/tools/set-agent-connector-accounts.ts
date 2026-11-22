@@ -5,6 +5,7 @@ import {
   ApiResultError,
   asString,
   errorResult,
+  hasErrorCode,
   isPlainObject,
   requireApiSuccess,
   toInteger,
@@ -56,29 +57,44 @@ const outputSchema = {
 type PickersBody = ApiEnvelope & { pickers?: unknown };
 type SetBody = ApiEnvelope & { accounts?: unknown; applied?: unknown; restart?: unknown; useragentconnectors?: unknown };
 
-// Wiro's answer when the service refused the connection's sign-in while listing its accounts: it expired or was
-// revoked. Wiro words it for the agent's chat, which asks its operator; here the user connects it again.
+// Wiro's answer when the service refused the connection's sign-in while listing its accounts, or the connection
+// already needs a new sign-in: it expired or was revoked. Wiro words it for the agent's chat, which asks its operator;
+// here the user connects it again. Wiro marks it with the code "reauth", and the connection then reads reauth. An
+// answer without the code, from a Wiro API before it, is known by its words.
+const REAUTH_CODE = 'reauth';
 const SIGN_IN_GONE = /expired or was revoked, so it has to be connected again/i;
 
-function isSignInGone(error: unknown): boolean {
-  return error instanceof ApiResultError && SIGN_IN_GONE.test(error.message);
+/** How Wiro told that refusal: by its code, so the connection reads reauth; by its words only; or not at all. */
+function signInGone(error: unknown): 'code' | 'words' | undefined {
+  if (!(error instanceof ApiResultError)) return undefined;
+  if (hasErrorCode(error, REAUTH_CODE)) return 'code';
+  return SIGN_IN_GONE.test(error.message) ? 'words' : undefined;
 }
 
 /**
- * The answer to that refusal, with the connect that starts a new sign-in as its next step. When the service refused
- * the sign-in itself, the connection still reads connected, so that connect first shows what it replaces; when Wiro
- * could not refresh it, the connection reads reauth and the connect returns the link at once.
+ * The answer to that refusal, with the connect that starts a new sign-in as its next step. A connection that reads
+ * reauth is not connected, so that connect returns the link at once (or first asks for the keys of the user's own app
+ * it needs). Without the code, the connection may still read connected, so that connect may first show what it
+ * replaces.
  */
-function signInGoneResult(agentGuid: string, slug: string, title: string, mode: 'list' | 'set') {
-  const message = `The ${title} sign-in expired or was revoked at the service, so its accounts cannot be listed or saved, `
-    + 'and nothing was changed. Connect it again with connect_agent_connector, then choose the accounts. Action connect '
-    + 'returns a new sign-in link, or, while the connection still reads connected, first shows what it replaces; after '
-    + 'the user\'s yes, the same call with confirm: true returns the link.';
+function signInGoneResult(agentGuid: string, slug: string, title: string, mode: 'list' | 'set', told: 'code' | 'words') {
+  const gone = `The ${title} sign-in expired or was revoked at the service, so its accounts cannot be listed or saved, `
+    + 'and nothing was changed.';
+  const message = told === 'code'
+    ? `${gone} Wiro now reads the connection as needing a new sign-in, so connect_agent_connector with action connect `
+      + 'needs no confirm: it returns a new sign-in link at once, or lists the keys of the user\'s own app it needs '
+      + 'first. Once the user has signed in again, choose the accounts.'
+    : `${gone} Connect it again with connect_agent_connector, then choose the accounts. Action connect returns a new `
+      + 'sign-in link, or, while the connection still reads connected, first shows what it replaces; after the user\'s '
+      + 'yes, the same call with confirm: true returns the link.';
   const nextAction = {
     tool: 'connect_agent_connector',
     arguments: { action: 'connect', agent_guid: agentGuid, connector: slug },
-    reason: `Connect ${title} again. While the connection still reads connected, this first shows what it replaces: `
-      + 'repeat it with confirm: true after the user\'s yes for the new sign-in link.',
+    reason: told === 'code'
+      ? `Connect ${title} again. This returns the sign-in link for the user to open in their own browser, or lists the `
+        + 'keys of the user\'s own app it needs first.'
+      : `Connect ${title} again. While the connection still reads connected, this first shows what it replaces: `
+        + 'repeat it with confirm: true after the user\'s yes for the new sign-in link.',
   };
   return {
     content: [{
@@ -261,7 +277,8 @@ export function registerSetAgentConnectorAccounts(server: McpServer, client: Wir
           const state = connections ? connectionOf(connections, slug)?.status : undefined;
           return errorResult(new Error(`${slug} is not connected to this agent${state && state !== 'connected' ? ` (${state})` : ''}, so its accounts cannot be listed. Connect it first with connect_agent_connector.`));
         }
-        if (isSignInGone(error)) return signInGoneResult(agentGuid, slug, title, accounts ? 'set' : 'list');
+        const told = signInGone(error);
+        if (told) return signInGoneResult(agentGuid, slug, title, accounts ? 'set' : 'list', told);
         return errorResult(error);
       }
     },
