@@ -631,8 +631,13 @@ test('the playbooks and send_agent_message say how setup replies, keys and the h
   assert.match(agents, /An add whose connector is connected with a key comes with that connector's connect card in the same reply\. Ask the user for the key together with their yes for the add, before you send the yes that applies it; `list_agent_connectors` with the connector's slug shows what to ask for and saves nothing\. Once the add is applied, save the key as the very next step, with no `get_my_agent` wait in between: the agent stays stopping or queued for the restart the add started only for seconds, and a key saved then loads with that restart; saved once it is starting again, it restarts the agent a second time\./);
   assert.doesNotMatch(agents, /Get the user's yes for the add, and once it is applied/);
   // Wiro pairs a connect card with an add for a sign-in too, and a reply never connects it.
-  assert.match(agents, /A connector connected with a sign-in comes with its connect card too, but a reply never connects it: once the add is applied, `connect_agent_connector` returns its link \(with the keys of the user's own app where it needs them\), or the user connects it on the agent page\. One set up on the agent page gets no connect card\./);
-  assert.match(agents, /A key is saved with `connect_agent_connector` \(a chat channel's with `set_agent_credentials`\), never sent in a message/);
+  assert.match(agents, /A connector connected with a sign-in comes with its connect card too, but a reply never connects it: once the add is applied, `connect_agent_connector` returns its link \(with the keys of the user's own app where it needs them\), or the user connects it on the agent page\. A disconnect needs no key/);
+  // Every connector an add needs gets its connect card, and a proposal never names a chat channel.
+  assert.doesNotMatch(agents, /gets no connect card|any other setup on the agent page|Connector or a chat channel/);
+  assert.match(agents, /A key is saved with `connect_agent_connector`, never sent in a message, even when the agent or Wiro's answer asks for it as a reply: that wording is for a person typing in the chat\. A proposal never names a chat channel: channels are set up with `set_agent_credentials`\./);
+  assert.match(agents, /connect or disconnect a Connector, add or remove a Skill \(`util-\*`\)/);
+  assert.match(agents, /An add or remove names a Skill, never a connector, and shows the other Skills that turn on or off with it \(`with`\)/);
+  assert.match(agents, /a key goes in with `connect_agent_connector`, and a sign-in with its link from `connect_agent_connector` or on the agent page\./);
   // Wiro's answer in a chat sent with an API key names no page and gives no link to one.
   assert.doesNotMatch(agents, /answer links to the agent page/);
   assert.doesNotMatch(agents, /A connector connected with a sign-in or on the agent page gets no connect card/);
@@ -648,12 +653,20 @@ test('the playbooks and send_agent_message say how setup replies, keys and the h
     assert.match(send, /Studio and the Workflow Agent never do\./);
     assert.match(send, /Wiro answers it without an agent turn, whatever the agent's status, also while it restarts\./);
     assert.match(send, /Their "no" turns the proposals down\./);
-    assert.match(send, /A key is saved with connect_agent_connector \(set_agent_credentials for a chat channel\), never sent in a message, even when the agent or Wiro asks for it as a reply\. For an add that needs a connector's key, ask the user for that key together with their yes, and save it as soon as the add is applied, with no wait in between, so the restart the add started loads it too\./);
+    assert.match(send, /A key is saved with connect_agent_connector, never sent in a message, even when the agent or Wiro asks for it as a reply\. For an add that needs a connector's key, ask the user for that key together with their yes, and save it as soon as the add is applied, with no wait in between, so the restart the add started loads it too\./);
+    assert.match(send, /\(setupChanges: connect or disconnect a Connector, add or remove a Skill, a scheduled task, a custom skill or its time zone\)/);
+    // Wiro proposes no chat channel and no connector as a Skill, and the tools that show proposals say so.
+    const message = tools.find(tool => tool.name === 'get_agent_message').description;
+    assert.match(message, /An add or remove of a Skill also shows what Wiro says the change does with it: the other Skills that turn on or off \(with\)/);
+    assert.match(message, /Connectors are proposed with connect and disconnect changes, never added or removed\./);
+    const update = tools.find(tool => tool.name === 'update_agent');
+    assert.match(JSON.stringify(update), /propose setup changes in its chat \(connect or disconnect a Connector, add or remove a Skill, scheduled tasks, custom skills and its time zone\)/);
+    for (const tool of [send, message, JSON.stringify(update)]) assert.doesNotMatch(tool, /Connector or (a chat )?channel|Skill or Connector/);
     assert.match(tools.find(tool => tool.name === 'get_playbook').description, /statuses and restarts, setup: credentials and connectors, an agent that does not answer, messages and setup proposals in chat/);
     const credentials = tools.find(tool => tool.name === 'set_agent_credentials').description;
     assert.match(credentials, /A running agent restarts to load values that change, and one still stopping or queued for a restart, such as after a setup change approved in its chat, loads them with that restart;/);
     assert.match(credentials, /a save that changes nothing leaves it running\./);
-    assert.match(credentials, /A channel key the agent or Wiro asks for in its chat is saved here, never sent in a message\./);
+    assert.match(credentials, /A channel key the agent asks for in its chat is saved here, never sent in a message; a setup proposal never names a channel\./);
     assert.match(credentials, /Outside services are Connectors and connect with connect_agent_connector instead\./);
     assert.match(tools.find(tool => tool.name === 'get_my_agent').description, /1 stopping \(also during a restart, which starts it again by itself\)/);
     const prompt = await client.getPrompt({ name: 'talk_to_my_agent', arguments: PROMPT_ARGUMENTS.talk_to_my_agent });

@@ -376,6 +376,20 @@ export function connectionOf(connections: readonly AgentConnection[], slug: stri
   return connections.find(connection => connection.connector === slug);
 }
 
+/** Whether a connection gives the agent its connector now: connected, and still offered by the catalog. */
+export function isLiveConnection(connection: AgentConnection | undefined): boolean {
+  return connection?.status === 'connected' && (connection.catalogStatus === undefined || connection.catalogStatus === 'active');
+}
+
+/**
+ * Whether a scheduled task that names these connectors starts or stops with this one: it names it, and none of the
+ * other connectors it names is connected. A task runs while any one of its connectors is connected.
+ */
+export function hangsOnConnector(requiresConnectors: readonly string[], slug: string, connections: readonly AgentConnection[]): boolean {
+  return requiresConnectors.includes(slug)
+    && !requiresConnectors.some(other => other !== slug && isLiveConnection(connectionOf(connections, other)));
+}
+
 /** A connector as a line of text: its title and its slug. Titles come from the catalog, so they are not quoted. */
 export function connectorLabel(connector: { title?: string; slug?: string; connector?: string }): string {
   const slug = connector.slug ?? connector.connector ?? '';

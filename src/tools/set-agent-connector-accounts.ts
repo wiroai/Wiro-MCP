@@ -150,7 +150,8 @@ export function registerSetAgentConnectorAccounts(server: McpServer, client: Wir
         const connector = await connectorOrError(client, slug, extra.signal);
         if (connector instanceof Error) return errorResult(connector);
         if (connector.accountPickers.length === 0) {
-          return errorResult(new Error(`${connector.title} has no account choices: once connected, it acts on what its connection reaches.`));
+          return errorResult(new Error(`${connector.title} has no account choices to list or save here, and nothing was changed. `
+            + 'If its setup steps (list_agent_connectors with its slug) name accounts the agent may act on, connect_agent_connector takes them in accounts.'));
         }
         const base = { agentGuid, connector: connector.slug, title: connector.title };
 

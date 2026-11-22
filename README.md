@@ -328,7 +328,7 @@ your wallet after each reply. Your own agents run on a monthly plan with credits
 | `set_agent_connector_accounts` | Choose the accounts a connected connector may act on, such as its ad accounts, pages or channels |
 | `disconnect_agent_connector` | Disconnect a connector from an agent, after your confirmation |
 | `list_projects` | List the projects of the connected project's workspace, to pick one for an agent; no keys are shown |
-| `bind_agent_project` | Connect an agent to a Wiro project so it can run models, with no key in the chat; shows the project first, then asks for your confirmation |
+| `bind_agent_project` | Set the Wiro project an agent's video and voice skills run models with, with no key in the chat; shows the project first, then asks for your confirmation. The agent's model tools come from the `wiro` connector, connected with `connect_agent_connector` |
 | `manage_agent_custom_skill` | Add, edit, schedule, restore or remove an agent's own instructions and scheduled tasks; turning off its approval policy or changing its rules needs your confirmation |
 | `manage_agent_billing` | Subscribe, move to another plan, cancel, renew or buy extra credits from your wallet, after your confirmation |
 | `get_agent_activity` | Read an agent's credit usage and activity logs, including who changed what on it |

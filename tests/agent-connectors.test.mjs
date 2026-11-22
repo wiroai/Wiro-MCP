@@ -540,6 +540,90 @@ test('connect_agent_connector shows the Wiro project and the wallet first, and b
   });
 });
 
+// A connector that acts only on the accounts saved with its connection, such as the advertisers a TikTok Ads call may
+// name, can have no account choices to list: its accounts go in with the connect, and a sign-in saves them once it
+// finishes.
+test('connect_agent_connector sends the accounts given with the connect, and checks them against account choices', async () => {
+  const fake = fakeClient(routes({
+    '/UserAgent/ConnectorConnect': body => (body.slug === 'tiktok-ads'
+      ? { result: true, errors: [], status: 'pending', authorizeUrl: 'https://ads.example/authorize?state=abc' }
+      : { result: true, errors: [], status: 'connected', applied: 1, restart: 'scheduled', useragentconnectors: [connection(FACEBOOK, { authmode: 'key', accounts: body.accounts ?? {} })] }),
+  }));
+  await withClient(fake, async client => {
+    const started = await call(client, 'connect_agent_connector', { agent_guid: AGENT, connector: 'tiktok-ads', accounts: { advertisers: ['7001', '7002'] } });
+    assert.notEqual(started.isError, true, text(started));
+    assert.deepEqual(fake.called('/UserAgent/ConnectorConnect')[0].body, { useragentguid: AGENT, slug: 'tiktok-ads', accounts: { advertisers: ['7001', '7002'] } });
+    assert.match(started.structuredContent.message, /The accounts given are saved with the connection once the sign-in finishes\./);
+
+    // An empty list of choices sends none, as if it were left out.
+    await call(client, 'connect_agent_connector', { agent_guid: AGENT, connector: 'tiktok-ads', accounts: {} });
+    assert.equal('accounts' in fake.called('/UserAgent/ConnectorConnect')[1].body, false);
+
+    // A connector with account choices takes only their keys.
+    const unknown = await call(client, 'connect_agent_connector', { agent_guid: AGENT, connector: 'facebook-pages', mode: 'key', values: { systemusertoken: 'EAAG-system-user-token' }, accounts: { groups: ['1'] } });
+    assert.equal(text(unknown), '## Error\n\nFacebook Pages has no account choice "groups". Its choices: "pages" (Facebook Pages). Nothing was sent.');
+    assert.equal(fake.called('/UserAgent/ConnectorConnect').length, 2);
+
+    const keyed = await call(client, 'connect_agent_connector', { agent_guid: AGENT, connector: 'facebook-pages', mode: 'key', values: { systemusertoken: 'EAAG-system-user-token' }, accounts: { pages: ['123'] } });
+    assert.notEqual(keyed.isError, true, text(keyed));
+    assert.deepEqual(fake.called('/UserAgent/ConnectorConnect')[2].body.accounts, { pages: ['123'] });
+    assert.match(keyed.structuredContent.message, /^Facebook Pages is connected with the accounts given\./);
+    // Chosen already, so nothing is left to choose.
+    assert.equal(keyed.structuredContent.nextAction, undefined);
+  });
+
+  // A single choice takes one id, and accounts come back in the step that repeats the call: they are no secret.
+  const single = { ...structuredClone(FACEBOOK), slug: 'ga-property', title: 'GA Property', accountpickers: [{ key: 'property', label: 'Property', multiple: false }] };
+  const asked = fakeClient(routes({
+    '/AgentConnector/Detail': body => (body.slug === 'ga-property' ? { result: true, errors: [], agentconnectors: [structuredClone(single)] } : catalogDetail(body)),
+    '/UserAgent/ConnectorList': { result: true, errors: [], useragentconnectors: [connection(SERPER, { savedvariables: ['apikey'] })] },
+  }));
+  await withClient(asked, async client => {
+    const two = await call(client, 'connect_agent_connector', { agent_guid: AGENT, connector: 'ga-property', mode: 'key', values: { systemusertoken: 'EAAG-system-user-token' }, accounts: { property: ['1', '2'] } });
+    assert.equal(text(two), '## Error\n\nProperty takes one account. Nothing was sent.');
+
+    const replace = await call(client, 'connect_agent_connector', { agent_guid: AGENT, connector: 'serper', values: { apikey: KEY }, accounts: { sites: ['a'] } });
+    assert.equal(replace.structuredContent.state, 'confirm_needed');
+    assert.deepEqual(replace.structuredContent.nextAction.arguments, { action: 'connect', agent_guid: AGENT, connector: 'serper', accounts: { sites: ['a'] }, confirm: true });
+    assert.equal(asked.paths().includes('/UserAgent/ConnectorConnect'), false);
+  });
+});
+
+// A service account file goes in as a JSON value or as its text. A refusal that quotes one of its keys back shows
+// none of them.
+test('connect_agent_connector hides every value it was sent, at any depth, from an error text', async () => {
+  const GA4 = {
+    slug: 'ga4',
+    title: 'Google Analytics 4',
+    authtype: 'fields',
+    transport: 'local',
+    credentialfields: [{ name: 'serviceaccountjson', label: 'Service account JSON', description: 'The key file of a service account.', required: true, secret: true, format: 'json' }],
+    accountpickers: [],
+    tools: [],
+  };
+  const PRIVATE_KEY = '-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC\n-----END PRIVATE KEY-----\n';
+  const EMAIL = 'agent-reader@example-project.iam.gserviceaccount.com';
+  const quoted = body => {
+    const file = typeof body.values.serviceaccountjson === 'string' ? JSON.parse(body.values.serviceaccountjson) : body.values.serviceaccountjson;
+    return { result: false, errors: [{ code: 0, message: `The vendor refused ${file.client_email}: private_key ${file.private_key} and ${JSON.stringify(file.private_key)} are not valid.` }] };
+  };
+  const fake = fakeClient(routes({
+    '/AgentConnector/Detail': body => (body.slug === 'ga4' ? { result: true, errors: [], agentconnectors: [structuredClone(GA4)] } : catalogDetail(body)),
+    '/UserAgent/ConnectorConnect': quoted,
+  }));
+  await withClient(fake, async client => {
+    const file = { type: 'service_account', client_email: EMAIL, private_key: PRIVATE_KEY };
+    for (const value of [file, JSON.stringify(file)]) {
+      const result = await call(client, 'connect_agent_connector', { agent_guid: AGENT, connector: 'ga4', values: { serviceaccountjson: value } });
+      assert.equal(result.isError, true);
+      // Values are hidden as they were sent, trimmed: only the key file's last line break can stay.
+      assert.match(text(result), /The vendor refused \[hidden\]: private_key \[hidden\]\s* and "\[hidden\](\\n)?" are not valid\. Nothing was saved\./);
+      const everything = JSON.stringify(result);
+      for (const secret of [PRIVATE_KEY.trim(), 'MIIEvQIBADANBgkqhkiG9w0BAQEFAASC', EMAIL]) assert.equal(everything.includes(secret), false, secret);
+    }
+  });
+});
+
 // ---------------------------------------------------------------------------
 // set_agent_connector_accounts
 // ---------------------------------------------------------------------------
@@ -566,8 +650,10 @@ test('set_agent_connector_accounts lists the accounts a connection reaches, then
     const unknown = await call(client, 'set_agent_connector_accounts', { agent_guid: AGENT, connector: 'facebook-pages', accounts: { groups: ['1'] } });
     assert.equal(text(unknown), '## Error\n\nFacebook Pages has no account choice "groups". Its choices: "pages" (Facebook Pages). Nothing was saved.');
 
+    // A connector without account choices promises nothing about what its connection may act on.
     const none = await call(client, 'set_agent_connector_accounts', { agent_guid: AGENT, connector: 'serper' });
-    assert.equal(text(none), '## Error\n\nSerper has no account choices: once connected, it acts on what its connection reaches.');
+    assert.equal(text(none), '## Error\n\nSerper has no account choices to list or save here, and nothing was changed. If its setup steps (list_agent_connectors with its slug) name accounts the agent may act on, connect_agent_connector takes them in accounts.');
+    assert.doesNotMatch(text(none), /acts on what its connection reaches/);
   });
 
   const notConnected = fakeClient(routes({ '/UserAgent/ConnectorAccounts': { result: false, errors: [{ code: 0, message: 'This connector is not connected to the agent.' }] } }));
@@ -617,6 +703,81 @@ test('disconnect_agent_connector says what goes and what stops, and disconnects 
     assert.equal(result.structuredContent.disconnected, false);
     assert.equal(result.structuredContent.message, 'Serper is not connected to this agent, so there is nothing to remove.');
     assert.equal(nothing.paths().includes('/UserAgent/ConnectorDisconnect'), false);
+  });
+});
+
+test('disconnect_agent_connector words the restart as Wiro answers it, and promises none for a connection that is not connected', async () => {
+  const disconnect = async (row, restart) => {
+    const fake = fakeClient(routes({
+      '/UserAgent/ConnectorList': { result: true, errors: [], useragentconnectors: [row] },
+      '/UserAgent/ConnectorDisconnect': { result: true, errors: [], removed: true, revoked: false, restart },
+    }));
+    let preview;
+    let done;
+    await withClient(fake, async client => {
+      preview = await call(client, 'disconnect_agent_connector', { agent_guid: AGENT, connector: row.slug });
+      done = await call(client, 'disconnect_agent_connector', { agent_guid: AGENT, connector: row.slug, confirm: true });
+    });
+    return { preview: preview.structuredContent, done: done.structuredContent };
+  };
+
+  const scheduled = await disconnect(connection(SERPER), 'scheduled');
+  assert.match(scheduled.done.message, /^Serper is disconnected\. .*The running agent restarts without it, which takes about a minute\. Connecting it again/);
+  assert.doesNotMatch(scheduled.done.message, /A running agent restarts\./);
+  assert.equal(scheduled.done.willClear, scheduled.done.message.replace(/^Serper is disconnected\. /, ''));
+
+  const stopped = await disconnect(connection(SERPER), 'none');
+  assert.match(stopped.done.message, /The agent is not running, so nothing restarts; it starts without the connector\./);
+  assert.equal(stopped.done.restart, 'none');
+
+  const failed = await disconnect(connection(SERPER), 'failed');
+  assert.match(failed.done.message, /The running agent could not be restarted, so it keeps the connector until it restarts: control_agent with action restart does that\./);
+
+  // A connection that needs a new sign-in gave the agent nothing: no tools to lose, no task stops, no restart.
+  const expired = await disconnect(connection(TIKTOK_ADS, { status: 'reauth' }), 'none');
+  assert.equal(expired.preview.willClear, 'The TikTok Ads connection is removed: its saved values, its sign-in and its account choices. The service is asked to revoke the access where it supports that. Connecting it again needs connect_agent_connector and a new sign-in.');
+  assert.match(expired.done.message, /It was not connected, so the agent does not restart\./);
+  for (const out of [expired.preview, expired.done]) assert.doesNotMatch(out.message, /A running agent restarts|restarts without it|loses the TikTok Ads tools/);
+});
+
+// A scheduled task runs while any one of the connectors it names is connected, so it stops with a disconnect, or
+// starts with a connect, only when none of its other connectors is connected.
+test('the connector tools name only the scheduled tasks that stop or start with this connector', async () => {
+  const either = { key: 'cs-cron-weekly-outreach', description: 'Weekly outreach', value: 'Find leads.', interval: '0 9 * * 1', enabled: true, requires_credentials: [], requires_connectors: ['serper', 'devto'], _source: 'user-created', _editable: true, _user_created: true };
+  const paused = { ...either, key: 'cs-cron-paused-search', requires_connectors: ['serper'], _source: 'skill-bundle', _skill_off: true, _off_skills: [['util-weather']], _owner_skills: ['util-weather'] };
+  const agent = { result: true, errors: [], useragents: [detailRow({ scheduledskills: [...detailRow().scheduledskills, either, paused] })] };
+  const DEVTO = { slug: 'devto', title: 'DEV', category: 'content', authtype: 'fields', transport: 'local' };
+  const tasksOf = out => out.willClear.match(/these scheduled tasks stop running until it is connected again: (.*?)\. /)?.[1] ?? '';
+
+  for (const [devto, expected] of [
+    [connection(DEVTO), 'Weekly Search (`cs-cron-weekly-search`)'],
+    // A connection to the other connector that gives the agent nothing does not keep a task running.
+    [connection(DEVTO, { status: 'reauth' }), 'Weekly Search (`cs-cron-weekly-search`), Weekly Outreach (`cs-cron-weekly-outreach`)'],
+    [connection(DEVTO, { catalogstatus: 'retired' }), 'Weekly Search (`cs-cron-weekly-search`), Weekly Outreach (`cs-cron-weekly-outreach`)'],
+  ]) {
+    const fake = fakeClient(routes({
+      '/UserAgent/Detail': agent,
+      '/UserAgent/ConnectorList': { result: true, errors: [], useragentconnectors: [connection(SERPER), devto] },
+    }));
+    await withClient(fake, async client => {
+      const preview = await call(client, 'disconnect_agent_connector', { agent_guid: AGENT, connector: 'serper' });
+      assert.equal(tasksOf(preview.structuredContent), expected, devto.status);
+      // A task whose skill is off does not run either way.
+      assert.doesNotMatch(preview.structuredContent.willClear, /cs-cron-paused-search/);
+    });
+  }
+
+  // Connecting: a task that another connected connector already runs does not start with this one.
+  const connect = fakeClient(routes({
+    '/UserAgent/Detail': agent,
+    '/UserAgent/ConnectorList': { result: true, errors: [], useragentconnectors: [connection(DEVTO)] },
+    '/UserAgent/ConnectorConnect': { result: true, errors: [], status: 'connected', applied: 1, restart: 'scheduled', useragentconnectors: [connection(SERPER, { savedvariables: ['apikey'] })] },
+  }));
+  await withClient(connect, async client => {
+    const result = await call(client, 'connect_agent_connector', { agent_guid: AGENT, connector: 'serper', values: { apikey: KEY } });
+    assert.notEqual(result.isError, true, text(result));
+    assert.match(result.structuredContent.message, /Scheduled tasks that need it run once it is loaded: Weekly Search \(`cs-cron-weekly-search`\)\. Every run/);
+    assert.doesNotMatch(result.structuredContent.message, /cs-cron-weekly-outreach|cs-cron-paused-search/);
   });
 });
 

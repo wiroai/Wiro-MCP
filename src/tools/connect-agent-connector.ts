@@ -12,6 +12,7 @@ import {
 } from '../utils/api.js';
 import {
   agentStatusOf,
+  collectStrings,
   customSkillEntries,
   holdsSecretMask,
   isAgentRunning,
@@ -27,6 +28,7 @@ import {
   connectionSchema,
   connectorFieldSchema,
   fieldsForMode,
+  hangsOnConnector,
   isAllowedRedirectUrl,
   listConnections,
   readConnector,
@@ -95,6 +97,8 @@ type ConnectBody = ApiEnvelope & {
 
 type Values = Record<string, unknown>;
 
+type Accounts = Record<string, string[]>;
+
 interface Context {
   client: WiroClient;
   agentGuid: string;
@@ -135,12 +139,48 @@ function fills(value: unknown): boolean {
   return true;
 }
 
-// Short values (select options, flags) are not secrets and would garble messages.
+/** A JSON object or list sent as its text, such as a service account file, or undefined for any other text. */
+function jsonInText(text: string): unknown {
+  const trimmed = text.trim();
+  if (!/^[[{]/.test(trimmed)) return undefined;
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Every value sent, to hide from an error text that quotes one back: each string of 8 or more characters at any
+ * depth (short values such as select options and flags are not secrets and would garble messages), as it is and
+ * as JSON writes it, and the whole JSON text of a JSON value. A JSON field sent as its text counts at every depth
+ * too, so a service's refusal that quotes one key of a service account file shows none of it.
+ */
 function secretsIn(values: Values): string[] {
-  return Object.values(values).flatMap((value) => {
-    const text = typeof value === 'string' ? value : isPlainObject(value) || Array.isArray(value) ? JSON.stringify(value) : '';
-    return text.trim().length >= 8 ? [text.trim()] : [];
-  });
+  const strings: string[] = [];
+  const secrets: string[] = [];
+  for (const value of Object.values(values)) {
+    collectStrings(value, strings);
+    if (isPlainObject(value) || Array.isArray(value)) secrets.push(JSON.stringify(value));
+    else if (typeof value === 'string') collectStrings(jsonInText(value), strings);
+  }
+  for (const text of strings) secrets.push(text, JSON.stringify(text).slice(1, -1));
+  return [...new Set(secrets.map(secret => secret.trim()).filter(secret => secret.length >= 8))];
+}
+
+/**
+ * Why accounts sent with a connect are refused, or null. A connector with account choices takes only their keys, and
+ * a single choice one id. Another connector's account keys are its setup steps' to name, so Wiro checks them.
+ */
+function accountsRefusal(connector: CatalogConnector, accounts: Accounts): string | null {
+  if (connector.accountPickers.length === 0) return null;
+  const unknown = Object.keys(accounts).filter(key => !connector.accountPickers.some(picker => picker.key === key));
+  if (unknown.length > 0) {
+    return `${connector.title} has no account choice ${unknown.map(key => `"${key}"`).join(', ')}. Its choices: `
+      + `${connector.accountPickers.map(picker => `"${picker.key}" (${picker.label})`).join(', ')}. Nothing was sent.`;
+  }
+  const single = connector.accountPickers.find(picker => !picker.multiple && (accounts[picker.key]?.length ?? 0) > 1);
+  return single ? `${single.label} takes one account. Nothing was sent.` : null;
 }
 
 function fieldNeedLines(fields: ConnectorField[]): string[] {
@@ -152,15 +192,18 @@ function fieldNeedLines(fields: ConnectorField[]): string[] {
 }
 
 /**
- * What the agent says about a new connection: the scheduled tasks that are on and need this connector, as people
- * see them, and whether it runs. Nothing when the agent cannot be read.
+ * What the agent says about a new connection: the scheduled tasks that are on and start running with this
+ * connector, as people see them, and whether it runs. A task runs while any one of its connectors is connected, so
+ * one that can use another connector of `connections` that is connected already runs and is left out. Nothing when
+ * the agent cannot be read.
  */
-async function agentAfterConnect(context: Context): Promise<{ tasks: string[]; running: boolean }> {
+async function agentAfterConnect(context: Context, connections: readonly AgentConnection[]): Promise<{ tasks: string[]; running: boolean }> {
   try {
     const row = await readUserAgent(context.client, context.agentGuid, context.signal);
     return {
       tasks: customSkillEntries(row)
-        .filter(entry => entry.kind === 'scheduled_task' && entry.enabled && entry.requiresConnectors.includes(context.connector.slug))
+        .filter(entry => entry.kind === 'scheduled_task' && entry.enabled && !entry.notWritten && !entry.skillOff
+          && hangsOnConnector(entry.requiresConnectors, context.connector.slug, connections))
         .map(entry => taskLabel(entry.key, taskNamedByWiro(entry))),
       running: isAgentRunning(agentStatusOf(row)),
     };
@@ -205,7 +248,7 @@ async function projectFor(context: Context, projectId: string | undefined): Prom
 
 async function connect(
   context: Context,
-  input: { values?: Values; mode?: ConnectMode; projectId?: string; redirectUrl?: string; confirm: boolean },
+  input: { values?: Values; mode?: ConnectMode; projectId?: string; redirectUrl?: string; accounts?: Accounts; confirm: boolean },
 ) {
   const { client, agentGuid, connector, signal } = context;
   const hybrid = connector.ways.includes('sign_in') && connector.ways.includes('key');
@@ -245,6 +288,9 @@ async function connect(
   if (masked.length > 0) {
     return errorResult(new Error(`${masked.join(', ')} ${masked.length > 1 ? 'hold' : 'holds'} ${SECRET_MASK_TEXT}. Send the value itself. Nothing was sent.`));
   }
+  const accounts = input.accounts && Object.keys(input.accounts).length > 0 ? input.accounts : undefined;
+  const accountRefusal = accounts ? accountsRefusal(connector, accounts) : null;
+  if (accountRefusal) return errorResult(new Error(accountRefusal));
 
   const connections = await listConnections(client, agentGuid, signal);
   const existing = connectionOf(connections, connector.slug);
@@ -266,7 +312,13 @@ async function connect(
         ...(existing ? { connection: existing } : {}),
         nextAction: {
           tool: 'connect_agent_connector',
-          arguments: { action: 'connect', agent_guid: agentGuid, connector: connector.slug, ...(input.mode ? { mode: input.mode } : {}) },
+          arguments: {
+            action: 'connect',
+            agent_guid: agentGuid,
+            connector: connector.slug,
+            ...(input.mode ? { mode: input.mode } : {}),
+            ...(accounts ? { accounts } : {}),
+          },
           reason: `Call it again with values for ${missing.map(field => field.name).join(', ')} once the user gives them.`,
         },
       },
@@ -298,6 +350,7 @@ async function connect(
             ...(input.mode ? { mode: input.mode } : {}),
             ...(input.projectId !== undefined ? { project_id: input.projectId } : {}),
             ...(input.redirectUrl ? { redirect_url: input.redirectUrl } : {}),
+            ...(accounts ? { accounts } : {}),
             confirm: true,
           },
           reason: `Ask the user to confirm this first.${sendAgain ? ' Add the same values again: they are never repeated here.' : ''}`,
@@ -315,6 +368,7 @@ async function connect(
         ...(hybrid && input.mode ? { mode: input.mode === 'key' ? 'key' : 'oauth' } : {}),
         ...(input.projectId !== undefined ? { wiroprojectguid: input.projectId } : {}),
         ...(input.redirectUrl ? { redirecturl: input.redirectUrl.trim() } : {}),
+        ...(accounts ? { accounts } : {}),
       }, signal),
       `${connector.title} could not be connected.`,
     );
@@ -331,9 +385,10 @@ async function connect(
     const after = input.redirectUrl
       ? `After approving, the browser goes to ${input.redirectUrl.trim()}.`
       : 'After approving, the browser lands on a page that says how it went.';
+    const accountsLater = accounts ? ' The accounts given are saved with the connection once the sign-in finishes.' : '';
     return result('connect', context, 'authorize_in_browser',
       `The user must open this link in their own browser and approve access within ${SIGN_IN_LINK_TTL_SECONDS / 60} minutes. Never open it for them. ${consent} `
-        + `${after} Give the link to the user and check the status once they say they are done.`,
+        + `${after}${accountsLater} Give the link to the user and check the status once they say they are done.`,
       {
         ...(mode ? { mode } : {}),
         authorizeUrl,
@@ -357,10 +412,10 @@ async function connect(
   const connection = toAgentConnections(body.useragentconnectors)[0];
   const applied = toInteger(body.applied, 1);
   const restart = restartOf(body.restart);
-  const { tasks } = await agentAfterConnect(context);
+  const { tasks } = await agentAfterConnect(context, connections);
   const unpicked = connector.accountPickers.filter(picker => !connection?.accounts[picker.key]?.length);
   const message = [
-    `${connector.title} is connected.`,
+    `${connector.title} is connected${accounts ? ' with the accounts given' : ''}.`,
     restartText(restart, applied),
     tasks.length > 0 ? `Scheduled tasks that need it run once it is loaded: ${tasks.join(', ')}. Every run uses the agent's credits.` : '',
     unpicked.length > 0 ? `Choose the ${unpicked.map(picker => picker.label).join(' and ')} it may act on with set_agent_connector_accounts.` : '',
@@ -448,7 +503,7 @@ async function status(
   switch (state) {
     case 'connected': {
       const unpicked = connector.accountPickers.filter(picker => !connection?.accounts[picker.key]?.length);
-      const { tasks, running } = await agentAfterConnect(context);
+      const { tasks, running } = await agentAfterConnect(context, polled.value);
       return result('status', context, state, [
         `${connector.title} is connected${connection?.connectedAt ? ` (since ${connection.connectedAt})` : ''}.`,
         running ? 'The running agent restarts to load it, which takes about a minute.' : '',
@@ -515,7 +570,8 @@ export function registerConnectAgentConnector(server: McpServer, client: WiroCli
         + 'Connecting a connector that is connected now replaces that connection, and a connector that runs with a '
         + 'Wiro project always shows its project first: both take confirm: true after the user agreed. A running '
         + 'agent restarts to load a new connection. Once connected, set_agent_connector_accounts chooses the accounts '
-        + 'it may act on where it has account choices, and disconnect_agent_connector removes it. The person who '
+        + 'it may act on where it has account choices (accounts sets them in this call where the connector\'s setup '
+        + 'steps name an account key instead), and disconnect_agent_connector removes it. The person who '
         + 'deployed the agent or a team admin of its team can connect. Keys go only in values, never in a message to '
         + 'an agent.',
       inputSchema: strictInput({
@@ -538,6 +594,12 @@ export function registerConnectAgentConnector(server: McpServer, client: WiroCli
           .regex(PROJECT_ID_PATTERN, 'project_id must be the id of a project from list_projects, such as "12345". Nothing was sent.')
           .optional()
           .describe('connect, for a connector that runs with a Wiro project: the project\'s id from list_projects. Leave it out for the project of this connection.'),
+        accounts: z.record(z.string().min(1).max(40), z.array(z.string().min(1).max(200)).max(500)).optional()
+          .describe('connect: the accounts the connection may act on, {account key: [ids]}, saved with it; a sign-in '
+            + 'saves them once it finishes. Use it where the connector\'s setup steps name an account key, such as the '
+            + 'ad accounts the agent may act on. Where list_agent_connectors shows account choices, choose them with '
+            + 'set_agent_connector_accounts once connected instead: it lists what the connection reaches. Leave it out '
+            + 'to keep the accounts saved before.'),
         redirect_url: z.string().max(2_048).optional()
           .describe('connect, for a sign-in: where the browser goes after approving, an https address or a local one on the user\'s own machine (http://localhost or http://127.0.0.1). Leave it out for Wiro\'s own page, which says how it went.'),
         since_connected_at: z.string().max(64).optional()
@@ -575,6 +637,7 @@ export function registerConnectAgentConnector(server: McpServer, client: WiroCli
           mode: args.mode,
           projectId: args.project_id,
           redirectUrl: args.redirect_url,
+          accounts: args.accounts,
           confirm: args.confirm,
         });
       } catch (error) {

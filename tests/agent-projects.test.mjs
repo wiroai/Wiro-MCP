@@ -207,7 +207,7 @@ test('list_projects shows each project from an allow-list, with every flag', asy
     assert.match(text(result), /- `Member Project` \(id `100`\): this connection cannot connect it/);
     assert.match(text(result), /- `Locked` \(id `103`\): can be connected; accepts requests only from its IP list/);
     assert.doesNotMatch(JSON.stringify(result), /wk-locked-key|wk-nobody-key|wk-unknown-key/);
-    assert.match(text(result), /bind_agent_project with agent_guid and project_id connects one/);
+    assert.match(text(result), /bind_agent_project with agent_guid and project_id connects one for the agent's video and voice skills, and connect_agent_connector with project_id connects one to a connector such as wiro: each shows a summary first and changes nothing without confirm: true\./);
   });
 });
 
@@ -324,9 +324,13 @@ test('list_projects and bind_agent_project advertise what they do', async () => 
     const bind = tools.find(tool => tool.name === 'bind_agent_project');
     assert.deepEqual(list.annotations, { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true });
     assert.deepEqual(bind.annotations, { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true });
-    assert.match(list.description, /to pick one for bind_agent_project/);
+    assert.match(list.description, /to pick one for bind_agent_project \(the project an agent's video and voice skills run models with\) or for connect_agent_connector's project_id/);
     assert.match(list.description, /No keys are shown\./);
     assert.match(bind.description, /with no key in this chat/);
+    // Binding sets the skills' project; the agent's model tools come from the wiro connector.
+    assert.match(bind.description, /^Set the Wiro project a deployed agent's video and voice skills run models with \(the Wiro AI Models credential, "wiro"\)/);
+    assert.match(bind.description, /The agent's own model tools \(wiro__\*\) come from the wiro connector instead, which connect_agent_connector connects with a project of its own\./);
+    assert.doesNotMatch(bind.description, /so it can run Wiro models/);
     assert.deepEqual(Object.keys(list.inputSchema.properties), ['agent_guid']);
     // No key of any kind goes in.
     assert.deepEqual(Object.keys(bind.inputSchema.properties).sort(), ['agent_guid', 'confirm', 'project_id']);
@@ -815,7 +819,7 @@ test('replacing a project names what is off and turns on again, and nothing else
   const task = (key, enabled, requires = ['wiro']) => ({ key, description: 'Task', value: 'Make images.', interval: '0 9 * * 1', enabled, requires_credentials: requires, _source: 'skill-bundle', _editable: true });
   const row = detail({
     credentials: { wiro: wiroGroup(OTHER_KEY) },
-    scheduledskills: [task('cs-cron-weekly-images', false), task('cs-cron-monthly-images', true), task('cs-cron-inbox', false, ['gmail'])],
+    scheduledskills: [task('cs-cron-weekly-images', false), task('cs-cron-monthly-images', true), task('cs-cron-inbox', false, ['telegram'])],
   });
   await withTools(routes({ '/UserAgent/Detail': row }), async ({ call }) => {
     const summary = await call('bind_agent_project', { agent_guid: AGENT });
@@ -1205,7 +1209,10 @@ test('set_agent_credentials leads with bind_agent_project for a Wiro project', a
     '/UserAgent/CredentialUpsert': { result: true, errors: [], applied: 1 },
   }), async ({ call, client, paths }) => {
     const { tools } = await client.listTools();
-    assert.match(tools.find(tool => tool.name === 'set_agent_credentials').description, /To connect a Wiro project \(credential "wiro"\), use bind_agent_project first: it takes no key\./);
+    const credentials = tools.find(tool => tool.name === 'set_agent_credentials').description;
+    assert.match(credentials, /To set the Wiro project the agent's video and voice skills run models with \(credential "wiro"\), use bind_agent_project first: it takes no key\./);
+    // The agent's model tools come from the wiro connector, which binding the credential does not connect.
+    assert.match(credentials, /The agent's model tools \(wiro__\*\) come from the wiro connector instead \(connect_agent_connector\)\./);
 
     const described = await call('set_agent_credentials', { agent_guid: AGENT, credential: 'wiro' });
     assert.equal(described.structuredContent.nextAction.tool, 'bind_agent_project');
@@ -1346,7 +1353,10 @@ test('the instructions, the playbooks and the prompts lead the same way', async 
   assert.ok(SERVER_INSTRUCTIONS.length < 4_000, String(SERVER_INSTRUCTIONS.length));
 
   const { agents, billing } = PLAYBOOKS;
-  assert.ok(agents.includes(`The Wiro AI Models credential (\`wiro\`): ${WIRO_PROJECT_NOTE} It takes two steps:`));
+  assert.ok(agents.includes(`The Wiro AI Models credential (\`wiro\`) is the project the agent's video and voice skills run models with. ${WIRO_PROJECT_NOTE} Binding it takes two steps:`));
+  // The agent's own model tools are the wiro connector's: "make images" connects it, and its project pays.
+  assert.match(agents, /The `wiro` connector connects this way and gives the agent its model tools \(`wiro__\*`\), so "let my agent make images" means connecting it, not `bind_agent_project`\./);
+  assert.match(agents, /the `wiro` credential's project for its video and voice skills, and the `wiro` connector's project for its model tools \(`wiro__\*`\)\./);
   assert.match(agents, /1\. `bind_agent_project` with the agent's guid shows the project, what it replaces, whether a running agent restarts and which wallet pays, and changes nothing\. To offer another project, `list_projects` lists the workspace's projects, and `project_id` picks one\./);
   assert.match(agents, /2\. After the user's yes, repeat the call as its `nextAction` shows, with `confirm: true`\./);
   assert.match(billing, /Model runs that a deployed agent starts are paid by the wallet of the workspace that owns the Wiro project connected to that agent\./);
@@ -1369,5 +1379,6 @@ test('the texts about the project read true before and after a bind, and name no
   assert.match(WIRO_PROJECT_NOTE, /^Connect a Wiro project with bind_agent_project: it takes the project of this connection or one from list_projects, and no key passes through this chat\./);
   assert.match(WIRO_PROJECT_NOTE, /The user can also pick the project on the agent's page in the Wiro dashboard\./);
   assert.match(WIRO_PROJECT_NOTE, /Saving a project API key with set_agent_credentials stays possible when the user gives one for this, and Wiro adds the project's secret by itself\./);
-  assert.match(WIRO_PROJECT_NOTE, /Model runs the agent starts are billed to the wallet of the workspace that owns the project\.$/);
+  assert.match(WIRO_PROJECT_NOTE, /The agent's video and voice skills run models with this project, billed to the wallet of the workspace that owns it\./);
+  assert.match(WIRO_PROJECT_NOTE, /The agent's own model tools \(wiro__\*\) come from the wiro connector instead: connect_agent_connector connects it with project_id, and model runs through it are billed to the wallet of the workspace that owns that connection's project\.$/);
 });

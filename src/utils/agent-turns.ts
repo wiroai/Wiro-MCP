@@ -843,7 +843,7 @@ function chooseNextAction(
  * The step after a deployed agent's reply that proposes setup changes, after
  * Wiro listed them, or after Wiro applied one. A change is applied only when the
  * user approves it: their "yes" as the next message, which Wiro matches itself,
- * or a key saved with connect_agent_connector (set_agent_credentials for a chat
+ * or a key saved with connect_agent_connector (a proposal never names a chat
  * channel). Sent with an API key, the first "yes" only gets Wiro's listing of
  * the exact change; the next "yes" (or "yes N") applies it. A key never goes in
  * a chat message. Only a connect asks for a key: a disconnect removes the
@@ -895,7 +895,7 @@ function setupNextAction(target: AgentTarget, result: AgentTurnResult): NextActi
       + 'and save it as soon as the change that needs its connector is applied, with no wait in between, so one '
       + 'restart loads both.'
     : open.some(change => change.kind === 'connect')
-      ? ' For a key, use connect_agent_connector (set_agent_credentials for a chat channel) instead of a chat message.'
+      ? ' For a key, use connect_agent_connector instead of a chat message.'
       : '';
   if (open.some(change => change.kind !== 'connect')) {
     return {
@@ -915,13 +915,12 @@ function setupNextAction(target: AgentTarget, result: AgentTurnResult): NextActi
   // A connector that an applied add needed keeps connecting the way the add said; a reply never connects it.
   const mode = card ? connectCardMode(card, result.message.setupChanges ?? []) : undefined;
   if (connector && isSignInNeedMode(mode)) return signInConnectStep(guid, connector);
-  // The card names a Connector or a chat channel; the catalog read says which, and what to ask for.
+  // The card names a catalog connector; the catalog read says what to ask for.
   return {
     tool: 'list_agent_connectors',
     arguments: { ...(connector ? { name: connector } : {}), agent_guid: guid },
-    reason: 'The agent asks for a key or sign-in. This call only shows what it needs (a chat channel is pointed to '
-      + 'set_agent_credentials): ask the user for the values and save them with connect_agent_connector, never in a '
-      + 'chat message.',
+    reason: 'The agent asks for a key or sign-in. This call only shows what it needs: ask the user for the values and '
+      + 'save them with connect_agent_connector, never in a chat message.',
   };
 }
 

@@ -4262,7 +4262,7 @@ function customBuildRoutes(scheduledskills) {
     scheduledskills,
   });
   return {
-    '/Skills/List': { result: true, errors: [], skills: [{ name: 'util-voice-receptionist', title: 'Gmail', requires_credentials: true, credential_key: 'twilio-voice', pricing: {} }] },
+    '/Skills/List': { result: true, errors: [], skills: [{ name: 'util-voice-receptionist', title: 'Voice Receptionist Rules', requires_credentials: true, credential_key: 'twilio-voice', pricing: {} }] },
     '/UserAgent/PricingPreview': { result: true, errors: [], totalPriceUsd: 4, totalMonthlyCredits: 400, enabledSkills: ['util-voice-receptionist'] },
     '/UserAgent/Deploy': { result: true, errors: [], useragents: [deployed] },
     '/UserAgent/Detail': detailResponse(deployed),
@@ -4272,7 +4272,7 @@ function customBuildRoutes(scheduledskills) {
 test('a custom build\'s deploy result names the scheduled tasks already on and how to change them', async () => {
   const fake = fakeClient(customBuildRoutes([
     { key: 'cs-cron-gmail-digest', description: 'Sends a digest', value: 'Send a digest.', interval: '0 10 * * 1', enabled: true, _source: 'skill-bundle' },
-    { key: 'cs-cron-inbox-check', description: 'Checks the inbox', value: 'Check the inbox.', interval: '*/30 * * * *', enabled: false, requires_credentials: ['gmail'], _source: 'skill-bundle' },
+    { key: 'cs-cron-inbox-check', description: 'Checks the inbox', value: 'Check the inbox.', interval: '*/30 * * * *', enabled: false, requires_credentials: [], requires_connectors: ['gmail'], _source: 'skill-bundle' },
     { key: 'cs-cron-weekly-report', description: 'Weekly report', value: 'Summarize the week', interval: '0 9 * * 1', enabled: true, _source: 'user-created' },
   ]));
   await withClient(fake, async client => {
@@ -5184,7 +5184,7 @@ test('every agent tool answers a guid it cannot reach with the next step', async
   ];
   for (const [name, args] of calls) {
     const fake = fakeClient({
-      '/Skills/List': { result: true, errors: [], skills: [{ name: 'util-voice-receptionist', title: 'Gmail', depends_on: [], conflicts_with: [], requires_credentials: false, pricing: {} }], channels: [] },
+      '/Skills/List': { result: true, errors: [], skills: [{ name: 'util-voice-receptionist', title: 'Voice Receptionist Rules', depends_on: [], conflicts_with: [], requires_credentials: false, pricing: {} }], channels: [] },
       '/UserAgent/Detail': notFound,
       '/UserAgent/TransactionList': notFound,
       '/UserAgent/Logs': notFound,
