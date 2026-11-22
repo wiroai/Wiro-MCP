@@ -3488,7 +3488,7 @@ test('a card plan moving to the balance is cancelled, and its agent deleted, onc
   await withClient(fakeClient({}), async client => {
     const { tools } = await client.listTools();
     const description = tools.find(tool => tool.name === 'manage_agent_billing').description;
-    assert.match(description, /Agent plans are paid only from the Wiro balance: no card checkout is opened, and a quote refused because the balance is short says how much to add on wiro\.ai, with nothing charged\. A card plan from before that is paid by card through its period, then moves to the balance and renews from it; its plan changes are paid from the balance, and cancel works once the balance bills it\./);
+    assert.match(description, /Agent plans are paid only from the Wiro balance: no card payment is taken, and a quote refused because the balance is short says how much to add on wiro\.ai, with nothing charged\. A card plan from before that is paid by card through its period, then moves to the balance and renews from it; its plan changes are paid from the balance, and cancel works once the balance bills it\./);
     assert.doesNotMatch(description, /dashboard|portal|Billing in/);
   });
   const switching = subscription({ provider: 'stripe', nextprovider: 'prepaid' });

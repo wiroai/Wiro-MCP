@@ -51,6 +51,25 @@ runs `npx @wiro-ai/wiro-mcp@latest` takes it at its next start.
   `project` (the `wiro` connector's Wiro project; `appkeys`, `token` and `page` are gone),
   as an add's `needs` and a connect change's own `mode` say. Chat channels are never
   proposed, and a key a proposal asks for is saved with `connect_agent_connector`.
+- Agents are billed in dollars. An agent's `credits` (in `list_my_agents`, `get_my_agent`,
+  `control_agent`, `manage_agent_billing` and `deploy_agent`) is replaced by `usage`, its AI
+  usage in USD: what the plan includes this period, used and left, what each renewal
+  includes, the Wiro balance that pays after it, and whether the agent is paused and why.
+  `spend` adds what the agent cost this calendar month. A plan's price carries
+  `includedUsageUsd` instead of `monthlyCredits`, in `pricing` and in the `deploy_agent` and
+  `manage_agent_billing` quotes, whose results carry `includedUsageUsd` and
+  `includedUsageNowUsd` instead of `monthlyCredits` and `creditsNow`. Model rates are
+  `inputUsdPer1M`, `outputUsdPer1M` and `cachedInputUsdPer1M`, and a message's cost is
+  `aiUsageUsd` instead of `creditsUsed`.
+- Extra credit packs are retired. `get_my_agent` lists no `extraCreditPacks`, and
+  `manage_agent_billing` with `buy_credits` quotes and charges nothing: it says the agent
+  uses the Wiro balance after its plan's included usage, and that funds are added on
+  wiro.ai. Its `pack` and `request_id` are ignored, and no answer carries a `requestId`.
+- `get_agent_activity` (usage) reads the dollar ledger: `summary` holds this month's AI
+  usage within the plan and from the balance, model runs and funds added, and each of
+  `transactions` its kind, title, model, tokens and costs by kind, `amountUsd`, `direction`
+  and `paidFrom`. `balance`, `extraPacks` and `byModel` are gone, `entries` reads one kind of
+  row, and a log event's cost is `costUsd`.
 
 ### Changes
 
@@ -79,3 +98,21 @@ runs `npx @wiro-ai/wiro-mcp@latest` takes it at its next start.
   a custom skill is how the agent learns to use a connector's tools.
 - The agents playbook, the server instructions, the `deploy_agent` prompt and the README
   describe connectors, how each kind connects, account choices and disconnecting.
+- Plans are read from Wiro's plan list (`includedUsageUsd`, else the plan's price) and said
+  as "Pro $30 a month, includes $30 of AI usage" in the catalog, the deploy quote and
+  `get_my_agent`.
+- Agent plans are paid only from the Wiro balance: `subscribe`, `renew`, `change_plan` and
+  `deploy_agent` quote "paid from your Wiro balance" (the team's for a team agent), and no
+  card checkout, billing portal or dashboard card payment is offered. A card plan from
+  before that is paid by card through its period, then moves to the balance and renews from
+  it: its plan changes are quoted from the balance, and it is cancelled once the balance
+  bills it. A charge the balance cannot cover is refused with code 97 and `neededusd`, and
+  the answer says how much to add on wiro.ai, with nothing charged.
+- A message refused because the agent's included usage is used up and the balance is short
+  keeps Wiro's answer and says where funds are added, and `control_agent` says the same for
+  a start refused that way; no pack is offered.
+- An answer from a Wiro API before agents were billed in dollars has no `usage`: the agent's
+  usage is then worked out from its credit fields, which count hundredths of a dollar.
+- The agents, billing and controls playbooks, the server instructions, the prompts and the
+  README say AI usage in dollars, the balance after the plan, and how spend limits and
+  Model Access rules count an agent's usage.

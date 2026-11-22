@@ -299,7 +299,7 @@ test('update_agent and the playbook say which changes restart a running agent', 
   const line = PLAYBOOKS.agents.split('\n').find(item => item.startsWith('- Some changes restart'));
   assert.match(line, /`update_agent` with a new title or a setting that changes \(time zone, session sharing, models, commands, setup from chat turned on or off\)/);
   // A sign-in that is started and not approved yet changes nothing on the agent; the connection restarts it once.
-  assert.match(line, /These leave it running: a new description, cover or categories with `update_agent`, setup from chat moved between "all" and "webchat", a new plan, plan changes, credit packs and renewals, a sign-in that is started and not yet approved, and a save that changes nothing\./);
+  assert.match(line, /These leave it running: a new description, cover or categories with `update_agent`, setup from chat moved between "all" and "webchat", a new plan, plan changes and renewals, a sign-in that is started and not yet approved, and a save that changes nothing\./);
   assert.match(line, /a connector connected, disconnected or given new values, a change of a connector's accounts/);
   assert.match(line, /`apply_agent_skills` when a skill turns on or off/);
   assert.match(line, /and the same changes approved in the agent's chat\./);

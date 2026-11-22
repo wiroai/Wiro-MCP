@@ -987,7 +987,7 @@ export function registerManageAgentBilling(server: McpServer, client: WiroClient
         + 'renewals with no refund. Extra credit packs are retired: buy_credits only says so and charges nothing, and '
         + 'funds are added to the balance on wiro.ai. Plans renew every 30 days until '
         + 'cancelled. Renewals and plan changes leave a running agent running. Agent plans are paid only from the '
-        + 'Wiro balance: no card checkout is opened, and a quote refused because the balance is short says how much '
+        + 'Wiro balance: no card payment is taken, and a quote refused because the balance is short says how much '
         + 'to add on wiro.ai, with nothing charged. A card plan from before that is paid by card through its period, '
         + 'then moves to the balance and renews from it; its plan changes are paid from the balance, and cancel works '
         + 'once the balance bills it. A card plan whose last payment did not go through has not ended and takes no new '
