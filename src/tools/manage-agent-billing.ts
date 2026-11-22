@@ -22,9 +22,9 @@ import {
   WALLET_NOT_READ_NOTE,
   agentDashboardUrl,
   agentSummarySchema,
-  asPlan,
-  chargeRoute,
   addFundsText,
+  asPlan,
+  balanceShortfall,
   centsToUsd,
   comparePlans,
   formatAgentSummaryLines,
@@ -33,11 +33,13 @@ import {
   isUnsettledPlan,
   isWalletNotRead,
   outcomeUnknown,
+  planBalanceName,
   planLineText,
   planName,
   readAgentDetail,
   roundUsd,
   sameAmount,
+  shortBalanceNote,
   toAgentDetail,
   toAgentSummary,
   toPlanPricing,
@@ -344,11 +346,15 @@ async function planFor(
   const active = raw?.status === 'active';
   const prepaid = raw?.provider === 'prepaid';
   const cancelled = raw?.pendingdowngrade === 'cancel';
-  const route = chargeRoute(raw);
+  // Agent plans are paid only from the Wiro balance of the agent's workspace: every new charge and every
+  // renewal. A card plan from before that is paid by card through its period, then moves to the balance.
   const paidFrom: PaidFrom = agent.workspace === 'team' ? 'team_wallet' : 'personal_wallet';
-  const wallet = agent.workspace === 'team' ? 'the team wallet' : 'the personal wallet';
+  const balance = planBalanceName(agent.workspace);
   const periodEnd = agent.subscription?.periodEndsAt ?? 'the end of the current period';
-  const cardPlan = (what: string) => `This plan is billed by card, and card payments are made in the Wiro dashboard. Nothing was charged here. To ${what}, open ${agent.dashboardUrl}`;
+  // An answer with a card checkout link instead of the change, which an older Wiro gave for a card plan. No
+  // checkout is opened here.
+  const checkoutAnswer = (what: string) => `Wiro did not ${what}: it answered with a card checkout, which is not opened `
+    + `here, and nothing was charged. Agent plans are paid from ${balance}; get_my_agent shows the plan as it is now.`;
   // A plan that has not ended and is not active, such as a card plan whose last payment did not go through
   // (past_due, then unpaid). Wiro counts every status but expired, cancelled and refunded as a plan that has
   // not ended: it starts no new plan beside one, and renews, changes, cancels and tops up only an active plan.
@@ -382,7 +388,7 @@ async function planFor(
           paidFrom,
           plan,
         },
-        message: `Subscribe on ${planName(plan)}: ${formatUsd(price.priceUsd)} now from ${wallet}, then every 30 days until the plan is cancelled. It includes ${formatUsd(price.includedUsageUsd)} of AI usage a month; after it, the agent uses the same balance. `
+        message: `Subscribe on ${planName(plan)}: ${formatUsd(price.priceUsd)} now, paid from ${balance}, then every 30 days until the plan is cancelled. It includes ${formatUsd(price.includedUsageUsd)} of AI usage a month; after it, the agent uses the same balance. `
           + subscribeQuoteNote(agent.status)
           + (missing.length > 0
             ? ` Missing credentials (${missing.map(item => item.title).join(', ')}) can be added afterwards; until then the skills that need them fail.`
@@ -400,7 +406,7 @@ async function planFor(
           const paid = walletPaid(body, monthly);
           return {
             outcome: 'done',
-            message: `Subscribed on ${planName(plan)} and charged ${paid.text} from ${wallet}. The plan renews every 30 days until it is cancelled. `
+            message: `Subscribed on ${planName(plan)} and charged ${paid.text} from ${balance}. The plan renews from it every 30 days until it is cancelled. `
               + (subscribeStarts(agent.status) ? 'The agent is starting.' : 'The agent keeps running: a new plan does not restart it.'),
             result: { chargedUsd: paid.chargedUsd, monthlyPriceUsd: monthly, includedUsageUsd: price.includedUsageUsd, plan },
             nextAction: subscribeWait(agent),
@@ -419,17 +425,19 @@ async function planFor(
       }
       if (active) {
         if (!prepaid) {
-          // A card plan can be set to stop at its period end.
-          const atPeriodEnd = agent.subscription?.atPeriodEnd;
+          // A card plan is not renewed by card any more: at its period end it moves to the balance, unless it
+          // was set to end, and then a new plan is paid from the balance.
+          if (agent.subscription?.atPeriodEnd === 'ends') {
+            return {
+              outcome: 'refused',
+              message: `This plan was paid by card and ends after ${periodEnd}. Card plans are not renewed any more: `
+                + `once it has ended, action subscribe starts a plan paid from ${balance}.`,
+            };
+          }
           return {
-            outcome: 'refused',
-            message: atPeriodEnd === 'ends'
-              ? `This plan is billed by card and is set to stop renewing after ${periodEnd}. Card plans are managed `
-                + `from the dashboard, where it can be kept: ${agent.dashboardUrl}`
-              : atPeriodEnd === 'renews'
-                ? `This plan is billed by card and renews by itself. It is managed from the dashboard: ${agent.dashboardUrl}`
-                : `This plan is billed by card and is paid through ${periodEnd}. Card plans are renewed or cancelled `
-                  + `from the dashboard: ${agent.dashboardUrl}`,
+            outcome: 'not_needed',
+            message: `This plan is paid by card through ${periodEnd}. Then it moves to ${balance} and renews from it `
+              + 'every 30 days by itself. Nothing to do.',
           };
         }
         if (!cancelled) {
@@ -450,8 +458,8 @@ async function planFor(
             paidFrom,
             ...(renewsOn ? { plan: renewsOn } : {}),
           },
-          message: `Undo the cancellation: nothing is charged now. The plan then renews${renewsOn ? ` on ${planName(renewsOn)}` : ''} from ${wallet} for ${formatUsd(amount)} after ${periodEnd} and every 30 days after that until it is cancelled.`,
-          confirmReason: 'Ask the user to confirm first: the plan will charge the wallet again at each renewal.',
+          message: `Undo the cancellation: nothing is charged now. The plan then renews${renewsOn ? ` on ${planName(renewsOn)}` : ''} for ${formatUsd(amount)} after ${periodEnd} and every 30 days after that until it is cancelled, paid from ${balance}.`,
+          confirmReason: 'Ask the user to confirm first: the plan will charge the Wiro balance again at each renewal.',
           perform: async signal => {
             requireApiSuccess(
               await client.post<BillingEnvelope>('/UserAgent/RenewSubscription', { guid }, signal),
@@ -477,7 +485,7 @@ async function planFor(
       if (!prepaid) {
         return {
           outcome: 'refused',
-          message: 'The expired plan was billed by card. Use action subscribe to start a new plan paid from the wallet.',
+          message: `The expired plan was paid by card, and card plans are not renewed. Action subscribe starts a new plan paid from ${balance}.`,
           nextAction: billingCall(guid, 'subscribe'),
         };
       }
@@ -507,7 +515,7 @@ async function planFor(
           paidFrom,
           ...(planKey ? { plan: planKey } : {}),
         },
-        message: `Renew the expired plan${planKey ? ` on ${planName(planKey)}` : ''}: ${formatUsd(price)} now from ${wallet}, then every 30 days until it is cancelled.${earlier} A stopped or failed agent is queued to start again.`,
+        message: `Renew the expired plan${planKey ? ` on ${planName(planKey)}` : ''}: ${formatUsd(price)} now, paid from ${balance}, then every 30 days until it is cancelled.${earlier} A stopped or failed agent is queued to start again.`,
         perform: async signal => {
           const body = requireApiSuccess(
             await client.post<BillingEnvelope>('/UserAgent/RenewSubscription', { guid }, signal),
@@ -520,7 +528,7 @@ async function planFor(
           const included = renewedOn ? agent.pricing?.[renewedOn]?.includedUsageUsd : undefined;
           return {
             outcome: 'done',
-            message: `Renewed${renewedOn ? ` on ${planName(renewedOn)}` : ''} and charged ${paid.text} from ${wallet}. The plan renews every 30 days until it is cancelled.`,
+            message: `Renewed${renewedOn ? ` on ${planName(renewedOn)}` : ''} and charged ${paid.text} from ${balance}. The plan renews from it every 30 days until it is cancelled.`,
             result: {
               chargedUsd: paid.chargedUsd,
               monthlyPriceUsd: monthly,
@@ -559,21 +567,25 @@ async function planFor(
         };
       };
       if (!prepaid) {
-        // A plan moving to wallet billing has no cancel in the dashboard either: it can be cancelled once the wallet bills it.
+        // A card plan moving to the balance is cancelled only once the balance bills it.
         if (raw?.nextprovider === 'prepaid') {
           return {
             outcome: 'refused',
-            message: `A switch to wallet billing is already scheduled for this plan, so it cannot be cancelled now. After ${periodEnd} it is billed from the wallet, and action cancel then stops its renewals.`,
-          };
-        }
-        if (agent.workspace === 'personal') {
-          return {
-            outcome: 'refused',
-            message: `This plan is billed by card. Card plans are cancelled from the dashboard: ${agent.dashboardUrl}`,
+            message: `This card plan moves to ${balance} after ${periodEnd}, and Wiro does not cancel it before that. `
+              + 'Once the balance bills it, action cancel stops its renewals.',
           };
         }
         if (agent.subscription?.cancelAtPeriodEnd) {
           return { outcome: 'not_needed', message: `The plan is already set to end after ${periodEnd}.` };
+        }
+        // Wiro stops a team's card plan here for its billing admins; a personal card plan is not cancelled here.
+        if (agent.workspace === 'personal') {
+          return {
+            outcome: 'refused',
+            message: `This plan is paid by card through ${periodEnd}, and Wiro does not cancel a personal card plan here. `
+              + `Agent plans are paid from the Wiro balance now: at the end of its period the plan moves to ${balance}, `
+              + 'and action cancel then stops its renewals.',
+          };
         }
         return {
           outcome: 'quote',
@@ -636,8 +648,6 @@ async function planFor(
       const next = asPlan(agent.nextPlan) ?? null;
       const when = agent.subscription?.periodEndsAt ? `the renewal after ${agent.subscription.periodEndsAt}` : 'the next renewal';
       const move = comparePlans(target, current);
-      // Wiro changes a team's card plan only in the dashboard, not with a project's key.
-      const teamCard = route === 'card' && agent.workspace === 'team';
 
       if (move === 0) {
         if (!next || next === current) {
@@ -648,9 +658,7 @@ async function planFor(
               : `The agent is already on ${planName(current)}. Nothing to do.`,
           };
         }
-        // A move to another plan is set for the next renewal: keeping this one undoes it. A team's card
-        // plan changes only in the dashboard.
-        if (teamCard) return { outcome: 'refused', message: cardPlan(`keep it on ${planName(current)}`) };
+        // A move to another plan is set for the next renewal: keeping this one undoes it.
         const keep = agent.pricing?.[current];
         return {
           outcome: 'quote',
@@ -659,7 +667,7 @@ async function planFor(
             estimated: false,
             recurringUsd: keep?.priceUsd ?? null,
             includedUsageUsd: keep?.includedUsageUsd ?? null,
-            paidFrom: route === 'card' ? 'card' : paidFrom,
+            paidFrom,
             plan: current,
             change: 'undo_downgrade',
           },
@@ -671,7 +679,7 @@ async function planFor(
               await client.post<BillingEnvelope>('/UserAgent/UpgradeTier', { guid, targetTier: current }, signal),
               'The move set for the next renewal could not be undone.',
             );
-            if (asString(body.url)) return { outcome: 'refused', message: cardPlan(`keep it on ${planName(current)}`) };
+            if (asString(body.url)) return { outcome: 'refused', message: checkoutAnswer(`keep the plan on ${planName(current)}`) };
             // An agent on a price from before the plans keeps its plan with that plan set for its renewal, so
             // the renewal bills the plan's own price.
             if (asPlan(body.nextplan) === current) {
@@ -699,16 +707,14 @@ async function planFor(
       }
 
       if (move > 0) {
-        // No checkout pages are opened for card plans: the user pays them in the dashboard.
-        if (route === 'card') return { outcome: 'refused', message: cardPlan(`move it to ${planName(target)}`) };
         const preview = await readPlanPreview(client, guid, target, signal);
         const targetPrice = preview?.price ?? agent.pricing?.[target];
         if (!targetPrice) throw new Error(`The ${planName(target)} price of this agent is not available right now. Try again later.`);
         const ending = `The plan is cancelled, so it ends about a day after ${periodEnd} and does not renew on ${planName(target)}; this charge covers only the time left. To keep the plan, undo the cancellation first with action renew.`;
         const currentPrice = agent.monthlyPriceUsd || agent.subscription?.amountUsd || 0;
         const fullDifference = roundUsd(Math.max(0, targetPrice.priceUsd - currentPrice));
-        // A wallet plan pays the amount Wiro works out on it now. A card plan moving to wallet billing is
-        // charged from the wallet for the time left of its card period, which Wiro works out at the change.
+        // A wallet plan pays the amount Wiro works out on it now. A card plan is charged from the balance for
+        // the time left of its card period, which Wiro works out at the change.
         const change = preview?.change?.wallet ? preview.change : null;
         const exact = change?.chargeNowUsd ?? null;
         const renewalUsd = change?.includedFromRenewalUsd ?? targetPrice.includedUsageUsd;
@@ -716,9 +722,9 @@ async function planFor(
         const days = daysLeftText(change?.secondsLeft ?? null);
         const undoes = next && next !== current ? ` This also undoes the move to ${planName(next)} set for the next renewal.` : '';
         const money = exact !== null
-          ? `Move to ${planName(target)}: ${formatUsd(exact)} now from ${wallet} for the rest of this period`
+          ? `Move to ${planName(target)}: ${formatUsd(exact)} now, paid from ${balance}, for the rest of this period`
             + `${exact > 0 && underOneDayLeft(change?.secondsLeft ?? null) ? ', at the one-day minimum' : days ? ` (${days})` : ''}. `
-          : `Move to ${planName(target)}: the difference for the rest of this period is taken from ${wallet} now. Wiro works it out from the time left when the plan changes, and it is never more than ${formatUsd(fullDifference)}, so that is the amount to approve. `;
+          : `Move to ${planName(target)}: the difference for the rest of this period is paid from ${balance} now. Wiro works it out from the time left when the plan changes, and it is never more than ${formatUsd(fullDifference)}, so that is the amount to approve. `;
         const usage = nowUsd !== null
           ? upgradeUsageText(nowUsd, cancelled ? '' : `, and every renewal includes ${formatUsd(renewalUsd)}`, false)
           : `The added AI usage comes for the time left in this period${cancelled ? '' : `, and every renewal includes ${formatUsd(renewalUsd)}`}. `;
@@ -743,10 +749,7 @@ async function planFor(
               await client.post<BillingEnvelope>('/UserAgent/UpgradeTier', { guid, targetTier: target }, signal),
               'The plan could not be changed.',
             );
-            if (asString(body.url)) {
-              // A checkout link means the plan is paid by card, and card payments are made in the dashboard.
-              return { outcome: 'refused', message: cardPlan(`move it to ${planName(target)}`) };
-            }
+            if (asString(body.url)) return { outcome: 'refused', message: checkoutAnswer(`move the plan to ${planName(target)}`) };
             const charged = toNumber(body.proratedCharge) ?? toNumber(body.chargedUsd);
             const newPrice = toNumber(body.newPriceUsd) ?? targetPrice.priceUsd;
             // Wiro answers the included usage in hundredths of a dollar.
@@ -757,7 +760,7 @@ async function planFor(
             const previous = asString(body.previousTier);
             return {
               outcome: 'done',
-              message: `Moved to ${planName(target)} and charged ${formatUsd(charged ?? 0)} from ${wallet}. `
+              message: `Moved to ${planName(target)} and charged ${formatUsd(charged ?? 0)} from ${balance}. `
                 + (came !== null
                   ? upgradeUsageText(came, cancelled ? '' : `, and every renewal includes ${formatUsd(fromRenewal)}`, true)
                   : '')
@@ -785,10 +788,10 @@ async function planFor(
       if (cancelled || agent.subscription?.atPeriodEnd === 'ends') {
         return {
           outcome: 'refused',
-          message: `The plan is set to end after ${periodEnd}, so it does not renew on another plan. To keep the agent on ${planName(target)}, `
-            + (route === 'card' && !cancelled
-              ? `keep the plan in the dashboard first (${agent.dashboardUrl}), then change the plan.`
-              : 'undo the cancellation first with action renew, then change the plan.'),
+          message: `The plan is set to end after ${periodEnd}, so it does not renew on another plan. `
+            + (cancelled
+              ? `To keep the agent on ${planName(target)}, undo the cancellation first with action renew, then change the plan.`
+              : `Card plans are not renewed any more: once it has ended, action subscribe starts a plan on ${planName(target)} paid from ${balance}.`),
           ...(cancelled ? { nextAction: billingCall(guid, 'renew') } : {}),
         };
       }
@@ -798,9 +801,7 @@ async function planFor(
           message: `The move to ${planName(target)} is already set: it starts with ${when}. Until then the agent keeps ${planName(current)} and the AI usage it includes.`,
         };
       }
-      if (teamCard) return { outcome: 'refused', message: cardPlan(`move it to ${planName(target)}`) };
       const smaller = agent.pricing?.[target];
-      const card = route === 'card';
       const startsAt = agent.subscription?.periodEndsAt;
       return {
         outcome: 'quote',
@@ -809,13 +810,13 @@ async function planFor(
           estimated: false,
           recurringUsd: smaller?.priceUsd ?? null,
           includedUsageUsd: smaller?.includedUsageUsd ?? null,
-          paidFrom: card ? 'card' : paidFrom,
+          paidFrom,
           plan: target,
           change: 'downgrade',
           ...(startsAt ? { startsAt } : {}),
         },
         message: `Move to ${planName(target)} at the next renewal: nothing is charged or refunded now. The agent keeps ${planName(current)} and the AI usage it includes until ${periodEnd}. `
-          + `From ${when} the plan is ${planName(target)}${smaller ? `, ${planTerms(smaller)}` : ''}, ${card ? 'paid by card' : `paid from ${wallet}`}. `
+          + `From ${when} the plan is ${planName(target)}${smaller ? `, ${planTerms(smaller)}` : ''}, paid from ${balance}. `
           + `Asking for ${planName(current)} again before then undoes the move.`,
         confirmReason: 'Ask the user to confirm first: from the next renewal the agent has the smaller plan\'s included AI usage.',
         perform: async signal => {
@@ -825,7 +826,7 @@ async function planFor(
             await client.post<BillingEnvelope>('/UserAgent/UpgradeTier', { guid, targetTier: target, allowDowngrade: true }, signal),
             'The move to the smaller plan could not be set.',
           );
-          if (asString(body.url)) return { outcome: 'refused', message: cardPlan(`move it to ${planName(target)}`) };
+          if (asString(body.url)) return { outcome: 'refused', message: checkoutAnswer(`move the plan to ${planName(target)}`) };
           const at = unixToIso(body.startsAt ?? body.effectiveAt ?? body.periodEnd) ?? startsAt;
           return {
             outcome: 'done',
@@ -943,7 +944,8 @@ const SMALLER_PLAN_REFUSAL = /^The \w+ plan is smaller than this agent's \w+ pla
 // Code 104: another payment from the same wallet, or another change to the agent's plan, was going through.
 const BUSY_NOTE = 'Nothing was charged or changed, and it is not a low balance. Offer to try again in a minute.';
 
-function annotateKnownRefusal(error: ApiResultError): Error {
+/** workspace: the agent's, whose Wiro balance pays for its plan. */
+function annotateKnownRefusal(error: ApiResultError, workspace: 'personal' | 'team' | undefined): Error {
   const text = error.message;
   if (hasErrorCode(error, 104)) return new Error(`${text}\n\n${BUSY_NOTE}`);
   if (isWalletNotRead(error)) return new Error(`${text}\n\n${WALLET_NOT_READ_NOTE}`);
@@ -951,8 +953,11 @@ function annotateKnownRefusal(error: ApiResultError): Error {
     // A move this server sent as one to a larger plan: the agent's plan moved up after it was read.
     return new Error(`${text}\n\nNothing was charged: the agent's plan changed after it was read. get_my_agent shows the plan it is on now, and change_plan quotes a move from it.`);
   }
-  if (/insufficient wallet balance/i.test(text)) {
-    return new Error(`${text}\n\nNothing was charged. Funds are added at https://wiro.ai/panel/wallet/deposit/credit-card (for a team project, select that team in the dashboard first); once the user has added them and says yes, try again. get_account shows the balance.`);
+  const short = balanceShortfall(error);
+  if (short) {
+    const team = workspace === 'team' ? 'select the agent\'s team in the dashboard first' : workspace ? '' : 'for a team agent, select its team in the dashboard first';
+    return new Error(`${text}\n\n${shortBalanceNote(short.neededUsd, team)} Once the user has added them and says yes, `
+      + 'confirm the same quote again. get_account shows the balance.');
   }
   const hint = workspaceHint(text);
   if (hint) return new Error(`${text}\n\n${hint}`);
@@ -967,7 +972,7 @@ export function registerManageAgentBilling(server: McpServer, client: WiroClient
       description: 'Pay for, renew, change or cancel a deployed agent\'s plan. An agent has '
         + 'one of three plans, smallest first: Starter, Pro or Max. Each has a fixed monthly price that it also '
         + 'includes as AI usage each month, and every plan includes every '
-        + 'skill. After the included usage, the agent uses the Wiro balance of its workspace. Charges come from the Wiro wallet of the agent\'s workspace (the team '
+        + 'skill. After the included usage, the agent uses the Wiro balance of its workspace. Charges come from the Wiro balance of the agent\'s workspace (the team '
         + 'wallet for a team agent); the connected project must belong to that same workspace. Every call without '
         + 'confirm: true only returns what will happen and the amount (for a move to a larger plan, the prorated '
         + 'amount Wiro works out, or the most it can charge when that is worked out only at the change). Show it to '
@@ -981,15 +986,12 @@ export function registerManageAgentBilling(server: McpServer, client: WiroClient
         + 'nothing, and asking for the plan the agent is on undoes a move set for the next renewal; cancel stops '
         + 'renewals with no refund. Extra credit packs are retired: buy_credits only says so and charges nothing, and '
         + 'funds are added to the balance on wiro.ai. Plans renew every 30 days until '
-        + 'cancelled. Renewals and plan changes leave a running agent running. An agent whose plan is billed '
-        + 'by card moves to a larger plan in the Wiro dashboard, and a personal card plan is '
-        + 'cancelled there; the tool returns the link and charges nothing. A personal card plan can move to a smaller '
-        + 'plan here: the card pays the smaller plan from the next renewal; a team\'s card plan changes plans in the '
-        + 'dashboard. A card plan that is moving to wallet billing '
-        + 'pays change_plan from the wallet, and cancel works once the wallet bills it. A card plan '
-        + 'whose last payment did not go through has not ended and takes no new plan: the payment is fixed from '
-        + 'Billing in the dashboard, in the personal workspace of the person whose card pays for the plan, and the '
-        + 'plan then renews by itself. On a team '
+        + 'cancelled. Renewals and plan changes leave a running agent running. Agent plans are paid only from the '
+        + 'Wiro balance: no card checkout is opened, and a quote refused because the balance is short says how much '
+        + 'to add on wiro.ai, with nothing charged. A card plan from before that is paid by card through its period, '
+        + 'then moves to the balance and renews from it; its plan changes are paid from the balance, and cancel works '
+        + 'once the balance bills it. A card plan whose last payment did not go through has not ended and takes no new '
+        + 'plan until it ends. On a team '
         + 'agent only a team admin, the organization\'s owner or the person who deployed the agent can pay for it or '
         + 'change its plan; other members are refused and nothing is charged.',
       inputSchema: strictInput({
@@ -1220,7 +1222,7 @@ export function registerManageAgentBilling(server: McpServer, client: WiroClient
           }
           return errorResult(new Error(`${text}\n\nThe request was sent and the answer does not show whether it went through. ${observed.text} Do not repeat the call until this is checked.`));
         }
-        if (error instanceof ApiResultError) return errorResult(annotateKnownRefusal(error));
+        if (error instanceof ApiResultError) return errorResult(annotateKnownRefusal(error, before?.workspace));
         return errorResult(error);
       }
     },

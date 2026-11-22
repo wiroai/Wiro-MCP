@@ -889,7 +889,8 @@ test('get_agent_activity and the playbook say what the log holds now', async () 
   assert.match(description, /never a credential value or an instruction's text/);
   assert.match(description, /Who changed what can be read while the agent is stopped/);
   // Wiro writes rows for the plan events no one asked for: renewals, card payments, portal cancellations and ends.
-  assert.match(description, /Plan events Wiro records by itself show there too, without a person's name, such as a renewal with the amount charged, a card payment, a cancellation in the billing portal or a plan that ended and why\./);
+  assert.match(description, /Plan events Wiro records by itself show there too, without a person's name, such as a renewal with the amount charged or a plan that ended and why\./);
+  assert.doesNotMatch(description, /billing portal|card payment/);
   assert.doesNotMatch(description, /for a stopped agent the call says so/);
   assert.doesNotMatch(description, /Names and emails of the people who acted are never returned/);
   assert.match(description, /emails and user ids are never returned/);

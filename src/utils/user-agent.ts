@@ -4,6 +4,7 @@ import {
   AGENT_NOT_FOUND_TEXT,
   ApiResultError,
   asString,
+  hasErrorCode,
   isPlainObject,
   requireApiSuccess,
   toNumber,
@@ -234,6 +235,28 @@ export function addFundsText(workspace: 'personal' | 'team'): string {
   return `Funds are added at ${ADD_FUNDS_URL}${workspace === 'team' ? ' (select the agent\'s team in the dashboard first)' : ''}.`;
 }
 
+/**
+ * What Wiro says is missing from the balance for a plan payment it refused: code 97 with neededusd, the amount to
+ * add in USD (at least the deposit minimum), or the older "Insufficient wallet balance" answer. null for any other
+ * answer, a 97 that refuses a team member included.
+ */
+export function balanceShortfall(error: unknown): { neededUsd: number | null } | null {
+  if (!(error instanceof ApiResultError)) return null;
+  const needed = toNumber(error.body.neededusd);
+  const short = (hasErrorCode(error, 97) && (needed !== null || /balance/i.test(error.message)))
+    || /insufficient wallet balance/i.test(error.message);
+  return short ? { neededUsd: needed !== null && needed > 0 ? needed : null } : null;
+}
+
+/**
+ * The words after a plan payment refused for a short balance: what was not done, how much to add, and where.
+ * teamHint says which team to select in the dashboard, when one is to be selected.
+ */
+export function shortBalanceNote(neededUsd: number | null, teamHint: string, nothingDone = 'Nothing was charged.'): string {
+  return `${nothingDone} ${neededUsd !== null ? `Add at least ${formatUsd(neededUsd)} to the Wiro balance on wiro.ai. ` : ''}`
+    + `Funds are added at ${ADD_FUNDS_URL}${teamHint ? ` (${teamHint})` : ''}.`;
+}
+
 // A confirmed charge goes ahead only when a fresh quote still matches the
 // amount the user approved; anything else is quoted again.
 export const AMOUNT_TOLERANCE_USD = 0.005;
@@ -252,7 +275,7 @@ export const subscriptionSchema = z.object({
   daysRemaining: z.number().nullable(),
   cancelAtPeriodEnd: z.boolean(),
   atPeriodEnd: z.enum(['renews', 'ends', 'unknown']).optional()
-    .describe('For an active plan, what happens at periodEndsAt: it renews, it ends, or unknown for a card plan whose renewal is managed in the Wiro dashboard.'),
+    .describe('For an active plan, what happens at periodEndsAt: it renews, it ends, or unknown for a card plan from before agent plans were paid from the Wiro balance only.'),
 });
 
 export type AgentSubscription = z.infer<typeof subscriptionSchema>;
@@ -260,7 +283,7 @@ export type AgentSubscription = z.infer<typeof subscriptionSchema>;
 /**
  * Whether a plan ends with its current period: true when it ends, false when
  * it renews, null when that is not known. A wallet plan says so itself, and a
- * card plan moving to wallet billing renews from the wallet, even though its
+ * card plan moving to the wallet renews from the Wiro balance, even though its
  * card subscription is set to end with the period. Any other card plan is
  * known only when the row carries its card state (cardEnds).
  */
@@ -290,13 +313,6 @@ export function toSubscription(value: unknown, cardEnds?: unknown): AgentSubscri
   };
 }
 
-/** How a new charge for this plan is paid right now. */
-export function chargeRoute(subscription: unknown): 'wallet' | 'card' | null {
-  if (!isPlainObject(subscription)) return null;
-  if (subscription.nextprovider === 'prepaid' || subscription.provider === 'prepaid') return 'wallet';
-  return 'card';
-}
-
 // The plan statuses Wiro counts as ended. Every other status is a plan that has not ended, a card plan
 // whose renewal payment did not go through included, and Wiro starts no second plan beside it.
 const ENDED_PLAN_STATUSES: ReadonlySet<string> = new Set(['expired', 'cancelled', 'refunded']);
@@ -314,16 +330,16 @@ export function isUnsettledPlan(plan: Pick<AgentSubscription, 'status'> | null |
   return Boolean(plan) && plan?.status !== 'active' && isLivePlanStatus(plan?.status);
 }
 
-// Billing in the dashboard's personal workspace. Its Open Billing Portal button is where a card plan whose last
-// payment did not go through is paid or cancelled: the agent's page offers the billing portal only for an active
-// plan, and a team workspace has no billing portal, since a team's card plans are billed to the member who pays.
-const BILLING_PAGE_URL = 'https://wiro.ai/panel/billing';
+/** The Wiro balance that pays for an agent's plan: the personal wallet, or the team wallet for a team agent. */
+export function planBalanceName(workspace: 'personal' | 'team'): string {
+  return workspace === 'team' ? 'the team\'s Wiro balance' : 'your Wiro balance';
+}
 
 /**
- * What to do about a plan that has not ended and is not active. Wiro starts no new plan beside it, and renews,
- * changes, cancels and adds packs only to an active plan, so the dashboard settles it: a card plan whose last
- * payment did not go through renews by itself once its open invoice is paid in the billing portal, which Billing
- * opens in the personal workspace of whoever pays for the plan. lead says what the call could not do, after the
+ * What to do about a plan that has not ended and is not active, such as a card plan from before agent plans were
+ * paid from the Wiro balance only, whose last payment did not go through. Wiro starts no new plan beside it, and
+ * renews, changes and cancels only an active plan, and no card payment is taken here, so nothing here settles it:
+ * once a card plan has ended, a new plan is paid from the balance. lead says what the call could not do, after the
  * plan's state.
  */
 export function unsettledPlanText(
@@ -335,11 +351,9 @@ export function unsettledPlanText(
   const state = failed
     ? `The last payment for this card plan did not go through (${plan.status}), so the plan has not ended.`
     : `This ${plan.billing === 'card' ? 'card ' : ''}plan is ${plan.status}, so it has not ended.`;
-  const fix = failed
-    ? 'To fix the payment, open Billing in the personal workspace of the Wiro dashboard and choose Open Billing Portal. '
-      + 'Pay the open invoice there, with another card if needed, and the plan renews by itself. The plan can also be cancelled there. '
-      + (agent.workspace === 'team' ? 'On a team agent, the member whose card pays for the plan does this, from their own personal workspace. ' : '')
-      + BILLING_PAGE_URL
+  const fix = plan.billing === 'card'
+    ? 'Agent plans are paid from the Wiro balance now, and no card payment is taken here: once this card plan has ended, '
+      + `a new plan is paid from ${planBalanceName(agent.workspace)}. The agent's page: ${agentDashboardUrl(agent.guid)}`
     : `It is managed in the Wiro dashboard: ${agentDashboardUrl(agent.guid)}`;
   return [state, lead, fix].filter(Boolean).join(' ');
 }
@@ -1038,7 +1052,7 @@ export function formatSubscriptionLine(subscription: AgentSubscription | null, p
       parts.push(`paid through ${subscription.periodEndsAt}`);
     }
   }
-  if (subscription.switchingToWallet) parts.push('switching to wallet billing at period end');
+  if (subscription.switchingToWallet) parts.push('moves to the Wiro balance at period end');
   return parts.join(', ');
 }
 
@@ -1529,7 +1543,8 @@ export function nextStepForAgent(agent: AgentDetail, waitSeconds: number, plainM
   return undefined;
 }
 
-// Refusals known to leave the wallet untouched (93: a spend limit refused the purchase).
+// Refusals known to leave the wallet untouched (93: a spend limit refused the purchase; 97: among others, a
+// balance too short for a plan payment).
 const PRE_CHARGE_CODES = new Set([93, 95, 96, 97, 99, 101, 102, 103, 104, 105, 106, 107, 108, 109]);
 
 const WALLET_NOT_READ = /could not retrieve wallet balance/i;

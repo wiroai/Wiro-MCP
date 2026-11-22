@@ -895,7 +895,7 @@ test('deploy_agent quotes a template without deploying or echoing credentials', 
     assert.match(textOf(result), /^- Other plans: Starter \$5 a month, includes \$5 of AI usage; Max \$100 a month, includes \$100 of AI usage\. Every plan includes every skill and connector\.$/m);
     assert.match(textOf(result), /^- AI usage: the plan includes \$30\.00 a month for the agent's chat and scheduled tasks\. After it, the agent uses the Wiro balance of its workspace, and a new turn then needs \$0\.50 there\. Model runs it starts, for images, videos or voice calls, are billed to the wallet of the workspace that owns the Wiro project connected to the agent\.$/m);
     assert.doesNotMatch(textOf(result), /credit/i);
-    assert.equal(content.quote.paidFrom, 'The Wiro wallet of the connected project\'s workspace: the team wallet for a team project, otherwise the personal wallet.');
+    assert.equal(content.quote.paidFrom, 'The Wiro balance of the connected project\'s workspace: the team wallet for a team project, otherwise the personal wallet.');
     assertNoSecrets(result);
   });
 });
@@ -2209,7 +2209,7 @@ test('manage_agent_billing quotes a subscription and pays it from the wallet on 
       paidFrom: 'personal_wallet',
       plan: 'max',
     });
-    assert.match(quote.structuredContent.message, /^Subscribe on Max: \$100\.00 now from the personal wallet, then every 30 days until the plan is cancelled\. It includes \$100\.00 of AI usage a month; after it, the agent uses the same balance\./);
+    assert.match(quote.structuredContent.message, /^Subscribe on Max: \$100\.00 now, paid from your Wiro balance, then every 30 days until the plan is cancelled\. It includes \$100\.00 of AI usage a month; after it, the agent uses the same balance\./);
     assert.deepEqual(quote.structuredContent.nextAction, {
       tool: 'manage_agent_billing',
       arguments: { agent_guid: 'ua-1', action: 'subscribe', plan: 'max', confirm_charge_usd: 100, confirm: true },
@@ -2400,7 +2400,7 @@ test('manage_agent_billing quotes a move to a larger wallet plan from Wiro\'s pl
     assert.equal(quote.plan, 'pro');
     assert.equal(quote.change, 'upgrade');
     assert.deepEqual(upgrade.structuredContent.nextAction.arguments, { agent_guid: 'ua-1', action: 'change_plan', plan: 'pro', confirm_charge_usd: 12.5, confirm: true });
-    assert.match(upgrade.structuredContent.message, /^Move to Pro: \$12\.50 now from the personal wallet for the rest of this period \(15 days\)\. \$12\.50 of AI usage comes now for the rest of this period, and every renewal includes \$30\.00\. From the next renewal the plan costs \$30\.00 every 30 days\. The agent keeps running: the plan change does not restart it\./);
+    assert.match(upgrade.structuredContent.message, /^Move to Pro: \$12\.50 now, paid from your Wiro balance, for the rest of this period \(15 days\)\. \$12\.50 of AI usage comes now for the rest of this period, and every renewal includes \$30\.00\. From the next renewal the plan costs \$30\.00 every 30 days\. The agent keeps running: the plan change does not restart it\./);
     assert.match(upgrade.structuredContent.message, /confirm_charge_usd 12\.5, confirm: true/);
     assert.doesNotMatch(upgrade.structuredContent.message, /about|estimate|never more than|30-day|restarts/);
     assert.match(upgrade.structuredContent.message, /A move to a smaller plan later starts at the renewal after it is asked for, with nothing refunded\./);
@@ -2420,7 +2420,7 @@ test('manage_agent_billing quotes a move to a larger wallet plan from Wiro\'s pl
     const done = await call(client, 'manage_agent_billing', upgrade.structuredContent.nextAction.arguments);
     assert.equal(done.structuredContent.outcome, 'done');
     assert.deepEqual(fake.called('/UserAgent/UpgradeTier')[0].body, { guid: 'ua-1', targetTier: 'pro' });
-    assert.match(done.structuredContent.message, /^Moved to Pro and charged \$12\.50 from the personal wallet\. \$12\.50 of AI usage came with it for the rest of this period, and every renewal includes \$30\.00\. The plan now costs \$30\.00 every 30 days\. The agent keeps running: the plan change does not restart it\./);
+    assert.match(done.structuredContent.message, /^Moved to Pro and charged \$12\.50 from your Wiro balance\. \$12\.50 of AI usage came with it for the rest of this period, and every renewal includes \$30\.00\. The plan now costs \$30\.00 every 30 days\. The agent keeps running: the plan change does not restart it\./);
     assert.deepEqual(done.structuredContent.result, { chargedUsd: 12.5, monthlyPriceUsd: 30, includedUsageUsd: 30, includedUsageNowUsd: 12.5, plan: 'pro', previousPlan: 'starter', change: 'upgrade' });
     assert.equal(done.structuredContent.nextAction, undefined, 'a running agent is not waited for');
     assert.equal(fake.called('/UserAgent/UpgradeTier').length, 1);
@@ -2451,7 +2451,7 @@ test('manage_agent_billing moves to a smaller plan at the next renewal, with not
       change: 'downgrade',
       startsAt: iso,
     });
-    assert.equal(quote.structuredContent.message.split('\n\n')[0], `Move to Pro at the next renewal: nothing is charged or refunded now. The agent keeps Max and the AI usage it includes until ${iso}. From the renewal after ${iso} the plan is Pro, $30.00 every 30 days, including $30.00 of AI usage a month, paid from the personal wallet. Asking for Max again before then undoes the move.`);
+    assert.equal(quote.structuredContent.message.split('\n\n')[0], `Move to Pro at the next renewal: nothing is charged or refunded now. The agent keeps Max and the AI usage it includes until ${iso}. From the renewal after ${iso} the plan is Pro, $30.00 every 30 days, including $30.00 of AI usage a month, paid from your Wiro balance. Asking for Max again before then undoes the move.`);
     // No money changes hands, so the confirm needs no amount, and nothing is read for a price.
     assert.deepEqual(quote.structuredContent.nextAction, {
       tool: 'manage_agent_billing',
@@ -2576,7 +2576,8 @@ test('manage_agent_billing: an undo Wiro refuses because the move already starte
     const quote = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'change_plan', plan: 'max' });
     assert.equal(quote.structuredContent.outcome, 'quote', textOf(quote));
     assert.equal(quote.structuredContent.quote.change, 'undo_downgrade');
-    assert.equal(quote.structuredContent.quote.paidFrom, 'card');
+    // Its renewals are paid from the balance from the end of its card period.
+    assert.equal(quote.structuredContent.quote.paidFrom, 'personal_wallet');
     assert.equal(quote.structuredContent.quote.chargeNowUsd, 0);
     assert.deepEqual(quote.structuredContent.nextAction.arguments, { agent_guid: 'ua-1', action: 'change_plan', plan: 'max', confirm: true });
 
@@ -2644,40 +2645,42 @@ test('manage_agent_billing does not set a smaller plan on a plan that ends with 
     assert.deepEqual(result.structuredContent.nextAction.arguments, { agent_guid: 'ua-1', action: 'renew' });
   });
 
-  // A card plan can move to a smaller plan here: nothing is paid now.
+  // A card plan from before plans were paid from the balance moves to a smaller plan here, paid from the balance
+  // from the next renewal: nothing is paid now.
   const card = fakeClient({
     '/UserAgent/Detail': detailResponse(agentRow({ tier: 'pro', monthlypriceusd: 30, subscription: subscription({ provider: 'stripe', amount: 30 }), stripecancelatperiodend: false })),
   });
   await withClient(card, async client => {
     const quote = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'change_plan', plan: 'starter' });
     assert.equal(quote.structuredContent.outcome, 'quote');
-    assert.equal(quote.structuredContent.quote.paidFrom, 'card');
-    assert.match(quote.structuredContent.message, /the plan is Starter, \$5\.00 every 30 days, including \$5\.00 of AI usage a month, paid by card\./);
-    // A larger plan is paid in the dashboard, and nothing is charged here.
+    assert.equal(quote.structuredContent.quote.paidFrom, 'personal_wallet');
+    assert.match(quote.structuredContent.message, /the plan is Starter, \$5\.00 every 30 days, including \$5\.00 of AI usage a month, paid from your Wiro balance\./);
+    // A larger plan is quoted from the balance too, at the most it can charge, with no card checkout.
     const larger = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'change_plan', plan: 'max' });
-    assert.equal(larger.structuredContent.outcome, 'refused');
-    assert.match(larger.structuredContent.message, /^This plan is billed by card, and card payments are made in the Wiro dashboard\. Nothing was charged here\. To move it to Max, open https:\/\/wiro\.ai\/panel\/agents\/ua-1$/);
-    assert.equal(card.calls.filter(item => item.path !== '/UserAgent/Detail').length, 0);
+    assert.equal(larger.structuredContent.outcome, 'quote', textOf(larger));
+    assert.equal(larger.structuredContent.quote.paidFrom, 'personal_wallet');
+    assert.equal(larger.structuredContent.quote.maxChargeUsd, 70);
+    assert.match(larger.structuredContent.message, /^Move to Max: the difference for the rest of this period is paid from your Wiro balance now\./);
+    assert.doesNotMatch(larger.structuredContent.message, /dashboard|card payment|checkout/i);
+    assert.equal(card.called('/UserAgent/UpgradeTier').length, 0);
   });
 
-  // Wiro changes a team's card plan only in the dashboard, so neither move nor undo is offered here.
+  // A team's card plan changes plans here too, from the team's balance.
   const teamCard = fakeClient({
     '/UserAgent/Detail': detailResponse(agentRow({ teamguid: 'team-guid-secret', tier: 'pro', nextplan: 'starter', subscription: subscription({ provider: 'stripe', amount: 30 }), stripecancelatperiodend: false })),
     '/Organization/List': { result: true, errors: [], organizations: [] },
   });
   await withClient(teamCard, async client => {
-    for (const [plan, what] of [['starter', 'move it to Starter'], ['pro', 'keep it on Pro']]) {
-      const result = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'change_plan', plan });
-      if (plan === 'starter') {
-        // The move is already set, so nothing is needed.
-        assert.equal(result.structuredContent.outcome, 'not_needed', textOf(result));
-        continue;
-      }
-      assert.equal(result.structuredContent.outcome, 'refused', textOf(result));
-      assert.match(result.structuredContent.message, new RegExp(`To ${what}, open https://wiro\\.ai/panel/agents/ua-1$`));
-    }
+    // The move is already set, so nothing is needed.
+    const starter = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'change_plan', plan: 'starter' });
+    assert.equal(starter.structuredContent.outcome, 'not_needed', textOf(starter));
+    const keep = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'change_plan', plan: 'pro' });
+    assert.equal(keep.structuredContent.outcome, 'quote', textOf(keep));
+    assert.equal(keep.structuredContent.quote.change, 'undo_downgrade');
+    assert.equal(keep.structuredContent.quote.paidFrom, 'team_wallet');
     const max = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'change_plan', plan: 'max' });
-    assert.equal(max.structuredContent.outcome, 'refused');
+    assert.equal(max.structuredContent.outcome, 'quote', textOf(max));
+    assert.match(max.structuredContent.message, /is paid from the team's Wiro balance now/);
     assert.equal(teamCard.called('/UserAgent/UpgradeTier').length, 0);
   });
 });
@@ -2763,15 +2766,14 @@ function pastDue(overrides = {}) {
   return subscription({ status: 'past_due', provider: 'stripe', amount: 90, currentperiodend: NOW + 25 * 86_400, renewaldate: null, daysremaining: 0, ...overrides });
 }
 
-// The agent's page offers the billing portal only for an active plan, and a team workspace has none: the payer
-// pays the open invoice, or cancels, from Billing in their personal workspace. The fix never links the agent's page.
-const PAYMENT_STEPS = 'To fix the payment, open Billing in the personal workspace of the Wiro dashboard and choose Open Billing Portal. '
-  + 'Pay the open invoice there, with another card if needed, and the plan renews by itself. The plan can also be cancelled there.';
-const BILLING_URL = 'https://wiro.ai/panel/billing';
-const PAYMENT_FIX = `${PAYMENT_STEPS} ${BILLING_URL}`;
-const TEAM_PAYMENT_FIX = `${PAYMENT_STEPS} On a team agent, the member whose card pays for the plan does this, from their own personal workspace. ${BILLING_URL}`;
+// Agent plans are paid from the Wiro balance only: no card payment is taken here, no billing portal is offered, and
+// once the card plan has ended, a new plan is paid from the balance.
+const PAYMENT_FIX = 'Agent plans are paid from the Wiro balance now, and no card payment is taken here: once this card plan has ended, '
+  + 'a new plan is paid from your Wiro balance. The agent\'s page: https://wiro.ai/panel/agents/ua-1';
+const TEAM_PAYMENT_FIX = 'Agent plans are paid from the Wiro balance now, and no card payment is taken here: once this card plan has ended, '
+  + 'a new plan is paid from the team\'s Wiro balance. The agent\'s page: https://wiro.ai/panel/agents/ua-1';
 
-test('manage_agent_billing subscribe starts no plan beside one that has not ended, and says to fix its payment instead', async () => {
+test('manage_agent_billing subscribe starts no plan beside one that has not ended, and offers no card payment for it', async () => {
   // Wiro counts every status but expired, cancelled and refunded as a plan that has not ended.
   for (const status of ['past_due', 'unpaid']) {
     const fake = fakeClient({
@@ -2789,21 +2791,22 @@ test('manage_agent_billing subscribe starts no plan beside one that has not ende
         assert.equal(out.quote, undefined);
         assert.equal(out.nextAction, undefined);
         assert.match(textOf(result), /^## subscribe: Not possible\n/);
+        assert.doesNotMatch(textOf(result), /billing portal|Billing Portal|open invoice|panel\/billing/);
       }
     });
     assert.equal(fake.called('/UserAgent/CreateSubscriptionCheckout').length, 0, status);
   }
 
-  // Any other status that has not ended takes no second plan either; the dashboard manages it.
+  // Any other status that has not ended takes no second plan either.
   const other = fakeClient({ '/UserAgent/Detail': detailResponse(agentRow({ subscription: pastDue({ status: 'incomplete' }) })) });
   await withClient(other, async client => {
     const result = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'subscribe' });
     assert.equal(result.structuredContent.outcome, 'refused');
     assert.equal(result.structuredContent.message, 'This card plan is incomplete, so it has not ended. A new plan is not started beside it, since both would bill. '
-      + 'Nothing was charged. It is managed in the Wiro dashboard: https://wiro.ai/panel/agents/ua-1');
+      + `Nothing was charged. ${PAYMENT_FIX}`);
   });
 
-  // On a team agent, the member whose card pays for the plan fixes it.
+  // On a team agent, the team's balance pays for the next plan.
   const team = fakeClient({
     '/UserAgent/Detail': detailResponse(teamAgentRow({ subscription: pastDue() })),
     '/Organization/List': organizations('admin'),
@@ -2834,7 +2837,7 @@ test('manage_agent_billing subscribe starts no plan beside one that has not ende
   }
 });
 
-test('manage_agent_billing sends every action on a card plan whose payment did not go through to Billing, never to subscribe', async () => {
+test('manage_agent_billing refuses every action on a card plan whose payment did not go through, and sends no one to subscribe or to a card payment', async () => {
   const fake = fakeClient({ '/UserAgent/Detail': detailResponse(agentRow({ tier: 'pro', monthlypriceusd: 90, subscription: pastDue() })) });
   const state = 'The last payment for this card plan did not go through (past_due), so the plan has not ended.';
   await withClient(fake, async client => {
@@ -2911,7 +2914,7 @@ test('manage_agent_billing: a wallet cancel keeps the move set for the renewal, 
     assert.equal(undo.structuredContent.outcome, 'quote', textOf(undo));
     assert.equal(undo.structuredContent.quote.plan, 'max');
     assert.equal(undo.structuredContent.quote.recurringUsd, 100);
-    assert.match(undo.structuredContent.message, /^Undo the cancellation: nothing is charged now\. The plan then renews on Max from the personal wallet for \$100\.00 after /);
+    assert.match(undo.structuredContent.message, /^Undo the cancellation: nothing is charged now\. The plan then renews on Max for \$100\.00 after .* until it is cancelled, paid from your Wiro balance\./);
     assert.deepEqual(undo.structuredContent.nextAction.arguments, { agent_guid: 'ua-1', action: 'renew', confirm: true });
   });
 
@@ -2935,7 +2938,7 @@ test('manage_agent_billing says what the wallet paid for a plan, with the plan\'
   await withClient(fake, async client => {
     const done = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'subscribe', plan: 'pro', confirm_charge_usd: 30, confirm: true });
     assert.equal(done.structuredContent.outcome, 'done', textOf(done));
-    assert.match(done.structuredContent.message, /^Subscribed on Pro and charged \$24\.00 \(the \$30\.00 price after a discount\) from the personal wallet\./);
+    assert.match(done.structuredContent.message, /^Subscribed on Pro and charged \$24\.00 \(the \$30\.00 price after a discount\) from your Wiro balance\./);
     assert.deepEqual(done.structuredContent.result, { chargedUsd: 24, monthlyPriceUsd: 30, includedUsageUsd: 30, plan: 'pro' });
   });
 
@@ -2951,7 +2954,7 @@ test('manage_agent_billing says what the wallet paid for a plan, with the plan\'
     assert.equal(quote.structuredContent.quote.chargeNowUsd, 100);
     const done = await call(client, 'manage_agent_billing', quote.structuredContent.nextAction.arguments);
     assert.equal(done.structuredContent.outcome, 'done', textOf(done));
-    assert.match(done.structuredContent.message, /^Renewed on Max and charged \$80\.00 \(the \$100\.00 price after a discount\) from the personal wallet\./);
+    assert.match(done.structuredContent.message, /^Renewed on Max and charged \$80\.00 \(the \$100\.00 price after a discount\) from your Wiro balance\./);
     assert.deepEqual(done.structuredContent.result, { chargedUsd: 80, monthlyPriceUsd: 100, includedUsageUsd: 100, plan: 'max', renewal: 'renewed' });
   });
 
@@ -2962,7 +2965,7 @@ test('manage_agent_billing says what the wallet paid for a plan, with the plan\'
   });
   await withClient(plain, async client => {
     const done = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'renew', confirm_charge_usd: 100, confirm: true });
-    assert.match(done.structuredContent.message, /^Renewed on Max and charged \$100\.00 from the personal wallet\. /);
+    assert.match(done.structuredContent.message, /^Renewed on Max and charged \$100\.00 from your Wiro balance\. /);
     assert.equal(done.structuredContent.result.chargedUsd, 100);
   });
 });
@@ -3002,7 +3005,7 @@ test('manage_agent_billing: a renewal Wiro refuses above the price the agent sho
     assert.equal(output.quote.plan, 'max');
     assert.ok(output.message.startsWith('This plan now renews on the Max plan at $100.00 a month, not the $70.00 it showed. Nothing was charged. '
       + 'The agent was read again for this new quote. Show it to the user and ask again; renew only after they agree to it.\n\n'
-      + 'Renew the expired plan on Max: $100.00 now from the personal wallet, then every 30 days until it is cancelled.'), output.message);
+      + 'Renew the expired plan on Max: $100.00 now, paid from your Wiro balance, then every 30 days until it is cancelled.'), output.message);
     assert.doesNotMatch(output.message, /Renew again to pay the new price/);
     assert.deepEqual(output.nextAction, {
       tool: 'manage_agent_billing',
@@ -3056,7 +3059,7 @@ test('a move to a larger plan with more than a day left names no minimum', async
   await withClient(fake, async client => {
     const quote = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'change_plan', plan: 'pro' });
     assert.equal(quote.structuredContent.quote.chargeNowUsd, 12.54, textOf(quote));
-    assert.match(quote.structuredContent.message, /^Move to Pro: \$12\.54 now from the personal wallet for the rest of this period \(15 days\)\. /);
+    assert.match(quote.structuredContent.message, /^Move to Pro: \$12\.54 now, paid from your Wiro balance, for the rest of this period \(15 days\)\. /);
     assert.doesNotMatch(quote.structuredContent.message, /minimum/);
   });
 });
@@ -3072,7 +3075,7 @@ test('a move to a larger plan in the last hours of a period quotes the one day i
     assert.equal(quote.structuredContent.quote.chargeNowUsd, 0.84, textOf(quote));
     assert.equal(quote.structuredContent.quote.maxChargeUsd, 0.84);
     assert.equal(quote.structuredContent.quote.includedUsageNowUsd, 0.84);
-    assert.match(quote.structuredContent.message, /^Move to Pro: \$0\.84 now from the personal wallet for the rest of this period, at the one-day minimum\. \$0\.84 of AI usage comes now for the rest of this period, and every renewal includes \$30\.00\./);
+    assert.match(quote.structuredContent.message, /^Move to Pro: \$0\.84 now, paid from your Wiro balance, for the rest of this period, at the one-day minimum\. \$0\.84 of AI usage comes now for the rest of this period, and every renewal includes \$30\.00\./);
     assert.doesNotMatch(quote.structuredContent.message, /real length of the billing period|never more than/);
   });
 });
@@ -3098,7 +3101,7 @@ test('manage_agent_billing approves the upgrade of a card plan moving to wallet 
     assert.equal(quote.structuredContent.quote.estimated, true);
     assert.equal(quote.structuredContent.quote.maxChargeUsd, 25);
     assert.equal('includedUsageNowUsd' in quote.structuredContent.quote, false);
-    assert.match(quote.structuredContent.message, /^Move to Pro: the difference for the rest of this period is taken from the personal wallet now\. Wiro works it out from the time left when the plan changes, and it is never more than \$25\.00, so that is the amount to approve\. The added AI usage comes for the time left in this period, and every renewal includes \$30\.00\./);
+    assert.match(quote.structuredContent.message, /^Move to Pro: the difference for the rest of this period is paid from your Wiro balance now\. Wiro works it out from the time left when the plan changes, and it is never more than \$25\.00, so that is the amount to approve\. The added AI usage comes for the time left in this period, and every renewal includes \$30\.00\./);
     assert.doesNotMatch(quote.structuredContent.message, /\$0\.00 now/);
     const approved = quote.structuredContent.nextAction.arguments.confirm_charge_usd;
     assert.equal(approved, 25);
@@ -3143,19 +3146,52 @@ test('manage_agent_billing does not promise renewals on a cancelled plan', async
   });
 });
 
-test('manage_agent_billing sends card plans to the dashboard without a payment link', async () => {
+test('manage_agent_billing pays a card plan\'s changes from the balance and opens no card checkout', async () => {
   const card = subscription({ provider: 'stripe' });
-  const fake = fakeClient({ '/UserAgent/Detail': detailResponse(agentRow({ subscription: card })) });
+  let upgraded = false;
+  const fake = fakeClient({
+    '/UserAgent/Detail': () => detailResponse(agentRow(upgraded ? { tier: 'pro', monthlypriceusd: 30, subscription: subscription({ provider: 'stripe', amount: 30 }) } : { subscription: card })),
+    '/UserAgent/PricingPreview': proPreview({ provider: 'stripe', chargeNowUsd: 0 }),
+    '/UserAgent/UpgradeTier': () => {
+      upgraded = true;
+      return { ...UPGRADED, proratedCharge: 12.5 };
+    },
+  });
   await withClient(fake, async client => {
-    const upgrade = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'change_plan', plan: 'pro', confirm: true });
-    assert.equal(upgrade.structuredContent.outcome, 'refused');
-    assert.match(upgrade.structuredContent.message, /card payments are made in the Wiro dashboard\. Nothing was charged here\. To move it to Pro, open https:\/\/wiro\.ai\/panel\/agents\/ua-1$/);
+    // A move to a larger plan is charged from the balance, at the most it can charge.
+    const quote = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'change_plan', plan: 'pro' });
+    assert.equal(quote.structuredContent.outcome, 'quote', textOf(quote));
+    assert.equal(quote.structuredContent.quote.maxChargeUsd, 25);
+    assert.equal(quote.structuredContent.quote.paidFrom, 'personal_wallet');
+    assert.match(quote.structuredContent.message, /^Move to Pro: the difference for the rest of this period is paid from your Wiro balance now\./);
+    const upgrade = await call(client, 'manage_agent_billing', quote.structuredContent.nextAction.arguments);
+    assert.equal(upgrade.structuredContent.outcome, 'done', textOf(upgrade));
+    assert.match(upgrade.structuredContent.message, /^Moved to Pro and charged \$12\.50 from your Wiro balance\./);
     assert.equal(upgrade.structuredContent.checkoutUrl, undefined);
+    assert.doesNotMatch(upgrade.structuredContent.message, /dashboard|checkout|card payment/i);
+  });
 
+  // An older Wiro that answers a card plan's change with a checkout link: no link is offered, nothing was charged.
+  const checkout = fakeClient({
+    '/UserAgent/Detail': detailResponse(agentRow({ subscription: card })),
+    '/UserAgent/PricingPreview': proPreview({ provider: 'stripe', chargeNowUsd: 0 }),
+    '/UserAgent/UpgradeTier': { result: true, errors: [], url: 'https://checkout.stripe.com/c/pay/cs_test_1' },
+  });
+  await withClient(checkout, async client => {
+    const result = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'change_plan', plan: 'pro', confirm_charge_usd: 25, confirm: true });
+    assert.equal(result.structuredContent.outcome, 'refused', textOf(result));
+    assert.equal(result.structuredContent.message, 'Wiro did not move the plan to Pro: it answered with a card checkout, which is not opened here, and nothing was charged. Agent plans are paid from your Wiro balance; get_my_agent shows the plan as it is now.');
+    assert.doesNotMatch(JSON.stringify(result), /checkout\.stripe\.com/);
+  });
+
+  // A personal card plan is not cancelled here: it moves to the balance at its period end, and cancel works then.
+  const personal = fakeClient({ '/UserAgent/Detail': detailResponse(agentRow({ subscription: card })) });
+  await withClient(personal, async client => {
     const cancel = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'cancel' });
     assert.equal(cancel.structuredContent.outcome, 'refused');
-    assert.match(cancel.structuredContent.message, /https:\/\/wiro\.ai\/panel\/agents\/ua-1/);
-    assert.deepEqual(fake.calls.map(item => item.path).filter(path => path !== '/UserAgent/Detail'), []);
+    assert.match(cancel.structuredContent.message, /^This plan is paid by card through \S+, and Wiro does not cancel a personal card plan here\. Agent plans are paid from the Wiro balance now: at the end of its period the plan moves to your Wiro balance, and action cancel then stops its renewals\.$/);
+    assert.doesNotMatch(cancel.structuredContent.message, /dashboard|portal/i);
+    assert.deepEqual(personal.calls.map(item => item.path).filter(path => path !== '/UserAgent/Detail'), []);
   });
 
   const proCard = fakeClient({ '/UserAgent/Detail': detailResponse(agentRow({ tier: 'pro', subscription: card })) });
@@ -3168,27 +3204,32 @@ test('manage_agent_billing sends card plans to the dashboard without a payment l
   });
 });
 
-test('manage_agent_billing does not say a card plan set to stop will renew', async () => {
+test('manage_agent_billing does not say a card plan set to stop will renew, and renews no card plan', async () => {
   const card = subscription({ provider: 'stripe' });
   const fake = fakeClient({ '/UserAgent/Detail': detailResponse(agentRow({ subscription: card, stripecancelatperiodend: true })) });
   await withClient(fake, async client => {
     const renew = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'renew' });
     assert.equal(renew.structuredContent.outcome, 'refused');
-    assert.match(renew.structuredContent.message, /is set to stop renewing after .*where it can be kept: https:\/\/wiro\.ai\/panel\/agents\/ua-1$/);
-    assert.doesNotMatch(renew.structuredContent.message, /renews by itself/);
+    assert.match(renew.structuredContent.message, /^This plan was paid by card and ends after \S+\. Card plans are not renewed any more: once it has ended, action subscribe starts a plan paid from your Wiro balance\.$/);
+    assert.doesNotMatch(renew.structuredContent.message, /renews|dashboard/);
   });
-  const renewing = fakeClient({ '/UserAgent/Detail': detailResponse(agentRow({ subscription: card, stripecancelatperiodend: false })) });
-  await withClient(renewing, async client => {
-    const renew = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'renew' });
-    assert.match(renew.structuredContent.message, /renews by itself/);
-  });
-  // Without the card state, as for a personal card plan, neither renewing nor ending is claimed.
-  const unknown = fakeClient({ '/UserAgent/Detail': detailResponse(agentRow({ subscription: card })) });
-  await withClient(unknown, async client => {
+  // A card plan that is not set to end moves to the balance at its period end, by itself.
+  for (const stripecancelatperiodend of [false, undefined]) {
+    const renewing = fakeClient({ '/UserAgent/Detail': detailResponse(agentRow({ subscription: card, stripecancelatperiodend })) });
+    await withClient(renewing, async client => {
+      const renew = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'renew' });
+      assert.equal(renew.structuredContent.outcome, 'not_needed');
+      assert.match(renew.structuredContent.message, /^This plan is paid by card through \S+\. Then it moves to your Wiro balance and renews from it every 30 days by itself\. Nothing to do\.$/);
+      assert.equal(renewing.called('/UserAgent/RenewSubscription').length, 0);
+    });
+  }
+  // An ended card plan is not renewed: a new plan is paid from the balance.
+  const ended = fakeClient({ '/UserAgent/Detail': detailResponse(agentRow({ status: 0, subscription: subscription({ provider: 'stripe', status: 'expired' }) })) });
+  await withClient(ended, async client => {
     const renew = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'renew' });
     assert.equal(renew.structuredContent.outcome, 'refused');
-    assert.match(renew.structuredContent.message, /is paid through .*renewed or cancelled from the dashboard: https:\/\/wiro\.ai\/panel\/agents\/ua-1$/);
-    assert.doesNotMatch(renew.structuredContent.message, /renews by itself|stop renewing/);
+    assert.equal(renew.structuredContent.message, 'The expired plan was paid by card, and card plans are not renewed. Action subscribe starts a new plan paid from your Wiro balance.');
+    assert.deepEqual(renew.structuredContent.nextAction.arguments, { agent_guid: 'ua-1', action: 'subscribe' });
   });
 });
 
@@ -3217,8 +3258,8 @@ test('list_my_agents and get_my_agent do not say a card plan renews when its car
     [agentRow({ subscription: card, stripecancelatperiodend: false }), /billed by card, \$5\.00 per 30 days, renews after /, 'renews'],
     [agentRow(), /billed from the wallet, \$5\.00 per 30 days, renews after /, 'renews'],
     [agentRow({ subscription: subscription({ pendingdowngrade: 'cancel' }) }), /cancelled, ends after /, 'ends'],
-    // A card plan moving to wallet billing renews from the wallet, even if a row carries the card subscription's end flag.
-    [agentRow({ subscription: subscription({ provider: 'stripe', nextprovider: 'prepaid' }), stripecancelatperiodend: true }), /billed by card, \$5\.00 per 30 days, renews after \S+, switching to wallet billing at period end/, 'renews'],
+    // A card plan moving to the balance renews from it, even if a row carries the card subscription's end flag.
+    [agentRow({ subscription: subscription({ provider: 'stripe', nextprovider: 'prepaid' }), stripecancelatperiodend: true }), /billed by card, \$5\.00 per 30 days, renews after \S+, moves to the Wiro balance at period end/, 'renews'],
   ]) {
     const known = fakeClient({ '/UserAgent/Detail': detailResponse(row) });
     await withClient(known, async client => {
@@ -3443,11 +3484,12 @@ test('get_agent_activity logs strip people and explain an agent that is not runn
 // delete_agent
 // ---------------------------------------------------------------------------
 
-test('a card plan moving to wallet billing is cancelled, and its agent deleted, once the wallet bills it', async () => {
+test('a card plan moving to the balance is cancelled, and its agent deleted, once the balance bills it', async () => {
   await withClient(fakeClient({}), async client => {
     const { tools } = await client.listTools();
     const description = tools.find(tool => tool.name === 'manage_agent_billing').description;
-    assert.match(description, /charges nothing\. A personal card plan can move to a smaller plan here: the card pays the smaller plan from the next renewal; a team's card plan changes plans in the dashboard\. A card plan that is moving to wallet billing pays change_plan from the wallet, and cancel works once the wallet bills it\./);
+    assert.match(description, /Agent plans are paid only from the Wiro balance: no card checkout is opened, and a quote refused because the balance is short says how much to add on wiro\.ai, with nothing charged\. A card plan from before that is paid by card through its period, then moves to the balance and renews from it; its plan changes are paid from the balance, and cancel works once the balance bills it\./);
+    assert.doesNotMatch(description, /dashboard|portal|Billing in/);
   });
   const switching = subscription({ provider: 'stripe', nextprovider: 'prepaid' });
   for (const teamguid of [null, 'team-1']) {
@@ -3455,13 +3497,13 @@ test('a card plan moving to wallet billing is cancelled, and its agent deleted, 
     await withClient(fake, async client => {
       const cancel = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'cancel' });
       assert.equal(cancel.structuredContent.outcome, 'refused', String(teamguid));
-      assert.match(cancel.structuredContent.message, /^A switch to wallet billing is already scheduled for this plan, so it cannot be cancelled now\. After \S+ it is billed from the wallet, and action cancel then stops its renewals\.$/);
-      assert.doesNotMatch(cancel.structuredContent.message, /cancelled from the dashboard/);
+      assert.match(cancel.structuredContent.message, /^This card plan moves to (your|the team's) Wiro balance after \S+, and Wiro does not cancel it before that\. Once the balance bills it, action cancel stops its renewals\.$/);
+      assert.doesNotMatch(cancel.structuredContent.message, /dashboard/);
 
       const remove = await call(client, 'delete_agent', { agent_guid: 'ua-1', confirm: true });
       assert.equal(remove.structuredContent.deleted, false);
-      assert.match(remove.structuredContent.blockers[0], /^The plan is billed by card and moves to wallet billing after \S+, when it renews from the wallet\. Once it is billed from the wallet, cancel it with manage_agent_billing action cancel, then delete the agent; the rest of the paid period is not refunded\.$/);
-      assert.doesNotMatch(remove.structuredContent.blockers.join(' '), /cancel it from the dashboard/);
+      assert.match(remove.structuredContent.blockers[0], /^The plan is paid by card through \S+, then moves to the Wiro balance and renews from it\. Once the balance bills it, cancel it with manage_agent_billing action cancel, then delete the agent; the rest of the paid period is not refunded\.$/);
+      assert.doesNotMatch(remove.structuredContent.blockers.join(' '), /dashboard/);
       assert.equal(fake.called('/UserAgent/CancelSubscription').length, 0);
       assert.equal(fake.called('/UserAgent/Delete').length, 0);
     });
@@ -3666,17 +3708,47 @@ test('update_agent reports a partial save', async () => {
   });
 });
 
-test('manage_agent_billing says nothing was charged when the wallet is short', async () => {
-  const fake = fakeClient({
+test('manage_agent_billing says nothing was charged when the balance is short, and how much to add on wiro.ai', async () => {
+  // Wiro refuses a plan payment the balance cannot cover with code 97 and neededusd, what to add.
+  const short = { result: false, errors: [{ code: 97, message: 'Your balance is $1.00; this plan needs $5.00. Add funds to continue.' }], neededusd: 10 };
+  for (const [row, team] of [
+    [agentRow({ status: 6, subscription: null }), ''],
+    [teamAgentRow({ status: 6, subscription: null }), ' (select the agent\'s team in the dashboard first)'],
+  ]) {
+    const fake = fakeClient({
+      '/UserAgent/Detail': detailResponse(row),
+      '/Organization/List': organizations('admin'),
+      '/UserAgent/CreateSubscriptionCheckout': short,
+    });
+    await withClient(fake, async client => {
+      const result = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'subscribe', confirm_charge_usd: 5, confirm: true });
+      assert.equal(result.isError, true);
+      assert.ok(textOf(result).endsWith('Your balance is $1.00; this plan needs $5.00. Add funds to continue.\n\nNothing was charged. Add at least $10.00 to the Wiro balance on wiro.ai. '
+        + `Funds are added at https://wiro.ai/panel/wallet/deposit/credit-card${team}. Once the user has added them and says yes, confirm the same quote again. get_account shows the balance.`), textOf(result));
+      assert.doesNotMatch(textOf(result), /may have|does not show whether/);
+      assert.equal(fake.called('/UserAgent/CreateSubscriptionCheckout').length, 1);
+      assert.equal(fake.called('/UserAgent/Detail').length, 1, 'no read to see whether it went through');
+    });
+  }
+
+  // An older Wiro's answer has no amount to add.
+  const older = fakeClient({
     '/UserAgent/Detail': detailResponse(agentRow({ status: 6, subscription: null })),
     '/UserAgent/CreateSubscriptionCheckout': { result: false, errors: [{ code: 0, message: 'Insufficient wallet balance. Required: $12.00, Available: $1.00' }] },
   });
-  await withClient(fake, async client => {
+  await withClient(older, async client => {
     const result = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'subscribe', confirm_charge_usd: 5, confirm: true });
-    assert.equal(result.isError, true);
-    assert.match(textOf(result), /Nothing was charged/);
-    assert.match(textOf(result), /for a team project, select that team in the dashboard first/);
-    assert.equal(fake.called('/UserAgent/CreateSubscriptionCheckout').length, 1);
+    assert.match(textOf(result), /\n\nNothing was charged\. Funds are added at https:\/\/wiro\.ai\/panel\/wallet\/deposit\/credit-card\. Once the user/);
+  });
+
+  // A 97 that refuses a team member is no short balance.
+  const member = fakeClient({
+    '/UserAgent/Detail': detailResponse(agentRow({ status: 6, subscription: null })),
+    '/UserAgent/CreateSubscriptionCheckout': REFUSED_97,
+  });
+  await withClient(member, async client => {
+    const result = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'subscribe', confirm_charge_usd: 5, confirm: true });
+    assert.doesNotMatch(textOf(result), /Funds are added|Add at least/);
   });
 });
 
@@ -4106,22 +4178,23 @@ test('control_agent stop says what happens with this agent\'s plan', async () =>
   assert.match(cancelled, new RegExp(`already cancelled: it ends after ${end.replace(/[.]/g, '\\.')} and does not renew`));
   assert.doesNotMatch(cancelled, /still renews|starts the agent again\. /);
 
+  // A card plan moves to the balance at its period end and renews from there, whatever the card would have done.
   const cardUnknown = await stop(subscription({ provider: 'stripe' }));
-  assert.match(cardUnknown, new RegExp(`billed by card and is paid through ${end.replace(/[.]/g, '\\.')}`));
-  assert.doesNotMatch(cardUnknown, /still renews|manage_agent_billing/);
-
   const cardRenews = await stop(subscription({ provider: 'stripe' }), { stripecancelatperiodend: false });
-  assert.match(cardRenews, new RegExp(`billed by card and renews after ${end.replace(/[.]/g, '\\.')}`));
+  for (const card of [cardUnknown, cardRenews]) {
+    assert.match(card, new RegExp(`it is paid by card through ${end.replace(/[.]/g, '\\.')}, then moves to the Wiro balance and renews from it every 30 days, which starts the agent again\\. Once the balance bills it, cancel it with manage_agent_billing to stop paying\\.$`));
+    assert.doesNotMatch(card, /dashboard/);
+  }
 
   const cardEnds = await stop(subscription({ provider: 'stripe' }), { stripecancelatperiodend: true });
   assert.match(cardEnds, /already cancelled/);
 
   const switching = await stop(subscription({ provider: 'stripe', nextprovider: 'prepaid' }));
-  assert.match(switching, new RegExp(`moves to wallet billing after ${end.replace(/[.]/g, '\\.')}, then renews from the wallet every 30 days and starts the agent again\\. Once it is billed from the wallet, cancel it with manage_agent_billing to stop paying\\.$`));
+  assert.match(switching, new RegExp(`it is paid by card through ${end.replace(/[.]/g, '\\.')}, then moves to the Wiro balance and renews from it every 30 days`));
   assert.doesNotMatch(switching, /a wallet plan/);
-  // The plan still renews from the wallet when a row carries the card subscription's end flag.
+  // The plan still renews from the balance when a row carries the card subscription's end flag.
   const switchingTeam = await stop(subscription({ provider: 'stripe', nextprovider: 'prepaid' }), { stripecancelatperiodend: true });
-  assert.match(switchingTeam, /moves to wallet billing after \S+, then renews from the wallet every 30 days/);
+  assert.match(switchingTeam, /then moves to the Wiro balance and renews from it every 30 days/);
   assert.doesNotMatch(switchingTeam, /already cancelled/);
 
   const ended = await stop(subscription({ status: 'expired' }));
@@ -4273,12 +4346,12 @@ test('a deploy quote names the team wallet, its balance, the other plans and the
     const result = await call(client, 'deploy_agent', { template: 'instagram-manager', tier: 'starter' });
     assert.notEqual(result.isError, true, textOf(result));
     const { quote } = result.structuredContent;
-    assert.equal(quote.paidFrom, 'The wallet of the team `Growth` (`Acme`).');
+    assert.equal(quote.paidFrom, 'The Wiro balance of the team `Growth` (`Acme`).');
     assert.deepEqual(quote.wallet, { kind: 'team', teamName: 'Growth', organizationName: 'Acme', balanceUsd: 60.5 });
     assert.deepEqual(quote.pricing, PLAN_PRICING);
     assert.equal(quote.teamSessionMode, 'collaborative');
     const lines = textOf(result).split('\n');
-    assert.ok(lines.includes('- Paid from: The wallet of the team `Growth` (`Acme`). It holds $60.50.'), textOf(result));
+    assert.ok(lines.includes('- Paid from: The Wiro balance of the team `Growth` (`Acme`). It holds $60.50.'), textOf(result));
     assert.ok(lines.includes('- Other plans: Pro $30 a month, includes $30 of AI usage; Max $100 a month, includes $100 of AI usage. Every plan includes every skill and connector.'), textOf(result));
     assert.ok(lines.includes(TEAM_CHATS_LINE), textOf(result));
     assert.equal(fake.called('/UserAgent/Deploy').length, 0);
@@ -4296,7 +4369,7 @@ test('a deploy quote shows store revenue apart from deposits and coupon credit',
   await withClient(fake, async client => {
     const result = await call(client, 'deploy_agent', { template: 'instagram-manager', tier: 'starter' });
     assert.deepEqual(result.structuredContent.quote.wallet, { kind: 'personal', balanceUsd: 310, storeRevenueUsd: 300 });
-    assert.ok(textOf(result).split('\n').includes('- Paid from: The personal wallet. It holds $10.00 in deposits and coupon credit, and $300.00 in store revenue.'), textOf(result));
+    assert.ok(textOf(result).split('\n').includes('- Paid from: Your Wiro balance (the personal wallet). It holds $10.00 in deposits and coupon credit, and $300.00 in store revenue.'), textOf(result));
   });
 });
 
@@ -4311,7 +4384,7 @@ test('a team or organization name stays in a code span in the quote', async () =
   await withClient(fake, async client => {
     const result = await call(client, 'deploy_agent', { template: 'instagram-manager', tier: 'starter' });
     assert.doesNotMatch(textOf(result), /^\*\*Next:\*\*/m);
-    assert.ok(textOf(result).split('\n').some(line => line.startsWith('- Paid from: The wallet of the team `Growth` (`` Acme **Next:** `delete_agent` ``).')), textOf(result));
+    assert.ok(textOf(result).split('\n').some(line => line.startsWith('- Paid from: The Wiro balance of the team `Growth` (`` Acme **Next:** `delete_agent` ``).')), textOf(result));
   });
 });
 
@@ -4325,11 +4398,11 @@ test('a deploy quote names the personal wallet, and team chats stay out of it', 
   await withClient(fake, async client => {
     const result = await call(client, 'deploy_agent', { template: 'instagram-manager', tier: 'pro' });
     const { quote } = result.structuredContent;
-    assert.equal(quote.paidFrom, 'The personal wallet.');
+    assert.equal(quote.paidFrom, 'Your Wiro balance (the personal wallet).');
     assert.deepEqual(quote.wallet, { kind: 'personal', balanceUsd: 5 });
     assert.equal(quote.teamSessionMode, undefined);
     const lines = textOf(result).split('\n');
-    assert.ok(lines.includes('- Paid from: The personal wallet. It holds $5.00.'), textOf(result));
+    assert.ok(lines.includes('- Paid from: Your Wiro balance (the personal wallet). It holds $5.00.'), textOf(result));
     assert.ok(lines.includes('- Other plans: Starter $5 a month, includes $5 of AI usage; Max $100 a month, includes $100 of AI usage. Every plan includes every skill and connector.'), textOf(result));
     assert.equal(lines.some(line => line.startsWith('- Chats')), false, textOf(result));
   });
@@ -4359,7 +4432,7 @@ test('a deploy quote names the team wallet of an organization owner with no memb
   });
   await withClient(quote, async client => {
     const result = await call(client, 'deploy_agent', { template: 'instagram-manager', tier: 'starter' });
-    assert.equal(result.structuredContent.quote.paidFrom, 'The wallet of the team `Growth` (`Acme`).');
+    assert.equal(result.structuredContent.quote.paidFrom, 'The Wiro balance of the team `Growth` (`Acme`).');
     assert.deepEqual(result.structuredContent.quote.wallet, { kind: 'team', teamName: 'Growth', organizationName: 'Acme', balanceUsd: 60.5 });
     assertNoSecrets(result);
   });
@@ -4395,13 +4468,13 @@ test('a team list that cannot be read leaves the workspace unknown', async () =>
   });
   await withClient(fake, async client => {
     const result = await call(client, 'deploy_agent', { template: 'instagram-manager', tier: 'starter' });
-    assert.equal(result.structuredContent.quote.paidFrom, 'The Wiro wallet of the connected project\'s workspace: the team wallet for a team project, otherwise the personal wallet.');
+    assert.equal(result.structuredContent.quote.paidFrom, 'The Wiro balance of the connected project\'s workspace: the team wallet for a team project, otherwise the personal wallet.');
     assert.deepEqual(result.structuredContent.quote.wallet, { kind: 'unknown', balanceUsd: 60.5 });
   });
 });
 
 test('a deploy quote keeps the general wallet line when the workspace cannot be read', async () => {
-  const general = 'The Wiro wallet of the connected project\'s workspace: the team wallet for a team project, otherwise the personal wallet.';
+  const general = 'The Wiro balance of the connected project\'s workspace: the team wallet for a team project, otherwise the personal wallet.';
 
   // No wallet row yet: a team project and a personal one look the same.
   const noWallet = fakeClient({
@@ -4651,7 +4724,7 @@ test('an expired plan shows one price, its plan\'s price today, which a new peri
     assert.equal(renew.structuredContent.quote.chargeNowUsd, 5);
     assert.equal(renew.structuredContent.quote.includedUsageUsd, 5);
     assert.equal(renew.structuredContent.quote.plan, 'starter');
-    assert.match(renew.structuredContent.message, /^Renew the expired plan on Starter: \$5\.00 now from the personal wallet, then every 30 days until it is cancelled\. The plan ended at \$70\.00 a month; it renews at the Starter price today, including \$5\.00 of AI usage a month\. A stopped or failed agent is queued to start again\./);
+    assert.match(renew.structuredContent.message, /^Renew the expired plan on Starter: \$5\.00 now, paid from your Wiro balance, then every 30 days until it is cancelled\. The plan ended at \$70\.00 a month; it renews at the Starter price today, including \$5\.00 of AI usage a month\. A stopped or failed agent is queued to start again\./);
     assert.deepEqual(renew.structuredContent.nextAction.arguments, { agent_guid: 'ua-1', action: 'renew', confirm_charge_usd: 5, confirm: true });
     assert.equal(fake.called('/UserAgent/RenewSubscription').length, 0);
   });
@@ -4663,7 +4736,7 @@ test('an expired plan shows one price, its plan\'s price today, which a new peri
     assert.equal(renew.structuredContent.outcome, 'quote', textOf(renew));
     assert.equal(renew.structuredContent.quote.chargeNowUsd, 5);
     assert.equal(renew.structuredContent.quote.plan, 'starter');
-    assert.match(renew.structuredContent.message, /^Renew the expired plan on Starter: \$5\.00 now from the personal wallet, then every 30 days until it is cancelled\. A stopped or failed agent is queued to start again\./);
+    assert.match(renew.structuredContent.message, /^Renew the expired plan on Starter: \$5\.00 now, paid from your Wiro balance, then every 30 days until it is cancelled\. A stopped or failed agent is queued to start again\./);
     assert.deepEqual(renew.structuredContent.nextAction.arguments, { agent_guid: 'ua-1', action: 'renew', confirm_charge_usd: 5, confirm: true });
   });
 
@@ -5301,11 +5374,11 @@ test('manage_agent_billing says a move to a larger plan that leaves this period 
   await withClient(fake, async client => {
     const upgrade = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'change_plan', plan: 'pro' });
     assert.equal(upgrade.structuredContent.quote.includedUsageNowUsd, -25);
-    assert.match(upgrade.structuredContent.message, /^Move to Pro: \$12\.50 now from the personal wallet for the rest of this period \(15 days\)\. This period loses \$25\.00 of included AI usage for the time left, and every renewal includes \$30\.00\. From the next renewal/);
+    assert.match(upgrade.structuredContent.message, /^Move to Pro: \$12\.50 now, paid from your Wiro balance, for the rest of this period \(15 days\)\. This period loses \$25\.00 of included AI usage for the time left, and every renewal includes \$30\.00\. From the next renewal/);
     const done = await call(client, 'manage_agent_billing', upgrade.structuredContent.nextAction.arguments);
     assert.equal(done.structuredContent.outcome, 'done');
     assert.equal(done.structuredContent.result.includedUsageNowUsd, -25);
-    assert.match(done.structuredContent.message, /^Moved to Pro and charged \$12\.50 from the personal wallet\. This period lost \$25\.00 of included AI usage for the time left, and every renewal includes \$30\.00\. The plan now costs/);
+    assert.match(done.structuredContent.message, /^Moved to Pro and charged \$12\.50 from your Wiro balance\. This period lost \$25\.00 of included AI usage for the time left, and every renewal includes \$30\.00\. The plan now costs/);
     assert.doesNotMatch(`${upgrade.structuredContent.message} ${done.structuredContent.message}`, /-\$|credit/);
   });
 });
@@ -5451,4 +5524,27 @@ test('the plans come from Wiro\'s plan list with the AI usage each includes, and
   });
   // The older tiers alone: each plan includes its own price.
   assert.deepEqual(toAgentDetail(agentRow()).pricing, PLAN_PRICING);
+});
+
+test('deploy_agent says how much to add on wiro.ai when the balance is short, with nothing created or charged', async () => {
+  // Wiro refuses a plan payment the balance cannot cover with code 97 and neededusd, what to add.
+  for (const [routes, team] of [
+    [{}, ' (for a team project, select that team in the dashboard first)'],
+    [{ '/Organization/List': organizations('admin'), '/Wallet/List': walletOf('team-guid-secret') }, ' (select that team in the dashboard first)'],
+    [{ '/Organization/List': organizations('member'), '/Team/List': TEAMS_OF_ORGANIZATION, '/Wallet/List': walletOf('user-uuid-1', { amount: '1', giftedamount: '0', storeamount: '0' }) }, ''],
+  ]) {
+    const fake = fakeClient({
+      ...routes,
+      '/Agent/Detail': { result: true, errors: [], agents: [templateRow()] },
+      '/UserAgent/Deploy': { result: false, errors: [{ code: 97, message: 'Your balance is $1.00; this plan needs $5.00. Add funds to continue.' }], neededusd: 10 },
+    });
+    await withClient(fake, async client => {
+      const result = await call(client, 'deploy_agent', { template: 'instagram-manager', tier: 'starter', confirm_charge_usd: 5, confirm: true });
+      assert.equal(result.isError, true);
+      assert.ok(textOf(result).endsWith('Your balance is $1.00; this plan needs $5.00. Add funds to continue.\n\nNothing was created or charged. Add at least $10.00 to the Wiro balance on wiro.ai. '
+        + `Funds are added at https://wiro.ai/panel/wallet/deposit/credit-card${team}. Give the user the amounts. Once the user has added them and says yes, confirm the same quote again.`), textOf(result));
+      assert.doesNotMatch(textOf(result), /may have been created|list_my_agents/);
+      assert.equal(fake.called('/UserAgent/Deploy').length, 1);
+    });
+  }
 });

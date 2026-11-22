@@ -58,16 +58,14 @@ function planAfterStop(plan: AgentSubscription | null): string {
     return `The plan is already cancelled: it ends after ${periodEnd} and does not renew, so nothing starts the agent `
       + 'again by itself.';
   }
-  if (plan.switchingToWallet) {
-    return `Stopping does not pause the plan: it moves to wallet billing after ${periodEnd}, then renews from the wallet `
-      + 'every 30 days and starts the agent again. Once it is billed from the wallet, cancel it with manage_agent_billing to stop paying.';
-  }
   if (plan.billing === 'wallet') {
     return 'Stopping does not pause the plan: a wallet plan still renews every 30 days and starts the agent again. '
       + 'Cancel it with manage_agent_billing to stop paying.';
   }
-  const state = plan.atPeriodEnd === 'renews' ? `renews after ${periodEnd}` : `is paid through ${periodEnd}`;
-  return `Stopping does not pause the plan: it is billed by card and ${state}. Card plans are managed in the Wiro dashboard.`;
+  // A card plan is not renewed by card any more: it moves to the Wiro balance at its period end.
+  return `Stopping does not pause the plan: it is paid by card through ${periodEnd}, then moves to the Wiro balance `
+    + 'and renews from it every 30 days, which starts the agent again. Once the balance bills it, cancel it with '
+    + 'manage_agent_billing to stop paying.';
 }
 
 /** What a finished wait found, in words that fit the action. A stop that ended stopped needs none: the status line says so. */
@@ -212,8 +210,7 @@ export function registerControlAgent(server: McpServer, client: WiroClient): voi
         + 'stop paying. The result says what happens with this agent\'s plan. '
         + 'A restart reloads the agent with its current settings. The change finishes in the background: pass '
         + 'wait_seconds, or follow the returned nextAction, to see the result. When a start is refused, the '
-        + 'result says what to do next (subscribe, renew, add funds on wiro.ai, fix a card payment in the dashboard or '
-        + 'finish setup). On a team agent this '
+        + 'result says what to do next (subscribe, renew, add funds on wiro.ai or finish setup). On a team agent this '
         + 'needs a team admin or the person who deployed it; other team members can read the agent with '
         + 'get_my_agent and message it.',
       inputSchema: strictInput({

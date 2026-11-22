@@ -16,6 +16,7 @@ import { DEFAULT_WAIT_SECONDS } from '../utils/poll.js';
 import {
   AGENT_AI_USAGE,
   AGENT_PLANS,
+  balanceShortfall,
   deployedAgentSchema,
   describeAgentStatus,
   formatUsd,
@@ -28,6 +29,7 @@ import {
   planPricingSchema,
   readAgentDetail,
   sameAmount,
+  shortBalanceNote,
   skillLabel,
   skillOffTasksNote,
   taskLabel,
@@ -52,12 +54,13 @@ import {
   type TemplateCustomSkill,
 } from '../utils/agent-config.js';
 import { readTemplateRow, toSkillSummary, toTemplateDetail, type SkillSummary } from '../utils/agent-catalog.js';
-import { quotedBlock } from '../utils/quoted-text.js';
+import { quotedBlock, quotedSpan } from '../utils/quoted-text.js';
 import { CHAT_SETUP_DESCRIPTION, CHAT_SETUP_MODES, chatSetupLabel } from '../utils/agent-setup.js';
-import { payingWalletText, readPayingWallet, type PayingWallet } from '../utils/workspace.js';
+import { readPayingWallet, type PayingWallet } from '../utils/workspace.js';
 import { nextActionSchema, strictInput } from './schemas.js';
 
-const PAID_FROM = 'The Wiro wallet of the connected project\'s workspace: the team wallet for a team '
+// Agent plans are paid only from the Wiro balance, never by card.
+const PAID_FROM = 'The Wiro balance of the connected project\'s workspace: the team wallet for a team '
   + 'project, otherwise the personal wallet.';
 
 // A team deploy starts with collaborative chats, and a deploy cannot set this.
@@ -191,9 +194,12 @@ function quoteApprovalPolicy(skills: DeployCustomSkill[]): z.infer<typeof quoteA
   };
 }
 
-/** The wallet a quote charges, named when the connection can read it. */
+/** The Wiro balance a quote charges, named when the connection can read it. */
 function paidFromText({ workspace }: PayingWallet): string {
-  return payingWalletText(workspace, PAID_FROM);
+  if (workspace.kind === 'personal') return 'Your Wiro balance (the personal wallet).';
+  if (workspace.kind !== 'team') return PAID_FROM;
+  const team = workspace.teamName?.trim() ? `the team ${quotedSpan(workspace.teamName)}` : 'the connected project\'s team';
+  return `The Wiro balance of ${team}${workspace.organizationName?.trim() ? ` (${quotedSpan(workspace.organizationName)})` : ''}.`;
 }
 
 function quoteWallet({ workspace, balanceUsd, storeRevenueUsd }: PayingWallet): z.infer<typeof quoteWalletSchema> | undefined {
@@ -327,7 +333,7 @@ function deployedText(
     `- Agent: ${agent.title} (\`${agent.guid}\`)`,
     `- Status: ${describeAgentStatus(agent.status)}. It starts on its own; get_my_agent with wait_seconds follows it.`,
     `- Plan: ${planName(agent.tier ?? quote.tier)}`,
-    `- Charged: ${formatUsd(chargedUsd ?? quote.priceUsd)} from the wallet. The plan renews every 30 days until it is cancelled.`,
+    `- Charged: ${formatUsd(chargedUsd ?? quote.priceUsd)} from the Wiro balance. The plan renews from it every 30 days until it is cancelled.`,
     `- AI usage: the plan includes ${formatUsd(agent.usage.includedUsd || quote.includedUsageUsd)} a month; after it, the agent uses the Wiro balance of its workspace.`,
   ];
   const saved = customSkills.filter(skill => skill.onAgent);
@@ -365,14 +371,15 @@ export function registerDeployAgent(server: McpServer, client: WiroClient): void
       title: 'Deploy a Wiro agent',
       description: 'Deploy a new agent from a template or as a custom build from chosen skills. In a team '
         + 'workspace only a team admin can deploy; anyone else is refused before anything is created or charged. This costs '
-        + 'money: the first 30 days are paid from the Wiro wallet of the connected project\'s workspace '
-        + '(a team project pays from the team wallet), and the plan renews from that wallet every 30 '
+        + 'money: the first 30 days are paid from the Wiro balance of the connected project\'s workspace '
+        + '(a team project pays from the team\'s balance), never by card, and the plan renews from that balance every 30 '
         + 'days until it is cancelled. Without confirm: true the tool only returns the exact quote. Show it to '
         + 'the user, get their approval, then repeat the call with confirm: true and confirm_charge_usd set to '
         + 'the quoted price; if the price changed in between, nothing is charged and a new quote comes back. '
         + 'Never repeat a confirmed deploy that timed out or whose outcome is unknown without checking '
         + 'list_my_agents first. A refusal that says nothing was created or charged, such as one for balance, '
-        + 'can be confirmed again once its cause is fixed and the user says yes. The '
+        + 'can be confirmed again once its cause is fixed and the user says yes; one for balance says how much to '
+        + 'add on wiro.ai. The '
         + 'agent starts on its own after deployment. Credentials can be added later with set_agent_credentials or, for '
         + 'a Wiro project, bind_agent_project, and outside services connected with connect_agent_connector (the quote '
         + 'names the connectors a template suggests), but work that needs them does not run until then. A custom build also gets '
@@ -410,7 +417,7 @@ export function registerDeployAgent(server: McpServer, client: WiroClient): void
         confirm_charge_usd: z.number().min(0).max(100_000).optional()
           .describe('With confirm: true, the price the user approved, from the quote\'s nextAction (quote.priceUsd). Required to deploy. If a fresh quote no longer matches it, nothing is charged and the new quote is returned.'),
         confirm: z.boolean().default(false)
-          .describe('false returns only the quote. true deploys the agent and charges the wallet. Set it only after the user approved the quoted price.'),
+          .describe('false returns only the quote. true deploys the agent and charges the Wiro balance. Set it only after the user approved the quoted price.'),
       }),
       outputSchema: {
         stage: z.enum(['quote', 'deployed', 'duplicate', 'retry_later']),
@@ -436,6 +443,8 @@ export function registerDeployAgent(server: McpServer, client: WiroClient): void
     },
     async (args, extra) => {
       let deploySent = false;
+      // Whose balance pays, for the words after a refusal for balance.
+      let payerKind: 'personal' | 'team' | 'unknown' = 'unknown';
       try {
         const { template, custom, tier, confirm } = args;
         const templateRef = template?.trim();
@@ -466,6 +475,7 @@ export function registerDeployAgent(server: McpServer, client: WiroClient): void
         // Every member of a team can read what a quote needs, but only a team
         // admin can deploy there, so a member gets the answer before a quote.
         const payer = await readPayingWallet(client, extra.signal);
+        payerKind = payer.workspace.kind;
         if (payer.workspace.role === 'member') {
           throw new Error('Only a team admin can deploy an agent in this team, and this connection acts as a team member '
             + 'without admin rights. Nothing was quoted, created or charged. A team admin can deploy it or grant admin '
@@ -775,8 +785,11 @@ export function registerDeployAgent(server: McpServer, client: WiroClient): void
         if (hasErrorCode(error, 104)) {
           return errorResult(new Error(`${errorText(error)}\n\nNothing was created or charged, and it is not a low balance. Offer to try again in a minute by confirming the same quote.`));
         }
-        if (error instanceof ApiResultError && /insufficient wallet balance/i.test(error.message)) {
-          return errorResult(new Error(`${error.message}\n\nNothing was created or charged. Give the user the amounts above. Funds are added at https://wiro.ai/panel/wallet/deposit/credit-card (for a team project, select that team in the dashboard first); once the user has added them and says yes, confirm the same quote again.`));
+        const short = balanceShortfall(error);
+        if (short) {
+          const team = payerKind === 'team' ? 'select that team in the dashboard first' : payerKind === 'unknown' ? 'for a team project, select that team in the dashboard first' : '';
+          return errorResult(new Error(`${errorText(error)}\n\n${shortBalanceNote(short.neededUsd, team, 'Nothing was created or charged.')} `
+            + 'Give the user the amounts. Once the user has added them and says yes, confirm the same quote again.'));
         }
         return errorResult(error);
       }

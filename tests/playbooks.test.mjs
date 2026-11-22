@@ -467,7 +467,7 @@ test('the wallet and workspace rule names the connected project, never the API k
     }
     const description = name => tools.find(tool => tool.name === name).description;
     assert.match(description('manage_agent_billing'), /the connected project must belong to that same workspace/);
-    assert.match(description('deploy_agent'), /the first 30 days are paid from the Wiro wallet of the connected project's workspace/);
+    assert.match(description('deploy_agent'), /the first 30 days are paid from the Wiro balance of the connected project's workspace/);
     assert.match(description('get_account'), /^Show which workspace the connected project belongs to/);
   });
 });
