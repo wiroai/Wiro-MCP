@@ -1826,8 +1826,8 @@ test('the controls playbook and texts are true to Studio\'s chat model, an agent
     /pauses at its next step, even in the middle of a reply/,
     /Its scheduled tasks pause too, without failing\./,
     // Every agent plan charge, the automatic renewal included, counts on the wallet, the buyer and the agent surface.
-    /Every agent plan charge, the renewal included, counts toward the whole wallet's limits \(in a team, the team's\), toward the limits of the member who paid for it in a team \(for a renewal, the member who started the plan\) and toward the `agent` surface's limits, but toward no API key and not toward the agent's own limit\./,
-    /Every agent plan charge, the renewal included, counts in the total, under the member who paid for it \(for a renewal, the member who started the plan\) and under the `agent` way in, but under no API key or agent\./,
+    /Every agent plan charge, the renewal included, counts toward the whole wallet's limits \(in a team, the team's\), toward the limits of the member who paid for it in a team \(for the automatic renewal, the member who started the plan\) and toward the `agent` surface's limits, but not toward the agent's own limit\. A plan payment made with an API key, as every `deploy_agent` and `manage_agent_billing` payment through this server is, also counts toward that key's limits, and they can refuse it with code 93\. The automatic renewal counts toward no API key\./,
+    /Every agent plan charge, the renewal included, counts in the total, under the member who paid for it \(for the automatic renewal, the member who started the plan\) and under the `agent` way in, but under no agent\. A plan payment made with an API key also counts under that key; the automatic renewal counts under none\./,
     /- `agent`: what deployed agents do on their own: the runs they start and their chat model\. Its spend limits also count their AI usage that the Wiro balance pays and their plan charges, renewals included\./,
     // Who changed it last.
     /who changed each limit and rule last/,

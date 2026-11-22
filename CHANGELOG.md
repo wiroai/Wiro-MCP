@@ -119,7 +119,8 @@ runs `npx @wiro-ai/wiro-mcp@latest` takes it at its next start.
   README say AI usage in dollars, the balance after the plan, and how spend limits and
   Model Access rules count an agent's usage. Every agent plan charge, the automatic renewal
   included, counts toward the limits of the whole wallet, the member who paid for it and the
-  `agent` surface.
+  `agent` surface, and a plan payment made with an API key, as every payment through this
+  server is, also toward that key's limits, which can refuse it with code 93.
 - The model runs Studio starts are your own tasks: `list_tasks` lists them, and `get_task`,
   `wait_for_task`, `cancel_task` and `kill_task` work on them by their id. `list_studio_results`
   still lists them with their prompts, and only it reads Studio's older runs, which Studio ran
