@@ -76,7 +76,11 @@ function wayShort(connector: Pick<CatalogConnector, 'ways'>): string {
 }
 
 function summaryLine(connector: CatalogConnector, connections: AgentConnection[] | null): string {
-  const details = [connector.category, wayShort(connector)].filter(Boolean).join(', ');
+  // Account choices are made once it is connected, for a sign-in served by the vendor too (TikTok Ads advertisers).
+  const accountChoices = connector.accountPickers.length > 0
+    ? `account choices: ${connector.accountPickers.map(picker => picker.label).join(', ')}`
+    : '';
+  const details = [connector.category, wayShort(connector), accountChoices].filter(Boolean).join(', ');
   const state = connections ? ` [${connectionStateText(connectionOf(connections, connector.slug))}]` : '';
   const description = connector.description ? `: ${truncate(connector.description, DESCRIPTION_IN_LIST)}` : '';
   return `- **${connector.title}** (\`${connector.slug}\`, ${details})${state}${description}`;
@@ -181,7 +185,16 @@ function formatDetail(connector: CatalogConnector, connection: AgentConnection |
     lines.push('', 'Nothing to type: connect returns a sign-in link, and the user approves access in their own browser.');
   }
   if (connector.ways.includes('project')) {
-    lines.push('', 'It runs with a Wiro project: connect_agent_connector takes project_id from list_projects (or the project of this connection), and model runs through it are billed to the wallet of the workspace that owns that project.');
+    lines.push('', 'It runs with the agent\'s own Wiro project, the one its video and voice skills use: connecting it '
+      + 'with connect_agent_connector (project_id from list_projects, or the project of this connection) binds that '
+      + 'project to the agent, as bind_agent_project does. Its calls count as the agent\'s own: the agent\'s spend '
+      + 'limits and Model Access rules apply, model runs are billed to the wallet of the workspace that owns the '
+      + 'project, and account, agent and billing calls are refused.');
+    if (agentGuid && connection?.status === 'connected') {
+      lines.push(connection.projectId
+        ? `On this agent it runs with the project with id ${quotedSpan(connection.projectId)}.`
+        : 'The agent has no Wiro project now, so the connector gives it nothing until one is bound with connect_agent_connector or bind_agent_project.');
+    }
   }
   if (connector.accountPickers.length > 0) {
     lines.push('', '### Account choices', '', 'Once it is connected, set_agent_connector_accounts lists these and saves the ones the agent may use; it acts only on those.', '');

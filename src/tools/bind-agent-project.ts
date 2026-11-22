@@ -447,8 +447,9 @@ export function registerBindAgentProject(server: McpServer, client: WiroClient):
     {
       title: 'Connect an agent to a Wiro project',
       description: 'Set the Wiro project a deployed agent\'s video and voice skills run models with (the Wiro AI '
-        + 'Models credential, "wiro"), with no key in this chat. The agent\'s own model tools (wiro__*) come from the '
-        + 'wiro connector instead, which connect_agent_connector connects with a project of its own. '
+        + 'Models credential, "wiro"), with no key in this chat. The wiro connector, which gives the agent its own '
+        + 'model tools (wiro__*), always runs with this same project, and connecting it with connect_agent_connector '
+        + 'binds its project here the same way; this tool does not connect that connector. '
         + 'Without project_id it takes the project of this connection; project_id takes one from list_projects. Call it '
         + 'without confirm first: it shows the project, what it replaces, whether a running agent restarts and which wallet '
         + 'pays for the agent\'s model runs, and changes nothing. After the user agrees, repeat the call as its nextAction '

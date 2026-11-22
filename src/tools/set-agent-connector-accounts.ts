@@ -2,6 +2,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { WiroClient } from '../client.js';
 import {
+  ApiResultError,
   asString,
   errorResult,
   isPlainObject,
@@ -54,6 +55,14 @@ const outputSchema = {
 
 type PickersBody = ApiEnvelope & { pickers?: unknown };
 type SetBody = ApiEnvelope & { accounts?: unknown; applied?: unknown; restart?: unknown; useragentconnectors?: unknown };
+
+// Wiro's answer when the service refused the connection's sign-in while listing its accounts: it expired or was
+// revoked. Wiro words it for the agent's chat, which asks its operator; here the user connects it again.
+const SIGN_IN_GONE = /expired or was revoked, so it has to be connected again/i;
+
+function isSignInGone(error: unknown): boolean {
+  return error instanceof ApiResultError && SIGN_IN_GONE.test(error.message);
+}
 
 function toPickers(value: unknown): Picker[] {
   return (Array.isArray(value) ? value : []).filter(isPlainObject).flatMap((picker) => {
@@ -121,7 +130,8 @@ export function registerSetAgentConnectorAccounts(server: McpServer, client: Wir
     {
       title: 'Choose a connector\'s accounts',
       description: 'Choose which accounts a connected Connector may act on, for a connector with account choices '
-        + '(such as the ad accounts, pages, properties, channels or apps a sign-in reaches). Call it with only '
+        + '(such as the ad accounts, pages, properties, channels or apps a sign-in reaches, or the advertisers of a '
+        + 'TikTok Ads sign-in). Call it with only '
         + 'connector first: it lists each account choice with the accounts the connection reaches now, as the service '
         + 'names them, and the ones chosen, and changes nothing. Then call it with accounts, {choice key: [ids]}, to '
         + 'save the ones the user picked: only ids from that list are taken, a single choice takes one id, and a choice '
@@ -222,6 +232,11 @@ export function registerSetAgentConnectorAccounts(server: McpServer, client: Wir
           const connections = await listConnections(client, agentGuid, extra.signal).catch(() => null);
           const state = connections ? connectionOf(connections, slug)?.status : undefined;
           return errorResult(new Error(`${slug} is not connected to this agent${state && state !== 'connected' ? ` (${state})` : ''}, so its accounts cannot be listed. Connect it first with connect_agent_connector.`));
+        }
+        if (isSignInGone(error)) {
+          return errorResult(new Error(`The ${slug} sign-in expired or was revoked at the service, so its accounts cannot be `
+            + 'listed or saved, and nothing was changed. Connect it again with connect_agent_connector (action connect '
+            + 'returns a new sign-in link), then choose the accounts.'));
         }
         return errorResult(error);
       }

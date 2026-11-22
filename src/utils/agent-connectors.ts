@@ -15,9 +15,13 @@ import {
 // account, a store or a mailbox. Wiro keeps one catalog of them, and each agent
 // connects the ones it needs: with values typed on the connector's Connect card
 // (an API key, a token, an ID), with a sign-in the user approves in their own
-// browser, or with a Wiro project. A connected connector gives the agent its
-// tools, named <connector>__<tool>. Everything here is built field by field from
-// what the catalog and the connection views show; a saved value never comes back.
+// browser, or with a Wiro project (the wiro connector, which always runs with
+// the agent's own project, so connecting it binds that project to the agent). A
+// connected connector gives the agent its tools, named <connector>__<tool>, and
+// a connector with account choices acts only on the accounts chosen, whether it
+// runs here or on its vendor's server. Everything here is built field by field
+// from what the catalog and the connection views show; a saved value never
+// comes back.
 
 /** A connector's catalog key: a lowercase letter, then 1 to 29 lowercase letters, digits or dashes. */
 export const CONNECTOR_SLUG = /^[a-z][a-z0-9-]{1,29}$/;
@@ -124,7 +128,9 @@ export const connectionSchema = z.object({
   scope: z.string().optional(),
   accounts: z.record(z.string(), z.array(z.string()))
     .describe('The accounts chosen for each account picker, by id.'),
-  projectId: z.string().optional().describe('The Wiro project the connection uses.'),
+  projectId: z.string().optional()
+    .describe('A connector that runs with a Wiro project (wiro): the agent\'s own Wiro project, which it always runs '
+      + 'with. Left out when the agent has none; the connector then gives the agent nothing.'),
   savedFields: z.array(z.string()).describe('The fields that hold a saved value. Values are never shown.'),
   lastError: z.string().optional(),
 });

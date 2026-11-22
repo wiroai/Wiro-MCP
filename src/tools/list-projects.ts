@@ -72,12 +72,12 @@ export function registerListProjects(server: McpServer, client: WiroClient): voi
     {
       title: 'List Wiro projects',
       description: 'List the projects of the connected project\'s workspace, to pick one for bind_agent_project (the '
-        + 'project an agent\'s video and voice skills run models with) or for connect_agent_connector\'s project_id (a '
-        + 'connector that runs with a Wiro project, such as wiro, which gives the agent its model tools). '
+        + 'project an agent\'s video and voice skills run models with) or for connect_agent_connector\'s project_id (the '
+        + 'wiro connector, which gives the agent its model tools and binds the same project to the agent). '
         + 'Each shows its id and name, whether it is this connection\'s own project, and whether this connection can '
         + 'connect it to an agent: a project you created, or any project of a team you are an admin of. No keys are '
-        + 'shown. With agent_guid the result also says which listed project that agent\'s video and voice skills use; '
-        + 'list_agent_connectors with agent_guid shows the project of each connector connection.',
+        + 'shown. With agent_guid the result also says which listed project that agent uses, for its video and voice '
+        + 'skills and its wiro connector alike.',
       inputSchema: strictInput({
         agent_guid: z.string().min(1).max(100).optional()
           .describe('A deployed agent\'s guid, from list_my_agents, to see which listed project it uses.'),
@@ -130,7 +130,7 @@ export function registerListProjects(server: McpServer, client: WiroClient): voi
         if (otherWorkspace) {
           notes.push(`This agent is in another workspace than this connection's project, so none of these can be connected to it. ${WORKSPACE_HINT}`);
         } else if (projects.some(project => project.view.canBind)) {
-          notes.push('bind_agent_project with agent_guid and project_id connects one for the agent\'s video and voice skills, and connect_agent_connector with project_id connects one to a connector such as wiro: each shows a summary first and changes nothing without confirm: true.');
+          notes.push('bind_agent_project with agent_guid and project_id connects one for the agent\'s video and voice skills, and connect_agent_connector with project_id connects the wiro connector, the agent\'s model tools, and binds the same project to the agent: each shows a summary first and changes nothing without confirm: true.');
         }
         if (projects.length >= PROJECT_LIST_LIMIT) notes.push(`This shows the ${PROJECT_LIST_LIMIT} newest projects of the workspace.`);
 

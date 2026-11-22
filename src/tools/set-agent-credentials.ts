@@ -249,7 +249,8 @@ export function registerSetAgentCredentials(server: McpServer, client: WiroClien
         + 'off any you do not want. To set the Wiro project the agent\'s video and voice skills run models with '
         + '(credential "wiro"), use bind_agent_project first: it takes no key. Only save a Wiro project API key here that '
         + 'the user gave you for this: model runs are billed to the wallet of the workspace that owns the project. The '
-        + 'agent\'s model tools (wiro__*) come from the wiro connector instead (connect_agent_connector). On a team '
+        + 'agent\'s model tools (wiro__*) come from the wiro connector (connect_agent_connector), which runs with this '
+        + 'same project. On a team '
         + 'agent this needs a team admin or the person who deployed it; other team members can read the agent with '
         + 'get_my_agent and message it, so do not ask them for values they cannot save. The agents '
         + 'playbook (get_playbook) has the full setup walkthrough.',

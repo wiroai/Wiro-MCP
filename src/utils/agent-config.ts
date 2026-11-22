@@ -706,15 +706,15 @@ export const FIELD_HELP_MAX = 4_000;
 // The Wiro project field. On the dashboard it is a project picker, and the help
 // it comes with describes that picker, so this line is shown instead. The
 // credential is the project the agent's video and voice skills run models
-// with; the agent's own model tools come from the wiro connector, which holds
-// a project of its own.
+// with. The wiro connector, the agent's own model tools, always runs with the
+// same project: connecting it binds its project to this credential.
 export const WIRO_PROJECT_NOTE = 'Connect a Wiro project with bind_agent_project: it takes the project of this connection or '
   + 'one from list_projects, and no key passes through this chat. The user can also pick the project on the agent\'s page in '
   + 'the Wiro dashboard. Saving a project API key with set_agent_credentials stays possible when the user gives one for this, '
   + 'and Wiro adds the project\'s secret by itself. The agent\'s video and voice skills run models with this project, '
   + 'billed to the wallet of the workspace that owns it. The agent\'s own model tools (wiro__*) come from the wiro '
-  + 'connector instead: connect_agent_connector connects it with project_id, and model runs through it are billed to '
-  + 'the wallet of the workspace that owns that connection\'s project.';
+  + 'connector, which always runs with this same project: connecting it with connect_agent_connector (project_id, or '
+  + 'the project of this connection) binds that project here too, and its model runs count as the agent\'s own.';
 
 export function isWiroProjectField(raw: Row): boolean {
   return /^(custom:)?wiro-project-picker$/.test(asString(raw.type) ?? '');

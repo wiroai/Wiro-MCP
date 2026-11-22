@@ -41,14 +41,20 @@ type Restart = 'scheduled' | 'none' | 'failed';
  */
 function describeClear(title: string, connection: AgentConnection, tasks: string[], restart: string): string {
   const signedIn = connection.way === 'sign_in';
+  // The wiro connector saves nothing of its own: it runs with the agent's Wiro project, which stays bound.
+  const project = connection.way === 'project';
   const loses = isLiveConnection(connection)
     ? `The agent loses the ${title} tools${tasks.length > 0 ? `, and these scheduled tasks stop running until it is connected again: ${tasks.join(', ')}` : ''}. `
     : '';
-  return `The ${title} connection is removed: its saved values${signedIn ? ', its sign-in' : ''} and its account choices. `
+  const removed = project
+    ? `The ${title} connection is removed. The agent keeps its Wiro project, which its video and voice skills use. `
+    : `The ${title} connection is removed: its saved values${signedIn ? ', its sign-in' : ''} and its account choices. `;
+  const again = signedIn ? ' and a new sign-in' : project ? ' with a Wiro project' : ' and the values again';
+  return removed
     + `${signedIn ? 'The service is asked to revoke the access where it supports that. ' : ''}`
     + loses
     + `${restart ? `${restart} ` : ''}`
-    + `Connecting it again needs connect_agent_connector${signedIn ? ' and a new sign-in' : ' and the values again'}.`;
+    + `Connecting it again needs connect_agent_connector${again}.`;
 }
 
 /** Before the disconnect: a connection that is connected now restarts a running agent; any other loads nothing. */

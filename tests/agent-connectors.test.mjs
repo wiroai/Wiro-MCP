@@ -58,6 +58,8 @@ const FACEBOOK = {
   docs: null,
 };
 
+// A remote row (the vendor's own MCP server, signed in with OAuth) with an account choice: Wiro lists the advertisers
+// a sign-in reaches by calling the vendor's read tool, and the bridge holds the agent to the ones chosen.
 const TIKTOK_ADS = {
   slug: 'tiktok-ads',
   title: 'TikTok Ads',
@@ -66,10 +68,10 @@ const TIKTOK_ADS = {
   authtype: 'oauth',
   transport: 'streamable-http',
   credentialfields: [],
-  accountpickers: [],
-  scopes: [],
+  accountpickers: [{ key: 'advertisers', label: 'Advertisers', description: 'The advertiser accounts the agent may work with.', multiple: true }],
+  scopes: ['mcp:tt4b'],
   modes: [],
-  tools: [],
+  tools: [{ name: 'auth_advertiser_get', title: 'Advertisers', description: 'The advertisers this sign-in reaches.', readonly: true, destructive: false }],
   docs: null,
 };
 
@@ -254,7 +256,10 @@ test('list_agent_connectors lists the catalog with how each one connects, and th
     assert.equal(connections.length, 3);
     const lines = text(result).split('\n');
     assert.ok(lines.includes('- **Serper** (`serper`, data, key) [connected]: Google search results through Serper.'), text(result));
-    assert.ok(lines.includes('- **Facebook Pages** (`facebook-pages`, social, sign-in or key) [sign-in started, not finished]: Post to Facebook Pages.'), text(result));
+    assert.ok(lines.includes('- **Facebook Pages** (`facebook-pages`, social, sign-in or key, account choices: Facebook Pages) [sign-in started, not finished]: Post to Facebook Pages.'), text(result));
+    // A remote row's account choices show the same way.
+    assert.ok(lines.includes('- **TikTok Ads** (`tiktok-ads`, marketing, sign-in, account choices: Advertisers) [not connected]: Manage TikTok ad campaigns.'), text(result));
+    assert.deepEqual(connectors.map(item => [item.slug, item.accountPickers]), [['serper', 0], ['facebook-pages', 1], ['tiktok-ads', 1], ['wiro', 0]]);
     assert.ok(lines.includes('- **Wiro** (`wiro`, ai, Wiro project) [not connected]: Run AI models.'), text(result));
     // A connection whose connector the catalog no longer offers is listed apart.
     assert.match(text(result), /### Connections the catalog no longer offers\n\n- Old CRM \(`old-crm`\): connected, but the catalog no longer offers it \(retired\) since /);
@@ -451,7 +456,7 @@ test('connect_agent_connector starts a sign-in that the user opens, and status w
 
     const done = await call(client, 'connect_agent_connector', { action: 'status', agent_guid: AGENT, connector: 'tiktok-ads', since_connected_at: '' });
     assert.equal(done.structuredContent.state, 'connected');
-    assert.match(done.structuredContent.message, /^TikTok Ads is connected \(since .+\)\. The running agent restarts to load it, which takes about a minute\.$/);
+    assert.match(done.structuredContent.message, /^TikTok Ads is connected \(since .+\)\. The running agent restarts to load it, which takes about a minute\. Choose the Advertisers it may act on with set_agent_connector_accounts\.$/);
   });
 });
 
@@ -511,7 +516,9 @@ test('connect_agent_connector signs in with the user\'s own app keys, or connect
   });
 });
 
-test('connect_agent_connector shows the Wiro project and the wallet first, and binds the project only with confirm', async () => {
+// The wiro connector always runs with the agent's own Wiro project, so Wiro binds the project a connect names to the
+// agent, as bind_agent_project does: the preview says so, with the project it replaces, and its calls are the agent's.
+test('connect_agent_connector shows the Wiro project it binds to the agent, what it replaces and the wallet, and binds only with confirm', async () => {
   const projects = { result: true, errors: [], project: [
     { id: '111', name: 'Main', apikey: 'own-project-key', teamguid: null },
     { id: '222', name: 'Side', apikey: 'other-key', teamguid: null },
@@ -524,25 +531,77 @@ test('connect_agent_connector shows the Wiro project and the wallet first, and b
     const own = await call(client, 'connect_agent_connector', { agent_guid: AGENT, connector: 'wiro' });
     assert.equal(own.structuredContent.state, 'confirm_needed');
     assert.deepEqual(own.structuredContent.project, { id: '111', name: 'Main' });
-    assert.match(own.structuredContent.message, /^Wiro would run Wiro models with `Main` \(id `111`\): model runs through it are billed to the wallet of the workspace that owns that project\. Nothing has changed yet\./);
+    assert.equal(own.structuredContent.replacesProject, undefined, 'the agent has no project yet');
+    assert.equal(own.structuredContent.message, 'Wiro runs with the agent\'s own Wiro project: connecting it makes `Main` (id `111`) that project, as '
+      + 'bind_agent_project does, so the agent\'s video and voice skills use it too. Model runs through it are billed to the wallet of '
+      + 'the workspace that owns that project, and the agent\'s spend limits and Model Access rules apply to them. Nothing has '
+      + 'changed yet. Ask the user to confirm.');
     assert.equal(fake.paths().includes('/UserAgent/ConnectorConnect'), false);
 
     const unknown = await call(client, 'connect_agent_connector', { agent_guid: AGENT, connector: 'wiro', project_id: '999' });
     assert.equal(unknown.isError, true);
     assert.match(text(unknown), /No project with the id 999 is in this connection's workspace/);
 
+    const detailReads = fake.called('/UserAgent/Detail').length;
     const bound = await call(client, 'connect_agent_connector', { agent_guid: AGENT, connector: 'wiro', project_id: '222', confirm: true });
     assert.notEqual(bound.isError, true, text(bound));
     assert.deepEqual(fake.called('/UserAgent/ConnectorConnect')[0].body, { useragentguid: AGENT, slug: 'wiro', wiroprojectguid: '222' });
     assert.equal(bound.structuredContent.connection.projectId, '222');
-    assert.match(bound.structuredContent.message, /Model runs through it are billed to the wallet of the workspace that owns `Side` \(id `222`\)\./);
+    assert.match(bound.structuredContent.message, /The agent's own Wiro project is now `Side` \(id `222`\): its model tools and its video and voice skills run models with it, billed to the wallet of the workspace that owns it\.$/);
+    // The confirm reads the agent once, after the connect, for the scheduled tasks it starts.
+    assert.equal(fake.called('/UserAgent/Detail').length, detailReads + 1);
     assert.equal(JSON.stringify(bound).includes('other-key'), false);
   });
+
+  // The agent's project now: replaced by another one, kept when it is the same, and named without its key when it is
+  // outside this connection's list.
+  const agentWith = key => fakeClient(routes({
+    '/Project/List': projects,
+    '/UserAgent/Detail': { result: true, errors: [], useragents: [detailRow({ credentials: { wiro: { apikey: key, optional: false, _filled: true } } })] },
+  }));
+  const preview = async (key, args = {}) => {
+    let out;
+    await withClient(agentWith(key), async client => {
+      out = (await call(client, 'connect_agent_connector', { agent_guid: AGENT, connector: 'wiro', ...args })).structuredContent;
+    });
+    return out;
+  };
+  const replaced = await preview('other-key');
+  assert.deepEqual(replaced.replacesProject, { id: '222', name: 'Side' });
+  assert.match(replaced.message, /connecting it makes `Main` \(id `111`\) that project, as bind_agent_project does, so the agent's video and voice skills use it too\. It replaces `Side` \(id `222`\), the agent's project now\. Model runs/);
+  const same = await preview('other-key', { project_id: '222' });
+  assert.equal(same.replacesProject, undefined);
+  assert.match(same.message, /^Wiro runs with the agent's own Wiro project, `Side` \(id `222`\), which stays as it is\. Model runs through it/);
+  const outside = await preview('a-key-no-listed-project-has');
+  assert.deepEqual(outside.replacesProject, { outsideList: true });
+  assert.match(outside.message, /It replaces a project outside this list or a key saved earlier, the agent's project now\./);
+  for (const out of [replaced, same, outside]) {
+    assert.equal(out.state, 'confirm_needed');
+    assert.equal(JSON.stringify(out).includes('other-key') || JSON.stringify(out).includes('a-key-no-listed-project-has'), false);
+  }
 });
 
-// A connector that acts only on the accounts saved with its connection, such as the advertisers a TikTok Ads call may
-// name, can have no account choices to list: its accounts go in with the connect, and a sign-in saves them once it
-// finishes.
+// The wiro connector's detail says the same: the agent's own project, its calls the agent's, and which project it runs
+// with on this agent, or that it gives the agent nothing while the agent has no project.
+test('list_agent_connectors says the wiro connector runs with the agent\'s own project, and what it does on this agent', async () => {
+  const detail = async row => {
+    let result;
+    const fake = fakeClient(routes({ '/UserAgent/ConnectorList': { result: true, errors: [], useragentconnectors: row ? [row] : [] } }));
+    await withClient(fake, async client => {
+      result = await call(client, 'list_agent_connectors', { name: 'wiro', agent_guid: AGENT });
+    });
+    assert.notEqual(result.isError, true, text(result));
+    return text(result);
+  };
+  const none = await detail(null);
+  assert.match(none, /It runs with the agent's own Wiro project, the one its video and voice skills use: connecting it with connect_agent_connector \(project_id from list_projects, or the project of this connection\) binds that project to the agent, as bind_agent_project does\. Its calls count as the agent's own: the agent's spend limits and Model Access rules apply, model runs are billed to the wallet of the workspace that owns the project, and account, agent and billing calls are refused\./);
+  assert.doesNotMatch(none, /On this agent it runs with|gives it nothing/);
+  assert.match(await detail(connection(WIRO, { wiroprojectid: '111' })), /On this agent it runs with the project with id `111`\./);
+  assert.match(await detail(connection(WIRO, { wiroprojectid: null })), /The agent has no Wiro project now, so the connector gives it nothing until one is bound with connect_agent_connector or bind_agent_project\./);
+});
+
+// Accounts the user already knows, such as the advertisers a TikTok Ads call may name, go in with the connect, and a
+// sign-in saves them once it finishes. A connector with account choices takes only their keys.
 test('connect_agent_connector sends the accounts given with the connect, and checks them against account choices', async () => {
   const fake = fakeClient(routes({
     '/UserAgent/ConnectorConnect': body => (body.slug === 'tiktok-ads'
@@ -663,6 +722,72 @@ test('set_agent_connector_accounts lists the accounts a connection reaches, then
   });
 });
 
+// A remote connector (the vendor's own MCP server) can have account choices too: Wiro lists the advertisers a TikTok
+// Ads sign-in reaches by calling the vendor's read tool, and saves only ones from that list. The tools treat it as any
+// connector with account choices, and the sign-in says to choose them once it finishes.
+test('a remote connector shows its account choices, asks for them once its sign-in finishes, and lists and saves them', async () => {
+  const remote = toCatalogConnector(TIKTOK_ADS);
+  assert.deepEqual(remote.ways, ['sign_in']);
+  assert.deepEqual(remote.accountPickers, [{ key: 'advertisers', label: 'Advertisers', description: 'The advertiser accounts the agent may work with.', multiple: true }]);
+
+  const PICKERS = [{ key: 'advertisers', label: 'Advertisers', description: 'The advertiser accounts the agent may work with.', multiple: true, candidates: [{ id: '7001', name: 'Shop A' }, { id: '7002', name: 'Shop B' }], selected: [] }];
+  let signedIn = false;
+  const fake = fakeClient(routes({
+    '/UserAgent/ConnectorList': () => ({ result: true, errors: [], useragentconnectors: signedIn ? [connection(TIKTOK_ADS, { connectedat: NOW })] : [] }),
+    '/UserAgent/ConnectorConnect': { result: true, errors: [], status: 'pending', authorizeUrl: 'https://ads.example/authorize?state=abc' },
+    '/UserAgent/ConnectorAccounts': { result: true, errors: [], pickers: PICKERS },
+    '/UserAgent/ConnectorSetAccounts': body => ({ result: true, errors: [], accounts: body.accounts, applied: 1, restart: 'scheduled', useragentconnectors: [connection(TIKTOK_ADS, { accounts: body.accounts })] }),
+  }));
+  await withClient(fake, async client => {
+    // The detail lists the account choice, as for a connector that runs here.
+    const detail = await call(client, 'list_agent_connectors', { name: 'tiktok-ads', agent_guid: AGENT });
+    assert.match(text(detail), /### Account choices\n\nOnce it is connected, set_agent_connector_accounts lists these and saves the ones the agent may use; it acts only on those\.\n\n- \*\*Advertisers\*\* \(`advertisers`, one or more\): The advertiser accounts the agent may work with\./);
+    assert.deepEqual(detail.structuredContent.connector.accountPickers, remote.accountPickers);
+
+    // The sign-in says to choose the advertisers once it finishes, unless they came with it.
+    const started = await call(client, 'connect_agent_connector', { agent_guid: AGENT, connector: 'tiktok-ads' });
+    assert.equal(started.structuredContent.state, 'authorize_in_browser');
+    assert.match(started.structuredContent.message, /Once it finishes, choose the Advertisers it may act on: set_agent_connector_accounts lists the ones the sign-in reaches\. Give the link to the user/);
+    const given = await call(client, 'connect_agent_connector', { agent_guid: AGENT, connector: 'tiktok-ads', accounts: { advertisers: ['7001'] } });
+    assert.deepEqual(fake.called('/UserAgent/ConnectorConnect')[1].body, { useragentguid: AGENT, slug: 'tiktok-ads', accounts: { advertisers: ['7001'] } });
+    assert.match(given.structuredContent.message, /The accounts given are saved with the connection once the sign-in finishes\./);
+    assert.doesNotMatch(given.structuredContent.message, /Once it finishes, choose/);
+    const wrongKey = await call(client, 'connect_agent_connector', { agent_guid: AGENT, connector: 'tiktok-ads', accounts: { adaccounts: ['1'] } });
+    assert.equal(text(wrongKey), '## Error\n\nTikTok Ads has no account choice "adaccounts". Its choices: "advertisers" (Advertisers). Nothing was sent.');
+
+    // Once the sign-in finished with none chosen, the result says to choose them, and the next step lists them.
+    signedIn = true;
+    const done = await call(client, 'connect_agent_connector', { action: 'status', agent_guid: AGENT, connector: 'tiktok-ads', since_connected_at: '' });
+    assert.equal(done.structuredContent.state, 'connected');
+    assert.match(done.structuredContent.message, /Choose the Advertisers it may act on with set_agent_connector_accounts\.$/);
+    assert.deepEqual(done.structuredContent.nextAction, {
+      tool: 'set_agent_connector_accounts',
+      arguments: { agent_guid: AGENT, connector: 'tiktok-ads' },
+      reason: 'List the Advertisers to choose from.',
+    });
+
+    // The list is the vendor's, read by Wiro; saving takes only ids from it.
+    const listed = await call(client, 'set_agent_connector_accounts', { agent_guid: AGENT, connector: 'tiktok-ads' });
+    assert.notEqual(listed.isError, true, text(listed));
+    assert.deepEqual(fake.called('/UserAgent/ConnectorAccounts')[0].body, { useragentguid: AGENT, slug: 'tiktok-ads' });
+    assert.match(text(listed), /### Advertisers \(`advertisers`, one or more\)\n\nThe advertiser accounts the agent may work with\.\n\n- `Shop A` \(id `7001`\)\n- `Shop B` \(id `7002`\)/);
+    assert.deepEqual(listed.structuredContent.nextAction.arguments, { agent_guid: AGENT, connector: 'tiktok-ads', accounts: { advertisers: ['7001', '7002'] } });
+    const saved = await call(client, 'set_agent_connector_accounts', { agent_guid: AGENT, connector: 'tiktok-ads', accounts: { advertisers: ['7002'] } });
+    assert.deepEqual(fake.called('/UserAgent/ConnectorSetAccounts')[0].body, { useragentguid: AGENT, slug: 'tiktok-ads', accounts: { advertisers: ['7002'] } });
+    assert.equal(saved.structuredContent.message, 'Saved the TikTok Ads accounts (Advertisers: 1 chosen). The agent acts only on these. The running agent restarts to load them, which takes about a minute.');
+  });
+
+  // The vendor refused the connection's sign-in while Wiro listed its accounts: connect it again, never "ask the operator".
+  const gone = fakeClient(routes({
+    '/UserAgent/ConnectorAccounts': { result: false, errors: [{ code: 0, message: 'The sign-in for this connector expired or was revoked, so it has to be connected again. Ask the agent\'s operator to reconnect it.' }] },
+  }));
+  await withClient(gone, async client => {
+    const result = await call(client, 'set_agent_connector_accounts', { agent_guid: AGENT, connector: 'tiktok-ads' });
+    assert.equal(result.isError, true);
+    assert.equal(text(result), '## Error\n\nThe tiktok-ads sign-in expired or was revoked at the service, so its accounts cannot be listed or saved, and nothing was changed. Connect it again with connect_agent_connector (action connect returns a new sign-in link), then choose the accounts.');
+  });
+});
+
 // ---------------------------------------------------------------------------
 // disconnect_agent_connector
 // ---------------------------------------------------------------------------
@@ -738,6 +863,16 @@ test('disconnect_agent_connector words the restart as Wiro answers it, and promi
   assert.equal(expired.preview.willClear, 'The TikTok Ads connection is removed: its saved values, its sign-in and its account choices. The service is asked to revoke the access where it supports that. Connecting it again needs connect_agent_connector and a new sign-in.');
   assert.match(expired.done.message, /It was not connected, so the agent does not restart\./);
   for (const out of [expired.preview, expired.done]) assert.doesNotMatch(out.message, /A running agent restarts|restarts without it|loses the TikTok Ads tools/);
+});
+
+// The wiro connector saves no values of its own: it runs with the agent's Wiro project, which a disconnect leaves bound.
+test('disconnect_agent_connector says the agent keeps its Wiro project when the wiro connector goes', async () => {
+  const fake = fakeClient(routes({ '/UserAgent/ConnectorList': { result: true, errors: [], useragentconnectors: [connection(WIRO, { wiroprojectid: '111' })] } }));
+  await withClient(fake, async client => {
+    const preview = await call(client, 'disconnect_agent_connector', { agent_guid: AGENT, connector: 'wiro' });
+    assert.equal(preview.structuredContent.willClear, 'The Wiro connection is removed. The agent keeps its Wiro project, which its video and voice skills use. The agent loses the Wiro tools. A running agent restarts. Connecting it again needs connect_agent_connector with a Wiro project.');
+    assert.doesNotMatch(preview.structuredContent.willClear, /saved values|the values again/);
+  });
 });
 
 // A scheduled task runs while any one of the connectors it names is connected, so it stops with a disconnect, or
