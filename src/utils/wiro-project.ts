@@ -1,8 +1,22 @@
 import type { WiroClient } from '../client.js';
 import { asString, errorText, isPlainObject, requireApiSuccess, type ApiEnvelope } from './api.js';
-import { credentialGroup, isFilledValue } from './agent-config.js';
+import {
+  credentialGroup,
+  customSkillEntries,
+  isFilledValue,
+  keyList,
+  WORKSPACE_HINT,
+  type CustomSkillEntry,
+} from './agent-config.js';
+import {
+  connectorLabel,
+  isLiveConnection,
+  listConnections,
+  readConnector,
+  type AgentConnection,
+} from './agent-connectors.js';
 import { quotedSpan } from './quoted-text.js';
-import { WIRO_PROJECT_CREDENTIAL } from './user-agent.js';
+import { skillOffTasksNote, taskLabel, taskNamedByWiro, WIRO_PROJECT_CREDENTIAL } from './user-agent.js';
 
 // The Wiro projects of the connected project's workspace. What tools show of a
 // project is built field by field: no key and no address on its IP list is ever
@@ -98,6 +112,81 @@ export function agentProjectState(row: Record<string, unknown>, projects: Listed
 export function isOtherWorkspace(row: Record<string, unknown>, projects: ListedProject[]): boolean {
   const agentWorkspace = asString(row.teamguid) ?? '';
   return projects.some(project => project.workspace !== undefined && project.workspace !== agentWorkspace);
+}
+
+/** The answer for an agent in another workspace than this connection's projects (isOtherWorkspace). */
+export const OTHER_WORKSPACE_TEXT = `This agent is in another workspace than this connection's project, and nothing was changed. ${WORKSPACE_HINT}`;
+
+/** The answer for a listed project this connection cannot make an agent's project (canBind false). */
+export const CANNOT_BIND_TEXT = 'You can bind a project you created, or any project of a team you are an admin of. Nothing '
+  + 'was changed. list_projects shows which ones.';
+
+/**
+ * The custom skills and scheduled tasks a new Wiro project turns on. Saving the agent's project sets every one that
+ * requires it to on: with a first project that is all of them, and with a new project the ones that are off now.
+ */
+export function entriesTurnedOnByProject(row: Record<string, unknown>, replacing: boolean): CustomSkillEntry[] {
+  return customSkillEntries(row).filter(entry => entry.requiresCredentials.includes(WIRO_PROJECT_CREDENTIAL)
+    && (!replacing || !entry.enabled));
+}
+
+/**
+ * Those entries as a sentence, said before ("once") or after ("now that") the project is connected. A paused task is
+ * named with the skills it still waits for, by their titles. Null when none turns on.
+ */
+export function projectTurnsOnNote(
+  entries: readonly CustomSkillEntry[],
+  when: 'once' | 'now that',
+  titles?: ReadonlyMap<string, string>,
+): string | null {
+  if (entries.length === 0) return null;
+  const sentence = `${keyList(entries.map(entry => taskLabel(entry.key, taskNamedByWiro(entry))))} ${entries.length > 1 ? 'turn' : 'turns'} on ${when} the project is connected.${skillOffTasksNote(entries, titles)}`;
+  return entries.some(entry => entry.kind === 'scheduled_task')
+    ? `${sentence} Every run of a scheduled task uses credits; turn off any you do not want with manage_agent_custom_skill.`
+    : sentence;
+}
+
+/**
+ * The agent's live connections to a connector that runs with its Wiro project (the wiro connector), whose tools a new
+ * project moves to it. ConnectorList names the agent's project on such a connection, but none while the agent has no
+ * project, so a connection that shows neither a project nor a saved value is looked up in the catalog. Empty when the
+ * connections cannot be read.
+ */
+export async function projectConnections(client: WiroClient, agentGuid: string, signal?: AbortSignal): Promise<AgentConnection[]> {
+  let live: AgentConnection[];
+  try {
+    live = (await listConnections(client, agentGuid, signal)).filter(isLiveConnection);
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    return [];
+  }
+  const found: AgentConnection[] = [];
+  for (const connection of live) {
+    if (connection.way === 'project') {
+      found.push(connection);
+      continue;
+    }
+    if (connection.way !== 'key' || connection.savedFields.length > 0) continue;
+    let ways: readonly string[] = [];
+    try {
+      ways = (await readConnector(client, connection.connector, signal))?.ways ?? [];
+    } catch (error) {
+      if (signal?.aborted) throw error;
+    }
+    if (ways.includes('project')) found.push({ ...connection, way: 'project' });
+  }
+  return found;
+}
+
+/** What a new project does to those connections: their tools run with it from then on. Null when there are none. */
+export function projectConnectionsNote(connections: readonly AgentConnection[]): string | null {
+  if (connections.length === 0) return null;
+  const several = connections.length > 1;
+  const names = keyList(connections.map(connection => connectorLabel(connection)));
+  const tools = keyList(connections.map(connection => `\`${connection.connector}__*\``));
+  return `${names} ${several ? 'are' : 'is'} connected and always ${several ? 'run' : 'runs'} with the agent's own Wiro `
+    + `project, so ${several ? 'their' : 'its'} model tools (${tools}) run with this project too, billed to the wallet of `
+    + 'the workspace that owns it.';
 }
 
 /** A project inside a line of this server's own text. Its name comes from a person, so it is quoted. */

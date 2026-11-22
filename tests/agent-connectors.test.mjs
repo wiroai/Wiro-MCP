@@ -548,8 +548,10 @@ test('connect_agent_connector shows the Wiro project it binds to the agent, what
     assert.deepEqual(fake.called('/UserAgent/ConnectorConnect')[0].body, { useragentguid: AGENT, slug: 'wiro', wiroprojectguid: '222' });
     assert.equal(bound.structuredContent.connection.projectId, '222');
     assert.match(bound.structuredContent.message, /The agent's own Wiro project is now `Side` \(id `222`\): its model tools and its video and voice skills run models with it, billed to the wallet of the workspace that owns it\.$/);
-    // The confirm reads the agent once, after the connect, for the scheduled tasks it starts.
+    // The confirm reads the agent once, before the connect: for bind_agent_project's checks, what the project turns
+    // on and the scheduled tasks the connection starts.
     assert.equal(fake.called('/UserAgent/Detail').length, detailReads + 1);
+    assert.ok(fake.paths().lastIndexOf('/UserAgent/Detail') < fake.paths().lastIndexOf('/UserAgent/ConnectorConnect'));
     assert.equal(JSON.stringify(bound).includes('other-key'), false);
   });
 
@@ -581,6 +583,90 @@ test('connect_agent_connector shows the Wiro project it binds to the agent, what
   }
 });
 
+// Binding a project writes the agent's Wiro key, and Wiro then turns on every scheduled task and custom skill that
+// needs the project: on a first project all of them, on a new one those that are off now, even ones the user turned
+// off. The preview names them before the yes, and the connected result after it, as bind_agent_project does.
+test('connect_agent_connector names what a Wiro project turns on, before the yes and after it', async () => {
+  const projects = { result: true, errors: [], project: [
+    { id: '101', name: 'Second Project', apikey: 'second-key', teamguid: null },
+    { id: '102', name: 'Main Project', apikey: 'own-project-key', teamguid: null },
+  ] };
+  const video = enabled => ({ key: 'cs-cron-weekly-video', description: 'Weekly video', value: 'Make the weekly video.', interval: '0 9 * * 1', enabled, requires_credentials: ['wiro'], requires_connectors: [], _source: 'user-created', _editable: true, _user_created: true });
+  const rules = { key: 'cs-video-rules', description: 'Video rules', value: 'Keep videos short.', interval: null, enabled: false, requires_credentials: ['wiro'], _source: 'user-created', _editable: true, _user_created: true };
+  const agent = (key, tasks) => ({ result: true, errors: [], useragents: [detailRow({
+    credentials: key ? { wiro: { apikey: key, optional: false, _filled: true } } : {},
+    scheduledskills: tasks,
+    customskills: [rules],
+  })] });
+  const credits = 'Every run of a scheduled task uses credits; turn off any you do not want with manage_agent_custom_skill.';
+
+  // A new project: what is off now turns on, the task the user turned off included; what is on stays out of it.
+  const fake = fakeClient(routes({
+    '/Project/List': projects,
+    '/UserAgent/Detail': agent('second-key', [video(false), { ...video(true), key: 'cs-cron-daily-video' }]),
+    '/UserAgent/ConnectorConnect': { result: true, errors: [], status: 'connected', applied: 1, restart: 'scheduled', useragentconnectors: [connection(WIRO, { wiroprojectid: '102' })] },
+  }));
+  await withClient(fake, async client => {
+    const preview = await call(client, 'connect_agent_connector', { agent_guid: AGENT, connector: 'wiro', project_id: '102' });
+    assert.equal(preview.structuredContent.state, 'confirm_needed');
+    assert.deepEqual(preview.structuredContent.replacesProject, { id: '101', name: 'Second Project' });
+    const before = `Video Rules (\`cs-video-rules\`) and Weekly Video (\`cs-cron-weekly-video\`) turn on once the project is connected. ${credits}`;
+    assert.ok(preview.structuredContent.message.includes(`apply to them. ${before} Nothing has changed yet.`), preview.structuredContent.message);
+    assert.doesNotMatch(preview.structuredContent.message, /cs-cron-daily-video/);
+    assert.equal(fake.paths().includes('/UserAgent/ConnectorConnect'), false);
+
+    const done = await call(client, 'connect_agent_connector', preview.structuredContent.nextAction.arguments);
+    assert.equal(done.structuredContent.state, 'connected');
+    assert.ok(done.structuredContent.message.endsWith(`billed to the wallet of the workspace that owns it. ${before.replace('once', 'now that')}`), done.structuredContent.message);
+  });
+
+  // A first project turns on every one of them; the agent's own project again turns on nothing.
+  const first = fakeClient(routes({ '/Project/List': projects, '/UserAgent/Detail': agent(null, [video(true)]) }));
+  await withClient(first, async client => {
+    const preview = await call(client, 'connect_agent_connector', { agent_guid: AGENT, connector: 'wiro' });
+    assert.match(preview.structuredContent.message, /Video Rules \(`cs-video-rules`\) and Weekly Video \(`cs-cron-weekly-video`\) turn on once the project is connected\. Every run/);
+  });
+  const same = fakeClient(routes({
+    '/Project/List': projects,
+    '/UserAgent/Detail': agent('own-project-key', [video(false)]),
+    '/UserAgent/ConnectorConnect': { result: true, errors: [], status: 'connected', applied: 1, restart: 'scheduled', useragentconnectors: [connection(WIRO, { wiroprojectid: '102' })] },
+  }));
+  await withClient(same, async client => {
+    const preview = await call(client, 'connect_agent_connector', { agent_guid: AGENT, connector: 'wiro' });
+    assert.match(preview.structuredContent.message, /which stays as it is\./);
+    assert.doesNotMatch(preview.structuredContent.message, /turns? on/);
+    const done = await call(client, 'connect_agent_connector', { agent_guid: AGENT, connector: 'wiro', confirm: true });
+    assert.doesNotMatch(done.structuredContent.message, /turns? on/);
+  });
+});
+
+// Wiro refuses a connect that binds a project bind_agent_project would refuse, so the preview refuses it first, with
+// bind_agent_project's own sentences, and nothing is sent.
+test('connect_agent_connector refuses a Wiro project bind_agent_project would refuse, before any summary', async () => {
+  const otherWorkspace = 'This agent is in another workspace than this connection\'s project, and nothing was changed. Connect with a project in the workspace (personal or team) that owns this agent, by its API key or a browser sign-in.';
+  const cannotBind = 'You can bind a project you created, or any project of a team you are an admin of. Nothing was changed. list_projects shows which ones.';
+  const cases = [
+    ['a team key on a personal agent', [{ id: '102', name: 'Main', apikey: 'own-project-key', teamguid: 'team-1' }], {}, otherWorkspace],
+    ['a personal key on a team agent', [{ id: '102', name: 'Main', apikey: 'own-project-key', teamguid: null }], { teamguid: 'team-1' }, otherWorkspace],
+    // A project the list shows without its key: this connection cannot bind it.
+    ['a project without its key', [{ id: '102', name: 'Main', apikey: 'own-project-key', teamguid: null }, { id: '103', name: 'Member', apikeymasked: 'mem***', teamguid: null }], {}, cannotBind, '103'],
+  ];
+  for (const [label, project, agent, refusal, projectId] of cases) {
+    const fake = fakeClient(routes({
+      '/Project/List': { result: true, errors: [], project },
+      '/UserAgent/Detail': { result: true, errors: [], useragents: [detailRow(agent)] },
+    }));
+    await withClient(fake, async client => {
+      for (const confirm of [false, true]) {
+        const result = await call(client, 'connect_agent_connector', { agent_guid: AGENT, connector: 'wiro', confirm, ...(projectId ? { project_id: projectId } : {}) });
+        assert.equal(result.isError, true, label);
+        assert.equal(text(result), `## Error\n\n${refusal}`, label);
+      }
+      assert.equal(fake.paths().includes('/UserAgent/ConnectorConnect'), false, label);
+    });
+  }
+});
+
 // The wiro connector's detail says the same: the agent's own project, its calls the agent's, and which project it runs
 // with on this agent, or that it gives the agent nothing while the agent has no project.
 test('list_agent_connectors says the wiro connector runs with the agent\'s own project, and what it does on this agent', async () => {
@@ -598,6 +684,16 @@ test('list_agent_connectors says the wiro connector runs with the agent\'s own p
   assert.doesNotMatch(none, /On this agent it runs with|gives it nothing/);
   assert.match(await detail(connection(WIRO, { wiroprojectid: '111' })), /On this agent it runs with the project with id `111`\./);
   assert.match(await detail(connection(WIRO, { wiroprojectid: null })), /The agent has no Wiro project now, so the connector gives it nothing until one is bound with connect_agent_connector or bind_agent_project\./);
+
+  // ConnectorList names no project on that connection, so the catalog row says how it connects.
+  const fake = fakeClient(routes({ '/UserAgent/ConnectorList': { result: true, errors: [], useragentconnectors: [connection(WIRO), connection(SERPER, { savedvariables: ['apikey'] })] } }));
+  await withClient(fake, async client => {
+    const full = await call(client, 'list_agent_connectors', { name: 'wiro', agent_guid: AGENT });
+    assert.equal(full.structuredContent.connections[0].way, 'project');
+    const listed = await call(client, 'list_agent_connectors', { agent_guid: AGENT });
+    assert.deepEqual(listed.structuredContent.connections.map(item => [item.connector, item.way]), [['wiro', 'project'], ['serper', 'key']]);
+  });
+  assert.equal(toAgentConnection(connection(WIRO)).way, 'key', 'the connection alone cannot tell');
 });
 
 // Accounts the user already knows, such as the advertisers a TikTok Ads call may name, go in with the connect, and a
@@ -872,6 +968,59 @@ test('disconnect_agent_connector says the agent keeps its Wiro project when the 
     const preview = await call(client, 'disconnect_agent_connector', { agent_guid: AGENT, connector: 'wiro' });
     assert.equal(preview.structuredContent.willClear, 'The Wiro connection is removed. The agent keeps its Wiro project, which its video and voice skills use. The agent loses the Wiro tools. A running agent restarts. Connecting it again needs connect_agent_connector with a Wiro project.');
     assert.doesNotMatch(preview.structuredContent.willClear, /saved values|the values again/);
+  });
+});
+
+// While the agent has no Wiro project, ConnectorList names none on the wiro connection, and Wiro leaves the connector
+// out of the agent's settings: the catalog row says it is a project connector, and the agent has no tools to lose.
+test('disconnect_agent_connector words a wiro connection on an agent with no project by its catalog row', async () => {
+  const either = { key: 'cs-cron-weekly-images', description: 'Weekly images', value: 'Make images.', interval: '0 9 * * 1', enabled: true, requires_credentials: [], requires_connectors: ['wiro'], _source: 'user-created', _editable: true, _user_created: true };
+  const fake = fakeClient(routes({
+    '/UserAgent/ConnectorList': { result: true, errors: [], useragentconnectors: [connection(WIRO, { wiroprojectid: null })] },
+    '/UserAgent/ConnectorDisconnect': { result: true, errors: [], removed: true, revoked: false, restart: 'scheduled' },
+  }));
+  await withClient(fake, async client => {
+    const preview = await call(client, 'disconnect_agent_connector', { agent_guid: AGENT, connector: 'wiro' });
+    assert.notEqual(preview.isError, true, text(preview));
+    assert.equal(preview.structuredContent.willClear, 'The Wiro connection is removed. The agent has no Wiro project now, so the connector gives it nothing. A running agent restarts. Connecting it again needs connect_agent_connector with a Wiro project.');
+    assert.doesNotMatch(preview.structuredContent.willClear, /saved values|the values again|loses the Wiro tools/);
+    assert.equal(preview.structuredContent.connection.way, 'project');
+    assert.deepEqual(fake.called('/AgentConnector/Detail').map(item => item.body), [{ slug: 'wiro' }]);
+
+    const done = await call(client, 'disconnect_agent_connector', { agent_guid: AGENT, connector: 'wiro', confirm: true });
+    assert.equal(done.structuredContent.disconnected, true);
+    assert.match(done.structuredContent.message, /^Wiro is disconnected\. The Wiro connection is removed\. The agent has no Wiro project now, so the connector gives it nothing\. The running agent restarts without it/);
+  });
+
+  // A scheduled task that needs the connector still stops with it.
+  const tasks = fakeClient(routes({
+    '/UserAgent/Detail': { result: true, errors: [], useragents: [detailRow({ scheduledskills: [either] })] },
+    '/UserAgent/ConnectorList': { result: true, errors: [], useragentconnectors: [connection(WIRO, { wiroprojectid: null })] },
+  }));
+  await withClient(tasks, async client => {
+    const preview = await call(client, 'disconnect_agent_connector', { agent_guid: AGENT, connector: 'wiro' });
+    assert.match(preview.structuredContent.willClear, /so the connector gives it nothing\. These scheduled tasks stop running until it is connected again: Weekly Images \(`cs-cron-weekly-images`\)\. A running agent restarts\./);
+  });
+
+  // A key connector with saved values needs no catalog read.
+  const serper = fakeClient(routes({ '/UserAgent/ConnectorList': { result: true, errors: [], useragentconnectors: [connection(SERPER, { savedvariables: ['apikey'] })] } }));
+  await withClient(serper, async client => {
+    await call(client, 'disconnect_agent_connector', { agent_guid: AGENT, connector: 'serper' });
+    assert.equal(serper.paths().includes('/AgentConnector/Detail'), false);
+  });
+});
+
+// The wiro connector has no saved values, so connecting it again replaces the connection and nothing else.
+test('connect_agent_connector words a replace of the wiro connection without saved values', async () => {
+  const fake = fakeClient(routes({
+    '/Project/List': { result: true, errors: [], project: [{ id: '111', name: 'Main', apikey: 'own-project-key', teamguid: null }] },
+    '/UserAgent/ConnectorList': { result: true, errors: [], useragentconnectors: [connection(WIRO, { wiroprojectid: null })] },
+  }));
+  await withClient(fake, async client => {
+    const preview = await call(client, 'connect_agent_connector', { agent_guid: AGENT, connector: 'wiro' });
+    assert.match(preview.structuredContent.message, /^Wiro is already connected \(since .+\)\. Connecting again replaces that connection\. Wiro runs with the agent's own Wiro project/);
+    assert.doesNotMatch(preview.structuredContent.message, /saved values/);
+    assert.equal(preview.structuredContent.connection.way, 'project');
   });
 });
 

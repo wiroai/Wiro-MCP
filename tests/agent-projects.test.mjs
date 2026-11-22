@@ -128,6 +128,7 @@ function routes(overrides = {}) {
     '/Project/List': { result: true, errors: [], project: [OWN_ROW, OTHER_ROW, MASKED_ROW] },
     '/Wallet/List': { result: true, errors: [], wallet: [{ symbol: 'USD', uuid: TEAM, amount: '50', giftedamount: '0', storeamount: '0' }] },
     '/UserAgent/CredentialProjectBind': bound(),
+    '/UserAgent/ConnectorList': { result: true, errors: [], useragentconnectors: [] },
     ...overrides,
   };
 }
@@ -333,6 +334,10 @@ test('list_projects and bind_agent_project advertise what they do', async () => 
     assert.doesNotMatch(bind.description, /a project of its own/);
     assert.match(list.description, /the wiro connector, which gives the agent its model tools and binds the same project to the agent/);
     assert.doesNotMatch(bind.description, /so it can run Wiro models/);
+    // The wiro connector's tools are Wiro's model, task and file upload tools, plus read-only docs search and playbooks.
+    const connect = tools.find(tool => tool.name === 'connect_agent_connector');
+    assert.match(connect.description, /The wiro connector runs with a Wiro project and gives the agent only Wiro's model, task and file upload tools, plus read-only docs search and playbooks: /);
+    assert.doesNotMatch(connect.description, /model and task tools only/);
     assert.deepEqual(Object.keys(list.inputSchema.properties), ['agent_guid']);
     // No key of any kind goes in.
     assert.deepEqual(Object.keys(bind.inputSchema.properties).sort(), ['agent_guid', 'confirm', 'project_id']);
@@ -575,6 +580,72 @@ test('bind_agent_project warns when no active skill uses a project, and the bind
     assert.equal(result.structuredContent.state, 'bound');
     assert.match(result.structuredContent.warnings[0], /^No active skill of this agent uses a Wiro project yet/);
     assert.match(text(result), /Warning: No active skill of this agent uses a Wiro project yet/);
+  });
+});
+
+// The wiro connector always runs with the agent's own Wiro project, so while it is connected a bind changes the project
+// its model tools (wiro__*) run with and the wallet they bill, whatever the skills say: no "changes nothing" warning.
+test('bind_agent_project counts a connected wiro connector as a use of the project, and says its tools move', async () => {
+  const wiroConnection = overrides => ({
+    slug: 'wiro', title: 'Wiro AI Models', iconurl: null, category: 'ai', authtype: 'headers', transport: 'streamable-http',
+    authmode: null, catalogstatus: 'active', status: 'connected', connectedat: 1760000000, updatedat: 1760000000,
+    tokenexpiresat: null, refreshtokenexpiresat: null, scope: null, accounts: {}, wiroprojectid: '101', savedvariables: [],
+    lasterror: null, ...overrides,
+  });
+  const connected = (...rows) => ({ '/UserAgent/ConnectorList': { result: true, errors: [], useragentconnectors: rows } });
+  const note = 'Wiro AI Models (`wiro`) is connected and always runs with the agent\'s own Wiro project, so its model tools (`wiro__*`) run with this project too, billed to the wallet of the workspace that owns it.';
+
+  // The agent runs on project 101 with only a reporting skill: the bind moves the connector's tools to 102.
+  await withTools(routes({ '/UserAgent/Detail': detail({ ...NO_WIRO_SKILL, credentials: { wiro: wiroGroup(OTHER_KEY) } }), ...connected(wiroConnection()) }), async ({ call }) => {
+    const preview = await call('bind_agent_project', { agent_guid: AGENT });
+    assert.notEqual(preview.isError, true, text(preview));
+    assert.equal(preview.structuredContent.state, 'preview');
+    assert.deepEqual(preview.structuredContent.replaces, { id: '101', name: 'Second Project' });
+    assert.deepEqual(preview.structuredContent.warnings, []);
+    assert.ok(preview.structuredContent.notes.includes(note), JSON.stringify(preview.structuredContent.notes));
+    assert.ok(text(preview).includes(note));
+    assert.doesNotMatch(text(preview), /No active skill|changes nothing until/);
+
+    const done = await call('bind_agent_project', preview.structuredContent.nextAction.arguments);
+    assert.equal(done.structuredContent.state, 'bound');
+    assert.deepEqual(done.structuredContent.warnings, []);
+    assert.ok(done.structuredContent.notes.includes(note));
+  });
+
+  // With no project, ConnectorList names none on the connection: the catalog row says it runs with one.
+  const catalogRow = { slug: 'wiro', title: 'Wiro AI Models', authtype: 'headers', transport: 'streamable-http', credentialfields: [{ name: 'wiro_credentials', label: 'Wiro credentials', required: true, secret: true, format: 'password', source: 'wiro_project' }], accountpickers: [], tools: [] };
+  await withTools(routes({
+    '/UserAgent/Detail': detail(NO_WIRO_SKILL),
+    ...connected(wiroConnection({ wiroprojectid: null })),
+    '/AgentConnector/Detail': body => (body.slug === 'wiro' ? { result: true, errors: [], agentconnectors: [catalogRow] } : refused(0, 'Connector not found.')),
+  }), async ({ call, calls }) => {
+    const preview = await call('bind_agent_project', { agent_guid: AGENT });
+    assert.deepEqual(preview.structuredContent.warnings, []);
+    assert.ok(preview.structuredContent.notes.includes(note));
+    assert.deepEqual(calls.filter(item => item.path === '/AgentConnector/Detail').map(item => item.body), [{ slug: 'wiro' }]);
+  });
+
+  // A connection that gives the agent nothing now, or one that saves values of its own, is no use of the project.
+  for (const row of [wiroConnection({ status: 'reauth' }), wiroConnection({ catalogstatus: 'retired' }), wiroConnection({ slug: 'serper', title: 'Serper', authtype: 'fields', transport: 'local', wiroprojectid: null, savedvariables: ['apikey'] })]) {
+    await withTools(routes({ '/UserAgent/Detail': detail(NO_WIRO_SKILL), ...connected(row) }), async ({ call, paths }) => {
+      const preview = await call('bind_agent_project', { agent_guid: AGENT });
+      assert.match(preview.structuredContent.warnings[0], /^No active skill of this agent uses a Wiro project yet/, row.slug);
+      assert.equal(preview.structuredContent.notes.includes(note), false, row.slug);
+      assert.equal(paths().includes('/AgentConnector/Detail'), false, row.slug);
+    });
+  }
+
+  // A failed read of the connections keeps the warning; the project the agent already has moves nothing.
+  await withTools(routes({ '/UserAgent/Detail': detail(NO_WIRO_SKILL), '/UserAgent/ConnectorList': refused(0, 'no list') }), async ({ call }) => {
+    const preview = await call('bind_agent_project', { agent_guid: AGENT });
+    assert.equal(preview.structuredContent.state, 'preview');
+    assert.match(preview.structuredContent.warnings[0], /^No active skill of this agent uses a Wiro project yet/);
+  });
+  await withTools(routes({ '/UserAgent/Detail': detail({ ...NO_WIRO_SKILL, credentials: { wiro: wiroGroup(OWN_KEY) } }), ...connected(wiroConnection({ wiroprojectid: '102' })) }), async ({ call }) => {
+    const result = await call('bind_agent_project', { agent_guid: AGENT });
+    assert.equal(result.structuredContent.state, 'unchanged');
+    assert.deepEqual(result.structuredContent.warnings, []);
+    assert.equal(result.structuredContent.notes.includes(note), false);
   });
 });
 

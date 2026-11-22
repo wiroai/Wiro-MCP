@@ -12,6 +12,7 @@ import {
   isLiveConnection,
   listConnections,
   readConnector,
+  withCatalogWay,
   type AgentConnection,
 } from '../utils/agent-connectors.js';
 import { taskLabel, taskNamedByWiro } from '../utils/user-agent.js';
@@ -37,18 +38,27 @@ type Restart = 'scheduled' | 'none' | 'failed';
 
 /**
  * What a disconnect removes and what goes with it. The agent loses tools and scheduled tasks only from a connection
- * that gives it the connector now, and `restart` is the sentence about the restart, or empty.
+ * that gives it the connector now, and `restart` is the sentence about the restart, or empty. The connection's way
+ * comes from the catalog row (withCatalogWay), since a connection to the wiro connector names no project while the
+ * agent has none.
  */
 function describeClear(title: string, connection: AgentConnection, tasks: string[], restart: string): string {
   const signedIn = connection.way === 'sign_in';
-  // The wiro connector saves nothing of its own: it runs with the agent's Wiro project, which stays bound.
+  // The wiro connector saves nothing of its own: it runs with the agent's Wiro project, which stays bound. While the
+  // agent has no project it gives the agent no tools, so there are none to lose.
   const project = connection.way === 'project';
-  const loses = isLiveConnection(connection)
-    ? `The agent loses the ${title} tools${tasks.length > 0 ? `, and these scheduled tasks stop running until it is connected again: ${tasks.join(', ')}` : ''}. `
-    : '';
-  const removed = project
-    ? `The ${title} connection is removed. The agent keeps its Wiro project, which its video and voice skills use. `
-    : `The ${title} connection is removed: its saved values${signedIn ? ', its sign-in' : ''} and its account choices. `;
+  const noProject = project && !connection.projectId;
+  const stop = tasks.length > 0 ? `these scheduled tasks stop running until it is connected again: ${tasks.join(', ')}` : '';
+  const loses = !isLiveConnection(connection)
+    ? ''
+    : noProject
+      ? (stop ? `${stop.charAt(0).toUpperCase()}${stop.slice(1)}. ` : '')
+      : `The agent loses the ${title} tools${stop ? `, and ${stop}` : ''}. `;
+  const removed = noProject
+    ? `The ${title} connection is removed. The agent has no Wiro project now, so the connector gives it nothing. `
+    : project
+      ? `The ${title} connection is removed. The agent keeps its Wiro project, which its video and voice skills use. `
+      : `The ${title} connection is removed: its saved values${signedIn ? ', its sign-in' : ''} and its account choices. `;
   const again = signedIn ? ' and a new sign-in' : project ? ' with a Wiro project' : ' and the values again';
   return removed
     + `${signedIn ? 'The service is asked to revoke the access where it supports that. ' : ''}`
@@ -113,8 +123,9 @@ export function registerDisconnectAgentConnector(server: McpServer, client: Wiro
         + 'sign-in\'s access where it supports that, the agent loses the connector\'s tools, scheduled tasks that can '
         + 'use no other connected connector stop running, and a running agent restarts when the connector was '
         + 'connected. It cannot be undone: connecting again needs '
-        + 'connect_agent_connector with a new sign-in or the values. Chat channels such as Telegram are turned off by '
-        + 'clearing their fields with set_agent_credentials instead.',
+        + 'connect_agent_connector with a new sign-in or the values. The wiro connector saves no values: disconnecting it '
+        + 'leaves the agent its Wiro project, and connecting it again takes a Wiro project. Chat channels such as Telegram '
+        + 'are turned off by clearing their fields with set_agent_credentials instead.',
       inputSchema: strictInput({
         agent_guid: z.string().min(1).max(100).describe('The deployed agent\'s guid, from list_my_agents.'),
         connector: z.string().min(1).max(100).describe('The connector\'s slug, such as "google-ads".'),
@@ -134,9 +145,14 @@ export function registerDisconnectAgentConnector(server: McpServer, client: Wiro
         const agentGuid = agent_guid.trim();
         const slug = rawConnector.trim().toLowerCase();
         const connections = await listConnections(client, agentGuid, extra.signal);
-        const connection = connectionOf(connections, slug);
-        // A connector the catalog no longer offers can still be disconnected; its title then comes from the connection.
-        const title = connection?.title ?? (await readConnector(client, slug, extra.signal).catch(() => null))?.title ?? slug;
+        const listed = connectionOf(connections, slug);
+        // The catalog row says how the connector connects where the connection does not: a connection to the wiro
+        // connector shows no project and no saved value while the agent has no project. A connector the catalog no
+        // longer offers can still be disconnected; its title then comes from the connection.
+        const unsure = !listed || listed.way === undefined || (listed.way === 'key' && listed.savedFields.length === 0);
+        const connector = unsure ? await readConnector(client, slug, extra.signal).catch(() => null) : null;
+        const connection = listed ? withCatalogWay(listed, connector) : undefined;
+        const title = connection?.title ?? connector?.title ?? slug;
         const base = { agentGuid, connector: slug, title };
         if (!connection) {
           const message = `${title} is not connected to this agent, so there is nothing to remove.`;

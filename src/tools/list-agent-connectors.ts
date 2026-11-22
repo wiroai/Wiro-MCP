@@ -18,6 +18,7 @@ import {
   readConnector,
   signsIn,
   waysText,
+  withCatalogWay,
   type AgentConnection,
   type CatalogConnector,
   type ConnectorField,
@@ -290,7 +291,8 @@ export function registerListAgentConnectors(server: McpServer, client: WiroClien
             }
             return errorResult(new Error(`No connector is named "${slug}". list_agent_connectors without name lists them, and search narrows the list.`));
           }
-          const connection = connections ? connectionOf(connections, connector.slug) : undefined;
+          const listed = connections ? connectionOf(connections, connector.slug) : undefined;
+          const connection = listed ? withCatalogWay(listed, connector) : undefined;
           const nextAction = detailNextAction(connector, agentGuid, connection);
           return {
             content: [{ type: 'text' as const, text: formatDetail(connector, connection, agentGuid) }],
@@ -323,7 +325,9 @@ export function registerListAgentConnectors(server: McpServer, client: WiroClien
           structuredContent: {
             connectors: catalog.map(connector => summaryOf(connector, connections)),
             total: catalog.length,
-            ...(connections ? { connections } : {}),
+            ...(connections
+              ? { connections: connections.map(item => withCatalogWay(item, catalog.find(connector => connector.slug === item.connector))) }
+              : {}),
             ...(only
               ? {
                 nextAction: {

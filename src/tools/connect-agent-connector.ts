@@ -17,9 +17,11 @@ import {
   holdsSecretMask,
   isAgentRunning,
   loadCredentialMeta,
+  pausedSkillTitles,
   readUserAgent,
   redactSecrets,
   SECRET_MASK_TEXT,
+  type CustomSkillEntry,
 } from '../utils/agent-config.js';
 import {
   CONNECT_MODES,
@@ -35,6 +37,7 @@ import {
   signsIn,
   toAgentConnections,
   waysText,
+  withCatalogWay,
   type AgentConnection,
   type CatalogConnector,
   type ConnectMode,
@@ -43,7 +46,18 @@ import {
 import { DEFAULT_WAIT_SECONDS, MAX_WAIT_SECONDS, pollUntil, reportProgress } from '../utils/poll.js';
 import { jsonSpan } from '../utils/quoted-text.js';
 import { taskLabel, taskNamedByWiro } from '../utils/user-agent.js';
-import { agentProjectState, OUTSIDE_LIST_TEXT, projectLabel, readProjects, type ListedProject } from '../utils/wiro-project.js';
+import {
+  agentProjectState,
+  CANNOT_BIND_TEXT,
+  entriesTurnedOnByProject,
+  isOtherWorkspace,
+  OTHER_WORKSPACE_TEXT,
+  OUTSIDE_LIST_TEXT,
+  projectLabel,
+  projectTurnsOnNote,
+  readProjects,
+  type ListedProject,
+} from '../utils/wiro-project.js';
 import { nextActionSchema, strictInput } from './schemas.js';
 
 // What the route takes as a project's id.
@@ -206,12 +220,16 @@ function fieldNeedLines(fields: ConnectorField[]): string[] {
 /**
  * What the agent says about a new connection: the scheduled tasks that are on and start running with this
  * connector, as people see them, and whether it runs. A task runs while any one of its connectors is connected, so
- * one that can use another connector of `connections` that is connected already runs and is left out. Nothing when
- * the agent cannot be read.
+ * one that can use another connector of `connections` that is connected already runs and is left out. `read` is the
+ * agent as read just before the connect, when it was; otherwise it is read now. Nothing when the agent cannot be read.
  */
-async function agentAfterConnect(context: Context, connections: readonly AgentConnection[]): Promise<{ tasks: string[]; running: boolean }> {
+async function agentAfterConnect(
+  context: Context,
+  connections: readonly AgentConnection[],
+  read?: Record<string, unknown>,
+): Promise<{ tasks: string[]; running: boolean }> {
   try {
-    const row = await readUserAgent(context.client, context.agentGuid, context.signal);
+    const row = read ?? await readUserAgent(context.client, context.agentGuid, context.signal);
     return {
       tasks: customSkillEntries(row)
         .filter(entry => entry.kind === 'scheduled_task' && entry.enabled && !entry.notWritten && !entry.skillOff
@@ -246,7 +264,7 @@ type ProjectView = { id?: string; name?: string };
 /**
  * What connecting a connector that runs with a Wiro project does to the agent's project. The connector always uses
  * the agent's own Wiro project, so Wiro binds the project the connect names (or this connection's own) to the agent,
- * as bind_agent_project does.
+ * as bind_agent_project does, with what that turns on.
  */
 interface ProjectPlan {
   /** The project it binds: the one asked for, or this connection's own. */
@@ -255,6 +273,12 @@ interface ProjectPlan {
   replaces?: ProjectView & { outsideList?: boolean };
   /** The agent holds this project already. */
   already: boolean;
+  /** The agent as read for this plan, before the connect; undefined when it could not be read. */
+  row?: Record<string, unknown>;
+  /** The custom skills and scheduled tasks the new project turns on (entriesTurnedOnByProject). */
+  turnsOn: CustomSkillEntry[];
+  /** The titles of the skills a paused one of them still waits for. */
+  titles: Map<string, string>;
 }
 
 function viewOf(project: ListedProject): ProjectView {
@@ -262,37 +286,43 @@ function viewOf(project: ListedProject): ProjectView {
 }
 
 /**
- * The project a connect would bind and, with readAgent, the one it replaces. Reads that fail only leave out what they
- * would show.
+ * The project a connect would bind, the one it replaces and what the bind turns on, read afresh for the preview and
+ * for the confirm. A project Wiro would refuse to bind is refused here first, with bind_agent_project's sentences: an
+ * agent in another workspace, or a listed project this connection cannot bind. Reads that fail only leave out what
+ * they would show; Wiro still checks the connect.
  */
-async function projectPlan(context: Context, projectId: string | undefined, readAgent: boolean): Promise<ProjectPlan> {
+async function projectPlan(context: Context, projectId: string | undefined): Promise<ProjectPlan> {
   let projects: ListedProject[];
   try {
     projects = await readProjects(context.client, context.signal);
   } catch (error) {
     if (context.signal.aborted) throw error;
-    return { project: projectId !== undefined ? { id: projectId } : {}, already: false };
+    return { project: projectId !== undefined ? { id: projectId } : {}, already: false, turnsOn: [], titles: new Map() };
   }
+  let row: Record<string, unknown> | undefined;
+  try {
+    row = await readUserAgent(context.client, context.agentGuid, context.signal);
+  } catch (error) {
+    if (context.signal.aborted) throw error;
+  }
+  if (row && isOtherWorkspace(row, projects)) throw new Error(OTHER_WORKSPACE_TEXT);
   const target = projectId !== undefined
     ? projects.find(item => item.view.id === projectId)
     : projects.find(item => item.view.connected);
   if (projectId !== undefined && !target) {
     throw new Error(`No project with the id ${projectId} is in this connection's workspace, and nothing was changed. list_projects shows the projects you can choose.`);
   }
+  if (target && !target.view.canBind) throw new Error(CANNOT_BIND_TEXT);
   const project = target ? viewOf(target) : {};
-  if (!readAgent) return { project, already: false };
-  let row: Record<string, unknown>;
-  try {
-    row = await readUserAgent(context.client, context.agentGuid, context.signal);
-  } catch (error) {
-    if (context.signal.aborted) throw error;
-    return { project, already: false };
-  }
+  if (!row) return { project, already: false, turnsOn: [], titles: new Map() };
   const { current, outsideList, holdsConnectionKey } = agentProjectState(row, projects, context.client);
   const already = target ? target === current : holdsConnectionKey;
-  if (already) return { project, already: true };
-  if (current) return { project, replaces: viewOf(current), already: false };
-  return outsideList ? { project, replaces: { outsideList: true }, already: false } : { project, already: false };
+  if (already) return { project, already: true, row, turnsOn: [], titles: new Map() };
+  // Binding the project writes the agent's Wiro key, which turns on what requires the project, as a bind does.
+  const turnsOn = entriesTurnedOnByProject(row, current !== null || outsideList || holdsConnectionKey);
+  const titles = await pausedSkillTitles(context.client, turnsOn, context.signal);
+  const replaces = current ? viewOf(current) : outsideList ? { outsideList: true } : undefined;
+  return { project, ...(replaces ? { replaces } : {}), already: false, row, turnsOn, titles };
 }
 
 /** What a connect with a Wiro project does, said before the user's yes. */
@@ -305,8 +335,9 @@ function projectPreviewText(title: string, plan: ProjectPlan): string {
   const replaces = plan.replaces
     ? ` It replaces ${plan.replaces.outsideList ? OUTSIDE_LIST_TEXT : projectLabel(plan.replaces)}, the agent's project now.`
     : '';
+  const turnsOn = projectTurnsOnNote(plan.turnsOn, 'once', plan.titles);
   return `${binds}${replaces} Model runs through it are billed to the wallet of the workspace that owns that project, `
-    + 'and the agent\'s spend limits and Model Access rules apply to them.';
+    + `and the agent's spend limits and Model Access rules apply to them.${turnsOn ? ` ${turnsOn}` : ''}`;
 }
 
 async function connect(
@@ -356,7 +387,8 @@ async function connect(
   if (accountRefusal) return errorResult(new Error(accountRefusal));
 
   const connections = await listConnections(client, agentGuid, signal);
-  const existing = connectionOf(connections, connector.slug);
+  const listed = connectionOf(connections, connector.slug);
+  const existing = listed ? withCatalogWay(listed, connector) : undefined;
   const saved = new Set(existing?.savedFields ?? []);
   const missing = fields.filter(field => field.required && !field.project
     && (Object.hasOwn(values, field.name) ? !fills(values[field.name]) : !saved.has(field.name)));
@@ -390,11 +422,12 @@ async function connect(
 
   const connectedNow = existing?.status === 'connected';
   const previewing = !input.confirm && (takesProject || connectedNow);
-  const plan = takesProject ? await projectPlan(context, input.projectId, previewing) : undefined;
+  const plan = takesProject ? await projectPlan(context, input.projectId) : undefined;
   const project = plan?.project;
   if (previewing) {
+    const typedValues = connector.fields.some(field => !field.project);
     const replace = connectedNow
-      ? `${connector.title} is already connected${existing?.connectedAt ? ` (since ${existing.connectedAt})` : ''}. Connecting again replaces that connection${signIn ? ' once the new sign-in is approved; until then the current one keeps working' : ' and its saved values'}.`
+      ? `${connector.title} is already connected${existing?.connectedAt ? ` (since ${existing.connectedAt})` : ''}. Connecting again replaces that connection${signIn ? ' once the new sign-in is approved; until then the current one keeps working' : typedValues ? ' and its saved values' : ''}.`
       : '';
     const pays = plan ? projectPreviewText(connector.title, plan) : '';
     const sendAgain = Object.keys(values).length > 0 ? ' Repeat the call with confirm: true and the same values.' : '';
@@ -478,10 +511,11 @@ async function connect(
       ['', authorizeUrl]);
   }
 
-  const connection = toAgentConnections(body.useragentconnectors)[0];
+  const answered = toAgentConnections(body.useragentconnectors)[0];
+  const connection = answered ? withCatalogWay(answered, connector) : undefined;
   const applied = toInteger(body.applied, 1);
   const restart = restartOf(body.restart);
-  const { tasks } = await agentAfterConnect(context, connections);
+  const { tasks } = await agentAfterConnect(context, connections, plan?.row);
   const unpicked = connector.accountPickers.filter(picker => !connection?.accounts[picker.key]?.length);
   const message = [
     `${connector.title} is connected${accounts ? ' with the accounts given' : ''}.`,
@@ -492,6 +526,8 @@ async function connect(
       ? `The agent's own Wiro project is now ${projectLabel(project)}: its model tools and its video and voice skills run `
         + 'models with it, billed to the wallet of the workspace that owns it.'
       : '',
+    // What the project's key turned on, as the preview named it; a connect that changed nothing turned nothing on.
+    plan && applied !== 0 ? projectTurnsOnNote(plan.turnsOn, 'now that', plan.titles) ?? '' : '',
   ].filter(Boolean).join(' ');
   return result('connect', context, 'connected', message, {
     ...(mode ? { mode } : {}),
@@ -564,7 +600,8 @@ async function status(
     onPoll: (list, elapsedMs) => reportProgress(extra, elapsedMs, `${connector.title}: ${stateOf(connectionOf(list, connector.slug), input.since)}`),
   });
   if (!polled.value) throw new Error(`Could not read the ${connector.title} connection.`);
-  const connection = connectionOf(polled.value, connector.slug);
+  const found = connectionOf(polled.value, connector.slug);
+  const connection = found ? withCatalogWay(found, connector) : undefined;
   const state = stateOf(connection, input.since);
   const connectAgain = {
     tool: 'connect_agent_connector',
@@ -636,14 +673,15 @@ export function registerConnectAgentConnector(server: McpServer, client: WiroCli
         + 'their own browser and approve within 10 minutes; never open it for them. A sign-in with the service\'s own '
         + 'OAuth uses the user\'s own app there: its keys (such as a client id and secret) go in values with the same '
         + 'call. A connector that offers both takes mode sign_in or key. The wiro connector runs with a Wiro project and '
-        + 'gives the agent model and task tools only: connecting it takes project_id from list_projects (or the project '
-        + 'of this connection) and makes that project the agent\'s own Wiro project, as bind_agent_project does, so its '
-        + 'calls count as the agent\'s own (its spend limits and Model Access rules apply, and account, agent and '
-        + 'billing calls are refused). It first shows the project, what it replaces and which wallet pays. A call with '
-        + 'required values missing sends nothing and lists what to ask for, with where each value comes from. action '
-        + 'status: whether the sign-in finished (wait_seconds waits for the user). Connecting a connector that is '
-        + 'connected now replaces that connection, and a connector that runs with a Wiro project always shows its '
-        + 'project first: both take confirm: true after the user agreed. A running agent restarts to load a new '
+        + 'gives the agent only Wiro\'s model, task and file upload tools, plus read-only docs search and playbooks: '
+        + 'connecting it takes project_id from list_projects (or the project of this connection) and makes that project '
+        + 'the agent\'s own Wiro project, as bind_agent_project does, so its calls count as the agent\'s own (its spend '
+        + 'limits and Model Access rules apply, and account, agent and billing calls are refused). It first shows the '
+        + 'project, what it replaces, which wallet pays and the scheduled tasks and custom skills the project turns on. '
+        + 'A call with required values missing sends nothing and lists what to ask for, with where each value comes '
+        + 'from. action status: whether the sign-in finished (wait_seconds waits for the user). Connecting a connector '
+        + 'that is connected now replaces that connection, and a connector that runs with a Wiro project always shows '
+        + 'its project first: both take confirm: true after the user agreed. A running agent restarts to load a new '
         + 'connection. Where a connector has account choices, such as the advertisers a TikTok Ads sign-in reaches, '
         + 'set_agent_connector_accounts lists and saves the accounts it may act on once it is connected; accounts '
         + 'saves ids the user already knows with this call. disconnect_agent_connector removes a connection. The person '

@@ -335,11 +335,15 @@ your wallet after each reply. Your own agents run on a monthly plan with credits
 | `delete_agent` | Delete an agent, after your confirmation |
 
 A connector connects with a key typed on its Connect card, a sign-in you approve in your
-browser, or a Wiro project. The `wiro` connector gives the agent Wiro's model and task tools
-only, and always runs with the agent's own Wiro project, so its calls count as the agent's own:
-the agent's spend limits and Model Access rules apply, and account, agent and billing calls are
-refused. Where a connector has account choices, the agent acts only on the accounts you choose,
-also for a connector served by the service itself, such as TikTok Ads and its advertisers.
+browser, or a Wiro project. The `wiro` connector gives the agent only Wiro's model, task and
+file upload tools, plus read-only docs search and playbooks. It always runs with the agent's
+own Wiro project, so its calls count as the agent's own: the agent's spend limits and Model
+Access rules apply, and account, agent and billing calls are refused. Connecting it binds the
+project to the agent, as `bind_agent_project` does: a new project turns on the scheduled tasks
+and custom skills that need one. While it is connected, binding another project moves its
+tools there too.
+Where a connector has account choices, the agent acts only on the accounts you choose, also
+for a connector served by the service itself, such as TikTok Ads and its advertisers.
 When an agent proposes a connection in its chat, a key goes in with `connect_agent_connector`,
 never in a message, and a sign-in or a Wiro project is never connected by a reply.
 

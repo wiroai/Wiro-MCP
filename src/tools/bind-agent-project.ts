@@ -16,7 +16,6 @@ import {
   agentStatusLabel,
   agentStatusOf,
   customSkillEntries,
-  keyList,
   loadSkillRegistry,
   pausedSkillTitles,
   readUserAgent,
@@ -24,17 +23,14 @@ import {
   setupStillMissingNote,
   unusedCredential,
   workspaceHint,
-  WORKSPACE_HINT,
   type UnusedCredential,
 } from '../utils/agent-config.js';
+import type { AgentConnection } from '../utils/agent-connectors.js';
 import { DEFAULT_WAIT_SECONDS } from '../utils/poll.js';
-import { jsonSpan, quotedSpan } from '../utils/quoted-text.js';
+import { jsonSpan } from '../utils/quoted-text.js';
 import {
   agentTitleSpan,
   nextStepForAgent,
-  skillOffTasksNote,
-  taskLabel,
-  taskNamedByWiro,
   toAgentDetail,
   WIRO_PROJECT_CREDENTIAL,
   type AgentDetail,
@@ -42,10 +38,16 @@ import {
 } from '../utils/user-agent.js';
 import {
   agentProjectState,
+  CANNOT_BIND_TEXT,
+  entriesTurnedOnByProject,
   isOtherWorkspace,
   keySafeErrorText,
+  OTHER_WORKSPACE_TEXT,
   OUTSIDE_LIST_TEXT,
+  projectConnections,
+  projectConnectionsNote,
   projectLabel,
+  projectTurnsOnNote,
   readProjects,
   type ListedProject,
 } from '../utils/wiro-project.js';
@@ -62,8 +64,6 @@ const WALLET_WHEN_UNKNOWN = 'The wallet of the workspace that owns the project.'
 const MEMBER_REFUSAL = 'Only a team admin or the person who deployed this agent can connect a project to it, and this '
   + 'connection acts as a team member without those rights. Nothing was changed. Ask a team admin or the person who '
   + 'deployed the agent to do it.';
-
-const OTHER_WORKSPACE = `This agent is in another workspace than this connection's project, and nothing was changed. ${WORKSPACE_HINT}`;
 
 const IP_LIST_WARNING = 'This project accepts requests only from the addresses on its IP list, and the agent\'s model calls '
   + 'are refused unless they come from one of them. To use it, allow all addresses for the project in the Wiro dashboard, '
@@ -111,7 +111,10 @@ interface BindPlan {
   alreadyBound: boolean;
   /** How many projects this connection could connect instead: not the target, and not the one the agent already uses. */
   others: number;
+  /** No skill and no connection of the agent uses the project: the skills that would. */
   unused: UnusedCredential | null;
+  /** The agent's live connections that run with its Wiro project (the wiro connector): the project moves their tools. */
+  connections: AgentConnection[];
   /** The titles of the skills a paused task waits for (pausedSkillTitles). */
   titles: Map<string, string>;
 }
@@ -147,7 +150,7 @@ async function readBindPlan(client: WiroClient, agentGuid: string, projectId: st
     if (signal.aborted) throw error;
     throw new Error(`The projects could not be read, and nothing was changed: ${keySafeErrorText(error)}`);
   }
-  if (isOtherWorkspace(row, projects)) throw new Error(OTHER_WORKSPACE);
+  if (isOtherWorkspace(row, projects)) throw new Error(OTHER_WORKSPACE_TEXT);
 
   const target = projectId !== undefined
     ? projects.find(project => project.view.id === projectId) ?? null
@@ -155,11 +158,12 @@ async function readBindPlan(client: WiroClient, agentGuid: string, projectId: st
   if (projectId !== undefined && !target) {
     throw new Error(`No project with the id ${projectId} is in this connection's workspace, and nothing was changed. list_projects shows the projects you can choose.`);
   }
-  if (target && !target.view.canBind) {
-    throw new Error('You can bind a project you created, or any project of a team you are an admin of. Nothing was changed. list_projects shows which ones.');
-  }
+  if (target && !target.view.canBind) throw new Error(CANNOT_BIND_TEXT);
 
   const { current, outsideList, holdsConnectionKey } = agentProjectState(row, projects, client);
+  // The wiro connector always runs with the agent's project, so while it is connected the project is in use whatever
+  // the skills say. A failed read leaves only the skills to say it.
+  const connections = await projectConnections(client, agentGuid, signal);
   return {
     row,
     plainMember,
@@ -169,7 +173,8 @@ async function readBindPlan(client: WiroClient, agentGuid: string, projectId: st
     holdsConnectionKey,
     alreadyBound: target ? target === current : holdsConnectionKey,
     others: projects.filter(project => project.view.canBind && project !== target && project !== current).length,
-    unused,
+    unused: connections.length > 0 ? null : unused,
+    connections,
     titles: await pausedSkillTitles(client, customSkillEntries(row), signal),
   };
 }
@@ -190,22 +195,17 @@ function hasProject(plan: BindPlan): boolean {
 }
 
 /**
- * What turns on with the project. Saving one sets every custom skill and
- * scheduled task that requires it to on: with a first project that is all of
- * them, and with a new project it is the ones that are off now. A paused
- * task is named with the skills it still waits for, by their titles. Null
- * when nothing does, as when the agent already holds this project.
+ * What turns on with the project (entriesTurnedOnByProject). Null when
+ * nothing does, as when the agent already holds this project.
  */
 function turnsOnNote(plan: BindPlan, when: 'once' | 'now that'): string | null {
   if (plan.alreadyBound) return null;
-  const replacing = hasProject(plan);
-  const entries = customSkillEntries(plan.row).filter(entry => entry.requiresCredentials.includes(WIRO_PROJECT_CREDENTIAL)
-    && (!replacing || !entry.enabled));
-  if (entries.length === 0) return null;
-  const sentence = `${keyList(entries.map(entry => taskLabel(entry.key, taskNamedByWiro(entry))))} ${entries.length > 1 ? 'turn' : 'turns'} on ${when} the project is connected.${skillOffTasksNote(entries, plan.titles)}`;
-  return entries.some(entry => entry.kind === 'scheduled_task')
-    ? `${sentence} Every run of a scheduled task uses credits; turn off any you do not want with manage_agent_custom_skill.`
-    : sentence;
+  return projectTurnsOnNote(entriesTurnedOnByProject(plan.row, hasProject(plan)), when, plan.titles);
+}
+
+/** The connections whose model tools move to the project (projectConnectionsNote). Null when it changes no project. */
+function connectionsNote(plan: BindPlan): string | null {
+  return plan.alreadyBound ? null : projectConnectionsNote(plan.connections);
 }
 
 function replacedProject(plan: BindPlan): { id?: string; name?: string; outsideList?: boolean } | null {
@@ -285,7 +285,7 @@ async function previewResult(client: WiroClient, agentGuid: string, plan: BindPl
     ...(plan.others > 0
       ? [`${plan.others} other ${plan.others === 1 ? 'project' : 'projects'} can be chosen; list_projects shows ${plan.others === 1 ? 'it' : 'them'}.`]
       : []),
-    ...[turnsOnNote(plan, 'once')].filter((note): note is string => note !== null),
+    ...[connectionsNote(plan), turnsOnNote(plan, 'once')].filter((note): note is string => note !== null),
   ];
   const nextAction = {
     tool: 'bind_agent_project',
@@ -346,7 +346,7 @@ function refusalText(error: unknown): string {
   const message = errorText(error);
   // The rest of this answer varies, so it is shown as Wiro sent it.
   if (message.startsWith('This project\'s API key no longer works:')) return message;
-  if (workspaceHint(message)) return OTHER_WORKSPACE;
+  if (workspaceHint(message)) return OTHER_WORKSPACE_TEXT;
   return message.replaceAll('Project/List', 'list_projects');
 }
 
@@ -390,6 +390,8 @@ async function bindAndReport(client: WiroClient, agentGuid: string, projectId: s
   }
   const setup = setupStillMissingNote(detail?.setupRequired ? detail.missingCredentials : []);
   if (setup) notes.push(setup);
+  const moved = connectionsNote(plan);
+  if (moved) notes.push(moved);
   const turnsOn = turnsOnNote(plan, 'now that');
   if (turnsOn) notes.push(turnsOn);
 

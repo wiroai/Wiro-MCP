@@ -332,6 +332,19 @@ export function toAgentConnections(list: unknown): AgentConnection[] {
     .filter((connection): connection is AgentConnection => connection !== null);
 }
 
+/**
+ * A connection with the way its catalog row connects. ConnectorList names no Wiro project on a connection to a
+ * connector that runs with one (the wiro connector) while the agent has none, so the connection alone reads as one
+ * that takes values; the catalog row tells them apart.
+ */
+export function withCatalogWay(
+  connection: AgentConnection,
+  connector: Pick<CatalogConnector, 'ways'> | null | undefined,
+): AgentConnection {
+  if (!connector?.ways.includes('project') || connection.way === 'project' || connection.way === 'sign_in') return connection;
+  return { ...connection, way: 'project' };
+}
+
 type CatalogBody = ApiEnvelope & { agentconnectors?: unknown };
 type ConnectionsBody = ApiEnvelope & { useragentconnectors?: unknown };
 
