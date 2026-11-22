@@ -21,7 +21,7 @@ export function registerGetAgentMessage(server: McpServer, client: WiroClient): 
         + 'when send_agent_message returned before the reply was ready (follow its nextAction), or to read a '
         + 'reply again later. It never sends anything and starts no new spend. '
         + 'For Studio it also collects the model runs the turn started (modelRuns) and keeps waiting while they '
-        + 'run; those runs belong to Studio, so get_task cannot read them. '
+        + 'run; they are your own tasks, so get_task and kill_task also take their id. '
         + 'For the Workflow Agent it lists the workflows in the reply with their artifact_hash for '
         + 'save_workflow_from_agent, and when the agent asked to see the user\'s workflows it returns that list. '
         + 'When the message was sent with a workflow attached, pass workflow and loaded_updatetime (the nextAction '

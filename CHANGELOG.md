@@ -120,3 +120,8 @@ runs `npx @wiro-ai/wiro-mcp@latest` takes it at its next start.
   Model Access rules count an agent's usage. Every agent plan charge, the automatic renewal
   included, counts toward the limits of the whole wallet, the member who paid for it and the
   `agent` surface.
+- The model runs Studio starts are your own tasks: `list_tasks` lists them, and `get_task`,
+  `wait_for_task`, `cancel_task` and `kill_task` work on them by their id. `list_studio_results`
+  still lists them with their prompts, and only it reads Studio's older runs, which Studio ran
+  on its own account. `list_tasks` also says that a deployed agent calling it through its
+  Wiro AI Models connector sees only its own tasks.

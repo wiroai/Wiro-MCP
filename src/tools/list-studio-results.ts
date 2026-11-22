@@ -26,8 +26,9 @@ export function registerListStudioResults(server: McpServer, client: WiroClient)
         + 'first, with their status, output URLs, text answers and cost. It covers all of your Studio conversations in '
         + 'this key\'s workspace; teammates\' runs are not included. Use it to collect outputs that finished after a turn '
         + 'ended, or to check what is still running. Each run shows when it was created and, for a model that takes a '
-        + 'prompt, its prompt, so it can be matched to a request. These runs belong to Studio, so get_task, list_tasks, '
-        + 'cancel_task and kill_task cannot read or stop them; poll this tool instead. It reads at most Studio\'s 100 most '
+        + 'prompt, its prompt, so it can be matched to a request. These runs are your own tasks too: a run\'s id is its '
+        + 'task id, list_tasks lists it, and get_task, wait_for_task, cancel_task and kill_task work on it. The exception '
+        + 'is Studio\'s older runs, which it ran on its own account: only this tool reads them. It reads at most Studio\'s 100 most '
         + 'recent runs: to collect a period, pass since with limit 100, and the result says when older runs in that '
         + 'period may be missing. Only successful runs are charged. Read-only.',
       inputSchema: strictInput({

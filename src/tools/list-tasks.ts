@@ -14,8 +14,11 @@ export function registerListTasks(server: McpServer, client: WiroClient): void {
         + 'key\'s team), newest first, from every project in it and from wiro.ai, with their '
         + 'status, cost and first outputs. Use it to find work from earlier conversations, then call '
         + '`get_task` with a returned task ID for the complete result. Start times are Unix '
-        + 'seconds. Steps of workflow runs and the runs Studio starts are not listed: '
-        + 'list_workflow_runs and list_studio_results have those.',
+        + 'seconds. The model runs Studio starts are your own tasks, so they are listed too; Studio\'s older '
+        + 'runs, which it ran on its own account, are only in list_studio_results. Steps of workflow runs are '
+        + 'not listed: list_workflow_runs has those. Called by a deployed agent through its Wiro AI Models '
+        + 'connector, it lists only that agent\'s own tasks, and get_task, cancel_task and kill_task answer any '
+        + 'other task as not found.',
       inputSchema: strictInput({
         start: z.number().int().min(0).default(0)
           .describe('Pagination offset (default 0).'),

@@ -10,10 +10,12 @@ import {
 } from './api.js';
 import { MODEL_ANSWER_LABEL, quotedSubItem } from './quoted-text.js';
 
-// Model runs that Studio starts on the user's behalf. They belong to Studio, so
-// list_studio_results and get_agent_message read them, not the task tools
-// (get_task, cancel_task, kill_task). Each run keeps its model, state, outputs,
-// text answer, prompt, cost and times.
+// Model runs that Studio starts on the user's behalf. They are the user's own
+// tasks, so the task tools (get_task, cancel_task, kill_task) work on them too;
+// list_studio_results and get_agent_message read them with their prompts, and
+// list_studio_results also reads Studio's older runs, which it ran on its own
+// account. Each run keeps its model, state, outputs, text answer, prompt, cost
+// and times.
 
 export const studioRunSchema = z.object({
   id: z.string(),

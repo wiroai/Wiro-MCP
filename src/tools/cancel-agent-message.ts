@@ -52,7 +52,7 @@ export function registerCancelAgentMessage(server: McpServer, client: WiroClient
         + 'on. Only queued or running turns can be cancelled; a finished turn is reported as it ended. The turn '
         + 'can still finish normally if it was already completing, so the final status is read back and '
         + 'returned. Usage up to the cancel stays billed. For Studio, model runs the turn already started keep '
-        + 'running and cannot be stopped from here; list_studio_results shows them.',
+        + 'running and cannot be stopped from here: kill_task stops one by its id, and list_studio_results shows them.',
       inputSchema: strictInput({
         agent: z.string().min(1).describe(AGENT_INPUT_DESCRIPTION),
         message_id: z.string().min(1).describe('The message id from send_agent_message.'),
