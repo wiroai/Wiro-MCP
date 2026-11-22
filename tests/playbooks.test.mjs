@@ -25,8 +25,9 @@ const PLANNED_TOOLS = new Set([
   'list_agent_templates', 'get_agent_template', 'list_agent_skills', 'deploy_agent',
   'list_my_agents', 'get_my_agent', 'control_agent', 'update_agent',
   'manage_agent_billing', 'get_agent_activity', 'delete_agent',
-  'apply_agent_skills', 'set_agent_credentials', 'connect_agent_oauth',
-  'disconnect_agent_oauth', 'manage_agent_custom_skill', 'list_projects', 'bind_agent_project',
+  'apply_agent_skills', 'set_agent_credentials', 'list_agent_connectors', 'connect_agent_connector',
+  'set_agent_connector_accounts', 'disconnect_agent_connector', 'manage_agent_custom_skill', 'list_projects',
+  'bind_agent_project',
   'get_controls', 'check_model_access', 'manage_spend_limit', 'manage_model_access',
 ]);
 
@@ -34,9 +35,11 @@ const PLANNED_TOOLS = new Set([
 // names rather than tools.
 const NON_TOOL_IDENTIFIERS = new Set([
   'timeout_seconds', 'wait_seconds', 'call_id', 'function_call', 'custom_tool_call',
-  'change_plan', 'buy_credits', 'select_accounts', 'confirm_charge_usd', 'idempotency_key', 'redirect_url',
+  'change_plan', 'buy_credits', 'confirm_charge_usd', 'idempotency_key', 'redirect_url',
   'session_id', 'debug_node_id', 'custom_skills', 'team_session_mode', 'recent_transactions', 'project_id',
   'chat_setup',
+  // How a connector connects, as connect_agent_connector's mode says it.
+  'sign_in',
   // An example Start field key, and an input name the Workflow Agent hides.
   'product_photo', 'api_key',
   // A plan status get_my_agent shows: a card plan whose last payment did not go through.
@@ -441,9 +444,9 @@ test('the guidance and the README make no stale promises', async () => {
   });
   assert.equal(readme.includes('\u2014'), false, 'README contains an em dash');
   assert.equal(readme.includes('\u2013'), false, 'README contains an en dash');
-  const oauthRow = readme.split('\n').find(line => line.startsWith('| `connect_agent_oauth`'));
-  assert.ok(oauthRow, 'README has no connect_agent_oauth row');
-  assert.doesNotMatch(oauthRow, /gmail/i, 'Gmail connects with an app password, not a sign-in');
+  const connectorRow = readme.split('\n').find(line => line.startsWith('| `connect_agent_connector`'));
+  assert.ok(connectorRow, 'README has no connect_agent_connector row');
+  assert.doesNotMatch(readme, /connect_agent_oauth|disconnect_agent_oauth|int-\*/, 'README still names the connector tools that are gone');
 });
 
 // An app connected with a browser sign-in has no API key of its own, so the rule
@@ -502,14 +505,17 @@ test('the playbooks and the README say what the results and checks really cover'
   assert.match(createRow, /returns every problem it finds at once/);
 });
 
-// The keys set_agent_credentials lists for Firebase, one level into each entry.
-test('the agents playbook shows a list inside a list entry with the Firebase keys', () => {
-  const lines = PLAYBOOKS.agents.split('\n');
-  const keyFile = lines.findIndex(line => line.startsWith('- A key file, such as that JSON key'));
-  const firebase = lines[keyFile + 1];
-  assert.match(firebase, /^- A list of objects takes one object per entry, and an entry can hold a list of its own\./);
-  assert.match(firebase, /Firebase takes `accounts`, one entry per Firebase project: `appname` \(a short name; ask for one or propose one\), `serviceaccountjson` \(the key file's text\) and `apps`, one row per app: `platform` "android" with the package name as `id`, or `platform` "ios" with the numeric Apple ID\./);
-  assert.match(firebase, /`apps` and the FCM `topics` list are optional\.$/);
+// A connector connects with a key, a sign-in or a Wiro project; the playbook says how each goes.
+test('the agents playbook says how each kind of connector connects', () => {
+  const { agents } = PLAYBOOKS;
+  assert.match(agents, /- key: values typed on its Connect card, such as an API key, a token or an ID\. Ask the user and pass them to `connect_agent_connector` in `values`: it connects at once and never shows them back\./);
+  assert.match(agents, /- sign_in: `connect_agent_connector` returns a link\. The user opens it within 10 minutes in their own browser and approves access; never open it for them\./);
+  assert.match(agents, /A connector that signs in with the service's own OAuth uses the user's own app there: its keys \(such as a client id and secret, with the redirect URI its setup steps give\) go in `values` with the same call, and the consent page shows that app\./);
+  assert.match(agents, /- project: a Wiro project, as for the `wiro` credential: `project_id` from `list_projects`, or the project of this connection\. It first shows the project and which wallet pays for the model runs through it, and connects only with `confirm: true`\./);
+  assert.match(agents, /`set_agent_connector_accounts` lists them once it is connected, as the service names them, and saves the ones the user picks; the agent then acts only on those\./);
+  assert.match(agents, /A connected connector gives the agent its tools, named `<connector>__<tool>`\. A custom skill \(`manage_agent_custom_skill`\) tells the agent when and how to use them/);
+  assert.match(agents, /A key file, such as a service account JSON, takes the file's text, never a link; never ask for a public link to a key\./);
+  assert.doesNotMatch(agents, /Firebase takes|Gmail takes the address|app password/);
 });
 
 test('the README continuation example sends the session_id with the task token', () => {
@@ -555,10 +561,10 @@ test('the agents playbook says the same as the tools about a Wiro project key, a
 
 test('the playbooks say what a deploy quote holds and how to read wallet rows', () => {
   const { agents, billing } = PLAYBOOKS;
-  assert.match(agents, /The quote gives the amount charged now, the monthly credits, the paying wallet with its balance and the other plans' prices\./);
+  assert.match(agents, /The quote gives the amount charged now, the monthly credits, the paying wallet with its balance, the other plans' prices and the connectors a template suggests\./);
   assert.match(agents, /In a team workspace the agent starts with collaborative chats, which every team member sees, and the quote says so: tell the user\. `update_agent` \(`team_session_mode`\) changes that after the deploy\./);
   assert.match(agents, /`buy_credits` works on any active plan; without a pack it lists them, and `get_my_agent` lists them for an active plan\. The small, medium and large packs are the same on every plan\./);
-  assert.match(agents, /A required field cannot be left empty, but saving a new value replaces the old one\./);
+  assert.match(agents, /A required credential field cannot be left empty, but saving a new value replaces the old one\./);
   assert.match(billing, /`get_account` with `recent_transactions` lists the wallet's latest rows/);
 });
 
@@ -602,7 +608,7 @@ test('the agents playbook says which plan an ended wallet plan renews on', () =>
 test('the playbooks name the three plans and say skills do not change the price', () => {
   assert.match(PLAYBOOKS.agents, /Every agent has one of three monthly plans, smallest first: Starter, Pro or Max\./);
   assert.match(PLAYBOOKS.agents, /every plan includes every skill/);
-  assert.match(PLAYBOOKS.agents, /turning a skill on or off costs nothing and keeps the plan's price and monthly credits/);
+  assert.match(PLAYBOOKS.agents, /turning a skill on or off, or connecting a connector, costs nothing and keeps the plan's price and monthly credits/);
   assert.match(PLAYBOOKS.billing, /\| Agent move to a smaller plan \| Nothing now; the smaller plan's price from then on \| At the next renewal \|/);
   for (const [topic, markdown] of Object.entries(PLAYBOOKS)) {
     // The skills set no price, and no plan is limited to some skills or packs.
@@ -611,7 +617,7 @@ test('the playbooks name the three plans and say skills do not change the price'
 });
 
 // Wiro answers a reply to an agent's setup proposals itself, at any status. A key is never typed in the chat:
-// the user gives it together with their yes to the add that brings it, and it is saved as the very next step
+// the user gives it together with their yes to the add that needs it, and it is saved as the very next step
 // once the add is applied, so the add's restart loads it too. Studio and the Workflow Agent are shared, so they
 // take no setup changes.
 test('the playbooks and send_agent_message say how setup replies, keys and the house agents work', async () => {
@@ -622,16 +628,16 @@ test('the playbooks and send_agent_message say how setup replies, keys and the h
   assert.match(agents, /Wiro takes these replies whatever the agent's status, also while it restarts or is stopped, but only for the proposals of the session's latest reply, for 30 minutes, and only when `chat_setup` is "all"/);
   assert.match(agents, /It must be running \(4\) and have credits left; only a reply to its setup proposals goes through at any status/);
   assert.match(agents, /never sent in a message, even when the agent or Wiro's answer asks for it as a reply: that wording is for a person typing in the chat\./);
-  assert.match(agents, /An add whose connector is connected with a key comes with that connector's connect card in the same reply\. Ask the user for the key together with their yes for the add, before you send the yes that applies it; `set_agent_credentials` with only `credential` shows the fields to ask for and saves nothing\. Once the add is applied, save the key as the very next step, with no `get_my_agent` wait in between: the agent stays stopping or queued for the restart the add started only for seconds, and a key saved then loads with that restart; saved once it is starting again, it restarts the agent a second time\./);
+  assert.match(agents, /An add whose connector is connected with a key comes with that connector's connect card in the same reply\. Ask the user for the key together with their yes for the add, before you send the yes that applies it; `list_agent_connectors` with the connector's slug shows what to ask for and saves nothing\. Once the add is applied, save the key as the very next step, with no `get_my_agent` wait in between: the agent stays stopping or queued for the restart the add started only for seconds, and a key saved then loads with that restart; saved once it is starting again, it restarts the agent a second time\./);
   assert.doesNotMatch(agents, /Get the user's yes for the add, and once it is applied/);
-  // Wiro pairs a connect card with an add for a sign-in, app keys or a token too, and connects it only on that card
-  // in the web chat or on the agent page.
-  assert.match(agents, /A connector connected with a sign-in, the user's own app keys or a token comes with its connect card too, but a reply never connects it: once the add is applied, Wiro's answer says to connect it outside the chat, and `connect_agent_oauth` connects it from here, after `set_agent_credentials` saves its app keys or token\. One set up on the agent page gets no connect card\./);
+  // Wiro pairs a connect card with an add for a sign-in too, and a reply never connects it.
+  assert.match(agents, /A connector connected with a sign-in comes with its connect card too, but a reply never connects it: once the add is applied, `connect_agent_connector` returns its link \(with the keys of the user's own app where it needs them\), or the user connects it on the agent page\. One set up on the agent page gets no connect card\./);
+  assert.match(agents, /A key is saved with `connect_agent_connector` \(a chat channel's with `set_agent_credentials`\), never sent in a message/);
   // Wiro's answer in a chat sent with an API key names no page and gives no link to one.
   assert.doesNotMatch(agents, /answer links to the agent page/);
   assert.doesNotMatch(agents, /A connector connected with a sign-in or on the agent page gets no connect card/);
   assert.match(agents, /Studio and the Workflow Agent always have it off: each is one agent shared by every Wiro user, so their connectors, skills and scheduled tasks are fixed, and they help with each request as a one-time task\./);
-  assert.match(agents, /`apply_agent_skills` turns skills on or off, Connectors \(`int-\*`\) and Skills \(`util-\*`\) alike\./);
+  assert.match(agents, /`apply_agent_skills` turns Skills \(`util-\*`\) on or off; outside services are Connectors and connect with `connect_agent_connector`\./);
   assert.match(studio, /Studio is one agent shared by every Wiro user, so its connectors, skills and scheduled tasks are fixed: it proposes no setup changes and does each request once\./);
   assert.match(PLAYBOOKS['workflow-agent'], /It is one agent shared by every Wiro user, so its setup is fixed: it proposes no setup changes and schedules nothing\./);
   assert.match(PLAYBOOKS['getting-started'], /A reply Wiro answers itself, such as a "yes" to a setup change the agent proposed, uses none\./);
@@ -642,13 +648,13 @@ test('the playbooks and send_agent_message say how setup replies, keys and the h
     assert.match(send, /Studio and the Workflow Agent never do\./);
     assert.match(send, /Wiro answers it without an agent turn, whatever the agent's status, also while it restarts\./);
     assert.match(send, /Their "no" turns the proposals down\./);
-    assert.match(send, /never sent in a message, even when the agent or Wiro asks for it as a reply\. For an add that brings a connector's key, ask the user for that key together with their yes, and save it as soon as the add is applied, with no wait in between, so the restart the add started loads it too\./);
-    assert.match(tools.find(tool => tool.name === 'get_playbook').description, /statuses and restarts, setup and sign-ins, an agent that does not answer, messages and setup proposals in chat/);
+    assert.match(send, /A key is saved with connect_agent_connector \(set_agent_credentials for a chat channel\), never sent in a message, even when the agent or Wiro asks for it as a reply\. For an add that needs a connector's key, ask the user for that key together with their yes, and save it as soon as the add is applied, with no wait in between, so the restart the add started loads it too\./);
+    assert.match(tools.find(tool => tool.name === 'get_playbook').description, /statuses and restarts, setup: credentials and connectors, an agent that does not answer, messages and setup proposals in chat/);
     const credentials = tools.find(tool => tool.name === 'set_agent_credentials').description;
     assert.match(credentials, /A running agent restarts to load values that change, and one still stopping or queued for a restart, such as after a setup change approved in its chat, loads them with that restart;/);
-    // Wiro restarts nothing for a sign-in's fields before it connects; the connection restarts the agent once.
-    assert.match(credentials, /a save that changes nothing leaves it running\. Fields saved for a sign-in integration that is not connected yet, such as its app keys or token, leave it running too: it restarts once, when connect_agent_oauth completes the connection\./);
-    assert.match(credentials, /A key the agent or Wiro asks for in its chat is saved here, never sent in a message\./);
+    assert.match(credentials, /a save that changes nothing leaves it running\./);
+    assert.match(credentials, /A channel key the agent or Wiro asks for in its chat is saved here, never sent in a message\./);
+    assert.match(credentials, /Outside services are Connectors and connect with connect_agent_connector instead\./);
     assert.match(tools.find(tool => tool.name === 'get_my_agent').description, /1 stopping \(also during a restart, which starts it again by itself\)/);
     const prompt = await client.getPrompt({ name: 'talk_to_my_agent', arguments: PROMPT_ARGUMENTS.talk_to_my_agent });
     assert.match(prompt.messages[0].content.text, /The agent must be running \(status 4\) and have credits left, unless my message is a "yes" or "yes N" to its setup proposals: Wiro answers those itself at any status and with no credits, and a "no" too while the agent is not running\./);

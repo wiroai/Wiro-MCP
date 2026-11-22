@@ -298,8 +298,9 @@ test('update_agent and the playbook say which changes restart a running agent', 
 
   const line = PLAYBOOKS.agents.split('\n').find(item => item.startsWith('- Some changes restart'));
   assert.match(line, /`update_agent` with a new title or a setting that changes \(time zone, session sharing, models, commands, setup from chat turned on or off\)/);
-  // Wiro restarts nothing for a sign-in's app keys or token before it connects; the connection restarts the agent once.
-  assert.match(line, /These leave it running: a new description, cover or categories with `update_agent`, setup from chat moved between "all" and "webchat", a new plan, plan changes, credit packs and renewals, app keys or a token saved for a sign-in that is not connected yet \(the connection then restarts it once\), and a save that changes nothing\./);
+  // A sign-in that is started and not approved yet changes nothing on the agent; the connection restarts it once.
+  assert.match(line, /These leave it running: a new description, cover or categories with `update_agent`, setup from chat moved between "all" and "webchat", a new plan, plan changes, credit packs and renewals, a sign-in that is started and not yet approved, and a save that changes nothing\./);
+  assert.match(line, /a connector connected, disconnected or given new values, a change of a connector's accounts/);
   assert.match(line, /`apply_agent_skills` when a skill turns on or off/);
   assert.match(line, /and the same changes approved in the agent's chat\./);
   assert.match(line, /A text or description edit of a custom skill or scheduled task usually reaches a running agent without a restart, though an edit of `cs-approval-policy` restarts it; the result says which happened\./);
@@ -396,14 +397,14 @@ function customBuild(scheduledskills, overrides = {}) {
   return {
     '/Organization/List': { result: true, errors: [], organizations: [] },
     '/Wallet/List': { result: true, errors: [], wallet: [] },
-    '/Skills/List': { result: true, errors: [], skills: [{ name: 'int-gmail-check', title: 'Gmail Check', requires_credentials: false }] },
-    '/UserAgent/PricingPreview': { result: true, errors: [], totalPriceUsd: 4, totalMonthlyCredits: 400, enabledSkills: ['int-gmail-check'] },
+    '/Skills/List': { result: true, errors: [], skills: [{ name: 'util-voice-receptionist', title: 'Voice Receptionist', requires_credentials: false }] },
+    '/UserAgent/PricingPreview': { result: true, errors: [], totalPriceUsd: 4, totalMonthlyCredits: 400, enabledSkills: ['util-voice-receptionist'] },
     '/UserAgent/Deploy': { result: true, errors: [], useragents: [deployed] },
     '/UserAgent/Detail': detail({ guid: 'ua-new', status: 2, scheduledskills, ...overrides }),
   };
 }
 
-const DEPLOY = { custom: true, title: 'Inbox', tier: 'starter', skills: ['int-gmail-check'] };
+const DEPLOY = { custom: true, title: 'Inbox', tier: 'starter', skills: ['util-voice-receptionist'] };
 
 test('deploy_agent: the starter task that is off is not flagged, and no Monday run is promised', async () => {
   const fake = fakeClient(customBuild([STARTER_TASK_OFF]));
@@ -426,7 +427,7 @@ test('deploy_agent: the starter task that is off is not flagged, and no Monday r
 test('deploy_agent: a task a skill brought that is on is still flagged, and one held off is not', async () => {
   const fake = fakeClient(customBuild([
     { key: 'cs-cron-inbox-check', description: 'Checks the inbox', value: 'Check the inbox.', interval: '*/30 * * * *', enabled: true, requires_credentials: [], _source: 'skill-bundle', _editable: true, _edited: false, _user_created: false },
-    { key: 'cs-cron-weekly-digest', description: 'Digest', value: 'Send a digest.', interval: '0 9 * * 1', enabled: false, requires_credentials: ['gmail'], _source: 'skill-bundle', _editable: true, _edited: false, _user_created: false },
+    { key: 'cs-cron-weekly-digest', description: 'Digest', value: 'Send a digest.', interval: '0 9 * * 1', enabled: false, requires_credentials: ['twilio-voice'], _source: 'skill-bundle', _editable: true, _edited: false, _user_created: false },
   ]));
   await withClient(fake, async client => {
     const result = await call(client, 'deploy_agent', { ...DEPLOY, confirm_charge_usd: 4, confirm: true });
@@ -437,27 +438,27 @@ test('deploy_agent: a task a skill brought that is on is still flagged, and one 
 });
 
 test('deploy_agent lists a task a skill brought that is paused apart from those that run', async () => {
-  // A custom build of Lemlist Outreach deployed with an Apollo key: Apollo reaches the agent only through Apollo Sales.
+  // A custom build of Outreach Compliance: its lead tasks wait for Lead Research, which is off.
   const lead = key => ({
-    key, description: key, value: 'Work the leads.', interval: '0 9 * * *', enabled: true, requires_credentials: ['apollo', 'lemlist'], _source: 'skill-bundle', _editable: true, _edited: false, _user_created: true,
-    _owner_skills: ['int-lemlist-outreach'], _skill_off: true, _off_skills: [['int-apollo-sales']], _usable_credentials: [], _if_connected: { lemlist: [['int-apollo-sales']] },
+    key, description: key, value: 'Work the leads.', interval: '0 9 * * *', enabled: true, requires_credentials: ['var-website'], requires_connectors: ['apollo', 'lemlist'], _source: 'skill-bundle', _editable: true, _edited: false, _user_created: true,
+    _owner_skills: ['util-outreach-compliance'], _skill_off: true, _off_skills: [['util-lead-research']], _usable_credentials: [], _if_connected: { 'var-website': [['util-lead-research']] },
   });
   const routes = customBuild([
     { key: 'cs-cron-inbox-check', description: 'Checks the inbox', value: 'Check the inbox.', interval: '*/30 * * * *', enabled: true, requires_credentials: [], _source: 'skill-bundle', _editable: true, _edited: false, _user_created: false },
     lead('cs-cron-lead-outreach-reporter'),
     lead('cs-cron-lead-reply-handler'),
   ]);
-  routes['/Skills/List'] = { ...routes['/Skills/List'], skills: [...routes['/Skills/List'].skills, { name: 'int-apollo-sales', title: 'Apollo Sales', requires_credentials: true, credential_key: 'apollo' }] };
+  routes['/Skills/List'] = { ...routes['/Skills/List'], skills: [...routes['/Skills/List'].skills, { name: 'util-lead-research', title: 'Lead Research', requires_credentials: true, credential_key: 'var-website' }] };
   await withClient(fakeClient(routes), async client => {
     const result = await call(client, 'deploy_agent', { ...DEPLOY, confirm_charge_usd: 4, confirm: true });
     assert.notEqual(result.isError, true, textOf(result));
     assert.deepEqual(result.structuredContent.defaultScheduledTasks, [{ key: 'cs-cron-inbox-check', interval: '*/30 * * * *' }]);
     assert.deepEqual(result.structuredContent.pausedScheduledTasks, [
-      { key: 'cs-cron-lead-outreach-reporter', offSkills: [['int-apollo-sales']] },
-      { key: 'cs-cron-lead-reply-handler', offSkills: [['int-apollo-sales']] },
+      { key: 'cs-cron-lead-outreach-reporter', offSkills: [['util-lead-research']] },
+      { key: 'cs-cron-lead-reply-handler', offSkills: [['util-lead-research']] },
     ]);
     assert.match(textOf(result), /- Scheduled tasks on by default: Inbox Check \(`cs-cron-inbox-check`\) \(runs on "\*\/30 \* \* \* \*"\)\./);
-    assert.match(textOf(result), /- Scheduled tasks that came with this build but are paused: Lead Outreach Reporter \(`cs-cron-lead-outreach-reporter`\) is paused until Apollo Sales \(`int-apollo-sales`\) is on\. Lead Reply Handler \(`cs-cron-lead-reply-handler`\) is paused until Apollo Sales \(`int-apollo-sales`\) is on\./);
+    assert.match(textOf(result), /- Scheduled tasks that came with this build but are paused: Lead Outreach Reporter \(`cs-cron-lead-outreach-reporter`\) is paused until Lead Research \(`util-lead-research`\) is on\. Lead Reply Handler \(`cs-cron-lead-reply-handler`\) is paused until Lead Research \(`util-lead-research`\) is on\./);
     assert.match(result.structuredContent.message, /Paused until skills they need are on: Lead Outreach Reporter \(`cs-cron-lead-outreach-reporter`\), Lead Reply Handler \(`cs-cron-lead-reply-handler`\)\./);
     assert.doesNotMatch(textOf(result).split('\n').find(line => line.includes('on by default')), /lead-/);
   });
@@ -465,27 +466,27 @@ test('deploy_agent lists a task a skill brought that is paused apart from those 
 
 test('the deploy_agent quote names a custom build\'s skills by their titles', async () => {
   const routes = customBuild([]);
-  routes['/Skills/List'] = { result: true, errors: [], skills: [{ name: 'int-metaads-manage', title: 'Meta Ads Manager', requires_credentials: false }] };
-  routes['/UserAgent/PricingPreview'] = { ...routes['/UserAgent/PricingPreview'], enabledSkills: ['int-metaads-manage'] };
+  routes['/Skills/List'] = { result: true, errors: [], skills: [{ name: 'util-ads-reporter', title: 'Ads Reporter', requires_credentials: false }] };
+  routes['/UserAgent/PricingPreview'] = { ...routes['/UserAgent/PricingPreview'], enabledSkills: ['util-ads-reporter'] };
   await withClient(fakeClient(routes), async client => {
-    const quote = await call(client, 'deploy_agent', { ...DEPLOY, title: 'Ads', skills: ['int-metaads-manage'] });
+    const quote = await call(client, 'deploy_agent', { ...DEPLOY, title: 'Ads', skills: ['util-ads-reporter'] });
     assert.notEqual(quote.isError, true, textOf(quote));
-    // The catalog's title, not the words made from the name (Meta Ads Manage).
-    assert.match(textOf(quote), /- Agent: Ads, a custom build with Meta Ads Manager \(`int-metaads-manage`\)$/m);
-    assert.deepEqual(quote.structuredContent.quote.skills, ['int-metaads-manage']);
+    // The catalog's title, not the words made from the name.
+    assert.match(textOf(quote), /- Agent: Ads, a custom build with Ads Reporter \(`util-ads-reporter`\)$/m);
+    assert.deepEqual(quote.structuredContent.quote.skills, ['util-ads-reporter']);
   });
 });
 
 test('deploy_agent names a retired skill and its replacement by title', async () => {
   const routes = customBuild([]);
   routes['/Skills/List'] = { result: true, errors: [], skills: [
-    { name: 'int-hubspot-classic', title: 'HubSpot Classic', deprecated: true, replacement: 'int-hubspot-crm', requires_credentials: false },
+    { name: 'util-old-outreach', title: 'Old Outreach', deprecated: true, replacement: 'util-outreach-compliance', requires_credentials: false },
   ] };
   await withClient(fakeClient(routes), async client => {
-    const refused = await call(client, 'deploy_agent', { ...DEPLOY, skills: ['int-hubspot-classic'] });
+    const refused = await call(client, 'deploy_agent', { ...DEPLOY, skills: ['util-old-outreach'] });
     assert.equal(refused.isError, true);
     // The replacement's title is not in what was read, so words from its name stand in.
-    assert.match(textOf(refused), /Deprecated skill: HubSpot Classic \(`int-hubspot-classic`\) \(use HubSpot CRM \(`int-hubspot-crm`\)\)\./);
+    assert.match(textOf(refused), /Deprecated skill: Old Outreach \(`util-old-outreach`\) \(use Outreach Compliance \(`util-outreach-compliance`\)\)\./);
   });
 });
 
@@ -1056,100 +1057,42 @@ test('apply_agent_skills: an unknown skill is a clean refusal, not an open outco
   assert.equal(describeSkillsApplyError(apiError('Unknown skill: x')).retrySameKey, false);
 });
 
-const OAUTH_NOT_CLEARED = 'The saved connection could not be cleared. Please try again.';
-const HUBSPOT = {
-  key: 'hubspot',
-  title: 'HubSpot',
-  credential_mode: 'oauth',
-  connection_modes: ['wiro', 'own'],
-  wiro_connect_pending: false,
-  credential_schema: [
-    { key: 'clientid', type: 'text', label: 'Client ID', required: true, oauth_managed: true, only_in_modes: ['own'] },
-  ],
-  oauth_provider: { auth_method_value: 'wiro', oauth_flow: { callback_path: '/UserAgentOAuth/HubSpotCallback' } },
-};
-const META_ADS = {
-  key: 'meta-ads',
-  title: 'Meta Ads',
-  credential_mode: 'hybrid',
-  connection_modes: ['api_key'],
-  default_connection_mode: 'api_key',
-  wiro_connect_pending: true,
-  credential_schema: [
-    { key: 'systemusertoken', type: 'password', label: 'System User Token', required: true, encrypted: true, only_in_modes: ['api_key'] },
-  ],
-  oauth_provider: {
-    auth_method_value: 'api_key',
-    oauth_flow: {},
-    direct_probe: { mode: 'api_key', mode_label: 'System User Token', token_field: 'systemusertoken', required_fields: ['systemusertoken'] },
-  },
-};
-const OAUTH_SKILLS = {
-  result: true,
-  errors: [],
-  channels: [],
-  skills: [
-    { name: 'int-hubspot-crm', title: 'HubSpot CRM', depends_on: [], conflicts_with: [], credential_key: 'hubspot', requires_credentials: true, pricing: {} },
-    { name: 'int-metaads-manage', title: 'Meta Ads', depends_on: [], conflicts_with: [], credential_key: 'meta-ads', requires_credentials: true, pricing: {} },
-  ],
-};
+const SERPER = { slug: 'serper', title: 'Serper', authtype: 'fields', transport: 'local', credentialfields: [{ name: 'apikey', label: 'API key', required: true, secret: true, format: 'password' }], accountpickers: [], tools: [] };
 
-function oauthRoutes(extra) {
+function connectorRoutes(extra) {
   return {
-    '/Credentials/Detail': body => ({ result: true, errors: [], credential: { hubspot: HUBSPOT, 'meta-ads': META_ADS }[body.key] }),
-    '/Skills/List': OAUTH_SKILLS,
-    '/UserAgentOAuth/OAuthStatus': { result: true, connected: true, accounts: [], connectedat: '2026-10-01T00:00:00Z', tokenexpiresat: '' },
+    '/AgentConnector/Detail': body => (body.slug === 'serper'
+      ? { result: true, errors: [], agentconnectors: [SERPER] }
+      : refused('Connector not found.')),
+    '/UserAgent/ConnectorList': { result: true, errors: [], useragentconnectors: [] },
+    '/UserAgent/Detail': detail({}),
     ...extra,
   };
 }
 
-test('disconnect_agent_oauth: a connection that could not be cleared passes the sentence on and is not disconnected', async () => {
-  const fake = fakeClient(oauthRoutes({ '/UserAgentOAuth/OAuthDisconnect': refused(OAUTH_NOT_CLEARED) }));
+test('connect_agent_connector: a refused key passes the service\'s own sentence on, saves nothing and never repeats the key', async () => {
+  const key = 'serper-key-0123456789';
+  const fake = fakeClient(connectorRoutes({ '/UserAgent/ConnectorConnect': refused(`Unauthorized: invalid API key ${key}`) }));
   await withClient(fake, async client => {
-    const result = await call(client, 'disconnect_agent_oauth', { agent_guid: GUID, credential: 'hubspot', confirm: true });
+    const result = await call(client, 'connect_agent_connector', { agent_guid: GUID, connector: 'serper', values: { apikey: key } });
     assert.equal(result.isError, true);
-    assert.equal(textOf(result), `## Error\n\n${OAUTH_NOT_CLEARED}`);
-    assert.equal(result.structuredContent.disconnected, false);
-    assert.equal(result.structuredContent.message, OAUTH_NOT_CLEARED);
-    assert.equal(result.structuredContent.credential, 'hubspot');
-    assert.equal(result.structuredContent.nextAction, undefined);
-  });
-});
-
-test('disconnect_agent_oauth: any other refusal stays a plain error', async () => {
-  const fake = fakeClient(oauthRoutes({ '/UserAgentOAuth/OAuthDisconnect': refused('Unknown OAuth credential: hubspot') }));
-  await withClient(fake, async client => {
-    const result = await call(client, 'disconnect_agent_oauth', { agent_guid: GUID, credential: 'hubspot', confirm: true });
-    assert.equal(result.isError, true);
+    assert.equal(textOf(result), '## Error\n\nUnauthorized: invalid API key [hidden] Nothing was saved.');
     assert.equal(result.structuredContent, undefined);
+    assert.equal(JSON.stringify(result).includes(key), false);
   });
 });
 
-test('connect_agent_oauth: a mode switch and a direct check that could not clear pass the sentence on verbatim', async () => {
-  const signIn = fakeClient(oauthRoutes({
-    '/UserAgent/Detail': detail({
-      skills: [{ name: 'int-hubspot-crm', enabled: true }],
-      credentials: { hubspot: { optional: false, _connected: false, _filled: false, _required_missing: true, _schema: { title: 'HubSpot', oauth_provider: {} } } },
-    }),
-    '/UserAgentOAuth/OAuthConnect': refused(OAUTH_NOT_CLEARED),
+test('disconnect_agent_connector: a refusal on confirm stays a plain error, and nothing reads as removed', async () => {
+  const connected = { slug: 'serper', title: 'Serper', authtype: 'fields', transport: 'local', status: 'connected', catalogstatus: 'active', connectedat: NOW - 3600, savedvariables: ['apikey'], accounts: {} };
+  const fake = fakeClient(connectorRoutes({
+    '/UserAgent/ConnectorList': { result: true, errors: [], useragentconnectors: [connected] },
+    '/UserAgent/ConnectorDisconnect': refused('Something went wrong. Try again.'),
   }));
-  await withClient(signIn, async client => {
-    const result = await call(client, 'connect_agent_oauth', { agent_guid: GUID, credential: 'hubspot', mode: 'wiro' });
+  await withClient(fake, async client => {
+    const result = await call(client, 'disconnect_agent_connector', { agent_guid: GUID, connector: 'serper', confirm: true });
     assert.equal(result.isError, true);
-    assert.equal(textOf(result), `## Error\n\n${OAUTH_NOT_CLEARED}`);
-  });
-
-  const direct = fakeClient(oauthRoutes({
-    '/UserAgent/Detail': detail({
-      skills: [{ name: 'int-metaads-manage', enabled: true }],
-      credentials: { 'meta-ads': { authmethod: 'api_key', systemusertoken: 'held', optional: false, _connected: true, _filled: true, _required_missing: false, _schema: { title: 'Meta Ads', oauth_provider: {} } } },
-    }),
-    '/UserAgentOAuth/OAuthConnect': { ...refused(OAUTH_NOT_CLEARED), errorcode: 'direct_probe_failed' },
-  }));
-  await withClient(direct, async client => {
-    const result = await call(client, 'connect_agent_oauth', { agent_guid: GUID, credential: 'meta-ads', mode: 'api_key', confirm: true });
-    assert.equal(result.isError, true);
-    assert.equal(textOf(result), `## Error\n\n${OAUTH_NOT_CLEARED}`);
+    assert.equal(textOf(result), '## Error\n\nSomething went wrong. Try again.');
+    assert.equal(result.structuredContent, undefined);
   });
 });
 
@@ -1359,18 +1302,18 @@ function channelGroup(title, values, connected) {
 function channelsAgent(overrides = {}) {
   return agentRow({
     setuprequired: true,
-    skills: [{ name: 'int-gmail-check', enabled: true, _edited: false, _user_created: false }],
-    skillsmeta: { 'int-gmail-check': { title: 'Gmail Check', requires_credentials: true, credential_key: 'gmail' } },
+    skills: [{ name: 'util-voice-receptionist', enabled: true, _edited: false, _user_created: false }],
+    skillsmeta: { 'util-voice-receptionist': { title: 'Voice Receptionist', requires_credentials: true, credential_key: 'twilio-voice' } },
     credentials: {
-      gmail: {
-        account: '',
-        apppassword: '',
+      'twilio-voice': {
+        accountsid: '',
+        authtoken: '',
         optional: false,
         extra: false,
         _connected: false,
         _filled: false,
         _required_missing: true,
-        _schema: { title: 'Gmail', credential_mode: 'imap_credentials', oauth_provider: null, fields: [] },
+        _schema: { title: 'Twilio Voice', credential_mode: 'api_key', oauth_provider: null, fields: [] },
       },
       discord: channelGroup('Discord', { bottoken: '', allowedusers: [] }, false),
       slack: channelGroup('Slack', { bottoken: '', allowedusers: [] }, false),
@@ -1402,16 +1345,16 @@ test('get_my_agent: a connected Telegram bot is a channel, not a credential, and
     });
     assert.deepEqual(agent.channels.map(channel => channel.id), ['discord', 'slack', 'telegram']);
     assert.deepEqual(agent.channels.find(channel => channel.id === 'slack').missingFields, ['allowedusers']);
-    assert.deepEqual(agent.credentials.map(credential => credential.key), ['gmail'], 'no channel among the credentials');
-    assert.deepEqual(agent.missingCredentials, [{ key: 'gmail', title: 'Gmail', oauth: false }]);
+    assert.deepEqual(agent.credentials.map(credential => credential.key), ['twilio-voice'], 'no channel among the credentials');
+    assert.deepEqual(agent.missingCredentials, [{ key: 'twilio-voice', title: 'Twilio Voice' }]);
     assert.equal(agent.setupRequired, true);
     assert.equal(nextAction.tool, 'set_agent_credentials');
 
     const text = textOf(result);
     assert.match(text, /\*\*Channels:\*\* Discord off, Slack off, Telegram on/);
-    assert.match(text, /\*\*Setup required:\*\* missing Gmail/);
-    const credentials = text.split('### Credentials')[1];
-    assert.match(credentials, /Gmail \(`gmail`\)/);
+    assert.match(text, /\*\*Setup required:\*\* missing Twilio Voice/);
+    const credentials = text.split('### Credentials')[1].split('### ')[0];
+    assert.match(credentials, /Twilio Voice \(`twilio-voice`\)/);
     assert.doesNotMatch(credentials, /Telegram|Discord|Slack/);
     assertNothingLeaks(result);
     assert.doesNotMatch(JSON.stringify(result), /brand_color|capabilities|required_fields|"schema"/);
@@ -1420,7 +1363,7 @@ test('get_my_agent: a connected Telegram bot is a channel, not a credential, and
 
 test('get_my_agent: an agent with only channels to set waits for nothing', async () => {
   const row = channelsAgent({ setuprequired: false, skills: [], skillsmeta: {} });
-  delete row.credentials.gmail;
+  delete row.credentials['twilio-voice'];
   const fake = fakeClient({ '/UserAgent/Detail': { result: true, errors: [], useragents: [row] } });
   await withClient(fake, async client => {
     const { agent, nextAction } = (await call(client, 'get_my_agent', { agent_guid: GUID })).structuredContent;

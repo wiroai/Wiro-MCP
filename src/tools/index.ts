@@ -47,8 +47,10 @@ import { registerGetAgentActivity } from './get-agent-activity.js';
 import { registerDeleteAgent } from './delete-agent.js';
 import { registerApplyAgentSkills } from './apply-agent-skills.js';
 import { registerSetAgentCredentials } from './set-agent-credentials.js';
-import { registerConnectAgentOauth } from './connect-agent-oauth.js';
-import { registerDisconnectAgentOauth } from './disconnect-agent-oauth.js';
+import { registerListAgentConnectors } from './list-agent-connectors.js';
+import { registerConnectAgentConnector } from './connect-agent-connector.js';
+import { registerSetAgentConnectorAccounts } from './set-agent-connector-accounts.js';
+import { registerDisconnectAgentConnector } from './disconnect-agent-connector.js';
 import { registerManageAgentCustomSkill } from './manage-agent-custom-skill.js';
 import { registerListProjects } from './list-projects.js';
 import { registerBindAgentProject } from './bind-agent-project.js';
@@ -190,8 +192,10 @@ export function registerTools(
     registerDeleteAgent(server, client);
     registerApplyAgentSkills(server, client);
     registerSetAgentCredentials(server, client);
-    registerConnectAgentOauth(server, client);
-    registerDisconnectAgentOauth(server, client);
+    registerListAgentConnectors(server, client);
+    registerConnectAgentConnector(server, client);
+    registerSetAgentConnectorAccounts(server, client);
+    registerDisconnectAgentConnector(server, client);
     registerManageAgentCustomSkill(server, client);
     registerListProjects(server, client);
     registerBindAgentProject(server, client);
@@ -255,8 +259,10 @@ export {
   registerDeleteAgent,
   registerApplyAgentSkills,
   registerSetAgentCredentials,
-  registerConnectAgentOauth,
-  registerDisconnectAgentOauth,
+  registerListAgentConnectors,
+  registerConnectAgentConnector,
+  registerSetAgentConnectorAccounts,
+  registerDisconnectAgentConnector,
   registerManageAgentCustomSkill,
   registerListProjects,
   registerBindAgentProject,

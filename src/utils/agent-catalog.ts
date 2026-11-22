@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { asString, isPlainObject, requireApiSuccess, toNumber, truncate, type ApiEnvelope } from './api.js';
-import { FIELD_HELP_MAX, WIRO_PROJECT_NOTE, isWiroProjectField, usableConnectionModes } from './agent-config.js';
+import { FIELD_HELP_MAX, WIRO_PROJECT_NOTE, isWiroProjectField } from './agent-config.js';
+import { CONNECTOR_SLUG } from './agent-connectors.js';
 import {
   agentTaskSchema,
   htmlToText,
@@ -13,8 +14,8 @@ import {
   type AgentApiClient,
 } from './user-agent.js';
 
-// The agent catalog: templates, skills and the credentials they need, from
-// public catalog endpoints. Results are rebuilt from an allowlist of what a
+// The agent catalog: templates, skills, the credentials they need and the
+// connectors a template suggests, from public catalog endpoints. Results are rebuilt from an allowlist of what a
 // user needs to choose an agent and set it up.
 
 export const templateSummarySchema = z.object({
@@ -49,15 +50,12 @@ export const credentialFieldSchema = z.object({
   label: z.string(),
   type: z.string().optional(),
   required: z.boolean(),
-  onlyInModes: z.array(z.string()).optional(),
 });
 
 export const credentialRequirementSchema = z.object({
   key: z.string(),
   title: z.string(),
   mode: z.string().optional(),
-  oauth: z.boolean(),
-  connectionModes: z.array(z.string()),
   note: z.string().optional(),
   fields: z.array(credentialFieldSchema),
 });
@@ -84,6 +82,8 @@ export const templateDetailSchema = templateSummarySchema.extend({
   })),
   requiredCredentials: z.array(credentialRequirementSchema),
   optionalCredentials: z.array(credentialRequirementSchema),
+  suggestedConnectors: z.array(z.string()).optional()
+    .describe('The connectors the template suggests, by slug. None is connected by the deploy: connect_agent_connector connects each one after it.'),
   channels: z.array(z.object({
     id: z.string(),
     title: z.string(),
@@ -102,7 +102,6 @@ export type TemplateDetail = z.infer<typeof templateDetailSchema>;
 
 function writableSchemaField(field: Record<string, unknown>): boolean {
   return field.platform_managed !== true
-    && field.auto_filled_by_oauth !== true
     && field.server_managed !== true
     && field.type !== 'computed';
 }
@@ -117,11 +116,6 @@ function toCredentialRequirement(key: string, group: Record<string, unknown>): C
     key,
     title: asString(schema.title) ?? key,
     ...(mode ? { mode } : {}),
-    oauth: isPlainObject(schema.oauth_provider),
-    connectionModes: usableConnectionModes({
-      connectionModes: toStringArray(schema.connection_modes),
-      wiroPending: schema.wiro_connect_pending === true,
-    }),
     ...(key === WIRO_PROJECT_CREDENTIAL ? { note: WIRO_PROJECT_NOTE } : {}),
     fields: fields
       .filter(field => {
@@ -130,14 +124,12 @@ function toCredentialRequirement(key: string, group: Record<string, unknown>): C
         return editable ? editable[fieldKey] !== false : true;
       })
       .map(field => {
-        const onlyInModes = toStringArray(field.only_in_modes);
         const type = asString(field.type);
         return {
           key: asString(field.key) ?? '',
           label: asString(field.label) ?? asString(field.key) ?? '',
           ...(type ? { type } : {}),
           required: field.required === true,
-          ...(onlyInModes.length > 0 ? { onlyInModes } : {}),
         };
       }),
   };
@@ -242,6 +234,7 @@ export function toTemplateDetail(row: Record<string, unknown>): TemplateDetail {
   }
 
   const description = htmlToText(row.description, 1_500);
+  const suggested = [...new Set(toStringArray(row.suggestedconnectors).filter(slug => CONNECTOR_SLUG.test(slug)))];
   const scheduled = Array.isArray(row.scheduledskills) ? summarizeTasks(row.scheduledskills) : undefined;
   const custom = Array.isArray(row.customskills) ? summarizeTasks(row.customskills) : undefined;
 
@@ -251,6 +244,7 @@ export function toTemplateDetail(row: Record<string, unknown>): TemplateDetail {
     skills,
     requiredCredentials,
     optionalCredentials,
+    ...(suggested.length > 0 ? { suggestedConnectors: suggested } : {}),
     channels,
     models: toModelOptions(row.tokenRates),
     ...(scheduled ? { scheduledTasks: scheduled } : {}),
@@ -318,7 +312,6 @@ export const credentialSetupFieldSchema = z.object({
   required: z.boolean(),
   writable: z.boolean(),
   secret: z.boolean(),
-  onlyInModes: z.array(z.string()).optional(),
   pattern: z.string().optional(),
   options: z.array(setupOptionSchema).optional(),
   help: z.string().optional(),
@@ -333,9 +326,6 @@ export const credentialSetupSchema = z.object({
   title: z.string(),
   role: z.enum(['primary', 'additional', 'channel', 'credential']),
   mode: z.string().optional(),
-  connectionModes: z.array(z.string()),
-  oauth: z.boolean(),
-  wiroConnectAvailable: z.boolean(),
   channel: z.object({ id: z.string(), requiredFields: z.array(z.string()) }).optional(),
   usedBySkills: z.array(z.string()).optional(),
   note: z.string().optional(),
@@ -397,8 +387,6 @@ export function toCredentialSetup(
   role: CredentialSetup['role'],
 ): CredentialSetup {
   const key = asString(credential.key) ?? '';
-  const listedModes = toStringArray(credential.connection_modes);
-  const wiroPending = credential.wiro_connect_pending === true;
   const channel = isPlainObject(credential.channel) ? credential.channel : null;
   const mode = asString(credential.credential_mode);
   const usedBy = toStringArray(credential.used_by_skills);
@@ -410,16 +398,12 @@ export function toCredentialSetup(
     title: asString(credential.title) ?? key,
     role: channel && role === 'credential' ? 'channel' : role,
     ...(mode ? { mode } : {}),
-    connectionModes: usableConnectionModes({ connectionModes: listedModes, wiroPending }),
-    oauth: isPlainObject(credential.oauth_provider),
-    wiroConnectAvailable: listedModes.includes('wiro') && !wiroPending,
     ...(channel
       ? { channel: { id: asString(channel.id) ?? key, requiredFields: toStringArray(channel.required_fields) } }
       : {}),
     ...(usedBy.length > 0 ? { usedBySkills: usedBy } : {}),
     ...(key === WIRO_PROJECT_CREDENTIAL ? { note: WIRO_PROJECT_NOTE } : {}),
     fields: schema.filter(field => asString(field.key)).map(field => {
-      const onlyInModes = toStringArray(field.only_in_modes);
       const type = asString(field.type);
       const pattern = asString(field.pattern);
       const help = isWiroProjectField(field) ? '' : htmlToText(field.help, FIELD_HELP_MAX);
@@ -432,7 +416,6 @@ export function toCredentialSetup(
         required: field.required === true,
         writable: writableSchemaField(field),
         secret: field.encrypted === true || type === 'password',
-        ...(onlyInModes.length > 0 ? { onlyInModes } : {}),
         ...(pattern ? { pattern } : {}),
         ...(options.length > 0 ? { options } : {}),
         ...(help ? { help } : {}),

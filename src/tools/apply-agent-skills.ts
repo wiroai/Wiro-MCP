@@ -95,9 +95,8 @@ function warningsOf(body: SkillsApplyBody): string[] {
 /** How to give the new skills what they still need. A Wiro project comes first, since it takes no key. */
 function stillNeededSteps(needed: Array<{ credentials: string[] }>): string {
   const keys = needed.flatMap(entry => entry.credentials);
-  const fields = 'set_agent_credentials or connect_agent_oauth.';
-  if (!keys.includes(WIRO_PROJECT_CREDENTIAL)) return `Set them with ${fields}`;
-  const others = keys.some(key => key !== WIRO_PROJECT_CREDENTIAL) ? ` Set the others with ${fields}` : '';
+  if (!keys.includes(WIRO_PROJECT_CREDENTIAL)) return 'Set them with set_agent_credentials.';
+  const others = keys.some(key => key !== WIRO_PROJECT_CREDENTIAL) ? ' Set the others with set_agent_credentials.' : '';
   return `Connect the Wiro project with bind_agent_project, with no key to paste.${others}`;
 }
 
@@ -106,7 +105,7 @@ function listLine(label: string, names: string[], titles: ReadonlyMap<string, st
   return names.length > 0 ? `**${label}:** ${names.map(name => skillLabel(name, titles)).join(', ')}` : null;
 }
 
-/** Each new skill with the credentials it still needs, by title: Instagram Post (`int-instagram-post`): Instagram (`instagram`). */
+/** Each new skill with the credentials it still needs, by title: Video Creator (`util-video-creator`): Wiro AI Models (`wiro`). */
 function neededText(
   needed: Array<{ skill: string; credentials: string[] }>,
   row: Row,
@@ -154,7 +153,8 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
     'apply_agent_skills',
     {
       title: 'Change an agent\'s skills',
-      description: 'Turn registry skills on or off for a deployed agent. Every plan includes every skill, so a '
+      description: 'Turn Skills on or off for a deployed agent. Outside services are Connectors and connect with '
+        + 'connect_agent_connector instead. Every plan includes every skill, so a '
         + 'skill change costs nothing: the plan keeps its price and monthly credits, and no active plan is '
         + 'needed. The change is applied on the first call, so tell the user what turns on or off and get '
         + 'their yes first. The tool checks the names and turns on the skills they depend on '
@@ -162,7 +162,7 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
         + 'scheduled tasks the change paused. A running agent restarts once when a skill turns on or off. '
         + 'A skill\'s work uses the agent\'s credits, and model runs it starts are billed to the wallet of the '
         + 'workspace that owns the Wiro project connected to the agent. Newly enabled skills may still need '
-        + 'credentials (set_agent_credentials, connect_agent_oauth, bind_agent_project for a Wiro project) and do '
+        + 'credentials (set_agent_credentials, bind_agent_project for a Wiro project) and do '
         + 'not create scheduled tasks (manage_agent_custom_skill does). On a team agent only a team admin or the '
         + 'person who deployed the agent can change its skills; other members are refused and nothing changes. '
         + 'Every result gives an idempotency_key: if an answer does not arrive, repeat the same change with it, '
@@ -172,7 +172,7 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
       inputSchema: strictInput({
         agent_guid: z.string().min(1).describe('The deployed agent\'s guid, from list_my_agents.'),
         skills: z.record(z.string(), z.boolean())
-          .describe('Skills to change, as name: true to turn on or name: false to turn off, for example {"int-instagram-post": true}. Registry names only (list_agent_skills). Custom skills and scheduled tasks (cs-...) are managed with manage_agent_custom_skill; channels such as Telegram turn on through set_agent_credentials.'),
+          .describe('Skills to change, as name: true to turn on or name: false to turn off, for example {"util-video-creator": true}. Registry names only (list_agent_skills). Custom skills and scheduled tasks (cs-...) are managed with manage_agent_custom_skill; channels such as Telegram turn on through set_agent_credentials; connectors connect with connect_agent_connector.'),
         add_dependencies: z.boolean().default(true)
           .describe('Also turn on the skills that the enabled skills depend on (default true). Without them the change is refused.'),
         idempotency_key: z.string().min(8).max(128).optional()

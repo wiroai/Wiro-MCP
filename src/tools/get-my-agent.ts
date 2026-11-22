@@ -3,6 +3,14 @@ import { z } from 'zod';
 import type { WiroClient } from '../client.js';
 import { errorResult } from '../utils/api.js';
 import { customSkillEntries, pausedSkillTitles, resolveExistingCustomSkillKey, setupStillMissingNote } from '../utils/agent-config.js';
+import {
+  accountsText,
+  connectionSchema,
+  connectionStateText,
+  connectorLabel,
+  listConnections,
+  type AgentConnection,
+} from '../utils/agent-connectors.js';
 import { textBlock } from '../utils/quoted-text.js';
 import { DEFAULT_WAIT_SECONDS, MAX_WAIT_SECONDS } from '../utils/poll.js';
 import {
@@ -21,6 +29,19 @@ import {
 import { isPlainTeamMember } from '../utils/workspace.js';
 import { nextActionSchema, strictInput } from './schemas.js';
 
+/** The agent's connectors as a section of the text. */
+function connectorLines(connections: AgentConnection[] | null): string[] {
+  if (!connections) return ['', '### Connectors', '', 'The connectors could not be read; list_agent_connectors with agent_guid lists them.'];
+  if (connections.length === 0) {
+    return ['', '### Connectors', '', 'None connected. list_agent_connectors lists the outside services it can connect.'];
+  }
+  return ['', '### Connectors', '', ...connections.map((connection) => {
+    const accounts = accountsText(connection);
+    const since = connection.status === 'connected' && connection.connectedAt ? ` since ${connection.connectedAt}` : '';
+    return `- ${connectorLabel(connection)}: ${connectionStateText(connection)}${since}${accounts ? `; ${accounts}` : ''}`;
+  })];
+}
+
 const entrySchema = z.object({
   key: z.string(),
   kind: z.enum(['custom_instruction', 'scheduled_task']),
@@ -37,8 +58,9 @@ export function registerGetMyAgent(server: McpServer, client: WiroClient): void 
       title: 'Get a deployed Wiro agent',
       description: 'Read the full state of one deployed agent: status (number and label), plan (Starter, Pro or Max) '
         + 'with any move set for its next renewal, the plans and their prices, credit balance, when it last did anything, time zone, setup from chat (chatSetup), skills, chat channels, model settings with the credit rates of the models it can switch to, '
-        + 'scheduled tasks and custom instructions (a long text is shortened; entry adds one entry\'s whole text), and the '
-        + 'state of each credential. Credential values are never returned, only whether each one is filled, '
+        + 'scheduled tasks and custom instructions (a long text is shortened; entry adds one entry\'s whole text), the '
+        + 'state of each credential, and its connectors with their state (connected, a sign-in started, needs a new '
+        + 'sign-in, failed) and the accounts chosen. Values are never returned, only whether each one is filled, '
         + 'connected or missing. With wait_seconds it keeps reading until the agent is no longer stopping, '
         + 'queued or starting; when the wait runs out, follow the returned nextAction instead of repeating '
         + 'the action that started it. Statuses: 0 stopped, 1 stopping (also during a restart, '
@@ -53,6 +75,8 @@ export function registerGetMyAgent(server: McpServer, client: WiroClient): void 
       }),
       outputSchema: {
         agent: agentDetailSchema,
+        connectors: z.array(connectionSchema).optional()
+          .describe('The agent\'s connectors, every state. Left out when they could not be read.'),
         settled: z.boolean(),
         waitedSeconds: z.number().nonnegative().optional(),
         advice: z.string(),
@@ -99,6 +123,11 @@ export function registerGetMyAgent(server: McpServer, client: WiroClient): void 
           };
         }
         const plainMember = await isPlainTeamMember(client, row, extra.signal);
+        // The connectors are read apart from the agent: an answer without them still says everything else.
+        const connections = await listConnections(client, guid, extra.signal).catch((error: unknown) => {
+          if (extra.signal.aborted) throw error;
+          return null;
+        });
         const titles = new Map([...activeSkillTitles(row), ...await pausedSkillTitles(client, agent.scheduledTasks, extra.signal)]);
         const advice = settled
           ? readStatusAdvice(agent, plainMember)
@@ -117,7 +146,7 @@ export function registerGetMyAgent(server: McpServer, client: WiroClient): void 
           content: [{
             type: 'text' as const,
             text: [
-              formatAgentDetail(agent, plainMember, titles),
+              formatAgentDetail(agent, plainMember, titles, connectorLines(connections)),
               ...(full ? ['', `### \`${full.key}\` in full`, '', ...textBlock(full.text)] : []),
               ...(setupNote ? ['', setupNote] : []),
               '',
@@ -126,6 +155,7 @@ export function registerGetMyAgent(server: McpServer, client: WiroClient): void 
           }],
           structuredContent: {
             agent,
+            ...(connections ? { connectors: connections } : {}),
             settled,
             ...(waitedSeconds !== undefined ? { waitedSeconds } : {}),
             advice,

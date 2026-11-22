@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { asString, isPlainObject, truncate, unixToIso } from './api.js';
+import { CONNECTOR_SLUG } from './agent-connectors.js';
 import {
   quotedBlock,
   quotedSpan,
@@ -13,13 +14,14 @@ import {
   SETUP_RESTORED_LABEL,
 } from './quoted-text.js';
 
-// Setup changes a deployed agent proposes in chat: connect a connector or
-// disconnect one, add or remove a Connector or a Skill, add or change a
-// scheduled task or a custom skill, add to a custom skill or undo its last
-// change, or set its time zone. Wiro stores
-// each proposal on the agent's reply as a timeline block of type "setup", and
+// Setup changes a deployed agent proposes in chat: connect a Connector or a
+// chat channel or disconnect one, add or remove a Skill (or a Connector, by its
+// catalog slug), add or change a scheduled task or a custom skill, add to a
+// custom skill or undo its last change, or set its time zone. Wiro stores each
+// proposal on the agent's reply as a timeline block of type "setup", and
 // nothing changes until a person approves it. The agent never applies its own
-// proposal and never sees a key: a key goes in with set_agent_credentials, and
+// proposal and never sees a key: a Connector's values go in with
+// connect_agent_connector and a chat channel's with set_agent_credentials, and
 // a reply of "yes" is matched by Wiro, not by the agent. Sent with an API key,
 // the first "yes" applies nothing: Wiro answers with its own listing of the
 // exact change, and a second "yes" (or "yes N") applies it. The agent writes
@@ -28,19 +30,19 @@ import {
 // proposed (before), which Wiro adds to the card, so an applied change still
 // shows what it replaced. That text, like the earlier version an undo restores,
 // can hold text the agent wrote in an earlier change: it is content too. An add
-// or remove names one Connector (int-*) or Skill (util-*), and Wiro adds what
-// the change also does to the card: the other names it turns on or off (with),
-// the scheduled tasks that pause or run again, and for an add the connectors it
-// brings that are not connected yet (needs). The agent cannot set those. An add
+// or remove names one Skill (util-*) or Connector, and Wiro adds what the change
+// also does to the card: the other names it turns on or off (with), the
+// scheduled tasks that pause or run again, and for an add the connectors it
+// needs that are not connected yet (needs). The agent cannot set those. An add
 // whose connector takes a key comes with that connector's connect card on the
 // same reply. From here the user gives that key together with their yes, before
 // the yes that applies the add is sent, and it is saved with
-// set_agent_credentials as the very next step: the agent stays stopping or
+// connect_agent_connector as the very next step: the agent stays stopping or
 // queued for the restart the add started only for seconds, and a key saved then
-// loads with that same restart. One that connects with a sign-in, the user's own
-// app keys or a token comes with its connect card too, but a reply never
-// connects it: that is done with connect_agent_oauth or on the agent page once
-// the add is applied.
+// loads with that same restart. One that connects with a sign-in comes with its
+// connect card too, but a reply never connects it: connect_agent_connector
+// returns its sign-in link, or the user connects it on the agent page, once the
+// add is applied.
 
 /** A pending proposal older than this cannot be approved with a typed reply. */
 export const SETUP_REPLY_WINDOW_SECONDS = 30 * 60;
@@ -58,9 +60,14 @@ export const SETUP_CHANGE_STATUSES = ['pending', 'applied', 'dismissed', 'failed
 // The custom skill actions that change its text and carry the text from before the change.
 const SKILL_TEXT_ACTIONS: readonly string[] = ['update', 'append', 'revert'];
 
-// The kinds that turn a Connector (int-*) or a Skill (util-*) on or off, by its name.
+// The kinds that turn a Skill (util-*) or a Connector (its catalog slug) on or off, by its name.
 const REGISTRY_KINDS: readonly string[] = ['add', 'remove'];
-const REGISTRY_NAME = /^(?:int|util)-[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const SKILL_NAME = /^util-[a-z0-9]+(?:-[a-z0-9]+)*$/;
+// Names that are neither a Skill nor a Connector: custom skills and tasks, platform keys and settings.
+const NOT_REGISTRY_PREFIX = /^(?:cs|sys|var)-/;
+const REGISTRY_NAME = {
+  test: (name: string) => SKILL_NAME.test(name) || (CONNECTOR_SLUG.test(name) && !NOT_REGISTRY_PREFIX.test(name)),
+};
 const SCHEDULED_TASK_KEY = /^cs-cron-[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const CONNECTOR_KEY = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const MAX_NAME_LENGTH = 64;
@@ -69,17 +76,15 @@ const MAX_NAME_LENGTH = 64;
 const MAX_WITH = 12;
 const MAX_TASKS = 20;
 const MAX_NEEDS = 3;
-// How a connector an add brings is connected: its key, a sign-in with Wiro's app, the user's own app keys and
-// then a sign-in, a token that Wiro checks, or a setup on the agent page (files, service accounts, a Wiro project).
-export const SETUP_NEED_MODES = ['key', 'signin', 'appkeys', 'token', 'page'] as const;
+// How a connector an add needs is connected: its key (values typed on its Connect card), a sign-in the user approves
+// in their own browser, or a setup on the agent page.
+export const SETUP_NEED_MODES = ['key', 'signin', 'page'] as const;
 export type SetupNeedMode = typeof SETUP_NEED_MODES[number];
-// The modes whose connect card a reply never connects.
-const SIGN_IN_NEED_MODES: readonly SetupNeedMode[] = ['signin', 'appkeys', 'token'];
-export type SignInNeedMode = 'signin' | 'appkeys' | 'token';
+export type SignInNeedMode = 'signin';
 
-/** Whether a connector connects with a sign-in, the user's own app keys or a token, which a reply never does. */
+/** Whether a connector connects with a sign-in, which a reply never does. */
 export function isSignInNeedMode(mode: SetupNeedMode | undefined): mode is SignInNeedMode {
-  return mode !== undefined && SIGN_IN_NEED_MODES.includes(mode);
+  return mode === 'signin';
 }
 
 export const CHAT_SETUP_MODES = ['off', 'webchat', 'all'] as const;
@@ -87,7 +92,7 @@ export type ChatSetupMode = typeof CHAT_SETUP_MODES[number];
 
 /** What each chat_setup value allows, said the same way by every tool that sets or shows it. */
 export const CHAT_SETUP_DESCRIPTION = 'Setup from chat lets the agent propose setup changes in its chat (connect or '
-  + 'disconnect a service, add or remove a Connector or Skill, scheduled tasks, custom skills and its time zone); '
+  + 'disconnect a Connector or channel, add or remove a Skill, scheduled tasks, custom skills and its time zone); '
   + 'nothing changes until an agent admin approves the proposal. "all" (the '
   + 'default) allows it in the Wiro web chat and in messages sent with an API key, such as from this MCP server; '
   + '"webchat" only in the Wiro web chat; "off" turns it off. Messages sent with an API key act with the key '
@@ -108,7 +113,7 @@ export const setupChangeSchema = z.object({
   connector: z.string().optional(),
   key: z.string().optional()
     .describe('Schedule and skill: the scheduled task\'s or custom skill\'s key. Add and remove: the name of the '
-      + 'Connector (int-*) or Skill (util-*) the change turns on or off.'),
+      + 'Skill (util-*) or Connector (its slug) the change turns on or off.'),
   title: z.string().optional(),
   cron: z.string().optional(),
   instructions: z.string().optional()
@@ -121,17 +126,16 @@ export const setupChangeSchema = z.object({
       + 'the change replaced.'),
   timezone: z.string().optional(),
   with: z.array(z.string()).optional()
-    .describe('Add and remove: the other Connectors and Skills, by name, that the change also turns on (add) or '
+    .describe('Add and remove: the other Skills and Connectors, by name, that the change also turns on (add) or '
       + 'off (remove). Wiro adds it to the proposal; the agent cannot set it.'),
   pauses: z.array(z.string()).optional()
     .describe('Add and remove: the scheduled tasks, by key, that pause with the change. Wiro adds it.'),
   resumes: z.array(z.string()).optional()
     .describe('Add and remove: the scheduled tasks, by key, that run again with the change. Wiro adds it.'),
   needs: z.array(setupNeedSchema).optional()
-    .describe('Add: the connectors the change brings that are not connected yet, and how each one connects: key '
-      + '(its key, saved with set_agent_credentials, never in a chat message), signin (a sign-in with Wiro\'s app), '
-      + 'appkeys (the user\'s own app keys, then a sign-in), token (a token that Wiro checks), each of these three '
-      + 'with connect_agent_oauth or on the agent page, or page (set up on the agent page). Wiro adds it.'),
+    .describe('Add: the connectors the change needs that are not connected yet, and how each one connects: key '
+      + '(its values, saved with connect_agent_connector, never in a chat message), signin (a sign-in link from '
+      + 'connect_agent_connector, or on the agent page), or page (set up on the agent page). Wiro adds it.'),
   note: z.string().optional(),
   status: z.enum(SETUP_CHANGE_STATUSES),
   proposedAt: z.string().optional(),
@@ -156,7 +160,7 @@ function shortLine(value: unknown): string | undefined {
 }
 
 /** The distinct names of a list Wiro writes on an add or remove, at most max; anything else in it is left out. */
-function nameList(value: unknown, pattern: RegExp, max: number, except?: string): string[] {
+function nameList(value: unknown, pattern: { test(name: string): boolean }, max: number, except?: string): string[] {
   if (!Array.isArray(value)) return [];
   const names: string[] = [];
   for (const item of value) {
@@ -167,7 +171,7 @@ function nameList(value: unknown, pattern: RegExp, max: number, except?: string)
   return names;
 }
 
-/** The connectors an add brings that are not connected yet, as Wiro wrote them. A mode this version does not know is left out. */
+/** The connectors an add needs that are not connected yet, as Wiro wrote them. A mode this version does not know is left out. */
 function needList(value: unknown): SetupNeed[] {
   if (!Array.isArray(value)) return [];
   const needs: SetupNeed[] = [];
@@ -342,15 +346,17 @@ export function asksKeyAsReply(answer: string | undefined): boolean {
 }
 
 /** What to do when Wiro's answer asks for a key as the next reply, said the same way by the note and the Next line. */
-export const SETUP_KEY_RULE = 'Never send a key in a chat message: save it right away with set_agent_credentials, under '
-  + 'the connector the agent\'s proposal names. Saved while the agent is still stopping or queued for its restart, the '
-  + 'key loads with that same restart; saved once the agent is starting again, it restarts the agent a second time.';
+export const SETUP_KEY_RULE = 'Never send a key in a chat message: save it right away under the name the agent\'s '
+  + 'proposal gives, with connect_agent_connector for a Connector or set_agent_credentials for a chat channel. Saved '
+  + 'while the agent is still stopping or queued for its restart, the key loads with that same restart; saved once the '
+  + 'agent is starting again, it restarts the agent a second time.';
 
 /** The same for a listing that offers to take the key in place of the yes. */
 export const SETUP_LISTING_KEY_RULE = 'The listing offers to take a key as the reply. Never send a key in a chat '
   + 'message: ask the user for the key together with their yes, before you send that yes. Then send "yes" to apply '
-  + 'the change and save the key with set_agent_credentials as the very next step, so it loads with the same restart; '
-  + 'a key saved later restarts the agent again.';
+  + 'the change and save the key as the very next step, with connect_agent_connector for a Connector or '
+  + 'set_agent_credentials for a chat channel, so it loads with the same restart; a key saved later restarts the agent '
+  + 'again.';
 
 /** Whether a pending proposal can still be approved with a typed reply. */
 export function isApprovableByReply(change: SetupChange, nowMs = Date.now()): boolean {
@@ -377,9 +383,9 @@ const SKILL_VERBS: Record<string, string> = {
   revert: 'Undo the last change to the custom skill',
 };
 
-/** What an add or a remove turns on or off: a Connector for an int-* name, else a Skill. */
+/** What an add or a remove turns on or off: a Skill for a util-* name, else a Connector. */
 function registryWord(key: string | undefined): string {
-  return key?.startsWith('int-') ? 'Connector' : 'Skill';
+  return key && SKILL_NAME.test(key) ? 'Skill' : 'Connector';
 }
 
 /** One line that names the change, such as "Create the scheduled task `cs-cron-weekly-report`". */
@@ -421,15 +427,12 @@ function showsBeforeAndAfter(change: SetupChange): boolean {
   return change.status === 'applied' && change.before !== undefined && change.instructions !== undefined;
 }
 
-// How each connector an add brings is connected once the add is applied.
+// How each connector an add needs is connected once the add is applied.
 const NEED_HOW: Record<SetupNeedMode, string> = {
-  key: 'its key. Ask the user for it together with their yes to this change, and save it with set_agent_credentials '
+  key: 'its key. Ask the user for it together with their yes to this change, and save it with connect_agent_connector '
     + 'as soon as this change is applied (one restart then loads both), never in a chat message',
-  signin: 'sign in on the agent page, or with connect_agent_oauth',
-  appkeys: 'the user\'s own app keys, then a sign-in, on the agent page or with set_agent_credentials and then '
-    + 'connect_agent_oauth, never in a chat message',
-  token: 'its token, which Wiro checks, on the agent page or with set_agent_credentials and then connect_agent_oauth, '
-    + 'never in a chat message',
+  signin: 'a sign-in: connect_agent_connector returns the link for the user to open in their own browser, or the user '
+    + 'signs in on the agent page. Keys of the user\'s own app go in with that call, never in a chat message',
   page: 'set up on the agent page',
 };
 
@@ -440,8 +443,7 @@ function needLine(need: SetupNeed): string {
 
 /**
  * What an add or a remove also does, as Wiro wrote it on the proposal: the other names it turns on or off,
- * the scheduled tasks that run again or pause, the connectors an add still needs connected, and for a
- * Connector's remove that its saved key stays.
+ * the scheduled tasks that run again or pause, and the connectors an add still needs connected.
  */
 function registryChangeLines(change: SetupChange): string[] {
   if (change.kind !== 'add' && change.kind !== 'remove') return [];
@@ -453,17 +455,12 @@ function registryChangeLines(change: SetupChange): string[] {
   const pauses = change.pauses ? [`- Scheduled tasks that pause: ${names(change.pauses)}`] : [];
   lines.push(...(add ? [...resumes, ...pauses] : [...pauses, ...resumes]));
   if (change.needs) lines.push('- Still to connect once it is on:', ...change.needs.map(need => `  - ${needLine(need)}`));
-  if (!add && change.key?.startsWith('int-')) {
-    lines.push('- Its saved key stays saved, if it has one: adding it back needs no new key. Only a disconnect '
-      + 'removes a key.');
-  }
   return lines;
 }
 
 /**
- * The pending add on the same reply that brings this connect card's connector with a key, a sign-in, the user's
- * own app keys or a token (the add-and-connect pair Wiro makes): its number and how the connector connects, or
- * undefined.
+ * The pending add on the same reply that needs this connect card's connector with a key or a sign-in (the
+ * add-and-connect pair Wiro makes): its number and how the connector connects, or undefined.
  */
 function pairedAdd(change: SetupChange, pending: readonly SetupChange[]): { number: number; mode: SetupNeedMode } | undefined {
   if (change.kind !== 'connect' || !change.connector) return undefined;
@@ -475,7 +472,7 @@ function pairedAdd(change: SetupChange, pending: readonly SetupChange[]): { numb
   return undefined;
 }
 
-/** The need of an add for this connector when a connect card connects it: by key, a sign-in, app keys or a token. */
+/** The need of an add for this connector when a connect card connects it: by key or a sign-in. */
 function connectNeed(add: SetupChange, connector: string): SetupNeed | undefined {
   return add.needs?.find(candidate => candidate.connector === connector
     && (candidate.mode === 'key' || isSignInNeedMode(candidate.mode)));
@@ -521,23 +518,23 @@ function pendingChangeLines(
   const paired = pairedAdd(change, pending);
   const applied = paired ? undefined : appliedPairedAdd(change, changes);
   if (paired?.mode === 'key') {
-    lines.push(`- Connects what proposed change ${paired.number} adds. Ask the user for the key together with their yes to `
-      + `change ${paired.number}. Once change ${paired.number} is applied, save the key with set_agent_credentials at once, `
+    lines.push(`- Connects what proposed change ${paired.number} needs. Ask the user for the key together with their yes to `
+      + `change ${paired.number}. Once change ${paired.number} is applied, save the key with connect_agent_connector at once, `
       + 'never in a chat message: one restart then loads both.');
   } else if (paired) {
-    lines.push(`- Connects what proposed change ${paired.number} adds, once it is applied: ${NEED_HOW[paired.mode]}. `
+    lines.push(`- Connects what proposed change ${paired.number} needs, once it is applied: ${NEED_HOW[paired.mode]}. `
       + 'A reply does not connect it.');
   } else if (applied && isSignInNeedMode(applied.mode)) {
     // The add is applied and its connector still waits: it connects the way the add said.
-    lines.push(`- Connects what the applied change, ${setupChangeHeadline(applied.add)}, added: ${NEED_HOW[applied.mode]}. `
+    lines.push(`- Connects what the applied change, ${setupChangeHeadline(applied.add)}, needs: ${NEED_HOW[applied.mode]}. `
       + 'A reply does not connect it.');
   } else if (change.kind === 'connect') {
-    lines.push('- The user provides the key or sign-in for it. A key is saved with set_agent_credentials, never sent '
-      + 'in a chat message.');
+    lines.push('- The user provides its values or signs in: connect_agent_connector saves a Connector\'s values or returns '
+      + 'its sign-in link, and set_agent_credentials saves a chat channel\'s fields. A key never goes in a chat message.');
   }
   if (change.kind === 'disconnect') {
-    lines.push('- Its saved key is removed, and skills that use it stop until it is connected again. Approving it '
-      + 'needs no key.');
+    lines.push('- Its connection is removed (its saved values, sign-in and account choices), and scheduled tasks that need '
+      + 'it stop until it is connected again. Approving it needs no key.');
   }
   lines.push(...registryChangeLines(change));
   if (isSkillAction(change, 'append')) {

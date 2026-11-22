@@ -37,7 +37,7 @@ const SECRETS = [
   'team-guid-secret',
   'test-app-password',
   'TEST-BOT-TOKEN',
-  'gmail-owner@example.com',
+  'AC-test-account-sid',
   '123456789',
   'billing.example.com',
   'price_test_123',
@@ -200,10 +200,10 @@ function agentRow(overrides = {}) {
       ],
     },
     skills: [
-      { name: 'int-gmail-check', enabled: true, _edited: false, _user_created: false },
+      { name: 'util-voice-receptionist', enabled: true, _edited: false, _user_created: false },
       { name: 'util-chat-markdown-reporting', enabled: true, _edited: false, _user_created: false },
     ],
-    skillsmeta: { 'int-gmail-check': { title: 'Gmail Check' } },
+    skillsmeta: { 'util-voice-receptionist': { title: 'Voice Receptionist' } },
     tokenRates: {
       default_model: 'openai/gpt-5.6-sol',
       fallback_rate: { input_per_1m: 0, output_per_1m: 0 },
@@ -214,22 +214,22 @@ function agentRow(overrides = {}) {
       },
     },
     credentials: {
-      gmail: {
+      'twilio-voice': {
         optional: false,
         extra: false,
         _connected: false,
         _filled: false,
         _required_missing: true,
-        account: 'gmail-owner@example.com',
-        apppassword: 'test-app-password',
-        _editable: { account: true, apppassword: true },
+        accountsid: 'AC-test-account-sid',
+        authtoken: 'test-app-password',
+        _editable: { accountsid: true, authtoken: true },
         _schema: {
-          title: 'Gmail',
-          credential_mode: 'imap_credentials',
+          title: 'Twilio Voice',
+          credential_mode: 'api_key',
           oauth_provider: null,
           fields: [
-            { key: 'account', label: 'Gmail Account', type: 'email', required: true },
-            { key: 'apppassword', label: 'App Password', type: 'password', required: true },
+            { key: 'accountsid', label: 'Account SID', type: 'text', required: true },
+            { key: 'authtoken', label: 'Auth Token', type: 'password', required: true },
           ],
         },
       },
@@ -277,7 +277,7 @@ function agentRow(overrides = {}) {
       value: 'Scan the inbox.',
       interval: '0 9 * * *',
       enabled: true,
-      requires_credentials: ['gmail'],
+      requires_credentials: ['twilio-voice'],
       _source: 'skill-bundle',
       _editable: true,
       _edited: false,
@@ -304,16 +304,17 @@ function templateRow(overrides = {}) {
     createdat: '1760000000',
     updatedat: '1760000000',
     tiers: PLAN_TIERS,
-    skills: ['int-instagram-post', 'util-chat-markdown-reporting'],
+    skills: ['util-voice-receptionist', 'util-chat-markdown-reporting'],
     skillsmeta: {
-      'int-instagram-post': {
-        title: 'Instagram Post',
-        description: 'Posts to Instagram',
+      'util-voice-receptionist': {
+        title: 'Voice Receptionist',
+        description: 'Answers phone calls',
         requires_credentials: true,
-        credential_key: 'instagram',
+        credential_key: 'twilio-voice',
         icon: 'https://cdn.example/icon.svg',
       },
     },
+    suggestedconnectors: ['instagram', 'meta-ads', 'Not A Slug'],
     tokenRates: {
       default_model: 'openai/gpt-5.6-sol',
       models: {
@@ -331,20 +332,19 @@ function templateRow(overrides = {}) {
     }],
     extracreditpacks: [],
     credentials: {
-      instagram: {
+      'twilio-voice': {
         optional: false,
         extra: false,
-        authmethod: 'wiro',
-        appid: 'preset-app-id-value',
-        _editable: { appid: true, accesstoken: false },
+        accountsid: 'preset-app-id-value',
+        _editable: { accountsid: true, authtoken: true, webhookstatus: false },
         _schema: {
-          title: 'Instagram',
-          credential_mode: 'oauth',
-          connection_modes: ['wiro', 'own'],
-          oauth_provider: { auth_method_value: 'oauth', oauth_flow: { authorize_url: 'https://example.com/authorize' } },
+          title: 'Twilio Voice',
+          credential_mode: 'api_key',
+          oauth_provider: null,
           fields: [
-            { key: 'appid', label: 'App ID', type: 'text', required: true, only_in_modes: ['own'] },
-            { key: 'accesstoken', label: 'Access token', type: 'password', required: true, auto_filled_by_oauth: true },
+            { key: 'accountsid', label: 'Account SID', type: 'text', required: true },
+            { key: 'authtoken', label: 'Auth Token', type: 'password', required: true },
+            { key: 'webhookstatus', label: 'Webhook status', type: 'text', required: false, server_managed: true },
           ],
         },
       },
@@ -409,30 +409,20 @@ test('only known refusals count as nothing charged after a paid request', () => 
 
 test('next steps carry every argument the next tool needs', () => {
   const agent = toAgentDetail(agentRow());
-  assert.deepEqual(nextStepForAgent(agent, 45).arguments, { agent_guid: 'ua-1', credential: 'gmail' });
-  const oauth = toAgentDetail(agentRow({
+  assert.deepEqual(nextStepForAgent(agent, 45), {
+    tool: 'set_agent_credentials',
+    arguments: { agent_guid: 'ua-1', credential: 'twilio-voice' },
+    reason: 'Provide the missing credentials (twilio-voice). This lists the Twilio Voice fields to ask the user for.',
+  });
+  const project = toAgentDetail(agentRow({
     credentials: {
-      instagram: { optional: false, _connected: false, _filled: false, _required_missing: true, _schema: { title: 'Instagram', oauth_provider: { oauth_flow: {} } } },
+      wiro: { optional: false, _connected: false, _filled: false, _required_missing: true, _schema: { title: 'Wiro AI Models' } },
     },
   }));
-  assert.deepEqual(nextStepForAgent(oauth, 45), {
-    tool: 'connect_agent_oauth',
-    arguments: { action: 'connect', agent_guid: 'ua-1', credential: 'instagram' },
-    reason: 'Provide the missing credentials (instagram). This starts with Instagram, which the user connects by signing in.',
-  });
+  assert.equal(nextStepForAgent(project, 45).tool, 'bind_agent_project');
+  assert.deepEqual(nextStepForAgent(project, 45).arguments, { agent_guid: 'ua-1' });
   // A running agent needs the user's own message, so no call is suggested.
   assert.equal(nextStepForAgent(toAgentDetail(agentRow({ credentials: {} })), 45), undefined);
-});
-
-test('a required OAuth credential that is saved but not connected still counts as missing', () => {
-  const shop = { optional: false, _connected: false, _filled: true, _required_missing: false, _schema: { title: 'Shopify', oauth_provider: { oauth_flow: {} } } };
-  const later = { optional: true, _connected: false, _filled: false, _required_missing: false, _schema: { title: 'Slack', oauth_provider: { oauth_flow: {} } } };
-  const agent = toAgentDetail(agentRow({ status: 6, setuprequired: true, credentials: { shopify: shop, slack: later } }));
-  assert.deepEqual(agent.missingCredentials, [{ key: 'shopify', title: 'Shopify', oauth: true }]);
-  assert.equal(nextStepForAgent(agent, 45).tool, 'connect_agent_oauth');
-  assert.deepEqual(nextStepForAgent(agent, 45).arguments, { action: 'connect', agent_guid: 'ua-1', credential: 'shopify' });
-  const connected = toAgentDetail(agentRow({ credentials: { shopify: { ...shop, _connected: true } } }));
-  assert.deepEqual(connected.missingCredentials, []);
 });
 
 test('status labels, html cleanup and custom skill keys follow the server rules', () => {
@@ -455,8 +445,8 @@ test('the detail sanitizer keeps states and drops every value and id', () => {
   assertNoSecrets(agent);
   assert.equal(agent.statusLabel, 'running');
   assert.equal(agent.workspace, 'personal');
-  assert.deepEqual(agent.missingCredentials, [{ key: 'gmail', title: 'Gmail', oauth: false }]);
-  assert.deepEqual(agent.credentials.map(item => item.key), ['gmail']);
+  assert.deepEqual(agent.missingCredentials, [{ key: 'twilio-voice', title: 'Twilio Voice' }]);
+  assert.deepEqual(agent.credentials.map(item => item.key), ['twilio-voice']);
   assert.equal(agent.channels[0].enabled, true);
   assert.equal(agent.customInstructions[0].instructionsTruncated, true);
   assert.ok(agent.customInstructions[0].instructions.length <= 303);
@@ -512,14 +502,16 @@ test('get_agent_template returns what to ask for without preset values', async (
     assert.notEqual(result.isError, true);
     assert.deepEqual(fake.calls[0].body, { slug: 'instagram-manager' });
     const template = result.structuredContent.template;
-    assert.deepEqual(template.requiredCredentials.map(item => item.key), ['instagram']);
-    assert.equal(template.requiredCredentials[0].oauth, true);
-    assert.deepEqual(template.requiredCredentials[0].connectionModes, ['wiro', 'own']);
-    assert.match(textOf(result), /list_agent_skills with its key shows which, so tell the user before deploying/);
+    assert.deepEqual(template.requiredCredentials.map(item => item.key), ['twilio-voice']);
+    for (const key of ['oauth', 'connectionModes']) assert.equal(key in template.requiredCredentials[0], false, key);
+    // The connectors it suggests, by slug; a value that is no slug is left out.
+    assert.deepEqual(template.suggestedConnectors, ['instagram', 'meta-ads']);
+    assert.match(textOf(result), /### Connectors it suggests\n\n`instagram`, `meta-ads`\. None is connected by the deploy: connect each one afterwards with connect_agent_connector\. list_agent_connectors with a slug shows how it connects \(a key, a sign-in or a Wiro project\) and what the user provides, so tell the user before deploying\./);
+    assert.match(textOf(result), /^- Twilio Voice \(`twilio-voice`\): Account SID, Auth Token; set with set_agent_credentials$/m);
     assert.match(textOf(result), /Credits pay for the agent's chat and scheduled tasks \(100 credits = 1 USD\)\. Model runs it starts, for images, videos or voice calls, are billed to the wallet of the workspace that owns the Wiro project connected to the agent\./);
-    assert.deepEqual(template.requiredCredentials[0].fields.map(field => field.key), ['appid']);
+    assert.deepEqual(template.requiredCredentials[0].fields.map(field => field.key), ['accountsid', 'authtoken']);
     assert.deepEqual(template.optionalCredentials.map(item => item.key), ['var-website']);
-    assert.equal(template.skills[0].credentialKey, 'instagram');
+    assert.equal(template.skills[0].credentialKey, 'twilio-voice');
     assert.deepEqual(template.models.selectable.map(model => model.slug), ['openai/gpt-5.6-sol']);
     assert.equal(template.models.selectable[0].inputCreditsPer1M, 625);
     assert.ok(textOf(result).split('\n').includes('**Chat models:** default GPT-5.6 Sol. Models it can use, in credits per 1M input and output tokens: GPT-5.6 Sol (openai/gpt-5.6-sol) 625 and 3,750.'), textOf(result));
@@ -533,16 +525,6 @@ test('get_agent_template returns what to ask for without preset values', async (
       arguments: { template: 'instagram-manager', tier: 'starter' },
       reason: 'Get the exact deployment quote. Nothing is charged until the user approves and the call is repeated with confirm: true.',
     });
-  });
-});
-
-test('get_agent_template leaves out a Wiro sign-in that the registry marks pending', async () => {
-  const row = templateRow();
-  row.credentials.instagram._schema = { ...row.credentials.instagram._schema, wiro_connect_pending: true };
-  const fake = fakeClient({ '/Agent/Detail': { result: true, errors: [], agents: [row] } });
-  await withClient(fake, async client => {
-    const result = await call(client, 'get_agent_template', { template: 'instagram-manager' });
-    assert.deepEqual(result.structuredContent.template.requiredCredentials[0].connectionModes, ['own']);
   });
 });
 
@@ -580,7 +562,7 @@ test('get_agent_template looks a guid up by guid, asks for tasks when told to an
       '- Approval Policy (`cs-approval-policy`) on: `Approval policy: how the agent should gate publish/send/modify actions before executing them.`',
       '- Adjust Strategy (`cs-adjust-strategy`) off: `Adjust attribution strategy`',
       '',
-      'A task or instruction that needs a credential switches on when that credential is saved.',
+      'A task or instruction that needs a credential switches on when that credential is saved, and one that needs a connector runs once it is connected.',
     ].join('\n');
     assert.equal(textOf(result), textOf(plain).replace('\n\n### About\n', `\n\n${sections}\n\n### About\n`));
   });
@@ -593,12 +575,12 @@ test('get_agent_template looks a guid up by guid, asks for tasks when told to an
 });
 
 test('get_agent_template names each skill by its title, with the name it takes', async () => {
-  const row = templateRow({ skillsmeta: { 'int-instagram-post': { title: 'Instagram Publisher', description: 'Posts to Instagram', requires_credentials: true, credential_key: 'instagram' } } });
+  const row = templateRow({ skillsmeta: { 'util-voice-receptionist': { title: 'Phone Receptionist', description: 'Answers phone calls', requires_credentials: true, credential_key: 'twilio-voice' } } });
   await withClient(fakeClient({ '/Agent/Detail': { result: true, errors: [], agents: [row] } }), async client => {
     const result = await call(client, 'get_agent_template', { template: 'instagram-manager' });
     assert.notEqual(result.isError, true, textOf(result));
-    // The template's title, not the words made from the name (Instagram Post); a skill without one reads as those words.
-    assert.match(textOf(result), /^\*\*Skills:\*\* Instagram Publisher \(`int-instagram-post`\), Chat Markdown Reporting \(`util-chat-markdown-reporting`\)$/m);
+    // The template's title, not the words made from the name (Voice Receptionist); a skill without one reads as those words.
+    assert.match(textOf(result), /^\*\*Skills:\*\* Phone Receptionist \(`util-voice-receptionist`\), Chat Markdown Reporting \(`util-chat-markdown-reporting`\)$/m);
   });
 });
 
@@ -644,83 +626,85 @@ test('list_agent_skills hides deprecated skills and lists channels', async () =>
       errors: [],
       total: 2,
       skills: [
-        { name: 'int-gmail-check', title: 'Gmail Check', category: 'int', requires_credentials: true, credential_key: 'gmail', depends_on: ['util-chat-markdown-reporting'], conflicts_with: [], capabilities: [], deprecated: false, icon: 'x.svg', pricing: { billing_model: 'tokens', monthly_price_weight_usd: 1, monthly_credits_weight: 100 } },
-        { name: 'int-old', title: 'Old', category: 'int', deprecated: true, replacement: 'int-new', pricing: {} },
+        { name: 'util-voice-receptionist', title: 'Voice Receptionist', category: 'util', requires_credentials: true, credential_key: 'twilio-voice', depends_on: ['util-chat-markdown-reporting'], conflicts_with: [], capabilities: [], deprecated: false, icon: 'x.svg', pricing: { billing_model: 'tokens', monthly_price_weight_usd: 1, monthly_credits_weight: 100 } },
+        { name: 'util-old', title: 'Old', category: 'util', deprecated: true, replacement: 'util-new', pricing: {} },
       ],
       channels: [{ id: 'telegram', title: 'Telegram', credential_key: 'telegram', required_fields: ['bottoken', 'allowedusers'], credential: { credential_schema: [{ help: '<p>long</p>' }] } }],
     },
   });
   await withClient(fake, async client => {
-    const result = await call(client, 'list_agent_skills', { category: 'int' });
-    assert.deepEqual(fake.calls[0].body, { category: 'int' });
-    assert.deepEqual(result.structuredContent.skills.map(skill => skill.name), ['int-gmail-check']);
+    const result = await call(client, 'list_agent_skills', {});
+    assert.deepEqual(fake.calls[0].body, {});
+    assert.deepEqual(result.structuredContent.skills.map(skill => skill.name), ['util-voice-receptionist']);
     // Every plan includes every skill, so a skill has no price of its own.
     assert.equal('monthlyPriceUsd' in result.structuredContent.skills[0], false);
     assert.equal('monthlyCredits' in result.structuredContent.skills[0], false);
-    assert.match(textOf(result), /^- \*\*Gmail Check\*\* \(`int-gmail-check`\): needs `gmail`$/m);
+    assert.match(textOf(result), /^- \*\*Voice Receptionist\*\* \(`util-voice-receptionist`\): needs `twilio-voice`$/m);
+    assert.match(textOf(result), /^Outside services are Connectors: list_agent_connectors lists them\.$/m);
     assert.doesNotMatch(textOf(result), /per month|\bfree\b|\$\d/);
-    assert.equal(result.structuredContent.pricingNote, 'Every plan (Starter, Pro or Max) includes every skill, so skills do not change an agent\'s price: a custom build costs its plan\'s price, and turning a skill on or off later costs nothing. A skill\'s work uses the agent\'s credits, and model runs it starts are billed to the wallet of the workspace that owns the Wiro project connected to the agent. deploy_agent returns the exact quote before anything is charged.');
+    assert.equal(result.structuredContent.pricingNote, 'Every plan (Starter, Pro or Max) includes every skill and connector, so neither changes an agent\'s price: a custom build costs its plan\'s price, and turning a skill on or off later costs nothing. A skill\'s work uses the agent\'s credits, and model runs it starts are billed to the wallet of the workspace that owns the Wiro project connected to the agent. deploy_agent returns the exact quote before anything is charged.');
     assert.deepEqual(result.structuredContent.channels[0].requiredFields, ['bottoken', 'allowedusers']);
     assert.equal(JSON.stringify(result.structuredContent).includes('credential_schema'), false);
-    assert.deepEqual(result.structuredContent.nextAction.arguments, { name: 'int-gmail-check' });
+    assert.deepEqual(result.structuredContent.nextAction.arguments, { name: 'util-voice-receptionist' });
+    // Skills have no category to pick any more: every one is a Skill, and services are Connectors.
+    const category = await call(client, 'list_agent_skills', { category: 'int' });
+    assert.equal(category.isError, true);
+    assert.match(textOf(category), /Unknown argument `category`\. This tool takes `name`, `capability`, `include_capabilities`, `include_deprecated`\./);
   });
 });
 
 test('list_agent_skills with a name returns the setup fields of every credential the skill needs', async () => {
   const credentials = {
-    'google-ads': {
-      key: 'google-ads',
-      title: 'Google Ads',
-      credential_mode: 'oauth',
-      connection_modes: ['wiro', 'own'],
-      wiro_connect_pending: true,
-      oauth_provider: { oauth_flow: { authorize_url: 'https://accounts.example/authorize', token_exchange: {} } },
+    'twilio-voice': {
+      key: 'twilio-voice',
+      title: 'Twilio Voice',
+      credential_mode: 'api_key',
+      connection_modes: [],
+      oauth_provider: null,
       credential_schema: [
-        { key: 'clientid', label: 'OAuth Client ID', type: 'text', required: true, only_in_modes: ['own'], help: '<ol><li>Open <a href="https://console.cloud.google.com/">Google Cloud Console</a></li></ol>' },
-        { key: 'accesstoken', label: 'Access token', type: 'password', required: false, auto_filled_by_oauth: true },
+        { key: 'accountsid', label: 'Account SID', type: 'text', required: true, help: '<ol><li>Open the <a href="https://console.twilio.com/">Twilio Console</a></li></ol>' },
+        { key: 'webhookstatus', label: 'Webhook status', type: 'text', required: false, server_managed: true },
       ],
-      used_by_skills: ['int-googleads-manage'],
+      used_by_skills: ['util-voice-receptionist'],
     },
-    'google-merchant-center': {
-      key: 'google-merchant-center',
-      title: 'Merchant Center',
-      credential_mode: 'oauth',
-      connection_modes: ['own'],
-      oauth_provider: {},
-      credential_schema: [],
+    wiro: {
+      key: 'wiro',
+      title: 'Wiro AI Models',
+      credential_mode: 'api_key',
+      connection_modes: [],
+      oauth_provider: null,
+      credential_schema: [{ key: 'apikey', label: 'Wiro Project', type: 'custom:wiro-project-picker', required: true, help: '<p>Pick a project.</p>' }],
     },
   };
   const fake = fakeClient({
     '/Skills/Detail': {
       result: true,
       errors: [],
-      skill: { name: 'int-googleads-manage', title: 'Google Ads', requires_credentials: true, credential_key: 'google-ads', additional_credential_keys: ['google-merchant-center', 'sys-example'], depends_on: [], conflicts_with: [], pricing: { monthly_price_weight_usd: 3, monthly_credits_weight: 300 } },
+      skill: { name: 'util-voice-receptionist', title: 'Voice Receptionist', requires_credentials: true, credential_key: 'twilio-voice', additional_credential_keys: ['wiro', 'sys-example'], depends_on: [], conflicts_with: [], pricing: { monthly_price_weight_usd: 3, monthly_credits_weight: 300 } },
     },
     '/Credentials/Detail': body => (credentials[body.key]
       ? { result: true, errors: [], credential: credentials[body.key] }
       : { result: false, errors: [{ code: 404, message: 'Credential not found' }] }),
   });
   await withClient(fake, async client => {
-    const result = await call(client, 'list_agent_skills', { name: 'int-googleads-manage' });
+    const result = await call(client, 'list_agent_skills', { name: 'util-voice-receptionist' });
     assert.notEqual(result.isError, true);
-    assert.deepEqual(fake.called('/Credentials/Detail').map(item => item.body.key), ['google-ads', 'google-merchant-center']);
+    assert.deepEqual(fake.called('/Credentials/Detail').map(item => item.body.key), ['twilio-voice', 'wiro']);
     const [primary, additional] = result.structuredContent.setup.credentials;
     assert.equal(primary.role, 'primary');
-    assert.equal(primary.oauth, true);
-    assert.equal(primary.wiroConnectAvailable, false);
-    assert.deepEqual(primary.connectionModes, ['own']);
-    assert.equal(primary.fields[0].help, '- Open Google Cloud Console (https://console.cloud.google.com/)');
+    for (const key of ['oauth', 'connectionModes', 'wiroConnectAvailable']) assert.equal(key in primary, false, key);
+    assert.equal(primary.fields[0].help, '- Open the Twilio Console (https://console.twilio.com/)');
     assert.equal(primary.fields[1].writable, false);
     assert.equal(additional.role, 'additional');
-    assert.equal(JSON.stringify(result).includes('authorize'), false);
-    const googleAds = textOf(result).split('### Google Ads (`google-ads`, primary)')[1].split('### Merchant Center')[0];
-    assert.match(googleAds, /How it connects \(connect_agent_oauth or set_agent_credentials\):\n- \*\*own\*\*: Use your own Google Ads app: save its keys with set_agent_credentials, then connect with mode own and sign in\. Fields: clientid\.\n/);
-    assert.doesNotMatch(googleAds, /\*\*wiro\*\*|Connection modes/);
+    // The project field's own help describes the dashboard's picker, so the project note stands in for it.
+    assert.equal(additional.fields[0].help, undefined);
+    assert.match(additional.note, /^Connect a Wiro project with bind_agent_project/);
+    assert.doesNotMatch(textOf(result), /How it connects|connect_agent_oauth/);
   });
 });
 
 test('list_agent_skills names the skills a skill turns on with it by their titles', async () => {
-  const skill = { name: 'int-metaads-manage', title: 'Meta Ads Manager', requires_credentials: false, depends_on: ['util-ads-manager-common', 'util-chat-markdown-reporting'], conflicts_with: [], pricing: {} };
+  const skill = { name: 'util-ads-reporter', title: 'Ads Reporter', requires_credentials: false, depends_on: ['util-ads-manager-common', 'util-chat-markdown-reporting'], conflicts_with: [], pricing: {} };
   const catalog = { result: true, errors: [], skills: [skill, { name: 'util-ads-manager-common', title: 'Ads Manager Toolkit', depends_on: [], requires_credentials: false, pricing: {} }], channels: [] };
   for (const [list, expected] of [
     // The catalog's titles, not the words made from the names (Ads Manager Common); one without a title reads as those words.
@@ -729,167 +713,100 @@ test('list_agent_skills names the skills a skill turns on with it by their title
     [{ result: false, errors: [{ code: 0, message: 'Busy' }] }, 'Also enables: Ads Manager Common (`util-ads-manager-common`), Chat Markdown Reporting (`util-chat-markdown-reporting`)'],
   ]) {
     await withClient(fakeClient({ '/Skills/Detail': { result: true, errors: [], skill }, '/Skills/List': list }), async client => {
-      const result = await call(client, 'list_agent_skills', { name: 'int-metaads-manage' });
+      const result = await call(client, 'list_agent_skills', { name: 'util-ads-reporter' });
       assert.notEqual(result.isError, true, textOf(result));
       assert.ok(textOf(result).split('\n').includes(expected), textOf(result));
     });
   }
 });
 
-test('list_agent_skills lists only the ways a service can connect, with what each one needs', async () => {
-  const credentials = {
-    youtube: {
-      key: 'youtube',
-      title: 'YouTube',
-      credential_mode: 'oauth',
-      connection_modes: ['wiro', 'own'],
-      wiro_connect_pending: true,
-      oauth_provider: { oauth_flow: { callback_path: '/UserAgentOAuth/YTCallback' } },
-      credential_schema: [
-        { key: 'clientid', label: 'OAuth Client ID', type: 'text', required: true, oauth_managed: true, only_in_modes: ['own'] },
-        { key: 'clientsecret', label: 'OAuth Client Secret', type: 'password', required: true, encrypted: true, oauth_managed: true, only_in_modes: ['own'] },
-        { key: 'channelid', label: 'YouTube Channel ID', type: 'text', required: true, auto_filled_by_oauth: true },
-      ],
-    },
-    hubspot: {
-      key: 'hubspot',
-      title: 'HubSpot',
-      credential_mode: 'oauth',
-      connection_modes: ['wiro', 'own'],
-      wiro_connect_pending: false,
-      oauth_provider: { oauth_flow: { callback_path: '/UserAgentOAuth/HubSpotCallback' } },
-      credential_schema: [
-        { key: 'clientid', label: 'Client ID', type: 'text', required: true, oauth_managed: true, only_in_modes: ['own'] },
-        { key: 'clientsecret', label: 'Client Secret', type: 'password', required: true, encrypted: true, oauth_managed: true, only_in_modes: ['own'] },
-      ],
-    },
-    // An api_key mode without a token check has no connect step.
-    mailchimp: {
-      key: 'mailchimp',
-      title: 'Mailchimp',
-      credential_mode: 'hybrid',
-      connection_modes: ['wiro', 'own', 'api_key'],
-      wiro_connect_pending: false,
-      oauth_provider: { oauth_flow: { callback_path: '/UserAgentOAuth/MailchimpCallback' } },
-      credential_schema: [
-        { key: 'clientid', label: 'Client ID', type: 'text', required: false, oauth_managed: true, only_in_modes: ['own'] },
-        { key: 'clientsecret', label: 'Client Secret', type: 'password', required: false, encrypted: true, oauth_managed: true, only_in_modes: ['own'] },
-        { key: 'apikey', label: 'API Key (alternative)', type: 'password', required: false, encrypted: true, only_in_modes: ['api_key'] },
-      ],
-    },
-  };
+test('list_agent_skills points an outside service to the connector tools', async () => {
   const fake = fakeClient({
     '/Skills/Detail': { result: false, errors: [{ code: 404, message: 'Skill not found' }] },
-    '/Credentials/Detail': body => ({ result: true, errors: [], credential: credentials[body.key] }),
+    '/Credentials/Detail': { result: false, errors: [{ code: 404, message: 'Credential not found' }] },
+    '/AgentConnector/Detail': body => (body.slug === 'hubspot'
+      ? { result: true, errors: [], agentconnectors: [{ slug: 'hubspot', title: 'HubSpot', authtype: 'provider-oauth', transport: 'local' }] }
+      : { result: false, errors: [{ code: 0, message: 'Connector not found.' }] }),
   });
   await withClient(fake, async client => {
-    const youtube = await call(client, 'list_agent_skills', { name: 'youtube' });
-    assert.notEqual(youtube.isError, true, textOf(youtube));
-    assert.match(textOf(youtube), /- \*\*own\*\*: Use your own YouTube app: save its keys with set_agent_credentials and allow https:\/\/api\.wiro\.ai\/v1\/UserAgentOAuth\/YTCallback as a redirect URI in the app, then connect with mode own and sign in\. Fields: clientid, clientsecret\./);
-    assert.doesNotMatch(textOf(youtube), /\*\*wiro\*\*/);
-    assert.deepEqual(youtube.structuredContent.setup.credentials[0].connectionModes, ['own']);
-    assert.equal(youtube.structuredContent.setup.credentials[0].wiroConnectAvailable, false);
-
     const hubspot = await call(client, 'list_agent_skills', { name: 'hubspot' });
-    assert.match(textOf(hubspot), /- \*\*wiro\*\*: Sign in through Wiro's own HubSpot app\. Nothing to set up first\.\n- \*\*own\*\*: Use your own HubSpot app/);
-    assert.deepEqual(hubspot.structuredContent.setup.credentials[0].connectionModes, ['wiro', 'own']);
-    assert.equal(hubspot.structuredContent.setup.credentials[0].wiroConnectAvailable, true);
-
-    const mailchimp = await call(client, 'list_agent_skills', { name: 'mailchimp' });
-    assert.match(textOf(mailchimp), /- \*\*api_key\*\*: Save these fields with set_agent_credentials together with authmethod api_key\. There is no sign-in or connect step for this mode\. Fields: apikey\./);
+    assert.equal(hubspot.isError, true);
+    assert.equal(textOf(hubspot), '## Error\n\nHubSpot is a Connector, not a skill: list_agent_connectors with name "hubspot" shows how it connects, and connect_agent_connector connects it.');
+    const unknown = await call(client, 'list_agent_skills', { name: 'no-such-thing' });
+    assert.equal(textOf(unknown), '## Error\n\nNo skill or credential is named "no-such-thing". Call list_agent_skills without name to see every skill, or list_agent_connectors for the outside services.');
   });
 });
 
 test('list_agent_skills and set_agent_credentials show a field\'s setup help in full, last step included', async () => {
-  const lastStep = 'Finally, share the calendars you want the agent to read with the service account email and give it permission to make changes to events.';
-  const help = `${'Create a service account in Google Cloud, enable the Calendar API and download its JSON key. '.repeat(7)}${lastStep}`;
+  const lastStep = 'Finally, set the phone number\'s Voice webhook to the address the agent page shows, and save it.';
+  const help = `${'Open the Twilio Console, buy or pick a phone number with voice enabled and copy its number in E.164 form. '.repeat(6)}${lastStep}`;
   assert.ok(help.length > 600);
-  const calendar = {
-    key: 'google-calendar',
-    title: 'Google Calendar',
-    credential_mode: 'fields',
+  const twilio = {
+    key: 'twilio-voice',
+    title: 'Twilio Voice',
+    credential_mode: 'api_key',
     credential_schema: [
-      { key: 'serviceaccountjson', label: 'Service Account JSON', type: 'fileinput-base64', required: true, filetypes: ['application/json'], help },
-      { key: 'calendarid', label: 'Calendar ID', type: 'text', required: true },
-      { key: 'timezone', label: 'Time zone', type: 'text', required: false },
+      { key: 'accountsid', label: 'Account SID', type: 'text', required: true },
+      { key: 'phonenumbers', label: 'Phone Numbers', type: 'string-array', required: true, help },
     ],
   };
   const fake = fakeClient({
     '/Skills/Detail': { result: false, errors: [{ code: 404, message: 'Skill not found' }] },
-    '/Credentials/Detail': { result: true, errors: [], credential: calendar },
+    '/Credentials/Detail': { result: true, errors: [], credential: twilio },
     '/UserAgent/Detail': detailResponse(agentRow()),
   });
   await withClient(fake, async client => {
-    const listed = await call(client, 'list_agent_skills', { name: 'google-calendar' });
+    const listed = await call(client, 'list_agent_skills', { name: 'twilio-voice' });
     assert.notEqual(listed.isError, true, textOf(listed));
     assert.ok(textOf(listed).includes(lastStep), textOf(listed));
 
-    const described = await call(client, 'set_agent_credentials', { agent_guid: 'ua-1', credential: 'google-calendar' });
+    const described = await call(client, 'set_agent_credentials', { agent_guid: 'ua-1', credential: 'twilio-voice' });
     assert.notEqual(described.isError, true, textOf(described));
     assert.ok(textOf(described).includes(lastStep), textOf(described));
-
-    const playbook = await call(client, 'get_playbook', { topics: ['agents'] });
-    assert.match(textOf(playbook), /The user also shares the calendar with the service account's email, with permission to make changes to events/);
-    assert.match(textOf(playbook), /Save the calendar's time zone too, such as Europe\/Berlin: without one, free times and new events use UTC\./);
   });
 });
 
-test('list_agent_skills lists the keys of a list\'s entries and of a list inside an entry', async () => {
-  const firebase = {
-    key: 'firebase',
-    title: 'Firebase',
-    credential_mode: 'sa',
+test('list_agent_skills lists the keys of a list\'s entries', async () => {
+  const website = {
+    key: 'var-website',
+    title: 'Website',
+    credential_mode: 'static',
     connection_modes: [],
-    wiro_connect_pending: false,
     oauth_provider: null,
     credential_schema: [{
-      key: 'accounts',
-      type: 'custom:firebase-accounts-list',
-      label: 'Firebase Accounts',
-      required: true,
+      key: 'urls',
+      type: 'custom:urls-list',
+      label: 'Websites',
+      required: false,
       custom_component_config: {
-        max_accounts: 10,
-        per_account_schema: [
-          { key: 'appname', type: 'text', label: 'App Name', required: true, help: '<p>A friendly label that identifies this Firebase project.</p>' },
-          { key: 'serviceaccountjson', type: 'fileinput-base64', label: 'Service Account JSON', required: true, encrypted: true, filetypes: ['application/json'] },
-          {
-            key: 'apps',
-            type: 'array',
-            label: 'Apps',
-            required: false,
-            item_type: 'object',
-            item_schema: [
-              { key: 'platform', type: 'select', label: 'Platform', required: true, options: [{ value: 'ios', text: 'iOS' }, { value: 'android', text: 'Android' }] },
-              { key: 'id', type: 'text', label: 'App ID', required: true, help: '<p>The Android package name or the numeric Apple ID of the app.</p>' },
-            ],
-            help: '<p>The mobile apps registered under this Firebase project.</p>',
-          },
+        max_urls: 10,
+        per_url_schema: [
+          { key: 'websitename', type: 'text', label: 'Website Name', required: true, help: '<p>A friendly label used when the agent refers to this site.</p>' },
+          { key: 'url', type: 'url', label: 'URL', required: true },
+          { key: 'kind', type: 'select', label: 'Kind', required: false, options: [{ value: 'main', text: 'Main site' }, { value: 'docs', text: 'Docs' }] },
         ],
       },
     }],
   };
   const fake = fakeClient({
     '/Skills/Detail': { result: false, errors: [{ code: 404, message: 'Skill not found' }] },
-    '/Credentials/Detail': { result: true, errors: [], credential: firebase },
+    '/Credentials/Detail': { result: true, errors: [], credential: website },
   });
   await withClient(fake, async client => {
-    const result = await call(client, 'list_agent_skills', { name: 'firebase' });
+    const result = await call(client, 'list_agent_skills', { name: 'var-website' });
     assert.notEqual(result.isError, true, textOf(result));
     assert.ok(textOf(result).includes([
-      '- **Firebase Accounts** (`accounts`, required, custom:firebase-accounts-list)',
+      '- **Websites** (`urls`, optional, custom:urls-list)',
       '  Each entry:',
-      '  - **App Name** (`appname`, required, text): A friendly label that identifies this Firebase project.',
-      '  - **Service Account JSON** (`serviceaccountjson`, required, fileinput-base64)',
-      '  - **Apps** (`apps`, optional, array): The mobile apps registered under this Firebase project.',
-      '    Each entry:',
-      '    - **Platform** (`platform`, required, select, one of: ios, android)',
-      '    - **App ID** (`id`, required, text): The Android package name or the numeric Apple ID of the app.',
+      '  - **Website Name** (`websitename`, required, text): A friendly label used when the agent refers to this site.',
+      '  - **URL** (`url`, required, url)',
+      '  - **Kind** (`kind`, optional, select, one of: main, docs)',
     ].join('\n')), textOf(result));
-    const [accounts] = result.structuredContent.setup.credentials[0].fields;
-    assert.deepEqual(accounts.itemFields.map(item => item.key), ['appname', 'serviceaccountjson', 'apps']);
-    assert.deepEqual(accounts.itemFields[2].itemFields, [
-      { key: 'platform', label: 'Platform', type: 'select', required: true, options: [{ value: 'ios', label: 'iOS' }, { value: 'android', label: 'Android' }] },
-      { key: 'id', label: 'App ID', type: 'text', required: true, help: 'The Android package name or the numeric Apple ID of the app.' },
+    const [urls] = result.structuredContent.setup.credentials[0].fields;
+    assert.deepEqual(urls.itemFields, [
+      { key: 'websitename', label: 'Website Name', type: 'text', required: true, help: 'A friendly label used when the agent refers to this site.' },
+      { key: 'url', label: 'URL', type: 'url', required: true },
+      { key: 'kind', label: 'Kind', type: 'select', required: false, options: [{ value: 'main', label: 'Main site' }, { value: 'docs', label: 'Docs' }] },
     ]);
   });
 });
@@ -943,14 +860,15 @@ test('deploy_agent quotes a template without deploying or echoing credentials', 
     assert.equal(content.quote.monthlyCredits, 3000);
     assert.deepEqual(content.quote.pricing, PLAN_PRICING);
     assert.equal(content.quote.title, 'Instagram Manager');
-    assert.deepEqual(content.quote.credentialsNeeded, [{ key: 'instagram', title: 'Instagram' }]);
+    assert.deepEqual(content.quote.credentialsNeeded, [{ key: 'twilio-voice', title: 'Twilio Voice' }]);
+    assert.deepEqual(content.quote.connectorsSuggested, ['instagram', 'meta-ads']);
     assert.equal(content.nextAction.tool, 'deploy_agent');
     assert.equal(content.nextAction.arguments.confirm, true);
     assert.equal(content.nextAction.arguments.credentials, undefined);
     assert.match(content.nextAction.reason, /^Ask the user to approve this charge first\./);
     assert.match(textOf(result), /^- Plan: Pro$/m);
     assert.match(textOf(result), /\$30\.00 now, then \$30\.00 every 30 days/);
-    assert.match(textOf(result), /^- Other plans: Starter \$5 \(500 credits\), Max \$100 \(10,000 credits\) per month\. Every plan includes every skill, and any plan can buy extra credit packs\.$/m);
+    assert.match(textOf(result), /^- Other plans: Starter \$5 \(500 credits\), Max \$100 \(10,000 credits\) per month\. Every plan includes every skill and connector, and any plan can buy extra credit packs\.$/m);
     assert.match(textOf(result), /Model runs it starts, for images, videos or voice calls, are billed to the wallet of the workspace that owns the Wiro project connected to the agent\./);
     assert.equal(content.quote.paidFrom, 'The Wiro wallet of the connected project\'s workspace: the team wallet for a team project, otherwise the personal wallet.');
     assertNoSecrets(result);
@@ -963,89 +881,89 @@ test('deploy_agent checks custom skills and prices them with a draft preview', a
       result: true,
       errors: [],
       skills: body.name_in
-        .filter(name => name !== 'int-typo')
-        .map(name => ({ name, title: 'Gmail Check', requires_credentials: true, credential_key: 'gmail', deprecated: name === 'int-retired', replacement: 'int-gmail-check', pricing: { monthly_price_weight_usd: 1, monthly_credits_weight: 100 } })),
+        .filter(name => name !== 'util-typo')
+        .map(name => ({ name, title: 'Voice Receptionist', requires_credentials: true, credential_key: 'twilio-voice', deprecated: name === 'util-retired', replacement: 'util-voice-receptionist', pricing: { monthly_price_weight_usd: 1, monthly_credits_weight: 100 } })),
     }),
-    '/UserAgent/PricingPreview': { result: true, errors: [], totalPriceUsd: 4, totalMonthlyCredits: 400, enabledSkills: ['int-gmail-check', 'util-chat-markdown-reporting'], tiers: {} },
+    '/UserAgent/PricingPreview': { result: true, errors: [], totalPriceUsd: 4, totalMonthlyCredits: 400, enabledSkills: ['util-voice-receptionist', 'util-chat-markdown-reporting'], tiers: {} },
   });
   await withClient(fake, async client => {
-    const unknown = await call(client, 'deploy_agent', { custom: true, title: 'Inbox', tier: 'starter', skills: ['int-typo'] });
+    const unknown = await call(client, 'deploy_agent', { custom: true, title: 'Inbox', tier: 'starter', skills: ['util-typo'] });
     assert.equal(unknown.isError, true);
-    assert.match(textOf(unknown), /Unknown skill: int-typo/);
+    assert.match(textOf(unknown), /Unknown skill: util-typo/);
 
-    const retired = await call(client, 'deploy_agent', { custom: true, title: 'Inbox', tier: 'starter', skills: ['int-retired'] });
+    const retired = await call(client, 'deploy_agent', { custom: true, title: 'Inbox', tier: 'starter', skills: ['util-retired'] });
     assert.equal(retired.isError, true);
-    assert.match(textOf(retired), /Gmail Check \(`int-retired`\) \(use Gmail Check \(`int-gmail-check`\)\)/);
+    assert.match(textOf(retired), /Voice Receptionist \(`util-retired`\) \(use Voice Receptionist \(`util-voice-receptionist`\)\)/);
     assert.equal(fake.called('/UserAgent/PricingPreview').length, 0);
 
-    const quote = await call(client, 'deploy_agent', { custom: true, title: 'Inbox', tier: 'starter', skills: ['int-gmail-check'] });
+    const quote = await call(client, 'deploy_agent', { custom: true, title: 'Inbox', tier: 'starter', skills: ['util-voice-receptionist'] });
     assert.notEqual(quote.isError, true);
-    assert.deepEqual(fake.called('/UserAgent/PricingPreview')[0].body, { draft: true, skills: ['int-gmail-check'], tier: 'starter' });
+    assert.deepEqual(fake.called('/UserAgent/PricingPreview')[0].body, { draft: true, skills: ['util-voice-receptionist'], tier: 'starter' });
     assert.equal(quote.structuredContent.quote.kind, 'custom');
     assert.equal(quote.structuredContent.quote.priceUsd, 4);
-    assert.deepEqual(quote.structuredContent.quote.skills, ['int-gmail-check', 'util-chat-markdown-reporting']);
+    assert.deepEqual(quote.structuredContent.quote.skills, ['util-voice-receptionist', 'util-chat-markdown-reporting']);
     assert.equal(fake.called('/UserAgent/Deploy').length, 0);
   });
 });
 
 test('deploy_agent quotes the credentials of every skill in a custom build, dependencies included', async () => {
   const registry = {
-    'int-twilio-channel': { name: 'int-twilio-channel', title: 'Twilio Voice Channel', requires_credentials: true, credential_key: 'twilio-voice', depends_on: ['util-voice-receptionist', 'util-voice-call-prep'], pricing: { monthly_price_weight_usd: 2 } },
-    'util-voice-receptionist': { name: 'util-voice-receptionist', title: 'Voice Receptionist Rules', requires_credentials: false, depends_on: ['int-wiro-aimodels'], pricing: {} },
+    'util-phone-channel': { name: 'util-phone-channel', title: 'Phone Channel', requires_credentials: true, credential_key: 'twilio-voice', depends_on: ['util-voice-receptionist', 'util-voice-call-prep'], pricing: { monthly_price_weight_usd: 2 } },
+    'util-voice-receptionist': { name: 'util-voice-receptionist', title: 'Voice Receptionist Rules', requires_credentials: false, depends_on: ['util-wiro-models'], pricing: {} },
     'util-voice-call-prep': { name: 'util-voice-call-prep', title: 'Voice Call Prep', requires_credentials: false, depends_on: [], pricing: {} },
-    'int-wiro-aimodels': { name: 'int-wiro-aimodels', title: 'Wiro AI Models', requires_credentials: true, credential_key: 'wiro', depends_on: ['util-chat-markdown-reporting'], pricing: {} },
+    'util-wiro-models': { name: 'util-wiro-models', title: 'Wiro AI Models', requires_credentials: true, credential_key: 'wiro', depends_on: ['util-chat-markdown-reporting'], pricing: {} },
     'util-chat-markdown-reporting': { name: 'util-chat-markdown-reporting', title: 'Chat Reporting', requires_credentials: false, depends_on: [], pricing: {} },
   };
-  const closure = ['int-twilio-channel', 'util-voice-receptionist', 'util-voice-call-prep', 'int-wiro-aimodels', 'util-chat-markdown-reporting'];
+  const closure = ['util-phone-channel', 'util-voice-receptionist', 'util-voice-call-prep', 'util-wiro-models', 'util-chat-markdown-reporting'];
   const fake = fakeClient({
     '/Skills/List': body => ({ result: true, errors: [], skills: body.name_in.filter(name => registry[name]).map(name => registry[name]) }),
     '/UserAgent/PricingPreview': { result: true, errors: [], totalPriceUsd: 6, totalMonthlyCredits: 600, enabledSkills: closure },
   });
   await withClient(fake, async client => {
-    const quote = await call(client, 'deploy_agent', { custom: true, title: 'Front desk', tier: 'starter', skills: ['int-twilio-channel'] });
+    const quote = await call(client, 'deploy_agent', { custom: true, title: 'Front desk', tier: 'starter', skills: ['util-phone-channel'] });
     assert.notEqual(quote.isError, true, textOf(quote));
     assert.deepEqual(quote.structuredContent.quote.skills, closure);
     assert.deepEqual(quote.structuredContent.quote.credentialsNeeded, [
-      { key: 'twilio-voice', title: 'Twilio Voice Channel credentials' },
+      { key: 'twilio-voice', title: 'Phone Channel credentials' },
       { key: 'wiro', title: 'Wiro AI Models credentials' },
     ]);
-    assert.match(textOf(quote), /- After deployment the user must provide: Twilio Voice Channel credentials \(`twilio-voice`\), Wiro AI Models credentials \(`wiro`\)\. bind_agent_project connects a project after deployment, with no key to paste\./);
+    assert.match(textOf(quote), /- After deployment the user must provide: Phone Channel credentials \(`twilio-voice`\), Wiro AI Models credentials \(`wiro`\)\. bind_agent_project connects a project after deployment, with no key to paste\./);
     // A voice build's calls run a model billed to the project's wallet, not to the plan.
     assert.match(textOf(quote), /Model runs it starts, for images, videos or voice calls, are billed to the wallet of the workspace that owns the Wiro project connected to the agent\./);
     // The named skills are checked first; the skills they bring are read once the build is known.
-    assert.deepEqual(fake.called('/Skills/List').map(item => item.body.name_in), [['int-twilio-channel'], closure.slice(1)]);
+    assert.deepEqual(fake.called('/Skills/List').map(item => item.body.name_in), [['util-phone-channel'], closure.slice(1)]);
     assert.equal(fake.called('/UserAgent/Deploy').length, 0);
   });
 });
 
 test('deploy_agent asks the user only for credentials the call does not carry', async () => {
   const registry = {
-    'int-gmail-check': { name: 'int-gmail-check', title: 'Gmail Check', requires_credentials: true, credential_key: 'gmail', depends_on: [], pricing: {} },
-    'int-wiro-aimodels': { name: 'int-wiro-aimodels', title: 'Wiro AI Models', requires_credentials: true, credential_key: 'wiro', depends_on: [], pricing: {} },
+    'util-voice-receptionist': { name: 'util-voice-receptionist', title: 'Voice Receptionist', requires_credentials: true, credential_key: 'twilio-voice', depends_on: [], pricing: {} },
+    'util-wiro-models': { name: 'util-wiro-models', title: 'Wiro AI Models', requires_credentials: true, credential_key: 'wiro', depends_on: [], pricing: {} },
   };
   const skills = Object.keys(registry);
   const fake = fakeClient({
     '/Skills/List': body => ({ result: true, errors: [], skills: body.name_in.map(name => registry[name]) }),
     '/UserAgent/PricingPreview': { result: true, errors: [], totalPriceUsd: 4, totalMonthlyCredits: 400, enabledSkills: skills },
   });
-  const gmail = '- Provided in this call: Gmail Check credentials (`gmail`). The deploy result names any still missing.';
+  const gmail = '- Provided in this call: Voice Receptionist credentials (`twilio-voice`). The deploy result names any still missing.';
   const toBind = 'bind_agent_project connects a project after deployment, with no key to paste.';
   await withClient(fake, async client => {
     const args = { custom: true, title: 'Mail', tier: 'starter', skills };
-    const carried = await call(client, 'deploy_agent', { ...args, credentials: { gmail: { account: 'bot@example.test', apppassword: '000000:TEST-BOT-TOKEN' } } });
+    const carried = await call(client, 'deploy_agent', { ...args, credentials: { 'twilio-voice': { accountsid: 'AC-bot-example', authtoken: '000000:TEST-BOT-TOKEN' } } });
     assert.ok(textOf(carried).includes(`- After deployment the user must provide: Wiro AI Models credentials (\`wiro\`). ${toBind}\n${gmail}\n`), textOf(carried));
-    assert.deepEqual(carried.structuredContent.quote.credentialsNeeded.map(item => item.key), ['gmail', 'wiro']);
+    assert.deepEqual(carried.structuredContent.quote.credentialsNeeded.map(item => item.key), ['twilio-voice', 'wiro']);
     assertNoSecrets(carried);
 
-    const both = await call(client, 'deploy_agent', { ...args, credentials: { gmail: { account: 'bot@example.test' }, wiro: { apikey: '000000:TEST-BOT-TOKEN' } } });
+    const both = await call(client, 'deploy_agent', { ...args, credentials: { 'twilio-voice': { accountsid: 'AC-bot-example' }, wiro: { apikey: '000000:TEST-BOT-TOKEN' } } });
     assert.doesNotMatch(textOf(both), /must provide/);
     assert.doesNotMatch(textOf(both), /bind_agent_project/);
-    assert.match(textOf(both), /- Provided in this call: Gmail Check credentials \(`gmail`\), Wiro AI Models credentials \(`wiro`\)\. The deploy result names any still missing\./);
+    assert.match(textOf(both), /- Provided in this call: Voice Receptionist credentials \(`twilio-voice`\), Wiro AI Models credentials \(`wiro`\)\. The deploy result names any still missing\./);
     assertNoSecrets(both);
 
     // An empty group carries nothing.
-    const empty = await call(client, 'deploy_agent', { ...args, credentials: { gmail: {}, wiro: { apikey: ' ' } } });
-    assert.ok(textOf(empty).includes(`- After deployment the user must provide: Gmail Check credentials (\`gmail\`), Wiro AI Models credentials (\`wiro\`). ${toBind}\n`), textOf(empty));
+    const empty = await call(client, 'deploy_agent', { ...args, credentials: { 'twilio-voice': {}, wiro: { apikey: ' ' } } });
+    assert.ok(textOf(empty).includes(`- After deployment the user must provide: Voice Receptionist credentials (\`twilio-voice\`), Wiro AI Models credentials (\`wiro\`). ${toBind}\n`), textOf(empty));
     assert.doesNotMatch(textOf(empty), /Provided in this call/);
   });
 });
@@ -1059,7 +977,7 @@ test('deploy_agent refuses unclear requests before calling Wiro', async () => {
     assert.match(textOf(none), /Pass template/);
     const noTitle = await call(client, 'deploy_agent', { custom: true, tier: 'starter' });
     assert.match(textOf(noTitle), /title is required/);
-    const overlay = await call(client, 'deploy_agent', { template: 'x', tier: 'starter', skills: ['int-gmail-check'] });
+    const overlay = await call(client, 'deploy_agent', { template: 'x', tier: 'starter', skills: ['util-voice-receptionist'] });
     assert.match(textOf(overlay), /apply_agent_skills/);
     const badKey = await call(client, 'deploy_agent', { template: 'x', tier: 'starter', custom_skills: [{ key: 'Bad Key' }] });
     assert.match(textOf(badKey), /not valid/);
@@ -1116,7 +1034,7 @@ test('deploy_agent with confirm pays from the wallet and returns a sanitized age
     assert.equal(content.agent.guid, 'ua-new');
     assert.equal(content.agent.statusLabel, 'queued');
     assert.equal(content.nextAction.tool, 'set_agent_credentials');
-    assert.deepEqual(content.nextAction.arguments, { agent_guid: 'ua-new', credential: 'gmail' });
+    assert.deepEqual(content.nextAction.arguments, { agent_guid: 'ua-new', credential: 'twilio-voice' });
     assert.deepEqual(content.customSkills, [
       { key: 'cs-content-strategy', kind: 'skill', interval: null, enabled: true, onAgent: true },
       { key: 'cs-cron-weekly-report', kind: 'scheduled_task', interval: '0 9 * * 1', enabled: true, onAgent: true },
@@ -1139,7 +1057,7 @@ test('deploy_agent names Wiro\'s own tasks in the words get_my_agent uses, and t
     guid: 'ua-new',
     scheduledskills: [
       { key: 'cs-cron-ga4-attribution-auditor', description: 'Audit', value: 'Audit the tracking.', interval: '0 7 * * 1', enabled: true, _source: 'preset-strategy' },
-      { key: 'cs-cron-metaads-performance-reporter', description: 'Report', value: 'Report the ads.', interval: '0 8 * * *', enabled: true, _source: 'skill-bundle', _owner_skills: ['int-metaads-manage'] },
+      { key: 'cs-cron-metaads-performance-reporter', description: 'Report', value: 'Report the ads.', interval: '0 8 * * *', enabled: true, _source: 'skill-bundle', _owner_skills: ['util-ads-reporter'] },
       { key: 'cs-cron-crm-notes', description: 'Notes', value: 'Write the notes.', interval: '0 9 * * 1', enabled: true, _source: 'user-created' },
     ],
   });
@@ -1391,14 +1309,14 @@ test('deploy_agent reads a channel field Wiro fills as refused before the charge
 // ---------------------------------------------------------------------------
 
 test('list_my_agents pages without a total and strips account data', async () => {
-  const row = agentRow({ enabledSkills: ['int-gmail-check'], skills: undefined, credentials: undefined });
+  const row = agentRow({ enabledSkills: ['util-voice-receptionist'], skills: undefined, credentials: undefined });
   const fake = fakeClient({ '/UserAgent/MyAgents': { result: true, errors: [], useragents: [row, { ...row, guid: 'ua-2' }] } });
   await withClient(fake, async client => {
     const result = await call(client, 'list_my_agents', { limit: 2, sort: 'recently_updated' });
     assert.deepEqual(fake.calls[0].body, { sort: 'updatedat', order: 'DESC', start: 0, limit: 2 });
     const [first] = result.structuredContent.agents;
     assert.equal(first.statusLabel, 'running');
-    assert.deepEqual(first.skills, ['int-gmail-check']);
+    assert.deepEqual(first.skills, ['util-voice-receptionist']);
     assert.equal(first.subscription.billing, 'wallet');
     assert.equal(result.structuredContent.nextStart, 2);
     assertNoSecrets(result);
@@ -1441,7 +1359,7 @@ test('get_my_agent returns the sanitized state and the next step', async () => {
     assert.deepEqual(agent.pricing, PLAN_PRICING);
     assert.equal(agent.tier, 'starter');
     assert.equal(nextAction.tool, 'set_agent_credentials');
-    assert.match(textOf(result), /Gmail \(`gmail`\): missing \(required\)/);
+    assert.match(textOf(result), /Twilio Voice \(`twilio-voice`\): missing \(required\)/);
     assert.match(textOf(result), /\*\*Time zone:\*\* UTC, the default\. Scheduled tasks run in it\./);
     assertNoSecrets(result);
   });
@@ -1452,13 +1370,13 @@ test('get_my_agent counts only the active skills\' credentials as missing on a c
     status: 6,
     setuprequired: true,
     credentials: {
-      instagram: { optional: false, _connected: true, _filled: true, _required_missing: false, _schema: { title: 'Instagram', oauth_provider: { provider: 'instagram' } } },
+      'twilio-voice': { optional: false, _connected: true, _filled: true, _required_missing: false, _schema: { title: 'Twilio Voice' } },
       wiro: { apikey: 'wiro-project-key-value', optional: false, _connected: false, _filled: true, _required_missing: false, _schema: { title: 'Wiro AI Models' } },
-      tiktok: { clientkey: '', clientsecret: '', optional: false, _connected: false, _filled: false, _required_missing: true, _schema: { title: 'TikTok', oauth_provider: { provider: 'tiktok' } } },
+      'var-support-email': { value: '', optional: false, _connected: false, _filled: false, _required_missing: true, _schema: { title: 'Support Email' } },
     },
     skillsmeta: {
-      'int-instagram-post': { title: 'Instagram Post', requires_credentials: true, credential_key: 'instagram' },
-      'int-wiro-models': { title: 'Wiro AI Models', requires_credentials: true, credential_key: 'wiro' },
+      'util-voice-receptionist': { title: 'Voice Receptionist', requires_credentials: true, credential_key: 'twilio-voice' },
+      'util-wiro-models': { title: 'Wiro AI Models', requires_credentials: true, credential_key: 'wiro' },
     },
   });
   row.agent = { ...row.agent, custom: true };
@@ -1466,10 +1384,10 @@ test('get_my_agent counts only the active skills\' credentials as missing on a c
   await withClient(fake, async client => {
     const result = await call(client, 'get_my_agent', { agent_guid: 'ua-1' });
     assert.notEqual(result.isError, true);
-    // TikTok belongs to a skill that is turned off, so it does not hold the setup back.
+    // The support email belongs to a skill that is turned off, so it does not hold the setup back.
     assert.deepEqual(result.structuredContent.agent.missingCredentials, []);
     assert.match(textOf(result), /\*\*Setup required:\*\* yes/);
-    assert.doesNotMatch(textOf(result), /missing TikTok/);
+    assert.doesNotMatch(textOf(result), /missing Support Email/);
     assert.doesNotMatch(JSON.stringify(result), /wiro-project-key-value/);
   });
 });
@@ -1621,7 +1539,7 @@ function skillTask(key, enabled, owners, offSkills) {
   };
 }
 
-const NEWSLETTER_PROVIDERS = ['int-brevo-email', 'int-hubspot-crm', 'int-mailchimp-email', 'int-sendgrid-email'];
+const NEWSLETTER_PROVIDERS = ['util-email-digest', 'util-crm-notes', 'util-mail-merge', 'util-mail-sender'];
 
 /** The skills catalog with the titles people see for the skills a paused task waits for. */
 const TITLED_SKILLS = {
@@ -1629,35 +1547,35 @@ const TITLED_SKILLS = {
   errors: [],
   channels: [],
   skills: [
-    ['int-gmail-check', 'Gmail Check'],
-    ['int-appstore-reviews', 'App Store Reviews'],
-    ['int-googleplay-reviews', 'Google Play Reviews'],
-    ['int-brevo-email', 'Brevo Email'],
-    ['int-hubspot-crm', 'HubSpot CRM'],
-    ['int-mailchimp-email', 'Mailchimp Email'],
-    ['int-sendgrid-email', 'SendGrid Email'],
-    ['int-metaads-manage', 'Meta Ads Manager'],
+    ['util-voice-receptionist', 'Voice Receptionist'],
+    ['util-store-review-response', 'Store Review Response'],
+    ['util-review-digest', 'Review Digest'],
+    ['util-email-digest', 'Email Digest'],
+    ['util-crm-notes', 'CRM Notes'],
+    ['util-mail-merge', 'Mail Merge'],
+    ['util-mail-sender', 'Mail Sender'],
+    ['util-ads-reporter', 'Ads Reporter'],
     ['util-newsletter-compose', 'Newsletter Compose Rules'],
-    ['int-googleads-manage', 'Google Ads Manager'],
-    ['int-google-drive', 'Google Drive'],
+    ['util-campaign-planner', 'Campaign Planner'],
+    ['util-file-organizer', 'File Organizer'],
   ].map(([name, title]) => ({ name, title, depends_on: [], conflicts_with: [], requires_credentials: true, pricing: {} })),
 };
 
 const SKILL_OFF_ROW = {
   skills: [
-    { name: 'int-googleplay-events', enabled: true, _edited: false, _user_created: false },
+    { name: 'util-event-planner', enabled: true, _edited: false, _user_created: false },
     { name: 'util-newsletter-compose', enabled: true, _edited: false, _user_created: false },
     { name: 'util-chat-markdown-reporting', enabled: true, _edited: false, _user_created: false },
   ],
   scheduledskills: [
-    skillTask('cs-cron-blog-gmail-checker', true, ['int-gmail-check'], [['int-gmail-check']]),
-    skillTask('cs-cron-review-scanner', true, ['int-appstore-reviews', 'int-googleplay-reviews'], [['int-appstore-reviews', 'int-googleplay-reviews']]),
+    skillTask('cs-cron-blog-gmail-checker', true, ['util-voice-receptionist'], [['util-voice-receptionist']]),
+    skillTask('cs-cron-review-scanner', true, ['util-store-review-response', 'util-review-digest'], [['util-store-review-response', 'util-review-digest']]),
     // The util that brings it is on, but every skill that holds one of its integrations is off.
     skillTask('cs-cron-newsletter-sender', true, ['util-newsletter-compose'], [NEWSLETTER_PROVIDERS]),
-    skillTask('cs-cron-metaads-performance-reporter', false, ['int-metaads-manage'], [['int-metaads-manage']]),
-    skillTask('cs-cron-app-event-scanner', true, ['int-appstore-events', 'int-googleplay-events'], null),
+    skillTask('cs-cron-metaads-performance-reporter', false, ['util-ads-reporter'], [['util-ads-reporter']]),
+    skillTask('cs-cron-app-event-scanner', true, ['util-release-notes', 'util-event-planner'], null),
     // Waiting with no skills to turn on named: nothing is named, not even the skill that brings it.
-    { ...skillTask('cs-cron-push-scanner', true, ['int-firebase-push'], null), _skill_off: true },
+    { ...skillTask('cs-cron-push-scanner', true, ['util-push-notes'], null), _skill_off: true },
     skillTask('cs-cron-my-task', true, null, null),
   ],
 };
@@ -1676,24 +1594,24 @@ test('a scheduled task that waits for its skills says it is paused and names the
     // The task's own on/off state stays as it is.
     assert.equal(tasks['cs-cron-blog-gmail-checker'].enabled, true);
     assert.equal(tasks['cs-cron-blog-gmail-checker'].skillOff, true);
-    assert.deepEqual(tasks['cs-cron-blog-gmail-checker'].ownerSkills, ['int-gmail-check']);
-    assert.deepEqual(tasks['cs-cron-blog-gmail-checker'].offSkills, [['int-gmail-check']]);
+    assert.deepEqual(tasks['cs-cron-blog-gmail-checker'].ownerSkills, ['util-voice-receptionist']);
+    assert.deepEqual(tasks['cs-cron-blog-gmail-checker'].offSkills, [['util-voice-receptionist']]);
     assert.deepEqual(tasks['cs-cron-newsletter-sender'].ownerSkills, ['util-newsletter-compose']);
     assert.deepEqual(tasks['cs-cron-newsletter-sender'].offSkills, [NEWSLETTER_PROVIDERS]);
     assert.equal(tasks['cs-cron-metaads-performance-reporter'].enabled, false);
     assert.equal(tasks['cs-cron-metaads-performance-reporter'].skillOff, true);
-    assert.deepEqual(tasks['cs-cron-app-event-scanner'].ownerSkills, ['int-appstore-events', 'int-googleplay-events']);
+    assert.deepEqual(tasks['cs-cron-app-event-scanner'].ownerSkills, ['util-release-notes', 'util-event-planner']);
     assert.equal(tasks['cs-cron-app-event-scanner'].skillOff, undefined);
     assert.equal(tasks['cs-cron-app-event-scanner'].offSkills, undefined);
     for (const field of ['ownerSkills', 'skillOff', 'offSkills']) assert.equal(field in tasks['cs-cron-my-task'], false, field);
 
     // Each skill shows by the title people see, with the name apply_agent_skills takes.
     const line = key => textOf(read).split('\n').find(entry => entry.startsWith('- ') && entry.includes(`(\`${key}\`)`));
-    assert.match(line('cs-cron-blog-gmail-checker'), /^- Blog Gmail Checker \(`cs-cron-blog-gmail-checker`\) on \(it is paused until Gmail Check \(`int-gmail-check`\) is on\), 0 9 \* \* \*/);
-    assert.match(line('cs-cron-review-scanner'), /^- Review Scanner \(`cs-cron-review-scanner`\) on \(it is paused until App Store Reviews \(`int-appstore-reviews`\) or Google Play Reviews \(`int-googleplay-reviews`\) is on\), 0 9/);
-    assert.match(line('cs-cron-newsletter-sender'), /^- Newsletter Sender \(`cs-cron-newsletter-sender`\) on \(it is paused until Brevo Email \(`int-brevo-email`\), HubSpot CRM \(`int-hubspot-crm`\), Mailchimp Email \(`int-mailchimp-email`\) or SendGrid Email \(`int-sendgrid-email`\) is on\), 0 9/);
+    assert.match(line('cs-cron-blog-gmail-checker'), /^- Blog Gmail Checker \(`cs-cron-blog-gmail-checker`\) on \(it is paused until Voice Receptionist \(`util-voice-receptionist`\) is on\), 0 9 \* \* \*/);
+    assert.match(line('cs-cron-review-scanner'), /^- Review Scanner \(`cs-cron-review-scanner`\) on \(it is paused until Store Review Response \(`util-store-review-response`\) or Review Digest \(`util-review-digest`\) is on\), 0 9/);
+    assert.match(line('cs-cron-newsletter-sender'), /^- Newsletter Sender \(`cs-cron-newsletter-sender`\) on \(it is paused until Email Digest \(`util-email-digest`\), CRM Notes \(`util-crm-notes`\), Mail Merge \(`util-mail-merge`\) or Mail Sender \(`util-mail-sender`\) is on\), 0 9/);
     assert.doesNotMatch(line('cs-cron-newsletter-sender'), /util-newsletter-compose/);
-    assert.match(line('cs-cron-metaads-performance-reporter'), /^- Meta Ads Performance Reporter \(`cs-cron-metaads-performance-reporter`\) off \(it also needs Meta Ads Manager \(`int-metaads-manage`\) turned on to run\), 0 9/);
+    assert.match(line('cs-cron-metaads-performance-reporter'), /^- Meta Ads Performance Reporter \(`cs-cron-metaads-performance-reporter`\) off \(it also needs Ads Reporter \(`util-ads-reporter`\) turned on to run\), 0 9/);
     assert.match(line('cs-cron-push-scanner'), /^- Push Scanner \(`cs-cron-push-scanner`\) on \(it is paused until a skill it needs is on\), 0 9/);
     assert.match(line('cs-cron-app-event-scanner'), /^- App Event Scanner \(`cs-cron-app-event-scanner`\) on, 0 9 \* \* \*/);
     assert.match(line('cs-cron-my-task'), /^- My Task \(`cs-cron-my-task`\) on, 0 9 \* \* \*/);
@@ -1706,22 +1624,22 @@ test('a scheduled task that waits for its skills says it is paused and names the
       return result;
     };
     const gmail = await history('cs-cron-blog-gmail-checker');
-    assert.match(gmail.structuredContent.message, /^Current: on, schedule "0 9 \* \* \*"\. It is paused until Gmail Check \(`int-gmail-check`\) is on\. /);
+    assert.match(gmail.structuredContent.message, /^Current: on, schedule "0 9 \* \* \*"\. It is paused until Voice Receptionist \(`util-voice-receptionist`\) is on\. /);
     assert.equal(gmail.structuredContent.entry.enabled, true);
     assert.equal(gmail.structuredContent.entry.skillOff, true);
-    assert.deepEqual(gmail.structuredContent.entry.ownerSkills, ['int-gmail-check']);
-    assert.deepEqual(gmail.structuredContent.entry.offSkills, [['int-gmail-check']]);
+    assert.deepEqual(gmail.structuredContent.entry.ownerSkills, ['util-voice-receptionist']);
+    assert.deepEqual(gmail.structuredContent.entry.offSkills, [['util-voice-receptionist']]);
     const newsletter = await history('cs-cron-newsletter-sender');
-    assert.match(newsletter.structuredContent.message, /It is paused until Brevo Email \(`int-brevo-email`\), HubSpot CRM \(`int-hubspot-crm`\), Mailchimp Email \(`int-mailchimp-email`\) or SendGrid Email \(`int-sendgrid-email`\) is on\./);
+    assert.match(newsletter.structuredContent.message, /It is paused until Email Digest \(`util-email-digest`\), CRM Notes \(`util-crm-notes`\), Mail Merge \(`util-mail-merge`\) or Mail Sender \(`util-mail-sender`\) is on\./);
     assert.doesNotMatch(newsletter.structuredContent.message, /util-newsletter-compose/);
     assert.deepEqual(newsletter.structuredContent.entry.offSkills, [NEWSLETTER_PROVIDERS]);
     const metaads = await history('cs-cron-metaads-performance-reporter');
-    assert.match(metaads.structuredContent.message, /^Current: off, schedule "0 9 \* \* \*"\. It also needs Meta Ads Manager \(`int-metaads-manage`\) turned on to run\. /);
+    assert.match(metaads.structuredContent.message, /^Current: off, schedule "0 9 \* \* \*"\. It also needs Ads Reporter \(`util-ads-reporter`\) turned on to run\. /);
     const events = await history('cs-cron-app-event-scanner');
     assert.doesNotMatch(textOf(events), /paused|turned on to run/);
     assert.equal(events.structuredContent.entry.skillOff, undefined);
     assert.equal(events.structuredContent.entry.offSkills, undefined);
-    assert.deepEqual(events.structuredContent.entry.ownerSkills, ['int-appstore-events', 'int-googleplay-events']);
+    assert.deepEqual(events.structuredContent.entry.ownerSkills, ['util-release-notes', 'util-event-planner']);
     const own = await history('cs-cron-my-task');
     assert.equal('ownerSkills' in own.structuredContent.entry, false);
   });
@@ -1740,19 +1658,19 @@ test('a scheduled task that waits for its skills says it is paused and names the
   await withClient(unread, async client => {
     const read = await call(client, 'get_my_agent', { agent_guid: 'ua-1' });
     assert.notEqual(read.isError, true, textOf(read));
-    assert.match(textOf(read), /- Blog Gmail Checker \(`cs-cron-blog-gmail-checker`\) on \(it is paused until Gmail Check \(`int-gmail-check`\) is on\)/);
-    assert.match(textOf(read), /- Meta Ads Performance Reporter \(`cs-cron-metaads-performance-reporter`\) off \(it also needs Meta Ads Manage \(`int-metaads-manage`\) turned on to run\)/);
+    assert.match(textOf(read), /- Blog Gmail Checker \(`cs-cron-blog-gmail-checker`\) on \(it is paused until Voice Receptionist \(`util-voice-receptionist`\) is on\)/);
+    assert.match(textOf(read), /- Meta Ads Performance Reporter \(`cs-cron-metaads-performance-reporter`\) off \(it also needs Ads Reporter \(`util-ads-reporter`\) turned on to run\)/);
     assert.doesNotMatch(textOf(read), /until `int-/);
   });
 
   // With every skill that brings it off, a task can wait for one skill from each of two lists: the util that
-  // brings the newsletter and one of its email providers, or Google Ads Manager and Google Drive.
+  // brings the newsletter and one of its email providers, or Campaign Planner and Google Drive.
   const paired = fakeClient({
     '/UserAgent/Detail': detailResponse(agentRow({
       skills: [{ name: 'util-chat-markdown-reporting', enabled: true, _edited: false, _user_created: false }],
       scheduledskills: [
         skillTask('cs-cron-newsletter-sender', true, ['util-newsletter-compose'], [['util-newsletter-compose'], NEWSLETTER_PROVIDERS]),
-        skillTask('cs-cron-googleads-drive-scanner', false, ['int-googleads-manage'], [['int-googleads-manage'], ['int-google-drive']]),
+        skillTask('cs-cron-googleads-drive-scanner', false, ['util-campaign-planner'], [['util-campaign-planner'], ['util-file-organizer']]),
       ],
     })),
     '/Skills/List': TITLED_SKILLS,
@@ -1764,10 +1682,10 @@ test('a scheduled task that waits for its skills says it is paused and names the
     assert.notEqual(read.isError, true, textOf(read));
     const newsletter = read.structuredContent.agent.scheduledTasks.find(item => item.key === 'cs-cron-newsletter-sender');
     assert.deepEqual(newsletter.offSkills, [['util-newsletter-compose'], NEWSLETTER_PROVIDERS]);
-    assert.match(textOf(read), /- Newsletter Sender \(`cs-cron-newsletter-sender`\) on \(it is paused until Newsletter Compose Rules \(`util-newsletter-compose`\) and one of Brevo Email \(`int-brevo-email`\), HubSpot CRM \(`int-hubspot-crm`\), Mailchimp Email \(`int-mailchimp-email`\) or SendGrid Email \(`int-sendgrid-email`\) are on\), 0 9/);
-    assert.match(textOf(read), /- Google Ads Drive Scanner \(`cs-cron-googleads-drive-scanner`\) off \(it also needs Google Ads Manager \(`int-googleads-manage`\) and Google Drive \(`int-google-drive`\) turned on to run\), 0 9/);
+    assert.match(textOf(read), /- Newsletter Sender \(`cs-cron-newsletter-sender`\) on \(it is paused until Newsletter Compose Rules \(`util-newsletter-compose`\) and one of Email Digest \(`util-email-digest`\), CRM Notes \(`util-crm-notes`\), Mail Merge \(`util-mail-merge`\) or Mail Sender \(`util-mail-sender`\) are on\), 0 9/);
+    assert.match(textOf(read), /- Google Ads Drive Scanner \(`cs-cron-googleads-drive-scanner`\) off \(it also needs Campaign Planner \(`util-campaign-planner`\) and File Organizer \(`util-file-organizer`\) turned on to run\), 0 9/);
     const history = await call(client, 'manage_agent_custom_skill', { action: 'history', agent_guid: 'ua-1', key: 'cs-cron-newsletter-sender' });
-    assert.match(history.structuredContent.message, /It is paused until Newsletter Compose Rules \(`util-newsletter-compose`\) and one of Brevo Email \(`int-brevo-email`\), HubSpot CRM \(`int-hubspot-crm`\), Mailchimp Email \(`int-mailchimp-email`\) or SendGrid Email \(`int-sendgrid-email`\) are on\./);
+    assert.match(history.structuredContent.message, /It is paused until Newsletter Compose Rules \(`util-newsletter-compose`\) and one of Email Digest \(`util-email-digest`\), CRM Notes \(`util-crm-notes`\), Mail Merge \(`util-mail-merge`\) or Mail Sender \(`util-mail-sender`\) are on\./);
     assert.deepEqual(history.structuredContent.entry.offSkills, [['util-newsletter-compose'], NEWSLETTER_PROVIDERS]);
   });
 });
@@ -1784,10 +1702,10 @@ test('turning on a scheduled task that waits for its skills says it is paused un
     const out = result.structuredContent;
     assert.equal(out.entry.enabled, true);
     assert.equal(out.entry.skillOff, true);
-    assert.deepEqual(out.entry.offSkills, [['int-metaads-manage']]);
-    assert.match(out.schedule.note, /Every run spends the agent's credits\. It is paused until Meta Ads Manager \(`int-metaads-manage`\) is on\./);
+    assert.deepEqual(out.entry.offSkills, [['util-ads-reporter']]);
+    assert.match(out.schedule.note, /Every run spends the agent's credits\. It is paused until Ads Reporter \(`util-ads-reporter`\) is on\./);
     assert.doesNotMatch(out.schedule.note, /It is turned off/);
-    assert.match(textOf(result), /\*\*Schedule:\*\* .*It is paused until Meta Ads Manager \(`int-metaads-manage`\) is on\./);
+    assert.match(textOf(result), /\*\*Schedule:\*\* .*It is paused until Ads Reporter \(`util-ads-reporter`\) is on\./);
 
     const events = await call(client, 'manage_agent_custom_skill', { action: 'upsert', agent_guid: 'ua-1', key: 'cs-cron-app-event-scanner', interval: '0 8 * * *' });
     assert.notEqual(events.isError, true, textOf(events));
@@ -1795,13 +1713,14 @@ test('turning on a scheduled task that waits for its skills says it is paused un
   });
 });
 
-test('the schedule note names only the services a skill\'s task can use, as one of them', async () => {
-  // The ads cleanup on a Google Ads Manager agent: Meta Ads reaches the agent only through Meta Ads Manager, which is off.
-  const cleanup = usable => ({
-    key: 'cs-cron-ads-recommendation-cleanup', description: 'Ads cleanup', value: 'Clean up.', interval: '0 6 * * *', enabled: false, requires_credentials: ['google-ads', 'meta-ads', 'tiktok-ads'],
-    _source: 'skill-bundle', _editable: true, _edited: false, _owner_skills: ['int-googleads-manage'], _skill_off: false, _usable_credentials: usable, _if_connected: {},
+test('the schedule note names only the credentials a skill\'s task can use, as one of them, and the connectors it needs', async () => {
+  // A call summary on a phone agent: Telegram reaches the agent only through a skill that is off.
+  const summary = usable => ({
+    key: 'cs-cron-call-summary', description: 'Call summary', value: 'Sum up the calls.', interval: '0 6 * * *', enabled: false, requires_credentials: ['twilio-voice', 'telegram', 'var-website'],
+    _source: 'skill-bundle', _editable: true, _edited: false, _owner_skills: ['util-voice-receptionist'], _skill_off: false, _usable_credentials: usable, _if_connected: {},
   });
-  const own = { key: 'cs-cron-inbox-digest', description: 'Inbox digest', value: 'Sum up the inbox.', interval: '0 8 * * *', enabled: false, requires_credentials: ['gmail'], _source: 'user-created', _editable: true, _edited: true, _user_created: true };
+  const own = { key: 'cs-cron-inbox-digest', description: 'Inbox digest', value: 'Sum up the inbox.', interval: '0 8 * * *', enabled: false, requires_credentials: ['twilio-voice'], _source: 'user-created', _editable: true, _edited: true, _user_created: true };
+  const ads = { key: 'cs-cron-ads-digest', description: 'Ads digest', value: 'Sum up the ads.', interval: '0 7 * * 1', enabled: false, requires_credentials: [], requires_connectors: '["google-ads","meta-ads","Not A Slug"]', _source: 'user-created', _editable: true, _edited: true, _user_created: true };
   const upsert = async (scheduledskills, key) => {
     let result;
     await withClient(fakeClient({
@@ -1813,42 +1732,46 @@ test('the schedule note names only the services a skill\'s task can use, as one 
     });
     return result.structuredContent.schedule.note;
   };
-  const one = await upsert([cleanup(['google-ads'])], 'cs-cron-ads-recommendation-cleanup');
-  assert.match(one, /It only runs while Google Ads \(`google-ads`\) is connected\./);
-  assert.doesNotMatch(one, /meta-ads|tiktok-ads/);
-  assert.match(await upsert([cleanup(['google-ads', 'meta-ads'])], 'cs-cron-ads-recommendation-cleanup'), /It only runs while one of Google Ads \(`google-ads`\) or Meta Ads \(`meta-ads`\) is connected\./);
+  const one = await upsert([summary(['twilio-voice'])], 'cs-cron-call-summary');
+  assert.match(one, /It only runs while Twilio Voice \(`twilio-voice`\) is connected\./);
+  assert.doesNotMatch(one, /telegram|var-website/);
+  assert.match(await upsert([summary(['twilio-voice', 'telegram'])], 'cs-cron-call-summary'), /It only runs while one of Twilio Voice \(`twilio-voice`\) or Telegram \(`telegram`\) is connected\./);
   // A task of the user's own needs what its row lists, named by the agent's credential card.
-  assert.match(await upsert([own], 'cs-cron-inbox-digest'), /It only runs while Gmail \(`gmail`\) is connected\./);
+  assert.match(await upsert([own], 'cs-cron-inbox-digest'), /It only runs while Twilio Voice \(`twilio-voice`\) is connected\./);
+  // The connectors a task needs, from the JSON text Wiro stores; a value that is no slug is left out.
+  const connectors = await upsert([ads], 'cs-cron-ads-digest');
+  assert.match(connectors, /It needs one of the connectors `google-ads` or `meta-ads` connected to run\./);
+  assert.doesNotMatch(connectors, /Not A Slug|It only runs while/);
 });
 
 test('update_agent names the skills a paused task waits for by their titles', async () => {
   const fake = fakeClient({
-    '/UserAgent/Detail': detailResponse(agentRow({ ...SKILL_OFF_ROW, skillsmeta: { 'int-googleplay-events': { title: 'Google Play Events' } } })),
+    '/UserAgent/Detail': detailResponse(agentRow({ ...SKILL_OFF_ROW, skillsmeta: { 'util-event-planner': { title: 'Google Play Events' } } })),
     '/Skills/List': TITLED_SKILLS,
     '/UserAgent/UpdateSettings': { result: true, errors: [] },
   });
   await withClient(fake, async client => {
     const result = await call(client, 'update_agent', { agent_guid: 'ua-1', timezone: 'Europe/Istanbul' });
     assert.notEqual(result.isError, true, textOf(result));
-    assert.match(textOf(result), /- Blog Gmail Checker \(`cs-cron-blog-gmail-checker`\) on \(it is paused until Gmail Check \(`int-gmail-check`\) is on\)/);
-    assert.match(textOf(result), /^\*\*Skills:\*\* Google Play Events \(`int-googleplay-events`\), /m);
+    assert.match(textOf(result), /- Blog Gmail Checker \(`cs-cron-blog-gmail-checker`\) on \(it is paused until Voice Receptionist \(`util-voice-receptionist`\) is on\)/);
+    assert.match(textOf(result), /^\*\*Skills:\*\* Google Play Events \(`util-event-planner`\), /m);
   });
 });
 
 test('get_my_agent names the agent\'s skills by their titles, with the names the tools take', async () => {
   const row = agentRow({
     skills: [
-      { name: 'int-metaads-manage', enabled: true, _edited: false, _user_created: false },
+      { name: 'util-ads-reporter', enabled: true, _edited: false, _user_created: false },
       { name: 'util-chat-markdown-reporting', enabled: true, _edited: false, _user_created: false },
     ],
-    skillsmeta: { 'int-metaads-manage': { title: 'Meta Ads Manager' } },
+    skillsmeta: { 'util-ads-reporter': { title: 'Ads Reporter' } },
   });
   await withClient(fakeClient({ '/UserAgent/Detail': detailResponse(row) }), async client => {
     const read = await call(client, 'get_my_agent', { agent_guid: 'ua-1' });
-    // Meta Ads Manager's title comes from Detail, not the words made from its name (Meta Ads Manage); the
+    // Ads Reporter's title comes from Detail, not the words made from its name (Meta Ads Manage); the
     // reporting skill has none there, so those words stand in.
-    assert.match(textOf(read), /^\*\*Skills:\*\* Meta Ads Manager \(`int-metaads-manage`\), Chat Markdown Reporting \(`util-chat-markdown-reporting`\)$/m);
-    assert.deepEqual(read.structuredContent.agent.skills, ['int-metaads-manage', 'util-chat-markdown-reporting']);
+    assert.match(textOf(read), /^\*\*Skills:\*\* Ads Reporter \(`util-ads-reporter`\), Chat Markdown Reporting \(`util-chat-markdown-reporting`\)$/m);
+    assert.deepEqual(read.structuredContent.agent.skills, ['util-ads-reporter', 'util-chat-markdown-reporting']);
   });
 });
 
@@ -2011,8 +1934,8 @@ test('control_agent turns start refusals into the billing step to take', async (
     assert.equal(result.structuredContent.outcome, 'refused');
     assert.deepEqual(result.structuredContent.nextAction, {
       tool: 'set_agent_credentials',
-      arguments: { agent_guid: 'ua-1', credential: 'gmail' },
-      reason: 'Provide the missing credentials (gmail). This lists the Gmail fields to ask the user for.',
+      arguments: { agent_guid: 'ua-1', credential: 'twilio-voice' },
+      reason: 'Provide the missing credentials (twilio-voice). This lists the Twilio Voice fields to ask the user for.',
     });
   });
 });
@@ -3854,17 +3777,17 @@ test('delete_agent turns a running container refusal into a stop step', async ()
 test('deploy_agent sends a custom build as a skill map and keeps refusals plain', async () => {
   const deployed = agentRow({ guid: 'ua-custom', status: 2, agentguid: undefined, agent: { custom: true, cover: null, icon: null, slug: 'custom-77' }, credentials: {} });
   const fake = fakeClient({
-    '/Skills/List': { result: true, errors: [], skills: [{ name: 'int-gmail-check', title: 'Gmail Check', pricing: {} }] },
-    '/UserAgent/PricingPreview': { result: true, errors: [], totalPriceUsd: 4, totalMonthlyCredits: 400, enabledSkills: ['int-gmail-check'] },
+    '/Skills/List': { result: true, errors: [], skills: [{ name: 'util-voice-receptionist', title: 'Voice Receptionist', pricing: {} }] },
+    '/UserAgent/PricingPreview': { result: true, errors: [], totalPriceUsd: 4, totalMonthlyCredits: 400, enabledSkills: ['util-voice-receptionist'] },
     '/UserAgent/Deploy': { result: true, errors: [], useragents: [deployed] },
     '/UserAgent/Detail': detailResponse(deployed),
   });
   await withClient(fake, async client => {
-    const result = await call(client, 'deploy_agent', { custom: true, title: 'Inbox', tier: 'starter', skills: ['int-gmail-check'], confirm_charge_usd: 4, confirm: true });
+    const result = await call(client, 'deploy_agent', { custom: true, title: 'Inbox', tier: 'starter', skills: ['util-voice-receptionist'], confirm_charge_usd: 4, confirm: true });
     const body = fake.called('/UserAgent/Deploy')[0].body;
     assert.equal(body.custom, true);
     assert.equal('agentguid' in body, false);
-    assert.deepEqual(body.skills, { 'int-gmail-check': true });
+    assert.deepEqual(body.skills, { 'util-voice-receptionist': true });
     assert.equal(result.structuredContent.agent.template.custom, true);
     assert.equal(JSON.stringify(result).includes('custom-77'), false);
     assert.equal(result.structuredContent.nextAction.tool, 'get_my_agent');
@@ -4199,7 +4122,7 @@ test('get_my_agent, list_my_agents and control_agent give a team member no call 
   const cases = [
     { row: teamAgentRow({ status: 0 }), hint: /\*\*Status:\*\* Stopped \(0\)\. It is not running\. On this team agent, a team admin or the person who deployed it can start it\./ },
     { row: teamAgentRow({ status: 5 }), hint: /\*\*Status:\*\* Error \(5\)\. The start failed or the agent stopped unexpectedly\. On this team agent, a team admin or the person who deployed it can start it again and read its logs\./ },
-    { row: teamAgentRow({ status: 6, subscription: null }), hint: /On this team agent, a team admin or the person who deployed it saves credentials, connects accounts such as Instagram or Google Ads, and pays for the plan\./ },
+    { row: teamAgentRow({ status: 6, subscription: null }), hint: /On this team agent, a team admin or the person who deployed it saves credentials, connects connectors such as Instagram or Google Ads, and pays for the plan\./ },
   ];
   for (const { row, hint } of cases) {
     const member = fakeClient({ '/UserAgent/Detail': detailResponse(row), '/Organization/List': organizations('member') });
@@ -4256,7 +4179,7 @@ test('get_my_agent, list_my_agents and control_agent give a team member no call 
   await withClient(control, async client => {
     const result = await call(client, 'control_agent', { agent_guid: 'ua-1', action: 'start' });
     assert.equal(result.structuredContent.outcome, 'refused');
-    assert.equal(result.structuredContent.message, 'The agent cannot start until it has a paid plan and its setup is finished. On this team agent, a team admin or the person who deployed it saves credentials, connects accounts such as Instagram or Google Ads, and pays for the plan.');
+    assert.equal(result.structuredContent.message, 'The agent cannot start until it has a paid plan and its setup is finished. On this team agent, a team admin or the person who deployed it saves credentials, connects connectors such as Instagram or Google Ads, and pays for the plan.');
     assert.equal(result.structuredContent.nextAction, undefined);
     assert.equal(control.called('/UserAgent/Start').length, 0);
   });
@@ -4339,8 +4262,8 @@ function customBuildRoutes(scheduledskills) {
     scheduledskills,
   });
   return {
-    '/Skills/List': { result: true, errors: [], skills: [{ name: 'int-gmail-check', title: 'Gmail', requires_credentials: true, credential_key: 'gmail', pricing: {} }] },
-    '/UserAgent/PricingPreview': { result: true, errors: [], totalPriceUsd: 4, totalMonthlyCredits: 400, enabledSkills: ['int-gmail-check'] },
+    '/Skills/List': { result: true, errors: [], skills: [{ name: 'util-voice-receptionist', title: 'Gmail', requires_credentials: true, credential_key: 'twilio-voice', pricing: {} }] },
+    '/UserAgent/PricingPreview': { result: true, errors: [], totalPriceUsd: 4, totalMonthlyCredits: 400, enabledSkills: ['util-voice-receptionist'] },
     '/UserAgent/Deploy': { result: true, errors: [], useragents: [deployed] },
     '/UserAgent/Detail': detailResponse(deployed),
   };
@@ -4353,14 +4276,14 @@ test('a custom build\'s deploy result names the scheduled tasks already on and h
     { key: 'cs-cron-weekly-report', description: 'Weekly report', value: 'Summarize the week', interval: '0 9 * * 1', enabled: true, _source: 'user-created' },
   ]));
   await withClient(fake, async client => {
-    const quote = await call(client, 'deploy_agent', { custom: true, title: 'Inbox', tier: 'starter', skills: ['int-gmail-check'] });
+    const quote = await call(client, 'deploy_agent', { custom: true, title: 'Inbox', tier: 'starter', skills: ['util-voice-receptionist'] });
     assert.match(textOf(quote), /Scheduled tasks: a custom build comes with the tasks its skills bring, and every run spends the agent's credits/);
 
     const result = await call(client, 'deploy_agent', {
       custom: true,
       title: 'Inbox',
       tier: 'starter',
-      skills: ['int-gmail-check'],
+      skills: ['util-voice-receptionist'],
       custom_skills: [{ key: 'weekly-report', value: 'Summarize the week', interval: '0 9 * * 1' }],
       confirm_charge_usd: 4,
       confirm: true,
@@ -4385,7 +4308,7 @@ test('a custom build whose tasks are all off or its own, and a template deploy, 
     { key: 'cs-cron-by-hand', value: 'Runs when asked.', interval: null, enabled: true, _source: 'user-created' },
   ]));
   await withClient(quiet, async client => {
-    const result = await call(client, 'deploy_agent', { custom: true, title: 'Inbox', tier: 'starter', skills: ['int-gmail-check'], confirm_charge_usd: 4, confirm: true });
+    const result = await call(client, 'deploy_agent', { custom: true, title: 'Inbox', tier: 'starter', skills: ['util-voice-receptionist'], confirm_charge_usd: 4, confirm: true });
     assert.notEqual(result.isError, true, textOf(result));
     assert.equal(result.structuredContent.defaultScheduledTasks, undefined);
     assert.doesNotMatch(textOf(result), /on by default/);
@@ -4541,13 +4464,13 @@ const WIRO_CREDENTIAL = {
     help: '<p>Select one of your Wiro projects (or create a new one). Request signing is handled automatically, so there\'s no secret to paste.</p>',
   }],
   oauth_provider: null,
-  used_by_skills: ['int-wiro-aimodels'],
+  used_by_skills: ['util-wiro-models'],
 };
 
 test('the Wiro project credential shows one line everywhere, without the help written for the dashboard', async () => {
   const fake = fakeClient({
-    '/Skills/Detail': body => (body.name === 'int-wiro-aimodels'
-      ? { result: true, errors: [], skill: { name: 'int-wiro-aimodels', title: 'Wiro AI Models', requires_credentials: true, credential_key: 'wiro', pricing: {} } }
+    '/Skills/Detail': body => (body.name === 'util-wiro-models'
+      ? { result: true, errors: [], skill: { name: 'util-wiro-models', title: 'Wiro AI Models', requires_credentials: true, credential_key: 'wiro', pricing: {} } }
       : { result: false, errors: [{ code: 404, message: 'Skill not found' }] }),
     '/Credentials/Detail': { result: true, errors: [], credential: WIRO_CREDENTIAL },
     '/UserAgent/Detail': detailResponse(agentRow({ credentials: {} })),
@@ -4555,7 +4478,7 @@ test('the Wiro project credential shows one line everywhere, without the help wr
   await withClient(fake, async client => {
     const results = [
       await call(client, 'list_agent_skills', { name: 'wiro' }),
-      await call(client, 'list_agent_skills', { name: 'int-wiro-aimodels' }),
+      await call(client, 'list_agent_skills', { name: 'util-wiro-models' }),
       await call(client, 'set_agent_credentials', { agent_guid: 'ua-1', credential: 'wiro' }),
     ];
     for (const result of results) {
@@ -4599,7 +4522,7 @@ test('a deploy quote names the team wallet, its balance, the other plans and the
     assert.equal(quote.teamSessionMode, 'collaborative');
     const lines = textOf(result).split('\n');
     assert.ok(lines.includes('- Paid from: The wallet of the team `Growth` (`Acme`). It holds $60.50.'), textOf(result));
-    assert.ok(lines.includes('- Other plans: Pro $30 (3,000 credits), Max $100 (10,000 credits) per month. Every plan includes every skill, and any plan can buy extra credit packs.'), textOf(result));
+    assert.ok(lines.includes('- Other plans: Pro $30 (3,000 credits), Max $100 (10,000 credits) per month. Every plan includes every skill and connector, and any plan can buy extra credit packs.'), textOf(result));
     assert.ok(lines.includes(TEAM_CHATS_LINE), textOf(result));
     assert.equal(fake.called('/UserAgent/Deploy').length, 0);
     assertNoSecrets(result);
@@ -4650,7 +4573,7 @@ test('a deploy quote names the personal wallet, and team chats stay out of it', 
     assert.equal(quote.teamSessionMode, undefined);
     const lines = textOf(result).split('\n');
     assert.ok(lines.includes('- Paid from: The personal wallet. It holds $5.00.'), textOf(result));
-    assert.ok(lines.includes('- Other plans: Starter $5 (500 credits), Max $100 (10,000 credits) per month. Every plan includes every skill, and any plan can buy extra credit packs.'), textOf(result));
+    assert.ok(lines.includes('- Other plans: Starter $5 (500 credits), Max $100 (10,000 credits) per month. Every plan includes every skill and connector, and any plan can buy extra credit packs.'), textOf(result));
     assert.equal(lines.some(line => line.startsWith('- Chats')), false, textOf(result));
   });
 });
@@ -4765,7 +4688,7 @@ test('a custom build quote gives the other plans from the draft preview', async 
     assert.deepEqual(fake.called('/UserAgent/PricingPreview')[0].body, { draft: true, skills: [], tier: 'max' });
     const lines = textOf(result).split('\n');
     assert.ok(lines.includes('- Plan: Max'), textOf(result));
-    assert.ok(lines.includes('- Other plans: Starter $5 (500 credits), Pro $30 (3,000 credits) per month. Every plan includes every skill, and any plan can buy extra credit packs.'), textOf(result));
+    assert.ok(lines.includes('- Other plans: Starter $5 (500 credits), Pro $30 (3,000 credits) per month. Every plan includes every skill and connector, and any plan can buy extra credit packs.'), textOf(result));
     assert.equal(fake.called('/UserAgent/PricingPreview').length, 1, 'one preview prices every plan');
   });
 
@@ -4845,7 +4768,7 @@ test('a deploy quote says what custom_skills does to the approval policy, and sh
   const quoteOf = async args => {
     let out;
     await withClient(fakeClient(customBuildRoutes([])), async client => {
-      out = await call(client, 'deploy_agent', { custom: true, title: 'Inbox', tier: 'starter', skills: ['int-gmail-check'], ...args });
+      out = await call(client, 'deploy_agent', { custom: true, title: 'Inbox', tier: 'starter', skills: ['util-voice-receptionist'], ...args });
     });
     return out;
   };
@@ -4897,7 +4820,7 @@ test('a custom build keeps its approval policy as an entry that comes with the a
   const fake = fakeClient(customBuildRoutes([]));
   await withClient(fake, async client => {
     const result = await call(client, 'deploy_agent', {
-      custom: true, title: 'Inbox', tier: 'starter', skills: ['int-gmail-check'],
+      custom: true, title: 'Inbox', tier: 'starter', skills: ['util-voice-receptionist'],
       custom_skills: [{ key: 'approval-policy', value: AUTO_POLICY }, { key: 'cs-house-rules', value: 'Be short.' }],
       confirm_charge_usd: 4, confirm: true,
     });
@@ -4911,7 +4834,7 @@ test('a custom build keeps its approval policy as an entry that comes with the a
   const own = fakeClient(customBuildRoutes([]));
   await withClient(own, async client => {
     await call(client, 'deploy_agent', {
-      custom: true, title: 'Inbox', tier: 'starter', skills: ['int-gmail-check'],
+      custom: true, title: 'Inbox', tier: 'starter', skills: ['util-voice-receptionist'],
       custom_skills: [{ key: 'cs-approval-policy', value: AUTO_POLICY, description: 'Our rules' }],
       confirm_charge_usd: 4, confirm: true,
     });
@@ -5035,15 +4958,15 @@ function customRow(overrides = {}) {
   return agentRow({
     agent: { custom: true, tiers: { starter: { priceUsd: 4, credits: 400 }, pro: { priceUsd: 40, credits: 4000 } } },
     skillsmeta: {
-      'int-mailchimp-email': { requires_credentials: true, credential_key: 'mailchimp' },
-      'int-serper-search': { requires_credentials: true, credential_key: 'serper' },
+      'util-voice-receptionist': { requires_credentials: true, credential_key: 'twilio-voice' },
+      'util-wiro-models': { requires_credentials: true, credential_key: 'wiro' },
       'util-chat-markdown-reporting': { requires_credentials: false },
     },
     credentials: {
-      mailchimp: { optional: false, _connected: false, _filled: false, _required_missing: false, _schema: { title: 'Mailchimp', oauth_provider: { oauth_flow: {} } } },
-      serper: { optional: false, _connected: false, _filled: false, _required_missing: true, _schema: { title: 'Serper Web Search', oauth_provider: null } },
-      'google-merchant-center': { optional: false, _connected: false, _filled: false, _required_missing: true, _schema: { title: 'Merchant Center', oauth_provider: null } },
-      slack: { optional: true, _connected: false, _filled: false, _required_missing: false, _schema: { title: 'Slack', oauth_provider: { oauth_flow: {} } } },
+      'twilio-voice': { optional: false, _connected: false, _filled: false, _required_missing: true, _schema: { title: 'Twilio Voice' } },
+      wiro: { optional: false, _connected: false, _filled: false, _required_missing: false, _schema: { title: 'Wiro AI Models' } },
+      'var-website': { optional: false, _connected: false, _filled: false, _required_missing: true, _schema: { title: 'Website' } },
+      slack: { optional: true, _connected: false, _filled: false, _required_missing: false, _schema: { title: 'Slack' } },
     },
     ...overrides,
   });
@@ -5055,32 +4978,26 @@ test('a credential is required and missing exactly when the setup waits for it',
   await withClient(fake, async client => {
     const result = await call(client, 'get_my_agent', { agent_guid: 'ua-1' });
     const { agent } = result.structuredContent;
-    assert.deepEqual(agent.missingCredentials.map(item => item.key), ['mailchimp', 'serper']);
-    assert.deepEqual(agent.credentials.filter(item => item.requiredMissing).map(item => item.key), ['mailchimp', 'serper']);
+    assert.deepEqual(agent.missingCredentials.map(item => item.key), ['twilio-voice', 'wiro']);
+    assert.deepEqual(agent.credentials.filter(item => item.requiredMissing).map(item => item.key), ['twilio-voice', 'wiro']);
 
     const lines = textOf(result).split('\n');
-    assert.ok(lines.includes('**Setup required:** missing Mailchimp, Serper Web Search'), textOf(result));
-    assert.ok(lines.includes('- Mailchimp (`mailchimp`): not connected (required)'), textOf(result));
-    assert.ok(lines.includes('- Serper Web Search (`serper`): missing (required)'), textOf(result));
-    // The setup does not wait for this one, so its row does not say it is required.
-    assert.ok(lines.includes('- Merchant Center (`google-merchant-center`): not set'), textOf(result));
+    assert.ok(lines.includes('**Setup required:** missing Twilio Voice, Wiro AI Models'), textOf(result));
+    assert.ok(lines.includes('- Twilio Voice (`twilio-voice`): missing (required)'), textOf(result));
+    // A required credential with no value yet holds the setup back while it waits.
+    assert.ok(lines.includes('- Wiro AI Models (`wiro`): missing (required)'), textOf(result));
+    // No active skill reads this one, so the setup does not wait for it and its row does not say it is required.
+    assert.ok(lines.includes('- Website (`var-website`): not set'), textOf(result));
     assert.ok(lines.includes('- Slack (`slack`): not set, optional'), textOf(result));
   });
-
-  // Saved but not connected: the setup still waits, and the row says so.
-  const shop = toAgentDetail(agentRow({
-    credentials: { shopify: { optional: false, _connected: false, _filled: true, _required_missing: false, _schema: { title: 'Shopify', oauth_provider: { oauth_flow: {} } } } },
-  }));
-  assert.equal(shop.credentials[0].requiredMissing, true);
-  assert.match(formatAgentDetail(shop), /- Shopify \(`shopify`\): not connected \(required\)/);
 
   // A required credential with no required field: the setup waits until it holds a value.
   const supportEmail = (group, setuprequired) => toAgentDetail(agentRow({
     setuprequired,
-    credentials: { 'var-support-email': { optional: false, _connected: false, _filled: false, _required_missing: false, _schema: { title: 'Support Email', oauth_provider: null }, ...group } },
+    credentials: { 'var-support-email': { optional: false, _connected: false, _filled: false, _required_missing: false, _schema: { title: 'Support Email' }, ...group } },
   }));
   const waiting = supportEmail({}, true);
-  assert.deepEqual(waiting.missingCredentials, [{ key: 'var-support-email', title: 'Support Email', oauth: false }]);
+  assert.deepEqual(waiting.missingCredentials, [{ key: 'var-support-email', title: 'Support Email' }]);
   assert.equal(waiting.credentials[0].requiredMissing, true);
   assert.match(formatAgentDetail(waiting), /\*\*Setup required:\*\* missing Support Email/);
   assert.match(formatAgentDetail(waiting), /- Support Email \(`var-support-email`\): missing \(required\)/);
@@ -5092,24 +5009,24 @@ test('a credential is required and missing exactly when the setup waits for it',
   assert.deepEqual(supportEmail({ optional: true }, true).missingCredentials, []);
 
   // On a custom build only the main credential of an active skill counts, also without a required field.
-  const apps = toAgentDetail(agentRow({
+  const website = toAgentDetail(agentRow({
     agent: { custom: true },
     setuprequired: true,
-    skillsmeta: { 'int-googleplay-events': { requires_credentials: true, credential_key: 'google-play-apps' } },
+    skillsmeta: { 'util-event-planner': { requires_credentials: true, credential_key: 'var-website' } },
     credentials: {
-      'google-play-apps': { optional: false, _connected: false, _filled: false, _required_missing: false, _schema: { title: 'Google Play Apps', oauth_provider: null } },
-      'var-support-email': { optional: false, _connected: false, _filled: false, _required_missing: false, _schema: { title: 'Support Email', oauth_provider: null } },
+      'var-website': { optional: false, _connected: false, _filled: false, _required_missing: false, _schema: { title: 'Website' } },
+      'var-support-email': { optional: false, _connected: false, _filled: false, _required_missing: false, _schema: { title: 'Support Email' } },
     },
   }));
-  assert.deepEqual(apps.missingCredentials.map(item => item.key), ['google-play-apps']);
+  assert.deepEqual(website.missingCredentials.map(item => item.key), ['var-website']);
 
-  // Once connected, it is off both lists.
-  const connected = toAgentDetail(customRow({
-    credentials: { mailchimp: { optional: false, _connected: true, _filled: true, _required_missing: false, _schema: { title: 'Mailchimp', oauth_provider: { oauth_flow: {} } } } },
+  // Once filled, it is off both lists.
+  const filled = toAgentDetail(customRow({
+    credentials: { 'twilio-voice': { optional: false, _connected: false, _filled: true, _required_missing: false, _schema: { title: 'Twilio Voice' } } },
   }));
-  assert.equal(connected.credentials[0].requiredMissing, false);
-  assert.deepEqual(connected.missingCredentials, []);
-  assert.match(formatAgentDetail(connected), /- Mailchimp \(`mailchimp`\): connected/);
+  assert.equal(filled.credentials[0].requiredMissing, false);
+  assert.deepEqual(filled.missingCredentials, []);
+  assert.match(formatAgentDetail(filled), /- Twilio Voice \(`twilio-voice`\): filled/);
 });
 
 // ---------------------------------------------------------------------------
@@ -5164,7 +5081,7 @@ test('control_agent says what a finished wait found, not what was still to come'
   const missing = await run([0, 4], { action: 'start', wait_seconds: 5 }, {
     credentials: agentRow().credentials,
   });
-  assert.equal(missing.message, 'Start requested. The agent is running. send_agent_message with agent set to its guid talks to it. Missing credentials: Gmail. Skills that need them fail until they are set.');
+  assert.equal(missing.message, 'Start requested. The agent is running. send_agent_message with agent set to its guid talks to it. Missing credentials: Twilio Voice. Skills that need them fail until they are set.');
 });
 
 test('control_agent start on an agent already on its way says only how it ended', async () => {
@@ -5263,11 +5180,11 @@ test('every agent tool answers a guid it cannot reach with the next step', async
     ['get_agent_activity', { agent_guid: 'not-a-guid', kind: 'usage' }],
     ['get_agent_activity', { agent_guid: 'not-a-guid', kind: 'logs' }],
     ['manage_agent_custom_skill', { agent_guid: 'not-a-guid', action: 'history', key: 'cs-tone' }],
-    ['apply_agent_skills', { agent_guid: 'not-a-guid', skills: { 'int-gmail-check': true } }],
+    ['apply_agent_skills', { agent_guid: 'not-a-guid', skills: { 'util-voice-receptionist': true } }],
   ];
   for (const [name, args] of calls) {
     const fake = fakeClient({
-      '/Skills/List': { result: true, errors: [], skills: [{ name: 'int-gmail-check', title: 'Gmail', depends_on: [], conflicts_with: [], requires_credentials: false, pricing: {} }], channels: [] },
+      '/Skills/List': { result: true, errors: [], skills: [{ name: 'util-voice-receptionist', title: 'Gmail', depends_on: [], conflicts_with: [], requires_credentials: false, pricing: {} }], channels: [] },
       '/UserAgent/Detail': notFound,
       '/UserAgent/TransactionList': notFound,
       '/UserAgent/Logs': notFound,

@@ -24,11 +24,8 @@ function credentialLine(credential: CredentialRequirement): string {
   if (credential.key === WIRO_PROJECT_CREDENTIAL) {
     return `- ${credential.title} (\`${credential.key}\`): a Wiro project; bind_agent_project connects one after deployment, with no key to paste`;
   }
-  const fields = credential.fields
-    .filter(field => !field.onlyInModes || field.onlyInModes.length === 0)
-    .map(field => `${field.label}${field.required ? '' : ' (optional)'}`);
-  const how = credential.oauth ? 'connect with connect_agent_oauth' : 'set with set_agent_credentials';
-  return `- ${credential.title} (\`${credential.key}\`): ${fields.length > 0 ? `${fields.join(', ')}; ` : ''}${how}`;
+  const fields = credential.fields.map(field => `${field.label}${field.required ? '' : ' (optional)'}`);
+  return `- ${credential.title} (\`${credential.key}\`): ${fields.length > 0 ? `${fields.join(', ')}; ` : ''}set with set_agent_credentials`;
 }
 
 function formatTemplate(template: TemplateDetail): string {
@@ -54,9 +51,11 @@ function formatTemplate(template: TemplateDetail): string {
     lines.push('', '### Optional credentials', '');
     for (const credential of template.optionalCredentials) lines.push(credentialLine(credential));
   }
-  if ([...template.requiredCredentials, ...template.optionalCredentials].some(credential => credential.oauth)) {
-    lines.push('', 'A service that connects through connect_agent_oauth uses a sign-in link, a token or the user\'s own app keys: '
-      + 'list_agent_skills with its key shows which, so tell the user before deploying.');
+  if (template.suggestedConnectors?.length) {
+    lines.push('', '### Connectors it suggests', '',
+      `${template.suggestedConnectors.map(slug => `\`${slug}\``).join(', ')}. None is connected by the deploy: connect each one afterwards with `
+        + 'connect_agent_connector. list_agent_connectors with a slug shows how it connects (a key, a sign-in or a Wiro project) '
+        + 'and what the user provides, so tell the user before deploying.');
   }
   if (template.channels.length > 0) {
     lines.push('', `**Chat channels (optional):** ${template.channels.map(channel => `${channel.title} (${channel.requiredFields.join(', ')})`).join('; ')}`);
@@ -79,7 +78,7 @@ function formatTemplate(template: TemplateDetail): string {
     for (const task of template.customInstructions) lines.push(formatCustomInstructionLine(task));
   }
   if ((template.scheduledTasks?.length ?? 0) + (template.customInstructions?.length ?? 0) > 0) {
-    lines.push('', 'A task or instruction that needs a credential switches on when that credential is saved.');
+    lines.push('', 'A task or instruction that needs a credential switches on when that credential is saved, and one that needs a connector runs once it is connected.');
   }
   if (template.description) lines.push('', '### About', '', template.description);
   return lines.join('\n');
@@ -91,10 +90,10 @@ export function registerGetAgentTemplate(server: McpServer, client: WiroClient):
     {
       title: 'Get a Wiro agent template',
       description: 'Read one agent template before deploying it: its skills, the credentials the user must '
-        + 'provide (with the field labels to ask for), the optional chat channels, the selectable chat models '
+        + 'provide (with the field labels to ask for), the connectors it suggests, the optional chat channels, the selectable chat models '
         + 'with their token rates in credits per 1M tokens, and the plans (Starter, Pro and Max) with the '
-        + 'exact prices and monthly credits that deploy_agent charges. Every plan includes every skill. Required '
-        + 'credentials can be added after deployment, but skills that need them do not work until they are set.',
+        + 'exact prices and monthly credits that deploy_agent charges. Every plan includes every skill and connector. Required '
+        + 'credentials and the connectors can be added after deployment, but work that needs them does not run until then.',
       inputSchema: strictInput({
         template: z.string().min(1).max(200)
           .describe('Template slug or guid from list_agent_templates.'),

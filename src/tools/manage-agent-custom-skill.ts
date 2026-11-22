@@ -327,6 +327,7 @@ async function upsert(client: WiroClient, input: Input, signal: AbortSignal) {
     source: existing?.source ?? 'user-created',
     userCreated: existing ? existing.userCreated : true,
     requiresCredentials: existing?.requiresCredentials ?? [],
+    requiresConnectors: existing?.requiresConnectors ?? [],
     ownerSkills: existing?.ownerSkills,
     skillOff: existing?.skillOff,
     offSkills: existing?.offSkills,
@@ -620,6 +621,7 @@ async function revert(client: WiroClient, input: Input, signal: AbortSignal) {
       source: current?.source ?? '',
       userCreated: current?.userCreated ?? false,
       requiresCredentials: current?.requiresCredentials ?? [],
+      requiresConnectors: current?.requiresConnectors ?? [],
       ownerSkills: current?.ownerSkills,
       skillOff: current?.skillOff,
       offSkills: current?.offSkills,
@@ -653,7 +655,8 @@ export function registerManageAgentCustomSkill(server: McpServer, client: WiroCl
       description: 'Create and manage a deployed agent\'s own skills. A custom skill (key cs-...) is '
         + 'standing instructions the agent follows, for example a tone or an approval policy. A '
         + 'scheduled task (key cs-cron-...) is a prompt the agent runs by itself on a cron schedule, '
-        + 'for example a weekly report. Actions: upsert creates or updates one (a bare key such as '
+        + 'for example a weekly report. A custom skill is also how the agent learns to use a connected Connector\'s tools '
+        + '(named <connector>__<tool>, listed by list_agent_connectors): when to call which one and how. Actions: upsert creates or updates one (a bare key such as '
         + '"weekly-report" updates the agent\'s own entry of that name when there is one, and otherwise '
         + 'gets its prefix from kind or interval; the result gives the final key); rename '
         + 'changes the key of one you created; delete removes one you created together with its '
@@ -669,7 +672,8 @@ export function registerManageAgentCustomSkill(server: McpServer, client: WiroCl
         + 'on outside services by itself without waiting for the user\'s yes. A running agent restarts for a '
         + 'new entry, a schedule change, turning one on or off, a rename, a delete or a revert; a text or '
         + 'description edit usually reaches it without a restart, and the result says which happened. get_my_agent lists the '
-        + 'current entries. Registry skills are switched with apply_agent_skills instead. On a team agent '
+        + 'current entries. Registry skills are switched with apply_agent_skills, and Connectors connected with '
+        + 'connect_agent_connector. On a team agent '
         + 'this needs a team admin or the person who deployed it; other team members read each entry in full '
         + 'with get_my_agent (entry). The agents playbook (get_playbook) covers custom skills and schedules.',
       inputSchema: strictInput({

@@ -311,11 +311,11 @@ const DEPLOYED_STATUS_HELP: Record<number, string> = {
   5: 'Your agent is in an error state. Restart it with control_agent (action "restart"); '
     + 'get_agent_activity (logs) can show what went wrong. On a team agent, both need a team admin or the '
     + 'person who deployed it.',
-  6: 'Your agent\'s setup is incomplete. get_my_agent lists the missing credentials or connections; '
-    + 'complete them with set_agent_credentials, connect_agent_oauth or, for a Wiro project, bind_agent_project, then start the agent. If get_my_agent '
+  6: 'Your agent\'s setup is incomplete. get_my_agent lists the missing credentials and its connectors; '
+    + 'complete them with set_agent_credentials, connect_agent_connector or, for a Wiro project, bind_agent_project, then start the agent. If get_my_agent '
     + 'shows no active plan, pay for one with manage_agent_billing (action subscribe), which returns the price first. '
-    + 'On a team agent, a team admin or the person who deployed it saves credentials, connects accounts with '
-    + 'connect_agent_oauth and pays for the plan.',
+    + 'On a team agent, a team admin or the person who deployed it saves credentials, connects connectors with '
+    + 'connect_agent_connector and pays for the plan.',
 };
 
 // Status 1 is also an agent that stops only to start again, to load a change (a setup change, a key, a skill).

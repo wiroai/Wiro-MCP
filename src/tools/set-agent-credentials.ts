@@ -15,34 +15,23 @@ import {
   afterWriteNotes,
   agentStatusLabel,
   agentStatusOf,
-  apiBaseUrlOf,
   channelStatuses,
-  chooseConnectionMode,
-  connectionModeRequirements,
   credentialFieldShape,
-  credentialGroup,
   credentialStatus,
   customSkillEntries,
   isWritableField,
-  keyList,
   loadCredentialMeta,
-  modeContext,
-  ownAppRedirectUri,
   pausedSkillTitles,
   prepareCredentialWrite,
-  readOAuthStatus,
   readUserAgent,
   redactSecrets,
-  savedForModesText,
-  unusedCredentialNote,
+  UNKNOWN_CREDENTIAL_HINT,
   uploadFileName,
-  usableConnectionModes,
   WIRO_PROJECT_NOTE,
-  writeOnlyModesNote,
-  writeOnlyNote,
   type CredentialField,
   type CredentialMeta,
 } from '../utils/agent-config.js';
+import { readConnector } from '../utils/agent-connectors.js';
 import { fetchPublicFile, type RemoteFile } from '../utils/remote-file.js';
 import { bindProjectStep, skillOffTasksNote, toAgentDetail, WIRO_PROJECT_CREDENTIAL } from '../utils/user-agent.js';
 import { isPlainTeamMember } from '../utils/workspace.js';
@@ -92,7 +81,6 @@ const fieldDescriptionSchema = z.object({
   required: z.boolean(),
   writable: z.boolean(),
   secret: z.boolean(),
-  modes: z.array(z.string()).optional(),
   pattern: z.string().optional(),
   options: z.array(z.string()).optional(),
   // A list of objects lists its entries' keys, and the keys of a list inside an entry.
@@ -103,24 +91,14 @@ const fieldDescriptionSchema = z.object({
   placeholder: z.string().optional(),
 });
 
-const connectionModeSchema = z.object({
-  mode: z.string(),
-  available: z.boolean(),
-  needsBrowser: z.boolean(),
-  fields: z.array(z.object({ field: z.string(), label: z.string(), isSet: z.boolean(), writeOnly: z.boolean().optional() })),
-  note: z.string(),
-});
-
 const outputSchema = {
   agentGuid: z.string(),
   mode: z.enum(['describe', 'write']),
   credential: z.object({
     key: z.string(),
     title: z.string(),
-    kind: z.enum(['fields', 'sign_in', 'channel']),
+    kind: z.enum(['fields', 'channel']),
     fields: z.array(fieldDescriptionSchema),
-    connectionModes: z.array(connectionModeSchema).optional(),
-    ownAppRedirectUri: z.string().optional(),
     channel: z.object({ id: z.string(), requiredFields: z.array(z.string()) }).optional(),
     status: credentialStatusSchema.nullable(),
   }).optional(),
@@ -158,8 +136,6 @@ function valueFormat(field: CredentialField): string {
         : 'list of objects';
     case 'file':
       return 'public http(s) URL of the file; it is uploaded';
-    case 'base64-file':
-      return 'the file content, as text or base64';
     case 'boolean':
       return 'true or false';
     case 'number':
@@ -197,8 +173,7 @@ function describeField(field: CredentialField) {
     valueFormat: valueFormat(field),
     required: field.required,
     writable: isWritableField(field),
-    secret: field.encrypted || field.type === 'password' || field.type === 'fileinput-base64',
-    ...(field.onlyInModes ? { modes: field.onlyInModes } : {}),
+    secret: field.encrypted || field.type === 'password',
     ...(field.pattern ? { pattern: field.pattern } : {}),
     ...(field.options ? { options: field.options } : {}),
     ...(field.itemSchema.length > 0
@@ -216,9 +191,8 @@ function describeField(field: CredentialField) {
   };
 }
 
-function credentialKind(meta: CredentialMeta): 'fields' | 'sign_in' | 'channel' {
-  if (meta.channel) return 'channel';
-  return meta.oauth ? 'sign_in' : 'fields';
+function credentialKind(meta: CredentialMeta): 'fields' | 'channel' {
+  return meta.channel ? 'channel' : 'fields';
 }
 
 /** A field's line in the Fields list; a list of objects the user fills is followed by the keys of its entries. */
@@ -229,8 +203,7 @@ function fieldLines(field: CredentialField, depth = 0): string[] {
   const flags = [
     entries.length > 0 ? 'list of objects' : valueFormat(field),
     field.required ? 'required' : 'optional',
-    !isWritableField(field) ? (field.platformManaged ? 'managed by Wiro' : 'filled by the connection') : null,
-    field.onlyInModes ? `mode ${field.onlyInModes.join('/')}` : null,
+    !isWritableField(field) ? 'managed by Wiro' : null,
     field.pattern ? `pattern ${field.pattern}` : null,
   ].filter(Boolean).join(', ');
   const help = field.help ? `: ${field.help}` : '';
@@ -247,12 +220,12 @@ function errorMessages(body: ApiEnvelope): string[] {
     .filter(Boolean);
 }
 
-function connectModeFor(meta: CredentialMeta, written: Set<string>, authMethod?: string): string | undefined {
-  if (authMethod) return authMethod;
-  const probe = meta.oauth?.directProbe;
-  if (probe && probe.requiredFields.some(field => written.has(field))) return probe.mode;
-  if (meta.fields.some(field => written.has(field.key) && field.onlyInModes?.includes('own'))) return 'own';
-  return undefined;
+/** The error for a key that is not a credential: a connector named by it is connected with connect_agent_connector. */
+async function notACredential(client: WiroClient, key: string, signal: AbortSignal): Promise<Error> {
+  const connector = await readConnector(client, key, signal).catch(() => null);
+  return new Error(connector
+    ? `${connector.title} is a Connector, not a credential: connect it with connect_agent_connector (list_agent_connectors with name "${key}" shows what it needs). Nothing was saved.`
+    : `Unknown credential "${key}". ${UNKNOWN_CREDENTIAL_HINT}`);
 }
 
 export function registerSetAgentCredentials(server: McpServer, client: WiroClient): void {
@@ -260,40 +233,32 @@ export function registerSetAgentCredentials(server: McpServer, client: WiroClien
     'set_agent_credentials',
     {
       title: 'Set agent credentials',
-      description: 'Save credential fields on a deployed agent: API keys, bot tokens, account IDs, '
-        + 'allow lists, your own OAuth app keys, or the token for a browser-free connection. '
-        + 'Call with only credential (no fields) to see that credential\'s field keys, formats, '
-        + 'which are required, how it connects, and what is already set on this agent; nothing is '
-        + 'written then. Skip that call when list_agent_skills with name already showed the fields. '
-        + 'Then call with fields. Every field is checked before anything '
-        + 'is written; unknown or Wiro-managed fields are refused. A key file, such as a Google '
-        + 'service account JSON or an App Store .p8 key, takes the file\'s text, never a link: never '
-        + 'ask for a public link to a key (the user can also upload it on the agent\'s page in the '
-        + 'Wiro dashboard). Other file fields take a public URL and the file is uploaded. '
-        + 'Values are never echoed back. A running agent restarts to load '
-        + 'values that change, and one still stopping or queued for a restart, such as after a setup change approved '
-        + 'in its chat, loads them with that restart; a save that changes nothing leaves it running. Fields saved for a '
-        + 'sign-in integration that is not connected yet, such as its app keys or token, leave it running too: it '
-        + 'restarts once, when connect_agent_oauth completes the connection. A key the agent '
-        + 'or Wiro asks for in its chat is saved here, never sent in a message. Channels such as Telegram, Slack and Discord turn on by themselves once all '
-        + 'their required fields are set, and turn off when one is cleared. Saving a credential turns on '
-        + 'the scheduled tasks that need it, and the result names any that stay paused until a skill they need is on; '
-        + 'turn off any you do not want. Sign-in integrations (such as '
-        + 'Google Ads, YouTube, Meta and HubSpot) are then connected with connect_agent_oauth; Gmail, Google '
-        + 'Calendar and Google Drive are not sign-ins and are set here. To connect a Wiro project (credential '
-        + '"wiro"), use bind_agent_project first: it takes no key. Only save a Wiro project API key here that the '
-        + 'user gave you for this: model runs are billed to the wallet of the workspace that owns the project. '
-        + 'On a team agent this needs a team admin or the person who deployed it; other team members can read '
-        + 'the agent with get_my_agent and message it, so do not ask them for values they cannot save. '
-        + 'The agents playbook (get_playbook) has the full setup walkthrough.',
+      description: 'Save the credential fields of a deployed agent: its chat channels (Telegram, Slack, Discord: '
+        + 'bot tokens and the IDs allowed to message it), Twilio Voice, settings such as a support email or a website, '
+        + 'and the Wiro project key. Outside services are Connectors and connect with connect_agent_connector instead. '
+        + 'Call with only credential (no fields) to see that credential\'s field keys, formats, which are required and '
+        + 'what is already set on this agent; nothing is written then. Skip that call when list_agent_skills with name '
+        + 'already showed the fields. Then call with fields. Every field is checked before anything is written; unknown '
+        + 'or Wiro-managed fields are refused. File fields, such as Twilio Voice\'s hold audio, take a public URL and the '
+        + 'file is uploaded. Values are never echoed back. A running agent restarts to load values that change, and one '
+        + 'still stopping or queued for a restart, such as after a setup change approved in its chat, loads them with that '
+        + 'restart; a save that changes nothing leaves it running. A channel key the agent or Wiro asks for in its chat '
+        + 'is saved here, never sent in a message. Channels turn on by themselves once all their required fields are '
+        + 'set, and turn off when one is cleared. Saving a credential turns on the scheduled tasks that need it, and the '
+        + 'result names any that stay paused until a skill they need is on; turn off any you do not want. To connect a '
+        + 'Wiro project (credential "wiro"), use bind_agent_project first: it takes no key. Only save a Wiro project API '
+        + 'key here that the user gave you for this: model runs are billed to the wallet of the workspace that owns the '
+        + 'project. On a team agent this needs a team admin or the person who deployed it; other team members can read '
+        + 'the agent with get_my_agent and message it, so do not ask them for values they cannot save. The agents '
+        + 'playbook (get_playbook) has the full setup walkthrough.',
       inputSchema: strictInput({
         agent_guid: z.string().min(1).describe('The deployed agent\'s guid, from list_my_agents.'),
         credential: z.string().optional()
-          .describe('Describe mode: a credential key such as "telegram" or "google-ads". Used when fields is empty.'),
+          .describe('Describe mode: a credential key such as "telegram" or "twilio-voice". Used when fields is empty.'),
         fields: z.array(z.object({
-          credential: z.string().min(1).describe('Credential key, for example "telegram", "gmail" or "meta-ads".'),
-          field: z.string().min(1).describe('Field key inside that credential, for example "bottoken". Use "authmethod" to pick a connection mode (for example "api_key").'),
-          value: credentialValueSchema.describe('The value. Lists are JSON arrays; a list of objects replaces the whole list. A key file takes the file\'s text; other files take a public http(s) URL. An empty value clears an optional field. A required field cannot be cleared, except on a chat channel, which then turns off.'),
+          credential: z.string().min(1).describe('Credential key, for example "telegram", "slack" or "twilio-voice".'),
+          field: z.string().min(1).describe('Field key inside that credential, for example "bottoken".'),
+          value: credentialValueSchema.describe('The value. Lists are JSON arrays; a list of objects replaces the whole list. A file takes a public http(s) URL. An empty value clears an optional field. A required field cannot be cleared, except on a chat channel, which then turns off.'),
           parent_field: z.string().optional().describe('Only to change one entry of a list field: that list field\'s key, for example "groups".'),
           ordinal: z.number().int().min(0).optional().describe('With parent_field: the entry\'s position in the list, from 0.'),
         })).max(100).optional()
@@ -320,7 +285,13 @@ export function registerSetAgentCredentials(server: McpServer, client: WiroClien
         const keys = [...new Set(fields.map(field => field.credential.trim()))];
         const metas = new Map<string, CredentialMeta | null>();
         for (const key of keys) metas.set(key, await loadCredentialMeta(client, key, extra.signal));
-        const prepared = prepareCredentialWrite(fields, metas);
+        // A key that is no credential may name a connector, which connects with the connector tools.
+        const connectors = new Map<string, string>();
+        for (const key of keys.filter(candidate => metas.get(candidate) === null)) {
+          const connector = await readConnector(client, key, extra.signal).catch(() => null);
+          if (connector) connectors.set(key, connector.title);
+        }
+        const prepared = prepareCredentialWrite(fields, metas, connectors);
         secrets.push(...prepared.secrets);
         if (prepared.errors.length > 0) {
           return errorResult(new Error(redactSecrets(`Nothing was saved:\n\n- ${prepared.errors.join('\n- ')}`, secrets)));
@@ -416,48 +387,7 @@ export function registerSetAgentCredentials(server: McpServer, client: WiroClien
         // The credentials the setup still waits for, named as get_my_agent names them.
         const setup = row ? toAgentDetail(row) : null;
         const stillMissing = setup?.setupRequired ? setup.missingCredentials : [];
-        // Wiro does not restart an agent for fields of sign-ins that read not connected before and after the
-        // save, such as app keys or a token saved before the sign-in or token check: the connection restarts it.
-        const awaitsConnection = keys.every(key => !!metas.get(key)?.oauth
-          && statuses.find(entry => entry.key === key)?.connected === false);
-        notes.unshift(...afterWriteNotes(status, stillMissing, { awaitsConnection }));
-
-        // Connect is offered only once the mode it uses has every field saved, as
-        // describe does; the agent read back after the write says which are.
-        let nextAction;
-        for (const key of keys) {
-          const meta = metas.get(key);
-          const state = statuses.find(entry => entry.key === key);
-          if (!meta?.oauth || state?.connected || !row) continue;
-          const unusedNote = await unusedCredentialNote(client, row, key, meta.title, extra.signal);
-          if (unusedNote) {
-            notes.push(unusedNote);
-            continue;
-          }
-          const written = new Set(prepared.apiFields.filter(field => field.credentialkey === key).map(field => field.fieldname));
-          const authMethod = prepared.apiFields.find(field => field.credentialkey === key && field.fieldname === 'authmethod')?.fieldvalue;
-          const modes = connectionModeRequirements(meta, credentialGroup(row, key), { apiBase: apiBaseUrlOf(client) });
-          const mode = connectModeFor(meta, written, typeof authMethod === 'string' ? authMethod : undefined)
-            ?? chooseConnectionMode(meta, modes);
-          if (!mode || (mode === 'api_key' && !meta.oauth.directProbe)) continue;
-          // An app key reads as empty even once saved, so the ones this call saved count as set.
-          const savedNow = errors.length === 0 ? written : new Set<string>();
-          const missing = mode === 'wiro'
-            ? []
-            : (modes.find(candidate => candidate.mode === mode)?.fields ?? [])
-              .filter(field => !field.isSet && !(field.writeOnly && savedNow.has(field.field)));
-          if (missing.length > 0) {
-            notes.push(`Mode ${mode} needs ${keyList(missing.map(field => field.field))} saved first.`);
-            if (missing.some(field => field.writeOnly)) notes.push(writeOnlyNote(mode));
-            continue;
-          }
-          nextAction = {
-            tool: 'connect_agent_oauth',
-            arguments: { action: 'connect', agent_guid, credential: key, mode },
-            reason: `Connect ${meta.title} now that its fields are saved.`,
-          };
-          break;
-        }
+        notes.unshift(...afterWriteNotes(status, stillMissing));
 
         const lines = [
           errors.length > 0 ? '## Credentials partly saved' : '## Credentials saved',
@@ -482,7 +412,6 @@ export function registerSetAgentCredentials(server: McpServer, client: WiroClien
             channels,
             ...(status !== null ? { agentStatus: agentStatusLabel(status) } : {}),
             notes: notes.map(note => redactSecrets(note, secrets)),
-            ...(nextAction ? { nextAction } : {}),
           },
           ...(errors.length > 0 ? { isError: true } : {}),
         };
@@ -500,9 +429,7 @@ async function describeCredential(
   signal: AbortSignal,
 ) {
   const meta = await loadCredentialMeta(client, key, signal);
-  if (!meta) {
-    return errorResult(new Error(`Unknown credential "${key}". The credential keys a skill uses are listed by list_agent_skills and get_my_agent.`));
-  }
+  if (!meta) return errorResult(await notACredential(client, key, signal));
   const notes: string[] = [];
   let row: Record<string, unknown> | null = null;
   try {
@@ -512,18 +439,8 @@ async function describeCredential(
     if (isAgentNotFound(error)) return errorResult(error);
     notes.push(`The agent could not be read: ${errorText(error)}`);
   }
-  const group = row ? credentialGroup(row, key) : null;
   const status = row ? credentialStatus(row, key, meta) : null;
   const kind = credentialKind(meta);
-  const apiBase = apiBaseUrlOf(client);
-  // App keys read as empty in the agent's detail even once saved. Wiro's status can say they are saved, says whether
-  // the token is, and gives the redirect URI for the host this server talks to; without it, describe reads as before.
-  const oauthStatus = meta.oauth && row
-    ? await readOAuthStatus(client, agentGuid, key, meta.oauth.picker, signal).catch(() => null)
-    : null;
-  const context = modeContext(oauthStatus, apiBase);
-  const modes = meta.oauth ? connectionModeRequirements(meta, group, context) : undefined;
-  const redirectUri = meta.oauth && meta.connectionModes.includes('own') ? ownAppRedirectUri(meta, oauthStatus?.redirectUri, apiBase) : undefined;
   const fields = meta.fields.map(describeField);
 
   if (row && await isPlainTeamMember(client, row, signal)) {
@@ -536,60 +453,21 @@ async function describeCredential(
   if (meta.channel) {
     notes.push(`${meta.title} turns on by itself once these are set: ${meta.channel.requiredFields.map(field => meta.fields.find(candidate => candidate.key === field)?.label ?? field).join(', ')}. Clearing one turns it off.`);
   }
-  const usableModes = usableConnectionModes(meta);
-  if (usableModes.length > 0) {
-    notes.push(`To choose how it connects, set field authmethod to one of: ${usableModes.join(', ')}.`);
-  }
-  const savedForModes = meta.oauth ? savedForModesText(meta, context) : '';
-  if (savedForModes) notes.push(savedForModes);
   if (key === WIRO_PROJECT_CREDENTIAL) notes.push(WIRO_PROJECT_NOTE);
-
-  const unusedNote = row && meta.oauth && !status?.connected
-    ? await unusedCredentialNote(client, row, key, meta.title, signal)
-    : null;
-  if (unusedNote) notes.push(unusedNote);
-
-  let nextAction;
-  if (key === WIRO_PROJECT_CREDENTIAL) {
-    nextAction = bindProjectStep(agentGuid, 'Connect a Wiro project to this agent.');
-  } else if (meta.oauth && modes && !status?.connected && !unusedNote) {
-    const mode = chooseConnectionMode(meta, modes);
-    if (!mode) {
-      const appKeys = writeOnlyModesNote(modes);
-      if (appKeys) notes.push(appKeys);
-    } else if (!(mode === 'api_key' && !meta.oauth.directProbe)) {
-      // The only usable mode is chosen even when its fields are not saved yet.
-      const missing = mode === 'wiro'
-        ? []
-        : (modes.find(candidate => candidate.mode === mode)?.fields ?? []).filter(field => !field.isSet);
-      if (missing.length > 0) {
-        notes.push(`Mode ${mode} needs ${keyList(missing.map(field => field.field))} saved first.`);
-        if (missing.some(field => field.writeOnly)) notes.push(writeOnlyNote(mode));
-      } else {
-        nextAction = {
-          tool: 'connect_agent_oauth',
-          arguments: { action: 'connect', agent_guid: agentGuid, credential: key, mode },
-          reason: mode === 'wiro'
-            ? `Start the ${meta.title} sign-in; the user approves it in a browser.`
-            : `Everything mode ${mode} needs is saved; connect ${meta.title}.`,
-        };
-      }
-    }
-  }
+  const nextAction = key === WIRO_PROJECT_CREDENTIAL
+    ? bindProjectStep(agentGuid, 'Connect a Wiro project to this agent.')
+    : undefined;
 
   const lines = [
     `## ${meta.title} (${key})`,
     '',
     status
-      ? `**On this agent:** ${status.connected ? 'connected' : kind === 'sign_in' ? 'not connected' : status.filled ? 'set' : 'not complete'}${status.missingFields.length > 0 ? `; missing ${status.missingFields.join(', ')}` : ''}`
+      ? `**On this agent:** ${status.connected ? 'connected' : status.filled ? 'set' : 'not complete'}${status.missingFields.length > 0 ? `; missing ${status.missingFields.join(', ')}` : ''}`
       : `**On this agent:** ${row ? 'not set yet' : 'could not be read'}`,
     '',
     '### Fields',
     '',
     ...meta.fields.flatMap(field => fieldLines(field)),
-    ...(modes
-      ? ['', '### How it connects', '', ...modes.filter(mode => mode.available).map(mode => `- **${mode.mode}**: ${mode.note}${mode.fields.length > 0 ? ` Fields: ${mode.fields.map(field => `${field.field}${field.isSet ? ' (set)' : ''}`).join(', ')}.` : ''}`)]
-      : []),
     ...(notes.length > 0 ? ['', ...notes.map(note => `- ${note}`)] : []),
   ];
 
@@ -603,8 +481,6 @@ async function describeCredential(
         title: meta.title,
         kind,
         fields,
-        ...(modes ? { connectionModes: modes } : {}),
-        ...(redirectUri ? { ownAppRedirectUri: redirectUri } : {}),
         ...(meta.channel ? { channel: meta.channel } : {}),
         status,
       },

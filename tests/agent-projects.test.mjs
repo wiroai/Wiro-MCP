@@ -69,8 +69,8 @@ function wiroGroup(saved = '') {
 }
 
 const WIRO_SKILL_ON = {
-  skills: [{ name: 'int-wiro-aimodels', enabled: true, _edited: false }],
-  skillsmeta: { 'int-wiro-aimodels': { requires_credentials: true, credential_key: 'wiro' } },
+  skills: [{ name: 'util-video-creator', enabled: true, _edited: false }],
+  skillsmeta: { 'util-video-creator': { requires_credentials: true, credential_key: 'wiro' } },
 };
 const NO_WIRO_SKILL = {
   skills: [{ name: 'util-chat-markdown-reporting', enabled: true, _edited: false }],
@@ -107,7 +107,7 @@ const SKILL_LIST = {
   errors: [],
   channels: [],
   skills: [
-    { name: 'int-wiro-aimodels', title: 'Wiro AI Models', depends_on: [], conflicts_with: [], credential_key: 'wiro', requires_credentials: true, pricing: {} },
+    { name: 'util-video-creator', title: 'Video Creator', depends_on: [], conflicts_with: [], credential_key: 'wiro', requires_credentials: true, pricing: {} },
     { name: 'util-chat-markdown-reporting', title: 'Reports', depends_on: [], conflicts_with: [], requires_credentials: false, pricing: {} },
   ],
 };
@@ -530,7 +530,7 @@ test('bind_agent_project warns when no active skill uses a project, and the bind
     assert.notEqual(result.isError, true, text(result));
     assert.equal(result.structuredContent.state, 'preview');
     assert.deepEqual(result.structuredContent.warnings, [
-      'No active skill of this agent uses a Wiro project yet, so connecting one changes nothing until one does. Turn on Wiro AI Models (`int-wiro-aimodels`) with apply_agent_skills to use it.',
+      'No active skill of this agent uses a Wiro project yet, so connecting one changes nothing until one does. Turn on Video Creator (`util-video-creator`) with apply_agent_skills to use it.',
     ]);
     assert.deepEqual(result.structuredContent.nextAction.arguments, { agent_guid: AGENT, project_id: '102', confirm: true });
     assert.match(text(result), /Warning: No active skill of this agent uses a Wiro project yet/);
@@ -800,12 +800,12 @@ test('bind_agent_project names the skill a task it turns on still waits for', as
     key, description: 'Images', value: 'Make the images.', interval: '0 9 * * 1', enabled: false, requires_credentials: ['wiro'], _source: owners ? 'skill-bundle' : 'user-created', _editable: true,
     ...(owners ? { _owner_skills: owners, _skill_off: true, _off_skills: [owners] } : { _user_created: true }),
   });
-  const row = detail({ ...NO_WIRO_SKILL, credentials: {}, customskills: [], scheduledskills: [task('cs-cron-weekly-images', ['int-wiro-aimodels']), task('cs-cron-monthly-images', null)] });
+  const row = detail({ ...NO_WIRO_SKILL, credentials: {}, customskills: [], scheduledskills: [task('cs-cron-weekly-images', ['util-video-creator']), task('cs-cron-monthly-images', null)] });
   await withTools(routes({ '/UserAgent/Detail': row }), async ({ call }) => {
     const preview = await call('bind_agent_project', { agent_guid: AGENT });
     assert.notEqual(preview.isError, true, text(preview));
     assert.equal(preview.structuredContent.state, 'preview');
-    const note = 'Weekly Images (`cs-cron-weekly-images`) and Monthly Images (`cs-cron-monthly-images`) turn on once the project is connected. Weekly Images (`cs-cron-weekly-images`) stays paused until Wiro AI Models (`int-wiro-aimodels`) is on. Every run of a scheduled task uses credits; turn off any you do not want with manage_agent_custom_skill.';
+    const note = 'Weekly Images (`cs-cron-weekly-images`) and Monthly Images (`cs-cron-monthly-images`) turn on once the project is connected. Weekly Images (`cs-cron-weekly-images`) stays paused until Video Creator (`util-video-creator`) is on. Every run of a scheduled task uses credits; turn off any you do not want with manage_agent_custom_skill.';
     assert.ok(preview.structuredContent.notes.includes(note), JSON.stringify(preview.structuredContent.notes));
     assert.ok(text(preview).includes(note));
   });
@@ -940,24 +940,24 @@ test('bind_agent_project says what the setup still waits for, and the route deci
   const row = detail({
     setuprequired: true,
     status: 4,
-    skills: [{ name: 'int-wiro-aimodels', enabled: true }, { name: 'int-serper-search', enabled: true }],
+    skills: [{ name: 'util-video-creator', enabled: true }, { name: 'util-voice-receptionist', enabled: true }],
     skillsmeta: {
-      'int-wiro-aimodels': { requires_credentials: true, credential_key: 'wiro' },
-      'int-serper-search': { requires_credentials: true, credential_key: 'serper' },
+      'util-video-creator': { requires_credentials: true, credential_key: 'wiro' },
+      'util-voice-receptionist': { requires_credentials: true, credential_key: 'twilio-voice' },
     },
     credentials: {
       wiro: wiroGroup(OWN_KEY),
-      serper: { apikey: '', optional: false, _connected: false, _filled: false, _required_missing: true, _schema: { title: 'Serper', oauth_provider: null } },
+      'twilio-voice': { accountsid: '', optional: false, _connected: false, _filled: false, _required_missing: true, _schema: { title: 'Twilio Voice', oauth_provider: null } },
     },
   });
   await withTools(routes({ '/UserAgent/Detail': row, '/UserAgent/CredentialProjectBind': bound({ id: '101', name: 'Second Project' }, { restart: 'none' }) }), async ({ call }) => {
     const result = await call('bind_agent_project', { agent_guid: AGENT, project_id: '101', confirm: true });
     assert.deepEqual(result.structuredContent.notes, [
       'The agent is not running and uses the project when it next starts.',
-      'Setup is not finished: still missing Serper. Set it with set_agent_credentials, then check with get_my_agent.',
+      'Setup is not finished: still missing Twilio Voice. Set it with set_agent_credentials, then check with get_my_agent.',
     ]);
     assert.equal(result.structuredContent.nextAction.tool, 'set_agent_credentials');
-    assert.deepEqual(result.structuredContent.nextAction.arguments, { agent_guid: AGENT, credential: 'serper' });
+    assert.deepEqual(result.structuredContent.nextAction.arguments, { agent_guid: AGENT, credential: 'twilio-voice' });
   });
 });
 
@@ -1147,7 +1147,7 @@ test('get_my_agent on an agent missing the project leads to bind_agent_project',
   const missing = detail({ setuprequired: true });
   await withTools(routes({ '/UserAgent/Detail': missing }), async ({ call }) => {
     const result = await call('get_my_agent', { agent_guid: AGENT });
-    assert.deepEqual(result.structuredContent.agent.missingCredentials, [{ key: 'wiro', title: 'Wiro AI Models', oauth: false }]);
+    assert.deepEqual(result.structuredContent.agent.missingCredentials, [{ key: 'wiro', title: 'Wiro AI Models' }]);
     assert.deepEqual(result.structuredContent.nextAction, {
       tool: 'bind_agent_project',
       arguments: { agent_guid: AGENT },
@@ -1169,13 +1169,13 @@ test('get_my_agent on an agent missing the project leads to bind_agent_project',
   // Another credential first: unchanged.
   const other = detail({
     setuprequired: true,
-    skills: [{ name: 'int-serper-search', enabled: true }, { name: 'int-wiro-aimodels', enabled: true }],
+    skills: [{ name: 'util-voice-receptionist', enabled: true }, { name: 'util-video-creator', enabled: true }],
     skillsmeta: {
-      'int-serper-search': { requires_credentials: true, credential_key: 'serper' },
-      'int-wiro-aimodels': { requires_credentials: true, credential_key: 'wiro' },
+      'util-voice-receptionist': { requires_credentials: true, credential_key: 'twilio-voice' },
+      'util-video-creator': { requires_credentials: true, credential_key: 'wiro' },
     },
     credentials: {
-      serper: { apikey: '', optional: false, _connected: false, _filled: false, _required_missing: true, _schema: { title: 'Serper', oauth_provider: null } },
+      'twilio-voice': { accountsid: '', optional: false, _connected: false, _filled: false, _required_missing: true, _schema: { title: 'Twilio Voice', oauth_provider: null } },
       wiro: wiroGroup(),
     },
   });
@@ -1183,8 +1183,8 @@ test('get_my_agent on an agent missing the project leads to bind_agent_project',
     const read = await call('get_my_agent', { agent_guid: AGENT });
     const { nextAction } = read.structuredContent;
     assert.equal(nextAction.tool, 'set_agent_credentials');
-    assert.deepEqual(nextAction.arguments, { agent_guid: AGENT, credential: 'serper' });
-    assert.match(text(read), /Set Serper with set_agent_credentials, connect Wiro AI Models with bind_agent_project, then check with get_my_agent\./);
+    assert.deepEqual(nextAction.arguments, { agent_guid: AGENT, credential: 'twilio-voice' });
+    assert.match(text(read), /Set Twilio Voice with set_agent_credentials, connect Wiro AI Models with bind_agent_project, then check with get_my_agent\./);
   });
 });
 
@@ -1196,7 +1196,7 @@ const WIRO_CREDENTIAL = {
   wiro_connect_pending: false,
   credential_schema: [{ key: 'apikey', type: 'custom:wiro-project-picker', label: 'Wiro Project', required: true, encrypted: true, help: '<p>The Wiro project the agent runs models with. In the dashboard, pick it from your projects. Through the API, call UserAgent/CredentialProjectBind with the project\'s id from Project/List.</p>' }],
   oauth_provider: null,
-  used_by_skills: ['int-wiro-aimodels'],
+  used_by_skills: ['util-video-creator'],
 };
 
 test('set_agent_credentials leads with bind_agent_project for a Wiro project', async () => {
@@ -1222,31 +1222,30 @@ test('set_agent_credentials leads with bind_agent_project for a Wiro project', a
 });
 
 test('the notes after a write name the tool that gives each missing credential', () => {
-  const project = { key: 'wiro', title: 'Wiro AI Models', oauth: false };
-  const field = { key: 'serper', title: 'Serper', oauth: false };
-  const signIn = { key: 'hubspot', title: 'HubSpot', oauth: true };
+  const project = { key: 'wiro', title: 'Wiro AI Models' };
+  const field = { key: 'twilio-voice', title: 'Twilio Voice' };
+  const channel = { key: 'telegram', title: 'Telegram' };
   assert.equal(setupStillMissingNote([]), null);
   assert.equal(setupStillMissingNote([project]), 'Setup is not finished: still missing Wiro AI Models. Connect it with bind_agent_project, then check with get_my_agent.');
-  assert.equal(setupStillMissingNote([field]), 'Setup is not finished: still missing Serper. Set it with set_agent_credentials, then check with get_my_agent.');
-  assert.equal(setupStillMissingNote([signIn]), 'Setup is not finished: still missing HubSpot. Connect it with connect_agent_oauth, then check with get_my_agent.');
-  assert.equal(setupStillMissingNote([field, signIn]), 'Setup is not finished: still missing Serper and HubSpot. Set Serper with set_agent_credentials, connect HubSpot with connect_agent_oauth, then check with get_my_agent.');
-  assert.equal(setupStillMissingNote([project, field, signIn]), 'Setup is not finished: still missing Wiro AI Models, Serper and HubSpot. Set Serper with set_agent_credentials, connect HubSpot with connect_agent_oauth, connect Wiro AI Models with bind_agent_project, then check with get_my_agent.');
+  assert.equal(setupStillMissingNote([field]), 'Setup is not finished: still missing Twilio Voice. Set it with set_agent_credentials, then check with get_my_agent.');
+  assert.equal(setupStillMissingNote([field, channel]), 'Setup is not finished: still missing Twilio Voice and Telegram. Set them with set_agent_credentials, then check with get_my_agent.');
+  assert.equal(setupStillMissingNote([project, field]), 'Setup is not finished: still missing Wiro AI Models and Twilio Voice. Set Twilio Voice with set_agent_credentials, connect Wiro AI Models with bind_agent_project, then check with get_my_agent.');
 });
 
 test('deploy_agent says bind_agent_project connects the project, in the quote and the result', async () => {
-  const skill = { name: 'int-wiro-aimodels', title: 'Wiro AI Models', credential_key: 'wiro', requires_credentials: true, depends_on: [], conflicts_with: [], pricing: {} };
+  const skill = { name: 'util-video-creator', title: 'Video Creator', credential_key: 'wiro', requires_credentials: true, depends_on: [], conflicts_with: [], pricing: {} };
   const created = agentRow({ setuprequired: true, status: 2 });
   const sentence = 'bind_agent_project connects a project after deployment, with no key to paste.';
   await withTools(routes({
     '/Skills/List': { result: true, errors: [], channels: [], skills: [skill] },
-    '/UserAgent/PricingPreview': { result: true, errors: [], totalPriceUsd: 4, totalMonthlyCredits: 400, enabledSkills: ['int-wiro-aimodels'] },
+    '/UserAgent/PricingPreview': { result: true, errors: [], totalPriceUsd: 4, totalMonthlyCredits: 400, enabledSkills: ['util-video-creator'] },
     '/UserAgent/Deploy': { result: true, errors: [], useragents: [created] },
     '/UserAgent/Detail': { result: true, errors: [], useragents: [created] },
   }), async ({ call }) => {
-    const args = { custom: true, title: 'Creative', tier: 'starter', skills: ['int-wiro-aimodels'] };
+    const args = { custom: true, title: 'Creative', tier: 'starter', skills: ['util-video-creator'] };
     const quote = await call('deploy_agent', args);
     assert.notEqual(quote.isError, true, text(quote));
-    assert.ok(text(quote).includes(`- After deployment the user must provide: Wiro AI Models credentials (\`wiro\`). ${sentence}`), text(quote));
+    assert.ok(text(quote).includes(`- After deployment the user must provide: Video Creator credentials (\`wiro\`). ${sentence}`), text(quote));
 
     const deployed = await call('deploy_agent', { ...args, confirm: true, confirm_charge_usd: 4 });
     assert.notEqual(deployed.isError, true, text(deployed));
@@ -1255,13 +1254,13 @@ test('deploy_agent says bind_agent_project connects the project, in the quote an
   });
 
   // Without it, neither line changes.
-  const other = { name: 'int-serper-search', title: 'Serper', credential_key: 'serper', requires_credentials: true, depends_on: [], conflicts_with: [], pricing: {} };
+  const other = { name: 'util-voice-receptionist', title: 'Voice Receptionist', credential_key: 'twilio-voice', requires_credentials: true, depends_on: [], conflicts_with: [], pricing: {} };
   await withTools(routes({
     '/Skills/List': { result: true, errors: [], channels: [], skills: [other] },
-    '/UserAgent/PricingPreview': { result: true, errors: [], totalPriceUsd: 4, totalMonthlyCredits: 400, enabledSkills: ['int-serper-search'] },
+    '/UserAgent/PricingPreview': { result: true, errors: [], totalPriceUsd: 4, totalMonthlyCredits: 400, enabledSkills: ['util-voice-receptionist'] },
   }), async ({ call }) => {
-    const quote = await call('deploy_agent', { custom: true, title: 'Search', tier: 'starter', skills: ['int-serper-search'] });
-    assert.ok(text(quote).includes('- After deployment the user must provide: Serper credentials (`serper`).\n'), text(quote));
+    const quote = await call('deploy_agent', { custom: true, title: 'Search', tier: 'starter', skills: ['util-voice-receptionist'] });
+    assert.ok(text(quote).includes('- After deployment the user must provide: Voice Receptionist credentials (`twilio-voice`).\n'), text(quote));
     assert.doesNotMatch(text(quote), /bind_agent_project/);
   });
 });
@@ -1298,7 +1297,7 @@ test('get_agent_template and list_agent_skills say the same about a Wiro project
   });
 });
 
-test('apply_agent_skills and connect_agent_oauth point a Wiro project to bind_agent_project', async () => {
+test('apply_agent_skills and set_agent_credentials point a Wiro project to bind_agent_project', async () => {
   const row = detail({ ...NO_WIRO_SKILL, credentials: {} });
   const afterApply = (_body, calls) => (calls.some(item => item.path === '/UserAgent/SkillsApply') ? detail() : structuredClone(row));
   await withTools(routes({
@@ -1307,25 +1306,25 @@ test('apply_agent_skills and connect_agent_oauth point a Wiro project to bind_ag
     '/UserAgent/SkillsApply': { result: true, errors: [], restartTriggered: true },
     '/Credentials/Detail': { result: true, errors: [], credential: WIRO_CREDENTIAL },
   }), async ({ call }) => {
-    const applied = await call('apply_agent_skills', { agent_guid: AGENT, skills: { 'int-wiro-aimodels': true } });
+    const applied = await call('apply_agent_skills', { agent_guid: AGENT, skills: { 'util-video-creator': true } });
     assert.notEqual(applied.isError, true, text(applied));
     assert.equal(applied.structuredContent.nextAction.tool, 'bind_agent_project');
     assert.deepEqual(applied.structuredContent.nextAction.arguments, { agent_guid: AGENT });
-    assert.ok(text(applied).includes('**Still needed:** credentials for Wiro AI Models (`int-wiro-aimodels`): Wiro AI Models (`wiro`). Connect the Wiro project with bind_agent_project, with no key to paste.'), text(applied));
-    assert.doesNotMatch(text(applied), /set_agent_credentials|connect_agent_oauth/);
+    assert.ok(text(applied).includes('**Still needed:** credentials for Video Creator (`util-video-creator`): Wiro AI Models (`wiro`). Connect the Wiro project with bind_agent_project, with no key to paste.'), text(applied));
+    assert.doesNotMatch(text(applied), /set_agent_credentials|connect_agent_/);
 
-    const signIn = await call('connect_agent_oauth', { agent_guid: AGENT, credential: 'wiro' });
-    assert.equal(signIn.isError, true);
-    assert.match(text(signIn), /Wiro AI Models is not a sign-in connection\. Connect a Wiro project with bind_agent_project, with no key to paste\./);
+    const described = await call('set_agent_credentials', { agent_guid: AGENT, credential: 'wiro' });
+    assert.notEqual(described.isError, true, text(described));
+    assert.equal(described.structuredContent.nextAction.tool, 'bind_agent_project');
   });
 });
 
 test('the still-needed line of apply_agent_skills names the tool each kind of credential takes', async () => {
-  const skills = [...SKILL_LIST.skills, { name: 'int-googleads', title: 'Google Ads', depends_on: [], conflicts_with: [], credential_key: 'google-ads', requires_credentials: true, pricing: {} }];
+  const skills = [...SKILL_LIST.skills, { name: 'util-campaign-planner', title: 'Campaign Planner', depends_on: [], conflicts_with: [], credential_key: 'var-website', requires_credentials: true, pricing: {} }];
   const cases = [
-    [{ 'int-wiro-aimodels': true }, 'Wiro AI Models (`int-wiro-aimodels`): Wiro (`wiro`). Connect the Wiro project with bind_agent_project, with no key to paste.'],
-    [{ 'int-wiro-aimodels': true, 'int-googleads': true }, 'Wiro AI Models (`int-wiro-aimodels`): Wiro (`wiro`); Google Ads (`int-googleads`): Google Ads (`google-ads`). Connect the Wiro project with bind_agent_project, with no key to paste. Set the others with set_agent_credentials or connect_agent_oauth.'],
-    [{ 'int-googleads': true }, 'Google Ads (`int-googleads`): Google Ads (`google-ads`). Set them with set_agent_credentials or connect_agent_oauth.'],
+    [{ 'util-video-creator': true }, 'Video Creator (`util-video-creator`): Wiro (`wiro`). Connect the Wiro project with bind_agent_project, with no key to paste.'],
+    [{ 'util-video-creator': true, 'util-campaign-planner': true }, 'Video Creator (`util-video-creator`): Wiro (`wiro`); Campaign Planner (`util-campaign-planner`): Var Website (`var-website`). Connect the Wiro project with bind_agent_project, with no key to paste. Set the others with set_agent_credentials.'],
+    [{ 'util-campaign-planner': true }, 'Campaign Planner (`util-campaign-planner`): Var Website (`var-website`). Set them with set_agent_credentials.'],
   ];
   for (const [change, expected] of cases) {
     await withTools(routes({
@@ -1354,7 +1353,7 @@ test('the instructions, the playbooks and the prompts lead the same way', async 
   for (const [topic, markdown] of Object.entries(PLAYBOOKS)) {
     assert.doesNotMatch(markdown, /Wiro API key saved|that key's wallet|Set that key only/, topic);
   }
-  assert.match(PLAYBOOKS['getting-started'], /`disconnect_agent_oauth`, `bind_agent_project`, /);
+  assert.match(PLAYBOOKS['getting-started'], /`disconnect_agent_connector`, `bind_agent_project`, /);
 
   await withTools({}, async ({ client }) => {
     const prompt = await client.getPrompt({ name: 'deploy_agent', arguments: { goal: 'make images' } });

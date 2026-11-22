@@ -45,7 +45,6 @@ import {
   setupResultActed,
   setupResultSchema,
   type SetupResult,
-  type SignInNeedMode,
 } from './agent-setup.js';
 import { createMediaContent, guessMimeType, isWiroHostedUrl, type MediaItem } from './media.js';
 import { DEFAULT_WAIT_SECONDS, defaultInterval, pollUntil, reportProgress, type ToolCallContext } from './poll.js';
@@ -844,15 +843,16 @@ function chooseNextAction(
  * The step after a deployed agent's reply that proposes setup changes, after
  * Wiro listed them, or after Wiro applied one. A change is applied only when the
  * user approves it: their "yes" as the next message, which Wiro matches itself,
- * or a key saved with set_agent_credentials. Sent with an API key, the first
- * "yes" only gets Wiro's listing of the exact change; the next "yes" (or
- * "yes N") applies it. A key never goes in a chat message. Only a connect
- * asks for a key: a disconnect removes the saved one and is approved with a
- * reply like the other changes. An add and a remove are approved with a reply
- * too; for an add that brings a connector connected with a key, the user gives
- * that key together with their yes, so it is saved as the very next step once
- * the add is applied and the restart the add started loads the key too. Wiro
- * answers such replies whatever the agent's status, restarts included.
+ * or a key saved with connect_agent_connector (set_agent_credentials for a chat
+ * channel). Sent with an API key, the first "yes" only gets Wiro's listing of
+ * the exact change; the next "yes" (or "yes N") applies it. A key never goes in
+ * a chat message. Only a connect asks for a key: a disconnect removes the
+ * connection and is approved with a reply like the other changes. An add and a
+ * remove are approved with a reply too; for an add that needs a connector
+ * connected with a key, the user gives that key together with their yes, so it
+ * is saved as the very next step once the add is applied and the restart the
+ * add started loads the key too. Wiro answers such replies whatever the agent's
+ * status, restarts included.
  */
 function setupNextAction(target: AgentTarget, result: AgentTurnResult): NextAction | undefined {
   const guid = target.agentGuid;
@@ -887,15 +887,15 @@ function setupNextAction(target: AgentTarget, result: AgentTurnResult): NextActi
   }
   const open = (result.message.setupChanges ?? []).filter(change => isApprovableByReply(change));
   if (open.length === 0) return undefined;
-  // An add that brings a connector's key: the key comes with the user's yes and is saved once the add is applied,
+  // An add that needs a connector's key: the key comes with the user's yes and is saved once the add is applied,
   // while the agent is still stopping or queued for its restart, which lasts only seconds.
   const addWithKey = open.some(change => change.kind === 'add' && change.needs?.some(need => need.mode === 'key'));
   const key = addWithKey
-    ? ' For a key, use set_agent_credentials instead of a chat message: ask the user for it together with their yes, '
-      + 'and save it as soon as the change that brings its connector is applied, with no wait in between, so one '
+    ? ' For a key, use connect_agent_connector instead of a chat message: ask the user for it together with their yes, '
+      + 'and save it as soon as the change that needs its connector is applied, with no wait in between, so one '
       + 'restart loads both.'
     : open.some(change => change.kind === 'connect')
-      ? ' For a key, use set_agent_credentials instead of a chat message.'
+      ? ' For a key, use connect_agent_connector (set_agent_credentials for a chat channel) instead of a chat message.'
       : '';
   if (open.some(change => change.kind !== 'connect')) {
     return {
@@ -912,40 +912,27 @@ function setupNextAction(target: AgentTarget, result: AgentTurnResult): NextActi
   }
   const card = open.find(change => change.kind === 'connect');
   const connector = card?.connector;
-  // A connector that an applied add brought keeps connecting the way the add said; a reply never connects it.
+  // A connector that an applied add needed keeps connecting the way the add said; a reply never connects it.
   const mode = card ? connectCardMode(card, result.message.setupChanges ?? []) : undefined;
-  if (connector && isSignInNeedMode(mode)) return signInConnectStep(guid, connector, mode);
+  if (connector && isSignInNeedMode(mode)) return signInConnectStep(guid, connector);
+  // The card names a Connector or a chat channel; the catalog read says which, and what to ask for.
   return {
-    tool: 'set_agent_credentials',
-    arguments: { agent_guid: guid, ...(connector ? { credential: connector } : {}) },
-    reason: 'The agent asks for a key or sign-in. This call only lists the connector\'s fields: ask the user for the '
-      + 'value and save it with set_agent_credentials, never in a chat message.',
+    tool: 'list_agent_connectors',
+    arguments: { ...(connector ? { name: connector } : {}), agent_guid: guid },
+    reason: 'The agent asks for a key or sign-in. This call only shows what it needs (a chat channel is pointed to '
+      + 'set_agent_credentials): ask the user for the values and save them with connect_agent_connector, never in a '
+      + 'chat message.',
   };
 }
 
-/**
- * The first step for a connect card's connector that connects with a sign-in, the user's own app keys or a token:
- * a sign-in starts with connect_agent_oauth; app keys and a token are saved first, so their fields come first.
- */
-function signInConnectStep(guid: string, connector: string, mode: SignInNeedMode): NextAction {
-  const pageNote = ' The user can also connect it on the agent page. Never ask for keys, tokens or passwords in a '
-    + 'chat message.';
-  if (mode === 'signin') {
-    return {
-      tool: 'connect_agent_oauth',
-      arguments: { action: 'connect', agent_guid: guid, credential: connector },
-      reason: 'This connector connects with a sign-in, and a reply does not connect it. This call returns the sign-in '
-        + `link for the user to open in their own browser.${pageNote}`,
-    };
-  }
-  const what = mode === 'appkeys'
-    ? { how: 'the user\'s own app keys, then a sign-in', shows: 'the app key fields, whether they are saved and the redirect URI the app allows', saved: 'the keys' }
-    : { how: 'its token, which Wiro checks', shows: 'the token field and whether it is saved', saved: 'the token' };
+/** The first step for a connect card's connector that connects with a sign-in: connect_agent_connector returns its link. */
+function signInConnectStep(guid: string, connector: string): NextAction {
   return {
-    tool: 'set_agent_credentials',
-    arguments: { agent_guid: guid, credential: connector },
-    reason: `This connector connects with ${what.how}, and a reply does not connect it. This call only shows `
-      + `${what.shows}: save ${what.saved} with set_agent_credentials, then connect with connect_agent_oauth.${pageNote}`,
+    tool: 'connect_agent_connector',
+    arguments: { action: 'connect', agent_guid: guid, connector },
+    reason: 'This connector connects with a sign-in, and a reply does not connect it. This call returns the sign-in '
+      + 'link for the user to open in their own browser, or lists the keys of the user\'s own app it needs first. The '
+      + 'user can also connect it on the agent page. Never ask for keys, tokens or passwords in a chat message.',
   };
 }
 

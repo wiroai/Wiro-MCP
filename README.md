@@ -18,7 +18,7 @@ Official MCP server for Wiro AI: run image, video, audio and LLM models, build a
 
 - **Models**: search the Wiro AI model catalog, read a model's parameters and price, run it and wait for the result, upload input files and browse past tasks.
 - **Workflows**: build multi-step workflows that chain models, run them, resume failed runs, browse the public gallery, and design workflows together with the Workflow Agent.
-- **Agents**: talk to Studio, the creative agent that runs models for you, and deploy, configure, run and message your own agents built from templates or from scratch.
+- **Agents**: talk to Studio, the creative agent that runs models for you, and deploy, configure, run and message your own agents built from templates or from scratch, with the outside services they work with connected as connectors.
 - **Controls**: see and change your workspace's Spend Limits and Model Access rules, the caps on what it spends and the rules on which models it runs, always after a change summary you confirm.
 
 Playbooks explain each job step by step, so the assistant knows the order of calls, what costs money and what needs your approval. The hosted server at `https://mcp.wiro.ai/v1` serves the same tools with nothing to install.
@@ -314,17 +314,19 @@ your wallet after each reply. Your own agents run on a monthly plan with credits
 | Tool | Description |
 |------|-------------|
 | `list_agent_templates` | Browse ready-made agent templates and the three monthly plans |
-| `get_agent_template` | Read a template's skills, plans, and the accounts and keys it needs |
+| `get_agent_template` | Read a template's skills, plans, the connectors it suggests and the keys it needs |
 | `list_agent_skills` | Browse the skills an agent can have, and what each one needs to work |
+| `list_agent_connectors` | Browse the connectors an agent can connect (ad accounts, stores, social accounts, mailboxes, data sources), what each one needs and the tools it gives the agent; with an agent, its connections |
 | `deploy_agent` | Deploy an agent from a template or build one from skills, on the Starter, Pro or Max plan; shows the plan's price, the wallet it charges and the other plans' prices, and asks before charging |
 | `list_my_agents` | List your agents with their status, plan and credits |
 | `get_my_agent` | Read one agent's setup, plan and credits; can wait until it is running |
 | `control_agent` | Start, stop or restart an agent |
 | `update_agent` | Change an agent's name, description, time zone, models, chat commands and setup from chat |
 | `apply_agent_skills` | Turn skills on or off; every plan includes every skill, so a change costs nothing |
-| `set_agent_credentials` | Save the keys, tokens and settings an agent's skills and channels need, such as a Telegram bot token or a Gmail app password |
-| `connect_agent_oauth` | Connect sign-in accounts such as HubSpot or X for the services an agent's skills use; you approve the connection in your browser. Some services need your own app keys or a token first |
-| `disconnect_agent_oauth` | Disconnect a connected account, after your confirmation |
+| `set_agent_credentials` | Save an agent's chat channel keys (such as a Telegram bot token), Twilio Voice and settings |
+| `connect_agent_connector` | Connect a connector to an agent: save its keys, or start its sign-in, which you approve in your browser. A connector that runs with a Wiro project shows the project and its wallet first |
+| `set_agent_connector_accounts` | Choose the accounts a connected connector may act on, such as its ad accounts, pages or channels |
+| `disconnect_agent_connector` | Disconnect a connector from an agent, after your confirmation |
 | `list_projects` | List the projects of the connected project's workspace, to pick one for an agent; no keys are shown |
 | `bind_agent_project` | Connect an agent to a Wiro project so it can run models, with no key in the chat; shows the project first, then asks for your confirmation |
 | `manage_agent_custom_skill` | Add, edit, schedule, restore or remove an agent's own instructions and scheduled tasks; turning off its approval policy or changing its rules needs your confirmation |
@@ -405,12 +407,13 @@ those tools first return the price (for a move inside a billing period, the
 amount Wiro works out for the time left) and only act when called again with
 `confirm: true` and `confirm_charge_usd`, the approved amount, after you agree.
 If the price changed in between, nothing is charged and you get a new quote.
-Turning an agent's skills on or off costs nothing, since every plan includes
-every skill. A move to a smaller plan starts with the next renewal, with
-nothing charged or refunded, and waits for `confirm: true` too. Deleting a
-workflow, an agent, a conversation or an account connection also waits for
-`confirm: true`,
-and so do connecting an agent to a Wiro project with `bind_agent_project` and
+Turning an agent's skills on or off costs nothing, and so does connecting its
+connectors, since every plan includes every skill and connector. A move to a smaller plan
+starts with the next renewal, with nothing charged or refunded, and waits for
+`confirm: true` too. Deleting a workflow, an agent, a conversation or a
+connector connection also waits for `confirm: true`, and so do replacing a
+working connector connection, connecting an agent or a connector to a Wiro
+project with `bind_agent_project` or `connect_agent_connector`, and
 replacing a workflow's steps with `update_workflow` or
 `save_workflow_from_agent`: you see a summary of the change first, with the old
 and new value of each step input that changes. Changing a spend limit or a Model
@@ -526,7 +529,7 @@ Workflow Agent chain:
 `send_agent_message (agent "workflow-agent") → get_agent_message → save_workflow_from_agent → run_workflow`
 
 Agent chain:
-`list_agent_templates → get_agent_template → deploy_agent → set_agent_credentials / connect_agent_oauth / bind_agent_project → control_agent → send_agent_message`
+`list_agent_templates → get_agent_template → deploy_agent → list_agent_connectors → connect_agent_connector / set_agent_credentials / bind_agent_project → control_agent → send_agent_message`
 
 Controls chain:
 `get_controls → manage_spend_limit or manage_model_access (change summary) → its nextAction, with confirm: true`
@@ -551,7 +554,8 @@ Wiro AI also hosts the same tools at `https://mcp.wiro.ai/v1` over streamable HT
 - [Error Reference](https://wiro.ai/docs/error-reference): error codes and handling
 - [Agents Overview](https://wiro.ai/docs/agent-overview): templates, plans, credits and the agent lifecycle
 - [Agent Builder](https://wiro.ai/docs/agent-builder): build an agent from skills instead of a template
-- [Agent Skills](https://wiro.ai/docs/agent-skills) and [Agent Credentials](https://wiro.ai/docs/agent-credentials): what each skill needs and how accounts are connected
+- [Agent Connectors](https://wiro.ai/docs/agent-connectors): the connector catalog, connecting with keys or a sign-in, account choices and disconnecting
+- [Agent Skills](https://wiro.ai/docs/agent-skills) and [Agent Credentials](https://wiro.ai/docs/agent-credentials): what each skill needs, chat channels and the Wiro project
 - [Agent Messaging](https://wiro.ai/docs/agent-messaging): conversations, sessions and replies
 
 ## Using as a Library

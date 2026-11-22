@@ -30,7 +30,7 @@ export function registerListAgentTemplates(server: McpServer, client: WiroClient
         + 'images, videos or voice calls, are billed to the wallet of the workspace that owns the Wiro project connected to the agent. '
         + 'A template whose pricing is null '
         + 'cannot be priced right now: do not quote or deploy it. Call get_agent_template next for the '
-        + 'skills, the credentials the user must provide and the exact prices. To build an agent from '
+        + 'skills, the credentials the user must provide, the connectors it suggests and the exact prices. To build an agent from '
         + 'individual skills instead, use list_agent_skills. get_playbook describes the whole flow from '
         + 'choosing a template to a running agent.',
       inputSchema: strictInput({

@@ -536,8 +536,9 @@ const EXPECTED_TOOLS = [
   'list_agent_templates', 'get_agent_template', 'list_agent_skills', 'deploy_agent',
   'list_my_agents', 'get_my_agent', 'control_agent', 'update_agent',
   'manage_agent_billing', 'get_agent_activity', 'delete_agent',
-  'apply_agent_skills', 'set_agent_credentials', 'connect_agent_oauth',
-  'disconnect_agent_oauth', 'manage_agent_custom_skill', 'list_projects', 'bind_agent_project',
+  'apply_agent_skills', 'set_agent_credentials', 'list_agent_connectors', 'connect_agent_connector',
+  'set_agent_connector_accounts', 'disconnect_agent_connector', 'manage_agent_custom_skill', 'list_projects',
+  'bind_agent_project',
   // Controls
   'get_controls', 'check_model_access', 'manage_spend_limit', 'manage_model_access',
 ];
@@ -624,7 +625,8 @@ test('tool annotations follow the MCP meaning of each hint', async () => {
   // Repeating one of these with the same arguments has no further effect.
   const repeatable = new Set([
     'apply_agent_skills', 'bind_agent_project', 'cancel_agent_message', 'cancel_task', 'delete_agent',
-    'delete_agent_session', 'delete_workflow', 'kill_task', 'manage_model_access', 'manage_spend_limit',
+    'delete_agent_session', 'delete_workflow', 'disconnect_agent_connector', 'kill_task', 'manage_model_access',
+    'manage_spend_limit', 'set_agent_connector_accounts',
   ]);
   await withClient({}, async client => {
     const { tools } = await client.listTools();
@@ -647,10 +649,12 @@ test('tool annotations follow the MCP meaning of each hint', async () => {
     // These charge the wallet, stop an agent, replace a connection or restart an agent.
     assert.deepEqual(hints('apply_agent_skills'), [true, true]);
     assert.deepEqual(hints('control_agent'), [true, false]);
-    assert.deepEqual(hints('connect_agent_oauth'), [true, false]);
+    assert.deepEqual(hints('connect_agent_connector'), [true, false]);
     assert.deepEqual(hints('update_agent'), [true, false]);
-    // A repeat restarts a running agent again.
-    assert.deepEqual(hints('disconnect_agent_oauth'), [true, false]);
+    // A repeat finds nothing left to remove, or the same accounts already chosen.
+    assert.deepEqual(hints('disconnect_agent_connector'), [true, true]);
+    assert.deepEqual(hints('set_agent_connector_accounts'), [true, true]);
+    assert.equal(tools.find(tool => tool.name === 'list_agent_connectors').annotations.readOnlyHint, true);
     // It can replace a project and restarts a running agent; a repeat changes nothing.
     assert.deepEqual(hints('bind_agent_project'), [true, true]);
     // A deployed agent's turn can change or remove things, and a model switch shortens a session's memory.

@@ -117,6 +117,8 @@ const quoteSchema = z.object({
     .describe('Setup from chat as chosen with chat_setup. Left out, the agent starts with the default, all.'),
   skills: z.array(z.string()).optional(),
   credentialsNeeded: z.array(z.object({ key: z.string(), title: z.string() })),
+  connectorsSuggested: z.array(z.string()).optional()
+    .describe('The connectors the template suggests, by slug. The deploy connects none of them: connect_agent_connector connects each one afterwards.'),
   customSkills: z.array(quoteCustomSkillSchema).optional(),
   approvalPolicy: quoteApprovalPolicySchema.optional()
     .describe('What custom_skills does to the agent\'s approval policy. Tell the user before they approve.'),
@@ -215,7 +217,7 @@ function walletHoldsText(wallet: Quote['wallet']): string {
 function otherPlansLine(quote: Quote): string | null {
   const others = quote.pricing ? planLineText(quote.pricing, quote.tier) : '';
   return others
-    ? `- Other plans: ${others}. Every plan includes every skill, and any plan can buy extra credit packs.`
+    ? `- Other plans: ${others}. Every plan includes every skill and connector, and any plan can buy extra credit packs.`
     : null;
 }
 
@@ -248,7 +250,10 @@ function quoteText(quote: Quote, credentials?: Record<string, unknown>, titles?:
   if (quote.kind === 'custom') {
     lines.push('- Scheduled tasks: a custom build comes with the tasks its skills bring, and every run spends the agent\'s credits. The deploy result names the tasks that are on, and they can be changed or turned off. A build whose skills bring none gets a starter task, which stays off until it is written and turned on with manage_agent_custom_skill.');
   }
-  // Only the deploy result can say a carried credential is complete: it may need more fields or a sign-in.
+  if (quote.connectorsSuggested?.length) {
+    lines.push(`- Connectors the template suggests: ${quote.connectorsSuggested.map(slug => `\`${slug}\``).join(', ')}. The deploy connects none of them: connect_agent_connector connects each one afterwards, and list_agent_connectors with a slug shows what the user provides for it.`);
+  }
+  // Only the deploy result can say a carried credential is complete: it may need more fields.
   const toProvide = quote.credentialsNeeded.filter(item => !isFilledValue(credentials?.[item.key]));
   const provided = quote.credentialsNeeded.filter(item => isFilledValue(credentials?.[item.key]));
   if (toProvide.length > 0) {
@@ -339,6 +344,9 @@ function deployedText(
   if (agent.missingCredentials.length > 0) {
     lines.push(`- Missing credentials: ${agent.missingCredentials.map(item => `${item.title} (\`${item.key}\`)`).join(', ')}. Skills that need them fail until they are set.${bindAfterDeployNote(agent.missingCredentials)}`);
   }
+  if (quote.connectorsSuggested?.length) {
+    lines.push(`- Connectors to connect: ${quote.connectorsSuggested.map(slug => `\`${slug}\``).join(', ')}, as the template suggests. connect_agent_connector connects each one; list_agent_connectors with a slug shows what the user provides.`);
+  }
   lines.push(`- Dashboard: ${agent.dashboardUrl}`);
   return lines.join('\n');
 }
@@ -358,12 +366,13 @@ export function registerDeployAgent(server: McpServer, client: WiroClient): void
         + 'Never repeat a confirmed deploy that timed out or whose outcome is unknown without checking '
         + 'list_my_agents first. A refusal that says nothing was created or charged, such as one for balance, '
         + 'can be confirmed again once its cause is fixed and the user says yes. The '
-        + 'agent starts on its own after deployment. Credentials can be added later with set_agent_credentials, '
-        + 'connect_agent_oauth or, for a Wiro project, bind_agent_project, but skills that need them do not work until then. A custom build also gets '
+        + 'agent starts on its own after deployment. Credentials can be added later with set_agent_credentials or, for '
+        + 'a Wiro project, bind_agent_project, and outside services connected with connect_agent_connector (the quote '
+        + 'names the connectors a template suggests), but work that needs them does not run until then. A custom build also gets '
         + 'the scheduled tasks its skills come with; the result names the ones that are on, and they can be changed or '
         + 'turned off. A build whose skills bring none gets a starter task, which stays off until it is written and turned '
         + 'on with manage_agent_custom_skill. The plan (tier) sets the price and the monthly credits, the same '
-        + 'for every template and custom build, and every plan includes every skill. The quote names the wallet '
+        + 'for every template and custom build, and every plan includes every skill and connector. The quote names the wallet '
         + 'and the other plans\' prices. '
         + 'In a team workspace the agent starts with collaborative chats, which every team member sees; update_agent '
         + 'changes that after the deploy. To change a template\'s '
@@ -384,7 +393,7 @@ export function registerDeployAgent(server: McpServer, client: WiroClient): void
         cover: z.url().max(2_048).optional()
           .describe('Optional https image URL for the agent cover. A template deploy shows the template cover when it is left out.'),
         credentials: z.record(z.string(), z.record(z.string(), z.unknown())).optional()
-          .describe('Optional credential values stored at deployment, keyed by credential key and then field key, for example {"telegram": {"bottoken": "...", "allowedusers": ["123456789"]}}. A chat channel group must contain every required field. Values are never shown back. Other credentials are better set after deployment with set_agent_credentials, which reports field errors.'),
+          .describe('Optional credential values stored at deployment, keyed by credential key and then field key, for example {"telegram": {"bottoken": "...", "allowedusers": ["123456789"]}}. A chat channel group must contain every required field. Values are never shown back. Other credentials are better set after deployment with set_agent_credentials, which reports field errors; connectors connect after deployment with connect_agent_connector.'),
         custom_skills: z.array(customSkillSchema).max(20).optional()
           .describe('Optional custom instructions or scheduled tasks added at deployment, or changes to the ones the template comes with. They are checked before the quote.'),
         chat_setup: z.enum(CHAT_SETUP_MODES).optional()
@@ -483,6 +492,7 @@ export function registerDeployAgent(server: McpServer, client: WiroClient): void
             paidFrom: paidFromText(payer),
             pricing: detail.pricing,
             credentialsNeeded: detail.requiredCredentials.map(item => ({ key: item.key, title: item.title })),
+            ...(detail.suggestedConnectors?.length ? { connectorsSuggested: detail.suggestedConnectors } : {}),
           };
         } else {
           const found = new Map<string, SkillSummary>();

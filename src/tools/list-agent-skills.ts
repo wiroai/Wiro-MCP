@@ -19,18 +19,12 @@ import {
   type CredentialSetupItem,
   type SkillSummary,
 } from '../utils/agent-catalog.js';
-import {
-  apiBaseUrlOf,
-  connectionModeRequirements,
-  loadSkillRegistry,
-  parseCredentialMeta,
-  registryTitles,
-  type ModeRequirement,
-} from '../utils/agent-config.js';
+import { loadSkillRegistry, registryTitles } from '../utils/agent-config.js';
+import { readConnector } from '../utils/agent-connectors.js';
 import { skillLabel, toStringArray } from '../utils/user-agent.js';
 import { nextActionSchema, strictInput } from './schemas.js';
 
-const PRICING_NOTE = 'Every plan (Starter, Pro or Max) includes every skill, so skills do not change an agent\'s '
+const PRICING_NOTE = 'Every plan (Starter, Pro or Max) includes every skill and connector, so neither changes an agent\'s '
   + 'price: a custom build costs its plan\'s price, and turning a skill on or off later costs nothing. A skill\'s '
   + 'work uses the agent\'s credits, and model runs it starts are billed to the wallet of the workspace that owns '
   + 'the Wiro project connected to the agent. deploy_agent returns the exact quote before anything is charged.';
@@ -78,18 +72,6 @@ function skillLine(skill: SkillSummary): string {
   return `- **${skill.title}** (\`${skill.name}\`)${details ? `: ${details}` : ''}`;
 }
 
-interface CredentialEntry {
-  setup: CredentialSetup;
-  /** The modes that can be used now, with what each one needs. */
-  modes: ModeRequirement[];
-}
-
-function toCredentialEntry(credential: Record<string, unknown>, role: CredentialSetup['role'], apiBase: string): CredentialEntry {
-  return {
-    setup: toCredentialSetup(credential, role),
-    modes: connectionModeRequirements(parseCredentialMeta(credential), null, { apiBase }).filter(mode => mode.available),
-  };
-}
 
 /** The keys of a list's entries, one line each, with a list inside an entry indented below it. */
 function entryLines(items: CredentialSetupItem[], depth: number): string[] {
@@ -108,15 +90,8 @@ function entryLines(items: CredentialSetupItem[], depth: number): string[] {
   });
 }
 
-function setupLines({ setup: credential, modes }: CredentialEntry): string[] {
+function setupLines(credential: CredentialSetup): string[] {
   const lines = [`### ${credential.title} (\`${credential.key}\`, ${credential.role})`, ''];
-  if (credential.oauth && modes.length > 0) {
-    lines.push('How it connects (connect_agent_oauth or set_agent_credentials):');
-    for (const mode of modes) {
-      lines.push(`- **${mode.mode}**: ${mode.note}${mode.fields.length > 0 ? ` Fields: ${mode.fields.map(field => field.field).join(', ')}.` : ''}`);
-    }
-    lines.push('');
-  }
   if (credential.note) lines.push(credential.note);
   if (credential.channel) {
     lines.push(`Chat channel \`${credential.channel.id}\`: it turns on once ${credential.channel.requiredFields.join(', ')} are filled.`);
@@ -126,7 +101,6 @@ function setupLines({ setup: credential, modes }: CredentialEntry): string[] {
       field.required ? 'required' : 'optional',
       field.type,
       field.secret ? 'secret' : undefined,
-      field.onlyInModes ? `only for ${field.onlyInModes.join('/')} mode` : undefined,
     ].filter(Boolean).join(', ');
     lines.push(`- **${field.label}** (\`${field.key}\`, ${notes})`);
     if (field.help) lines.push(`  ${field.help.replace(/\n/g, ' ')}`);
@@ -140,20 +114,17 @@ export function registerListAgentSkills(server: McpServer, client: WiroClient): 
     'list_agent_skills',
     {
       title: 'List Wiro agent skills',
-      description: 'List the skills a Wiro agent can have, the skills they depend on and the credential each '
-        + 'one needs. Every plan includes every skill, so a skill has no price of its own. Use it to plan a custom '
-        + 'build for deploy_agent or a skill change for apply_agent_skills. Without `name` it lists every skill with '
-        + 'its title: look '
-        + 'there for the service the user named (apply_agent_skills also answers an unknown name with close '
-        + 'matches). Pass `name` with a skill name (or a credential or channel key such '
-        + 'as "telegram") to get the exact fields the user must provide, with their labels, formats and setup '
-        + 'help, so you know what to ask for before calling set_agent_credentials or connect_agent_oauth. '
-        + 'A Wiro project (credential "wiro") is connected with bind_agent_project, with no key to paste.',
+      description: 'List the Skills a Wiro agent can have (how it works: reporting, copywriting, video, voice '
+        + 'calls and more), the skills they depend on, the credentials they need, and the chat channels. Every plan '
+        + 'includes every skill, so a skill has no price of its own. Use it to plan a custom build for deploy_agent or '
+        + 'a skill change for apply_agent_skills. Outside services (ad accounts, stores, social accounts, mailboxes) '
+        + 'are not skills but Connectors: list_agent_connectors lists them. Pass `name` with a skill name (or a '
+        + 'credential or channel key such as "telegram") to get the exact fields the user must provide, with their '
+        + 'labels, formats and setup help, so you know what to ask for before calling set_agent_credentials. A Wiro '
+        + 'project (credential "wiro") is connected with bind_agent_project, with no key to paste.',
       inputSchema: strictInput({
         name: z.string().min(1).max(100).optional()
-          .describe('A skill name (for example "int-gmail-check") returns the skill and the setup fields of every credential it needs. A credential or channel key (for example "telegram") returns that credential\'s setup and the ways it can connect.'),
-        category: z.enum(['int', 'util']).optional()
-          .describe('"int" for skills that connect to an outside service, "util" for helper skills.'),
+          .describe('A skill name (for example "util-video-creator") returns the skill and the setup fields of every credential it needs. A credential or channel key (for example "telegram") returns that credential\'s setup.'),
         capability: z.string().max(100).optional()
           .describe('Only skills with this capability, for example "image_generation". include_capabilities lists the names.'),
         include_capabilities: z.boolean().default(false)
@@ -177,7 +148,7 @@ export function registerListAgentSkills(server: McpServer, client: WiroClient): 
         openWorldHint: true,
       },
     },
-    async ({ name, category, capability, include_capabilities, include_deprecated }, extra) => {
+    async ({ name, capability, include_capabilities, include_deprecated }, extra) => {
       try {
         let capabilities: Array<{ name: string; description?: string }> | undefined;
         if (include_capabilities) {
@@ -198,7 +169,7 @@ export function registerListAgentSkills(server: McpServer, client: WiroClient): 
           const key = name.trim();
           const detail = await client.post<ApiEnvelope & { skill?: unknown }>('/Skills/Detail', { name: key }, extra.signal);
           let skills: SkillSummary[] = [];
-          const credentials: CredentialEntry[] = [];
+          const credentials: CredentialSetup[] = [];
 
           if (detail?.result === true && isPlainObject(detail.skill)) {
             const skill = toSkillSummary(detail.skill);
@@ -212,18 +183,20 @@ export function registerListAgentSkills(server: McpServer, client: WiroClient): 
             for (const entry of keys) {
               if (isPlatformCredentialKey(entry.key)) continue;
               const credential = await readCredential(client, entry.key, extra.signal);
-              if (credential) credentials.push(toCredentialEntry(credential, entry.role, apiBaseUrlOf(client)));
+              if (credential) credentials.push(toCredentialSetup(credential, entry.role));
             }
           } else {
             const credential = await readCredential(client, key, extra.signal);
             if (!credential || isPlatformCredentialKey(key)) {
-              throw new ApiResultError(
-                `No skill or credential is named "${key}". Call list_agent_skills without name to see every skill.`,
-                [404],
-                {},
+              const connector = await readConnector(client, key.toLowerCase(), extra.signal).catch(() => null);
+              throw new ApiResultError(connector
+                ? `${connector.title} is a Connector, not a skill: list_agent_connectors with name "${connector.slug}" shows how it connects, and connect_agent_connector connects it.`
+                : `No skill or credential is named "${key}". Call list_agent_skills without name to see every skill, or list_agent_connectors for the outside services.`,
+              [404],
+              {},
               );
             }
-            credentials.push(toCredentialEntry(credential, 'credential', apiBaseUrlOf(client)));
+            credentials.push(toCredentialSetup(credential, 'credential'));
           }
 
           const lines: string[] = [];
@@ -243,7 +216,7 @@ export function registerListAgentSkills(server: McpServer, client: WiroClient): 
               channels: [],
               total: skills.length,
               ...(capabilities ? { capabilities } : {}),
-              setup: { credentials: credentials.map(entry => entry.setup) },
+              setup: { credentials },
               pricingNote: PRICING_NOTE,
             },
           };
@@ -251,7 +224,6 @@ export function registerListAgentSkills(server: McpServer, client: WiroClient): 
 
         const body = requireApiSuccess(
           await client.post<ApiEnvelope & { skills?: unknown; channels?: unknown }>('/Skills/List', {
-            ...(category ? { category } : {}),
             ...(capability?.trim() ? { capability: capability.trim() } : {}),
           }, extra.signal),
           'The skill list could not be read.',
@@ -269,6 +241,7 @@ export function registerListAgentSkills(server: McpServer, client: WiroClient): 
           lines.push('', '### Chat channels', '', 'Channels are not skills. Each one turns on once its required fields are set with set_agent_credentials.');
           for (const channel of channels) lines.push(`- ${channel.title} (\`${channel.credentialKey}\`): ${channel.requiredFields.join(', ')}`);
         }
+        lines.push('', 'Outside services are Connectors: list_agent_connectors lists them.');
         if (capabilities?.length) {
           lines.push('', '### Capabilities', '');
           for (const item of capabilities) lines.push(`- \`${item.name}\`${item.description ? `: ${item.description}` : ''}`);

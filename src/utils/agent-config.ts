@@ -1,11 +1,10 @@
 import crypto from 'node:crypto';
-import { DEFAULT_BASE_URL, type WiroClient } from '../client.js';
+import type { WiroClient } from '../client.js';
 import {
   AGENT_NOT_FOUND_TEXT,
   ApiResultError,
   asString,
   hasErrorCode,
-  isAgentNotFound,
   isPlainObject,
   requireApiSuccess,
   toNumber,
@@ -13,7 +12,6 @@ import {
   unixToIso,
   type ApiEnvelope,
 } from './api.js';
-import { oneLine, quotedSpan } from './quoted-text.js';
 import {
   credentialKeysSetupWaitsFor,
   nameList,
@@ -23,13 +21,14 @@ import {
   WIRO_PROJECT_CREDENTIAL,
   wordsFromKey,
 } from './user-agent.js';
+import { CONNECTOR_SLUG } from './agent-connectors.js';
 
-// Helpers for configuring a deployed agent: its registry skills, credentials,
-// sign-in connections and custom skills. The pure functions mirror the server
+// Helpers for configuring a deployed agent: its registry skills, its credentials
+// (chat channels, Twilio Voice, settings and the Wiro project) and its custom
+// skills. Outside services are connectors (agent-connectors.ts). The pure functions mirror the server
 // rules closely so a bad request is caught before anything is written.
 
 export const DEFAULT_CRON_INTERVAL = '0 10 * * 1';
-export const OAUTH_LINK_TTL_SECONDS = 900;
 const REGISTRY_TTL_MS = 5 * 60_000;
 
 type Row = Record<string, unknown>;
@@ -68,46 +67,6 @@ export function isAgentRunning(status: number | null): boolean {
   return status === 3 || status === 4;
 }
 
-/** The API base URL a client sends its requests to, without a trailing slash; the public API for one that does not say. */
-export function apiBaseUrlOf(client: WiroClient): string {
-  const base = (client as { apiBaseUrl?: unknown }).apiBaseUrl;
-  return typeof base === 'string' && base.trim() !== '' ? base.trim().replace(/\/+$/, '') : DEFAULT_BASE_URL;
-}
-
-/**
- * The base URL when users and sign-in providers can reach it: https on a domain name. A server that calls the API
- * on its own machine or network (plain http, an IP address or a local name) sends people to the public addresses.
- */
-function reachableApiUrl(apiBase: string): URL | null {
-  let url: URL;
-  try {
-    url = new URL(apiBase.trim());
-  } catch {
-    return null;
-  }
-  const host = url.hostname.replace(/\.$/, '');
-  const local = host.startsWith('[') || /^[\d.]+$/.test(host) || !host.includes('.') || host.endsWith('.localhost');
-  return url.protocol === 'https:' && !url.username && !url.password && !local ? url : null;
-}
-
-/**
- * Where the sign-in callbacks and the dashboard's agent pages are for an API base URL: the callbacks under the base
- * URL itself, the dashboard on the API's host without a leading "api." label. The public API gives the public ones.
- */
-function wiroAddresses(apiBase: string): { callbackBase: string; dashboardAgents: string } {
-  const url = reachableApiUrl(apiBase) ?? new URL(DEFAULT_BASE_URL);
-  return {
-    callbackBase: `${url.origin}${url.pathname.replace(/\/+$/, '')}`,
-    dashboardAgents: `https://${url.host.replace(/^api\./, '')}/panel/agents/`,
-  };
-}
-
-/** The agent's page in the Wiro dashboard, in the form the dashboard itself uses as an OAuth return address. */
-export function dashboardAgentUrl(agentGuid: string, apiBase: string = DEFAULT_BASE_URL): string {
-  const guid = encodeURIComponent(agentGuid);
-  return `${wiroAddresses(apiBase).dashboardAgents}${guid}?id=${guid}`;
-}
-
 export function restartNote(status: number | null, what = 'change'): string {
   switch (status) {
     case 3:
@@ -132,12 +91,7 @@ export function keyList(keys: string[]): string {
   return keys.length > 1 ? `${keys.slice(0, -1).join(', ')} and ${keys[keys.length - 1]}` : keys.join('');
 }
 
-// Wiro restarts nothing for fields of a sign-in that is not connected yet; the connection restarts the agent once.
-const AWAITS_CONNECTION_NOTE = 'The agent kept running: fields saved for a sign-in integration that is not connected yet, '
-  + 'such as its app keys or token, do not restart it. It needs no restart now: it restarts once, when '
-  + 'connect_agent_oauth completes the connection.';
-
-function afterWriteNote(status: number | null, awaitsConnection: boolean): string {
+function afterWriteNote(status: number | null): string {
   switch (status) {
     case 1:
       return 'The agent restarts to load the new values, which takes about a minute.';
@@ -145,7 +99,6 @@ function afterWriteNote(status: number | null, awaitsConnection: boolean): strin
     case 3:
       return 'The agent is starting and loads the new values.';
     case 4:
-      if (awaitsConnection) return AWAITS_CONNECTION_NOTE;
       // A save that changes a value sets a running agent stopping before Wiro answers.
       return 'The agent kept running: a save that matches what is stored does not restart it. If it should load new values now, control_agent with action restart does it.';
     case 6:
@@ -159,14 +112,13 @@ function afterWriteNote(status: number | null, awaitsConnection: boolean): strin
   }
 }
 
-/** What the setup still waits for and the tool that gives each one: a Wiro project, a sign-in or saved fields. */
-export function setupStillMissingNote(missing: Array<{ key: string; title: string; oauth: boolean }>): string | null {
+/** What the setup still waits for and the tool that gives each one: a Wiro project or saved fields. */
+export function setupStillMissingNote(missing: Array<{ key: string; title: string }>): string | null {
   if (missing.length === 0) return null;
   const titles = (items: typeof missing) => items.map(item => item.title);
   const isProject = (item: typeof missing[number]) => item.key === WIRO_PROJECT_CREDENTIAL;
   const steps = [
-    { verb: 'Set', names: titles(missing.filter(item => !item.oauth && !isProject(item))), tool: 'set_agent_credentials' },
-    { verb: 'Connect', names: titles(missing.filter(item => item.oauth && !isProject(item))), tool: 'connect_agent_oauth' },
+    { verb: 'Set', names: titles(missing.filter(item => !isProject(item))), tool: 'set_agent_credentials' },
     { verb: 'Connect', names: titles(missing.filter(isProject)), tool: 'bind_agent_project' },
   ].filter(step => step.names.length > 0);
   const first = steps[0];
@@ -176,16 +128,12 @@ export function setupStillMissingNote(missing: Array<{ key: string; title: strin
   return `Setup is not finished: still missing ${keyList(titles(missing))}. ${how}, then check with get_my_agent.`;
 }
 
-/**
- * When the agent loads the values, and the credentials its setup still waits for, at any status.
- * awaitsConnection: every credential written is a sign-in that still reads not connected.
- */
+/** When the agent loads the values, and the credentials its setup still waits for, at any status. */
 export function afterWriteNotes(
   status: number | null,
-  missing: Array<{ key: string; title: string; oauth: boolean }>,
-  options: { awaitsConnection?: boolean } = {},
+  missing: Array<{ key: string; title: string }>,
 ): string[] {
-  const note = afterWriteNote(status, options.awaitsConnection === true);
+  const note = afterWriteNote(status);
   const setup = setupStillMissingNote(missing);
   if (!setup) return [note];
   // At status 6 the general note says the same without the names.
@@ -391,7 +339,7 @@ export function planSkillChanges(
     const skill = registry.skills.get(name);
     if (!skill) {
       const suggestions = suggestSkills(name, registry);
-      errors.add(`Unknown skill "${name}".${suggestions.length ? ` Did you mean ${suggestions.map(label).join(', ')}?` : ''} Use list_agent_skills for the full list.`);
+      errors.add(`Unknown skill "${name}".${suggestions.length ? ` Did you mean ${suggestions.map(label).join(', ')}?` : ''} Use list_agent_skills for the full list. An outside service is a Connector, not a skill: list_agent_connectors lists them and connect_agent_connector connects one.`);
       continue;
     }
     if (enabled && skill.deprecated) {
@@ -503,21 +451,16 @@ export function credentialsUsedBySkills(skills: Iterable<string>, registry: Skil
 }
 
 export interface UnusedCredential {
-  /** The services the agent's active skills, custom skills and scheduled tasks connect with connect_agent_oauth, as "Title (key)". */
-  services: string[];
   /** The skills whose main credential this is, to turn on first, as people see them: Title (`key`). */
   skills: string[];
 }
 
 /**
- * Why connect_agent_oauth connect refuses a service on this agent, or null when
- * it connects: one of the agent's active skills uses it, or one of its custom
- * skills or scheduled tasks requires it (a skill's scheduled task only when it
- * can use that credential now). Wiro keeps such an entry off until the
- * credential is connected, and connecting turns it on, so the entry counts
- * whatever its enabled says. A template agent's setup also waits for the
- * credentials its template requires, whichever skills are on, so those stay
- * connectable.
+ * Null when the agent uses this credential: one of its active skills reads it, or
+ * one of its custom skills or scheduled tasks requires it (a skill's scheduled
+ * task only when it can use that credential now). A template agent's setup also
+ * waits for the credentials its template requires, whichever skills are on. Else
+ * the skills that would use it, to turn on first.
  */
 export function unusedCredential(row: Row, credential: string, registry: SkillRegistry): UnusedCredential | null {
   const used = credentialsUsedBySkills(enabledSkillNames(row), registry);
@@ -527,46 +470,10 @@ export function unusedCredential(row: Row, credential: string, registry: SkillRe
   }
   if (used.has(credential) || (!isCustomBuild(row) && credentialGroup(row, credential)?.optional === false)) return null;
   return {
-    services: [...used].flatMap(key => {
-      const schema = credentialGroup(row, key)?._schema;
-      return isPlainObject(schema) && isPlainObject(schema.oauth_provider)
-        ? [`${asString(schema.title) ?? wordsFromKey(key)} (\`${key}\`)`]
-        : [];
-    }),
     skills: [...registry.skills.values()]
       .filter(skill => !skill.deprecated && skill.requiresCredentials && skill.credentialKeys[0] === credential)
       .map(skill => skillLabel(skill.name, registryTitles(registry))),
   };
-}
-
-export function turnOnSkillText(title: string, credential: string, skills: string[]): string {
-  return skills.length > 0
-    ? `To use ${title}, first turn on ${skills.join(' or ')} with apply_agent_skills; list_agent_skills with name "${credential}" shows how it connects.`
-    : '';
-}
-
-/**
- * The same rule for the answers that offer connect (status, and describing or
- * saving a credential), as a note to show instead of that offer. Null when the
- * service connects, and when the skills cannot be read: connect checks again.
- */
-export async function unusedCredentialNote(
-  client: WiroClient,
-  row: Row,
-  credential: string,
-  title: string,
-  signal?: AbortSignal,
-): Promise<string | null> {
-  try {
-    const unused = unusedCredential(row, credential, await loadSkillRegistry(client, signal));
-    if (!unused) return null;
-    return [
-      `${title} is not used by any of this agent's active skills, custom skills or scheduled tasks, so connect_agent_oauth refuses it for now.`,
-      turnOnSkillText(title, credential, unused.skills),
-    ].filter(Boolean).join(' ');
-  } catch {
-    return null;
-  }
 }
 
 // A key minted by this package: mcp-<random>-<change digest>. Keys from earlier versions also carry a price fingerprint at the end.
@@ -754,32 +661,6 @@ export function describeSkillsApplyError(error: unknown, titles?: ReadonlyMap<st
   return { ...base, guidance: workspaceHint(message) ?? '' };
 }
 
-/**
- * One refusal covers an agent that does not exist and an agent this project may
- * not connect, and the fix for each is different. The agent's own read tells
- * them apart.
- */
-export async function connectionRefusalText(
-  client: WiroClient,
-  agentGuid: string,
-  message: string,
-  done: 'connected' | 'changed',
-  signal?: AbortSignal,
-): Promise<string> {
-  const rule = `can only be ${done} with a project of the person who deployed the agent or of a team admin of its team: `
-    + 'connect this server with such a project, by its API key or a browser sign-in.';
-  try {
-    await readUserAgent(client, agentGuid, signal);
-  } catch (error) {
-    if (isAgentNotFound(error)) return AGENT_NOT_FOUND_TEXT;
-    return `${message}\n\nCheck the guid with list_my_agents. If the agent is listed, integrations ${rule}`;
-  }
-  return `${message}\n\nIntegrations ${rule}`;
-}
-
-/** Wiro's answer when it could not clear a saved connection. Nothing says the connection is gone, and a repeat is safe. */
-export const CONNECTION_NOT_CLEARED = 'The saved connection could not be cleared. Please try again.';
-
 export const WORKSPACE_HINT = 'Connect with a project in the workspace (personal or team) that owns this agent, by its API key or a browser sign-in.';
 
 /** The API names a dashboard concept ("team context"); here the workspace is the connected project's. */
@@ -797,11 +678,8 @@ export interface CredentialField {
   type: string;
   required: boolean;
   encrypted: boolean;
-  oauthManaged: boolean;
-  autoFilled: boolean;
   serverManaged: boolean;
   platformManaged: boolean;
-  onlyInModes: string[] | null;
   pattern?: string;
   minLength?: number;
   maxLength?: number;
@@ -814,51 +692,15 @@ export interface CredentialField {
   placeholder?: string;
 }
 
-export interface NextPickerMeta {
-  key: string;
-  label: string;
-  optional: boolean;
-  parentValueField: string;
-  parentLabelField: string;
-  itemValueField: string;
-  itemLabelField: string;
-  persistField: string;
-  /** How many accounts Wiro lists this step for at once. */
-  maxParents?: number;
-}
-
-export interface PickerMeta {
-  multiSelect: boolean;
-  valueField: string;
-  labelField?: string;
-  fieldsToSave: string[];
-  urlItemFields: Record<string, string>;
-  pendingCache: boolean;
-  next: NextPickerMeta | null;
-}
-
-export interface OAuthMeta {
-  callbackPath?: string;
-  stateFields: string[];
-  connectRequirements: string[];
-  directProbe: { mode: string; label?: string; requiredFields: string[] } | null;
-  picker: PickerMeta | null;
-}
-
 export interface CredentialMeta {
   key: string;
   title: string;
-  connectionModes: string[];
-  defaultConnectionMode?: string;
-  wiroPending: boolean;
   fields: CredentialField[];
   channel: { id: string; requiredFields: string[] } | null;
-  oauth: OAuthMeta | null;
   platformOnly: boolean;
 }
 
-// A field's setup help is shown whole: its last steps, such as sharing a
-// calendar with the service account, are part of the setup.
+// A field's setup help is shown whole: its last steps are part of the setup.
 export const FIELD_HELP_MAX = 4_000;
 
 // The Wiro project field. On the dashboard it is a project picker, and the help
@@ -918,11 +760,8 @@ export function parseCredentialField(raw: Row): CredentialField {
     type: asString(raw.type) ?? 'text',
     required: raw.required === true,
     encrypted: raw.encrypted === true,
-    oauthManaged: raw.oauth_managed === true,
-    autoFilled: raw.auto_filled_by_oauth === true,
     serverManaged: raw.server_managed === true,
     platformManaged: raw.platform_managed === true,
-    onlyInModes: Array.isArray(raw.only_in_modes) ? stringList(raw.only_in_modes) : null,
     ...(asString(raw.pattern) ? { pattern: asString(raw.pattern) } : {}),
     ...(toNumber(raw.minlength) !== null ? { minLength: toNumber(raw.minlength) as number } : {}),
     ...(toNumber(raw.maxlength) !== null ? { maxLength: toNumber(raw.maxlength) as number } : {}),
@@ -936,93 +775,23 @@ export function parseCredentialField(raw: Row): CredentialField {
   };
 }
 
-function parsePicker(raw: unknown): PickerMeta | null {
-  if (!isPlainObject(raw) || raw.enabled === false) return null;
-  const valueField = asString(raw.item_value_field);
-  if (!valueField) return null;
-  const urlItemFields: Record<string, string> = {};
-  if (isPlainObject(raw.url_item_fields)) {
-    for (const [saved, source] of Object.entries(raw.url_item_fields)) {
-      if (asString(source)) urlItemFields[saved] = asString(source) as string;
-    }
-  }
-  const nextRaw = isPlainObject(raw.next) && raw.next.enabled !== false ? raw.next : null;
-  const maxParents = nextRaw ? toNumber(nextRaw.max_parents) : null;
-  const next = nextRaw && asString(nextRaw.key) && asString(nextRaw.item_value_field)
-    ? {
-      key: asString(nextRaw.key) as string,
-      label: asString(nextRaw.modal_title)?.replace(/^select\s+/i, '') ?? (asString(nextRaw.key) as string),
-      optional: nextRaw.optional === true,
-      parentValueField: asString(nextRaw.parent_value_field) ?? valueField,
-      parentLabelField: asString(nextRaw.parent_label_field) ?? asString(raw.item_label_field) ?? valueField,
-      itemValueField: asString(nextRaw.item_value_field) as string,
-      itemLabelField: asString(nextRaw.item_label_field) ?? (asString(nextRaw.item_value_field) as string),
-      persistField: asString(nextRaw.persist_field) ?? '',
-      ...(maxParents !== null && Number.isInteger(maxParents) && maxParents > 0 ? { maxParents } : {}),
-    }
-    : null;
-  return {
-    multiSelect: raw.multi_select === true,
-    valueField,
-    ...(asString(raw.item_label_field) ? { labelField: asString(raw.item_label_field) } : {}),
-    fieldsToSave: stringList(raw.item_fields_to_save).length > 0 ? stringList(raw.item_fields_to_save) : [valueField],
-    urlItemFields,
-    pendingCache: isPlainObject(raw.pending_cache),
-    next,
-  };
-}
-
 export function parseCredentialMeta(raw: Row): CredentialMeta {
   const key = asString(raw.key) ?? '';
   const fields = (Array.isArray(raw.credential_schema) ? raw.credential_schema : [])
     .filter(isPlainObject)
     .map(parseCredentialField)
     .filter(field => field.key);
-  const provider = isPlainObject(raw.oauth_provider) ? raw.oauth_provider : null;
-  let oauth: OAuthMeta | null = null;
-  if (provider) {
-    const flow = isPlainObject(provider.oauth_flow) ? provider.oauth_flow : {};
-    const probe = isPlainObject(provider.direct_probe) ? provider.direct_probe : null;
-    const tokenField = probe ? asString(probe.token_field) : undefined;
-    oauth = {
-      ...(asString(flow.callback_path) ? { callbackPath: asString(flow.callback_path) } : {}),
-      stateFields: stringList(flow.state_fields),
-      connectRequirements: (Array.isArray(flow.connect_requirements) ? flow.connect_requirements : [])
-        .filter(isPlainObject)
-        .map(requirement => asString(requirement.message) ?? '')
-        .filter(Boolean),
-      directProbe: probe
-        ? {
-          mode: asString(probe.mode) ?? 'api_key',
-          ...(asString(probe.mode_label) ? { label: asString(probe.mode_label) } : {}),
-          requiredFields: stringList(probe.required_fields).length > 0
-            ? stringList(probe.required_fields)
-            : (tokenField ? [tokenField] : []),
-        }
-        : null,
-      picker: parsePicker(provider.account_picker),
-    };
-  }
   const channel = isPlainObject(raw.channel)
     ? { id: asString(raw.channel.id) ?? key, requiredFields: stringList(raw.channel.required_fields) }
     : null;
   return {
     key,
     title: asString(raw.title) ?? key,
-    connectionModes: stringList(raw.connection_modes),
-    ...(asString(raw.default_connection_mode) ? { defaultConnectionMode: asString(raw.default_connection_mode) } : {}),
-    wiroPending: raw.wiro_connect_pending === true,
     fields,
     channel,
-    oauth,
     platformOnly: raw.credential_mode === 'rule_only'
-      || (!provider && fields.length > 0 && fields.every(field => field.platformManaged)),
+      || (fields.length > 0 && fields.every(field => field.platformManaged)),
   };
-}
-
-/** The modes a connection can use now: wiro is left out while the registry marks it pending. */
-export function usableConnectionModes(meta: Pick<CredentialMeta, 'connectionModes' | 'wiroPending'>): string[] {
-  return meta.connectionModes.filter(mode => mode !== 'wiro' || !meta.wiroPending);
 }
 
 /** Returns null when the registry has no credential with that key. */
@@ -1048,15 +817,10 @@ export async function loadCredentialMeta(
   }
 }
 
-export type FieldShape = 'object-array' | 'string-array' | 'file' | 'base64-file' | 'boolean' | 'number' | 'select' | 'text';
+export type FieldShape = 'object-array' | 'string-array' | 'file' | 'boolean' | 'number' | 'select' | 'text';
 
 const OBJECT_LIST_TYPES = new Set([
-  'custom:apps-list-ios',
-  'custom:apps-list-android',
-  'custom:apps-list-adjust',
   'custom:urls-list',
-  'custom:firebase-accounts-list',
-  'custom:drive-folder-picker',
 ]);
 
 /** Mirrors how the API stores a field: lists of rows, lists of strings, files or one value. */
@@ -1070,62 +834,15 @@ export function credentialFieldShape(field: Pick<CredentialField, 'type' | 'item
     return field.itemSchema.length > 0 ? 'object-array' : 'string-array';
   }
   if (type === 'fileinput') return 'file';
-  if (type === 'fileinput-base64') return 'base64-file';
   if (type === 'boolean') return 'boolean';
   if (type === 'number') return 'number';
   if (type === 'select') return 'select';
   return 'text';
 }
 
-/** Fields the connection flow or Wiro fills; customers cannot write them. */
+/** Fields Wiro fills; customers cannot write them. */
 export function isWritableField(field: CredentialField): boolean {
-  return !field.autoFilled && !field.serverManaged && !field.platformManaged && field.type !== 'computed';
-}
-
-// Token state the connection flow owns.
-const CONNECTION_STATE_FIELDS = new Set([
-  'accesstoken',
-  'refreshtoken',
-  'connectedat',
-  'tokenexpiresat',
-  'refreshtokenexpiresat',
-]);
-
-/**
- * Base64 file fields hold the file's bytes as base64. Callers often have the
- * file's text instead (a service account JSON, a .p8 key), so anything that is
- * not already base64 is encoded here.
- */
-export function normalizeBase64FileValue(value: string): string {
-  const dataUrl = /^data:[^,]*;base64,(.*)$/s.exec(value.trim());
-  if (dataUrl) return (dataUrl[1] ?? '').replace(/\s+/g, '');
-  const compact = value.replace(/\s+/g, '');
-  if (compact && compact.length % 4 === 0 && /^[A-Za-z0-9+/]+={0,2}$/.test(compact)) return compact;
-  return Buffer.from(value, 'utf8').toString('base64');
-}
-
-function isJsonObjectText(text: string): boolean {
-  try {
-    return isPlainObject(JSON.parse(text));
-  } catch {
-    return false;
-  }
-}
-
-/** A key file field's value as Wiro stores it, or why it is refused. The value itself is never repeated. */
-function keyFileValue(field: CredentialField, value: unknown, label: string): { value?: string; error?: string } {
-  if (typeof value !== 'string') return { error: `${label} takes the file's content as text or base64.` };
-  // Key files take the file's text; refuse a link before anything is saved.
-  if (/^\s*https?:\/\//i.test(value)) {
-    return { error: `${label} takes the file's content as text or base64, not a link. The user can paste the file's text or upload the file on the agent's page in the Wiro dashboard.` };
-  }
-  const stored = normalizeBase64FileValue(value);
-  // A JSON key, such as a service account file, must hold a JSON object, so a
-  // path, a share link or an id is refused before anything is saved.
-  if (field.fileTypes?.includes('application/json') && !isJsonObjectText(Buffer.from(stored, 'base64').toString('utf8'))) {
-    return { error: `${label} takes the text of the JSON key file. This value is not JSON. The user can paste the file's text or upload the file on the agent's page in the Wiro dashboard.` };
-  }
-  return { value: stored };
+  return !field.serverManaged && !field.platformManaged && field.type !== 'computed';
 }
 
 export interface CredentialFieldInput {
@@ -1278,8 +995,8 @@ function isListField(field: CredentialField): boolean {
 /**
  * The rows of a list of objects, checked the way Wiro checks them: only the
  * keys the item schema declares, each value by its own rules, and a list inside
- * a row (such as the apps of one Firebase account) by its own shape. Errors
- * name the row the way Wiro does: "App ID in Apps #2 in Firebase Accounts #1".
+ * a row (such as the channels of one Discord server) by its own shape. Errors
+ * name the row the way Wiro does: "Server ID in Allowed Discord Servers #2".
  */
 function rowsValue(
   field: CredentialField,
@@ -1314,8 +1031,6 @@ function rowsValue(
 function rowFieldValue(field: CredentialField, value: unknown, label: string): { value?: unknown; error?: string } {
   if (!isFilledValue(value)) return field.required ? { error: `${label} is required.` } : { value };
   const shape = credentialFieldShape(field);
-  // Key files inside a row, such as each Firebase account's service account JSON, are stored like top-level ones.
-  if (shape === 'base64-file') return keyFileValue(field, value, label);
   if (typeof value === 'object') return { error: `${label} takes a single text value.` };
   const text = String(value);
   if (shape === 'select' && field.options && !field.options.includes(text)) {
@@ -1326,7 +1041,7 @@ function rowFieldValue(field: CredentialField, value: unknown, label: string): {
 }
 
 /**
- * A list inside one entry of a list, such as the apps of one Firebase account,
+ * A list inside one entry of a list, such as the channels of one Discord server,
  * in a whole write of the outer list or on its own with parent_field: rows
  * checked against its item schema, or text items.
  */
@@ -1345,6 +1060,11 @@ function nestedListValue(field: CredentialField, value: unknown, entryLabel: str
     : checked;
 }
 
+/** What an unknown credential key gets: the credentials there are, and where an outside service goes. */
+export const UNKNOWN_CREDENTIAL_HINT = 'Credentials are chat channels (such as "telegram"), Twilio Voice, settings and the Wiro '
+  + 'project; get_my_agent lists the agent\'s. An outside service is a Connector: list_agent_connectors lists them and '
+  + 'connect_agent_connector connects one.';
+
 /**
  * Checks every requested field against the credential registry and builds the
  * API payload. Nothing is written when any field is refused.
@@ -1352,6 +1072,8 @@ function nestedListValue(field: CredentialField, value: unknown, entryLabel: str
 export function prepareCredentialWrite(
   inputs: CredentialFieldInput[],
   metas: Map<string, CredentialMeta | null>,
+  /** Unknown keys that name a connector, with its title: they get the connector tools' names. */
+  connectors: ReadonlyMap<string, string> = new Map(),
 ): PreparedCredentialWrite {
   const prepared: PreparedCredentialWrite = { apiFields: [], files: [], errors: [], secrets: [] };
   const reportedUnknown = new Set<string>();
@@ -1362,7 +1084,10 @@ export function prepareCredentialWrite(
     const meta = metas.get(credential) ?? null;
     if (!meta) {
       if (!reportedUnknown.has(credential)) {
-        prepared.errors.push(`Unknown credential "${credential}". The credential keys a skill uses are listed by list_agent_skills and get_my_agent.`);
+        const connector = connectors.get(credential);
+        prepared.errors.push(connector
+          ? `${connector} is a Connector, not a credential: connect it with connect_agent_connector (list_agent_connectors with name "${credential}" shows what it needs).`
+          : `Unknown credential "${credential}". ${UNKNOWN_CREDENTIAL_HINT}`);
         reportedUnknown.add(credential);
       }
       continue;
@@ -1379,24 +1104,8 @@ export function prepareCredentialWrite(
       prepared.errors.push(`${meta.title}: "${fieldName}" is a reserved name.`);
       continue;
     }
-    if (CONNECTION_STATE_FIELDS.has(fieldName)) {
-      prepared.errors.push(`${meta.title}: "${fieldName}" is filled by the connection itself. Use connect_agent_oauth.`);
-      continue;
-    }
     if (holdsSecretMask(input.value)) {
       prepared.errors.push(`${meta.title}: "${fieldName}" holds ${SECRET_MASK_TEXT}. Leave it out to keep the saved value, or send the new value.`);
-      continue;
-    }
-
-    if (fieldName === 'authmethod') {
-      const usable = usableConnectionModes(meta);
-      if (input.parent_field || usable.length === 0) {
-        prepared.errors.push(`${meta.title} has no connection modes, so "authmethod" does not apply.`);
-      } else if (typeof input.value !== 'string' || !usable.includes(input.value)) {
-        prepared.errors.push(`${meta.title}: authmethod must be one of ${usable.join(', ')}.`);
-      } else {
-        prepared.apiFields.push({ credentialkey: credential, fieldname: 'authmethod', fieldvalue: input.value });
-      }
       continue;
     }
 
@@ -1415,7 +1124,7 @@ export function prepareCredentialWrite(
         continue;
       }
       if (!isWritableField(parent)) {
-        prepared.errors.push(`${parent.label} is filled by the connection or by Wiro and cannot be set.`);
+        prepared.errors.push(`${parent.label} is filled by Wiro and cannot be set.`);
         continue;
       }
       const item = parent.itemSchema.find(candidate => candidate.key === fieldName);
@@ -1462,7 +1171,7 @@ export function prepareCredentialWrite(
       continue;
     }
     if (!isWritableField(field)) {
-      prepared.errors.push(`${field.label} is filled when the account is connected with connect_agent_oauth and cannot be set directly.`);
+      prepared.errors.push(`${field.label} is filled by Wiro and cannot be set directly.`);
       continue;
     }
 
@@ -1494,15 +1203,6 @@ export function prepareCredentialWrite(
         fileTypes: field.fileTypes ?? [],
         maxBytes: (field.maxSizeKb ?? 10240) * 1024,
       });
-      continue;
-    }
-    if (shape === 'base64-file') {
-      const checked = keyFileValue(field, input.value, field.label);
-      if (checked.error) {
-        prepared.errors.push(checked.error);
-        continue;
-      }
-      prepared.apiFields.push({ credentialkey: credential, fieldname: fieldName, fieldvalue: checked.value });
       continue;
     }
     const checked = shape === 'string-array' || shape === 'object-array'
@@ -1603,15 +1303,11 @@ export function credentialGroup(row: Row, key: string): Row | null {
   return isPlainObject(group) ? group : null;
 }
 
-/**
- * Whether the agent can use a credential now. An OAuth credential is ready only once connected: a saved shop
- * domain or own-app key alone does not let the agent sign in.
- */
+/** Whether the agent can use a credential now: it is connected, or every required field holds a value. */
 export function credentialReady(row: Row, key: string): boolean {
   const group = credentialGroup(row, key);
   if (!group) return false;
-  const oauth = isPlainObject(group._schema) && isPlainObject(group._schema.oauth_provider);
-  return group._connected === true || (!oauth && group._filled === true);
+  return group._connected === true || group._filled === true;
 }
 
 export interface CredentialStatus {
@@ -1629,9 +1325,8 @@ export function credentialStatus(row: Row, key: string, meta?: CredentialMeta | 
   if (!group) return null;
   const schema = isPlainObject(group._schema) ? group._schema : {};
   const connected = group._connected === true;
-  // A sign-in credential's required fields depend on its mode; connected is the signal there. Filled says every
-  // required field holds a value, a template's own value that is not shown included.
-  const missingFields = connected || !meta || meta.oauth || group._filled === true
+  // Filled says every required field holds a value, a template's own value that is not shown included.
+  const missingFields = connected || !meta || group._filled === true
     ? []
     : meta.fields
       .filter(field => field.required && isWritableField(field) && !isCredentialFieldFilled(field, group[field.key]))
@@ -1674,528 +1369,6 @@ export function channelStatuses(row: Row): ChannelStatus[] {
       missingFields: stringList(channel.missingfields).map(field => labels.get(field) ?? field),
     };
   });
-}
-
-// ---------------------------------------------------------------------------
-// Sign-in connections (connect_agent_oauth)
-// ---------------------------------------------------------------------------
-
-/**
- * Wiro sends the browser to this address after sign-in with the connected
- * account names appended, so only the agent's own dashboard page (for the API
- * this server talks to, as dashboardAgentUrl gives it) or an address on the
- * user's own machine is accepted.
- */
-export function isAllowedRedirectUrl(url: string, agentGuid: string, apiBase: string = DEFAULT_BASE_URL): boolean {
-  let parsed: URL;
-  try {
-    parsed = new URL(url.trim());
-  } catch {
-    return false;
-  }
-  if (parsed.username || parsed.password) return false;
-  if (parsed.protocol === 'http:') return parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1';
-  const dashboard = new URL(dashboardAgentUrl(agentGuid, apiBase));
-  return parsed.protocol === 'https:'
-    && parsed.host === dashboard.host
-    && parsed.pathname.replace(/\/+$/, '') === dashboard.pathname
-    && (parsed.search === '' || parsed.search === dashboard.search)
-    && parsed.hash === '';
-}
-
-/**
- * The redirect URI a customer registers in their own OAuth app. Wiro's status gives the one for the host this
- * server talks to; without it, or when it is not an address for this service's callback, the callback under the
- * API base URL is used (wiroAddresses).
- */
-export function ownAppRedirectUri(meta: CredentialMeta, fromStatus?: string, apiBase: string = DEFAULT_BASE_URL): string | undefined {
-  const callbackPath = meta.oauth?.callbackPath;
-  if (!callbackPath) return undefined;
-  return statusRedirectUri(meta, fromStatus) ?? `${wiroAddresses(apiBase).callbackBase}${callbackPath}`;
-}
-
-/** The redirect URI Wiro's status gave, when it is an address for this service's callback; else undefined. */
-export function statusRedirectUri(meta: CredentialMeta, fromStatus?: string): string | undefined {
-  const callbackPath = meta.oauth?.callbackPath;
-  return callbackPath && fromStatus && isCallbackAddress(fromStatus, callbackPath) ? fromStatus : undefined;
-}
-
-function isCallbackAddress(value: string, callbackPath: string): boolean {
-  let parsed: URL;
-  try {
-    parsed = new URL(value);
-  } catch {
-    return false;
-  }
-  return (parsed.protocol === 'https:' || parsed.protocol === 'http:')
-    && !parsed.username && !parsed.password && !parsed.search && !parsed.hash
-    && parsed.pathname.endsWith(callbackPath);
-}
-
-export interface ModeRequirement {
-  mode: string;
-  available: boolean;
-  needsBrowser: boolean;
-  /** writeOnly marks an app key: it reads as empty even once saved, so isSet false says nothing about it. */
-  fields: Array<{ field: string; label: string; isSet: boolean; writeOnly?: boolean }>;
-  note: string;
-}
-
-/** Goes with a list of missing fields that holds app keys, which may be saved already. */
-export function writeOnlyNote(mode: string): string {
-  return `App keys are not shown once saved. If they are saved already, connect with mode ${mode}.`;
-}
-
-/** The same note before a mode is chosen: it names each usable mode that takes app keys. */
-export function writeOnlyModesNote(requirements: ModeRequirement[]): string | null {
-  const modes = requirements
-    .filter(requirement => requirement.available && requirement.fields.some(field => field.writeOnly))
-    .map(requirement => requirement.mode);
-  return modes.length > 0 ? writeOnlyNote(modes.join(' or ')) : null;
-}
-
-/**
- * What Wiro's status says is saved for the modes that need something saved before they connect: that the keys of
- * the user's own app are saved (Wiro's no says nothing about them; see parseOAuthStatus), and whether the token a
- * check reads is. Empty when the status does not say, as from an older Wiro API.
- */
-export function savedForModesText(meta: CredentialMeta, context: Pick<ModeContext, 'appKeysSaved' | 'tokenSaved'>): string {
-  const modes = usableConnectionModes(meta);
-  const sentences: string[] = [];
-  if (modes.includes('own') && context.appKeysSaved === true) {
-    sentences.push(`The keys of the user's own ${meta.title} app (mode own) are saved.`);
-  }
-  const probe = meta.oauth?.directProbe;
-  if (probe && modes.includes(probe.mode) && context.tokenSaved !== undefined) {
-    sentences.push(`The ${probe.label ?? 'token'} (mode ${probe.mode}) ${context.tokenSaved ? 'is saved' : 'is not saved yet'}.`);
-  }
-  return sentences.join(' ');
-}
-
-function fieldsForMode(meta: CredentialMeta, mode: string): CredentialField[] {
-  if (mode === 'wiro') return [];
-  const byKey = new Map(meta.fields.map(field => [field.key, field]));
-  const keys: string[] = [];
-  if (mode === meta.oauth?.directProbe?.mode) {
-    keys.push(...meta.oauth.directProbe.requiredFields);
-  } else {
-    for (const field of meta.fields) {
-      if (isWritableField(field) && field.onlyInModes?.includes(mode)) keys.push(field.key);
-    }
-    if (mode === 'own') keys.push(...(meta.oauth?.stateFields ?? []));
-  }
-  return [...new Set(keys)]
-    .map(key => byKey.get(key) ?? { ...parseCredentialField({ key }), required: true })
-    .filter(field => isWritableField(field));
-}
-
-/** What Wiro's connection status says about a connection's setup, and the API base URL this server talks to. */
-export interface ModeContext {
-  /** The redirect URI to register in the user's own app, as Wiro's status gives it. */
-  redirectUri?: string;
-  /** Wiro says every required field of mode own, such as the app keys, holds a value. Only a yes is kept. */
-  appKeysSaved?: true;
-  /** Every field the token check reads holds a value. */
-  tokenSaved?: boolean;
-  /** For the redirect URI when Wiro's status gives none. */
-  apiBase?: string;
-}
-
-/** The context of a status read, which may have failed (null): then only the API base URL. */
-export function modeContext(status: OAuthStatusSnapshot | null | undefined, apiBase: string): ModeContext {
-  return {
-    ...(status?.redirectUri ? { redirectUri: status.redirectUri } : {}),
-    ...(status?.appKeysSaved === true ? { appKeysSaved: true as const } : {}),
-    ...(status?.tokenSaved !== undefined ? { tokenSaved: status.tokenSaved } : {}),
-    apiBase,
-  };
-}
-
-/**
- * What each connection mode needs, with which of those fields are already saved. App keys read as empty in the
- * agent's detail even once saved, so where Wiro's status says the own app's keys are saved, or whether the token
- * check's fields are, that decides for them.
- */
-export function connectionModeRequirements(meta: CredentialMeta, group: Row | null, context: ModeContext = {}): ModeRequirement[] {
-  const modes = meta.connectionModes.length > 0 ? meta.connectionModes : ['wiro'];
-  return modes.map(mode => {
-    // Mode own only ever has Wiro's yes (see parseOAuthStatus): without it, the app keys keep the hedge below, so a
-    // connect still lets the sign-in route decide whether they are saved.
-    const saved = mode === 'own'
-      ? context.appKeysSaved
-      : mode === meta.oauth?.directProbe?.mode ? context.tokenSaved : undefined;
-    const fields = fieldsForMode(meta, mode).map(field => {
-      // Wiro's yes on mode own covers its required fields; its word on the token check, every field the check reads.
-      const statusSays = saved !== undefined && (mode !== 'own' || field.required);
-      const isSet = (group !== null && isFilledValue(group[field.key])) || (statusSays && saved === true);
-      return {
-        field: field.key,
-        label: field.label,
-        isSet,
-        ...(field.oauthManaged && !isSet && !statusSays ? { writeOnly: true } : {}),
-      };
-    });
-    if (mode === 'wiro') {
-      return {
-        mode,
-        available: !meta.wiroPending,
-        needsBrowser: true,
-        fields,
-        note: meta.wiroPending
-          ? `Use another mode for ${meta.title}.`
-          : `Sign in through Wiro's own ${meta.title} app. Nothing to set up first.`,
-      };
-    }
-    if (mode === meta.oauth?.directProbe?.mode) {
-      return {
-        mode,
-        available: true,
-        needsBrowser: false,
-        fields,
-        note: `Save ${meta.oauth.directProbe.label ? `the ${meta.oauth.directProbe.label}` : 'these fields'} with set_agent_credentials, then connect with mode ${mode}. Wiro checks it and lists the accounts it can use. No browser needed.`,
-      };
-    }
-    if (mode === 'api_key') {
-      return {
-        mode,
-        available: true,
-        needsBrowser: false,
-        fields,
-        note: `Save these fields with set_agent_credentials together with authmethod ${mode}. There is no sign-in or connect step for this mode.`,
-      };
-    }
-    if (mode === 'own') {
-      const redirect = ownAppRedirectUri(meta, context.redirectUri, context.apiBase);
-      const requirements = meta.oauth?.connectRequirements ?? [];
-      return {
-        mode,
-        available: true,
-        needsBrowser: true,
-        fields,
-        note: `Use your own ${meta.title} app: save its keys with set_agent_credentials${redirect ? ` and allow ${redirect} as a redirect URI in the app` : ''}, then connect with mode own and sign in.${requirements.length > 0 ? ` ${requirements.join(' ')}` : ''}`,
-      };
-    }
-    return { mode, available: true, needsBrowser: true, fields, note: `Connect with mode ${mode}.` };
-  });
-}
-
-/**
- * The mode to use when the caller did not name one: Wiro's own app when it is
- * available, the only remaining mode, or the first mode whose fields are
- * already saved (the registry's default first).
- */
-export function chooseConnectionMode(meta: CredentialMeta, requirements: ModeRequirement[]): string | null {
-  const usable = requirements.filter(requirement => requirement.available);
-  const wiro = usable.find(requirement => requirement.mode === 'wiro');
-  if (wiro) return 'wiro';
-  if (usable.length === 1) return usable[0]?.mode ?? null;
-  const ordered = [...usable].sort((left, right) => {
-    const preferred = meta.defaultConnectionMode;
-    return Number(right.mode === preferred) - Number(left.mode === preferred);
-  });
-  return ordered.find(requirement => requirement.fields.every(field => field.isSet))?.mode ?? null;
-}
-
-export interface AccountRef {
-  id: string;
-  name: string;
-}
-
-/**
- * An account in a line of this server's text. The outside service sets its name,
- * and a service without an account choice gives that name as the id too, so both
- * are quoted and a repeat is left out.
- */
-export function accountLabel(account: AccountRef): string {
-  const name = oneLine(account.name);
-  const id = quotedSpan(account.id);
-  return name && name !== oneLine(account.id) ? `${quotedSpan(name)} (${id})` : id;
-}
-
-/** Candidate or saved accounts in one shape, whatever the provider calls the fields. */
-export function toAccountRefs(list: unknown, picker?: PickerMeta | null): AccountRef[] {
-  if (!Array.isArray(list)) return [];
-  return list.filter(isPlainObject).map(item => {
-    const id = asString(item.id) ?? (picker ? asString(item[picker.valueField]) : undefined) ?? '';
-    const name = asString(item.name)
-      ?? asString(item.title)
-      ?? asString(item.displayName)
-      ?? (picker?.labelField ? asString(item[picker.labelField]) : undefined)
-      ?? '';
-    return { id, name };
-  }).filter(account => account.id);
-}
-
-/**
- * The ids of the chosen accounts. Wiro saves only accounts from the list its sign-in or token check gave, under the
- * names in that list, so an id is all it takes.
- */
-export function pickedAccountIds(
-  picker: PickerMeta,
-  accounts: Array<Record<string, unknown>>,
-): { ids?: string[]; error?: string } {
-  if (accounts.length === 0) return { error: 'Pass at least one account.' };
-  if (!picker.multiSelect && accounts.length !== 1) return { error: 'This connection uses exactly one account.' };
-  const ids: string[] = [];
-  for (const account of accounts) {
-    const id = (asString(account.id) ?? asString(account[picker.valueField]) ?? '').trim();
-    if (!id) return { error: 'Every account needs an id.' };
-    if (ids.includes(id)) return { error: `Account ${id} is listed twice.` };
-    ids.push(id);
-  }
-  return { ids };
-}
-
-export interface DiscoveredGroup {
-  parent: AccountRef;
-  items: AccountRef[];
-  errorCode?: string;
-}
-
-export function parseDiscoveredGroups(next: NextPickerMeta, groups: unknown): DiscoveredGroup[] {
-  if (!Array.isArray(groups)) return [];
-  return groups.filter(isPlainObject).map(group => {
-    const parent = isPlainObject(group.parent) ? group.parent : {};
-    const items = Array.isArray(group.items) ? group.items.filter(isPlainObject) : [];
-    return {
-      parent: {
-        id: asString(parent[next.parentValueField]) ?? '',
-        name: asString(parent[next.parentLabelField]) ?? '',
-      },
-      items: items
-        .map(item => ({
-          id: asString(item[next.itemValueField]) ?? '',
-          name: asString(item[next.itemLabelField]) ?? '',
-        }))
-        .filter(item => item.id),
-      ...(asString(group.errorcode) ? { errorCode: asString(group.errorcode) } : {}),
-    };
-  });
-}
-
-function sameId(left: string, right: string): boolean {
-  if (left.trim() === right.trim()) return true;
-  const digits = (value: string) => value.replace(/\D+/g, '');
-  return digits(left) !== '' && digits(left) === digits(right);
-}
-
-/**
- * Builds the chained-step payload from a fresh discovery. The API wants every
- * readable parent exactly once and each item with its discovered label, so
- * parents the caller left out are sent with no items.
- */
-export function buildChainedSelections(
-  next: NextPickerMeta,
-  groups: DiscoveredGroup[],
-  selections: Array<{ parent: string; items: string[] }>,
-): { selections?: Array<{ parentvalue: string; items: Array<Record<string, string>> }>; skippedParents: AccountRef[]; error?: string } {
-  const chosen = new Map<string, string[]>();
-  for (const selection of selections) {
-    const group = groups.find(candidate => sameId(candidate.parent.id, selection.parent));
-    if (!group) {
-      return {
-        skippedParents: [],
-        error: `Account "${selection.parent}" is not among the accounts this step lists (${groups.map(candidate => candidate.parent.id).join(', ') || 'none'}).`,
-      };
-    }
-    if (group.errorCode) {
-      return {
-        skippedParents: [],
-        error: `${accountLabel(group.parent)} could not be read (${group.errorCode}), so nothing can be chosen for it. Leave it out.`,
-      };
-    }
-    const ids = chosen.get(group.parent.id) ?? [];
-    for (const itemId of selection.items) {
-      const item = group.items.find(candidate => sameId(candidate.id, itemId));
-      if (!item) {
-        return {
-          skippedParents: [],
-          error: `"${itemId}" is not available under ${accountLabel(group.parent)}. Available: ${group.items.map(accountLabel).join(', ') || 'none'}.`,
-        };
-      }
-      if (!ids.includes(item.id)) ids.push(item.id);
-    }
-    chosen.set(group.parent.id, ids);
-  }
-  const skippedParents: AccountRef[] = [];
-  const payload = groups.filter(group => !group.errorCode).map(group => {
-    const ids = chosen.get(group.parent.id);
-    if (!ids) skippedParents.push(group.parent);
-    return {
-      parentvalue: group.parent.id,
-      items: group.items
-        .filter(item => ids?.includes(item.id))
-        .map(item => ({ [next.itemValueField]: item.id, [next.itemLabelField]: item.name })),
-    };
-  });
-  return { selections: payload, skippedParents };
-}
-
-export interface ChildStepStatus {
-  picker: string;
-  optional: boolean;
-  configured: boolean;
-  groups: Array<{ parent: AccountRef; items: AccountRef[] }>;
-}
-
-/** Where the latest sign-in or token check for a connection stands, as Wiro keeps it for 15 minutes. */
-export const OAUTH_FLOW_STATUSES = ['waiting', 'candidates', 'connected', 'saved', 'failed'] as const;
-export type OAuthFlowStatus = typeof OAUTH_FLOW_STATUSES[number];
-
-export interface OAuthFlow {
-  status: OAuthFlowStatus;
-  /** Whether this connection's person started it. Wiro sends the account list and the details only to them. */
-  mine: boolean;
-  /** Its id, for the person who started it, or empty. A later step names it so Wiro can tell it was not replaced. */
-  flowId: string;
-  /** Why it failed, as Wiro names it, or empty. */
-  errorCode: string;
-  /** Who signed in, when the service says so, or empty. */
-  account: string;
-}
-
-export interface OAuthStatusSnapshot {
-  connected: boolean;
-  accounts: AccountRef[];
-  connectedAt: string;
-  tokenExpiresAt: string;
-  childStep: ChildStepStatus | null;
-  /** The accounts the latest sign-in or token check found, while they wait to be chosen. Only for the person who started it. */
-  candidates: AccountRef[];
-  flow: OAuthFlow | null;
-  /** The redirect URI to register in the user's own app, as Wiro gives it. */
-  redirectUri?: string;
-  /** Wiro says every required field of the own-app sign-in, such as the app keys, is saved. Only a yes is kept. */
-  appKeysSaved?: true;
-  /** Wiro says whether every field the token check reads is saved. */
-  tokenSaved?: boolean;
-}
-
-const FLOW_ID = /^[a-f0-9]{32}$/;
-const FLOW_ERROR_CODE = /^[a-z0-9_]{1,80}$/;
-const FLOW_ACCOUNT_MAX = 120;
-
-function parseOAuthFlow(value: unknown): OAuthFlow | null {
-  if (!isPlainObject(value)) return null;
-  const status = asString(value.status);
-  if (!(OAUTH_FLOW_STATUSES as readonly string[]).includes(status ?? '')) return null;
-  const mine = value.mine === true;
-  const flowId = asString(value.flowid) ?? '';
-  const errorCode = asString(value.errorcode)?.trim() ?? '';
-  return {
-    status: status as OAuthFlowStatus,
-    mine,
-    flowId: mine && FLOW_ID.test(flowId) ? flowId : '',
-    errorCode: FLOW_ERROR_CODE.test(errorCode) ? errorCode : '',
-    account: oneLine(asString(value.account) ?? '').slice(0, FLOW_ACCOUNT_MAX),
-  };
-}
-
-export function parseOAuthStatus(body: Row, picker: PickerMeta | null): OAuthStatusSnapshot {
-  let childStep: ChildStepStatus | null = null;
-  const next = picker?.next;
-  const steps = isPlainObject(body.pickersteps) ? body.pickersteps : null;
-  const step = next && steps && isPlainObject(steps[next.key]) ? steps[next.key] as Row : null;
-  if (next && step) {
-    childStep = {
-      picker: next.key,
-      optional: step.optional === true,
-      configured: step.configured === true,
-      groups: parseDiscoveredGroups(next, step.groups).map(group => ({ parent: group.parent, items: group.items })),
-    };
-  }
-  const redirectUri = asString(body.redirecturi)?.trim();
-  return {
-    connected: body.connected === true,
-    accounts: toAccountRefs(body.accounts, picker),
-    connectedAt: asString(body.connectedat) ?? '',
-    tokenExpiresAt: asString(body.tokenexpiresat) ?? '',
-    childStep,
-    candidates: toAccountRefs(body.candidates),
-    flow: parseOAuthFlow(body.flow),
-    ...(redirectUri ? { redirectUri } : {}),
-    // Wiro says yes once every required field its own-app setup takes is saved. Its no says less than that the keys
-    // are missing: it is also no for a service whose own-app setup needs a field Wiro manages, such as an approval,
-    // and while any other required field is empty. So only a yes is kept.
-    ...(body.appkeyssaved === true ? { appKeysSaved: true as const } : {}),
-    ...(typeof body.tokensaved === 'boolean' ? { tokenSaved: body.tokensaved } : {}),
-  };
-}
-
-export async function readOAuthStatus(
-  client: WiroClient,
-  agentGuid: string,
-  credential: string,
-  picker: PickerMeta | null,
-  signal?: AbortSignal,
-): Promise<OAuthStatusSnapshot> {
-  const body = requireApiSuccess(
-    await client.post<ApiEnvelope & Row>('/UserAgentOAuth/OAuthStatus', {
-      useragentguid: agentGuid,
-      credentialkey: credential,
-    }, signal),
-    'Could not read the connection status.',
-  );
-  return parseOAuthStatus(body, picker);
-}
-
-export type ConnectionState =
-  | 'connected'
-  | 'pick_accounts'
-  | 'pick_child_items'
-  | 'waiting_for_user'
-  | 'token_expired'
-  | 'not_connected';
-
-/**
- * The latest sign-in or token check this connection's person started decides first: a list of accounts to choose
- * from, a sign-in still open in the browser, or one that failed. A sign-in that keeps its account list on the
- * server writes no connectedat until the choice is saved, so only the flow tells it is done.
- */
-function ownFlowState(status: OAuthStatusSnapshot): ConnectionState | null {
-  const flow = status.flow;
-  if (!flow?.mine) return null;
-  if (ownCandidates(status).length > 0) return 'pick_accounts';
-  if (flow.status === 'waiting') return 'waiting_for_user';
-  if (flow.status === 'failed') return 'not_connected';
-  return null;
-}
-
-/** The accounts this connection's person can choose from now: the list of their own latest sign-in or token check. */
-export function ownCandidates(status: OAuthStatusSnapshot): AccountRef[] {
-  return status.flow?.mine === true && status.flow.status === 'candidates' ? status.candidates ?? [] : [];
-}
-
-/** The latest sign-in or token check of this connection's person, when it failed, so waiting for it ends. */
-export function ownFailedFlow(status: OAuthStatusSnapshot): OAuthFlow | null {
-  return status.flow?.mine === true && status.flow.status === 'failed' ? status.flow : null;
-}
-
-/**
- * Wiro reports a picker credential as not connected until an account is
- * saved, so a fresh connectedat with no accounts means "signed in, accounts
- * still to choose". since is the connectedat seen before the sign-in started.
- * An answer without a flow of this connection's person reads by these rules alone.
- */
-export function connectionState(
-  status: OAuthStatusSnapshot,
-  options: { hasPicker: boolean; since?: string; nowMs?: number },
-): ConnectionState {
-  const fromFlow = ownFlowState(status);
-  if (fromFlow) return fromFlow;
-  if (options.since !== undefined && status.connectedAt === options.since) return 'waiting_for_user';
-  if (status.connected) {
-    return status.childStep && !status.childStep.optional && !status.childStep.configured
-      ? 'pick_child_items'
-      : 'connected';
-  }
-  const expiresAt = Date.parse(status.tokenExpiresAt);
-  if (Number.isFinite(expiresAt) && expiresAt <= (options.nowMs ?? Date.now())
-    && (status.accounts.length > 0 || status.connectedAt)) {
-    return 'token_expired';
-  }
-  if (options.hasPicker && status.connectedAt && status.accounts.length === 0) return 'pick_accounts';
-  return 'not_connected';
 }
 
 // ---------------------------------------------------------------------------
@@ -2444,6 +1617,8 @@ export interface CustomSkillEntry {
   source: string;
   userCreated: boolean;
   requiresCredentials: string[];
+  /** The connectors a scheduled task needs: it runs while one of them is connected. */
+  requiresConnectors: string[];
   /** The starter task whose text was never written: it does not run until its text is saved. */
   notWritten?: boolean;
   /** The skills that bring a scheduled task. */
@@ -2466,6 +1641,19 @@ function skillGroupsByKey(value: Row): Record<string, string[][]> {
   return Object.fromEntries(Object.entries(value).filter(([, groups]) => Array.isArray(groups)).map(([key, groups]) => [key, toSkillGroups(groups)]));
 }
 
+/** A task's connector slugs, as a list or as the JSON text Wiro stores. */
+function connectorList(value: unknown): string[] {
+  let list = value;
+  if (typeof value === 'string') {
+    try {
+      list = JSON.parse(value);
+    } catch {
+      return [];
+    }
+  }
+  return [...new Set(stringList(list).filter(slug => CONNECTOR_SLUG.test(slug)))];
+}
+
 export function customSkillEntries(row: Row): CustomSkillEntry[] {
   const rows = [
     ...(Array.isArray(row.customskills) ? row.customskills : []),
@@ -2484,6 +1672,7 @@ export function customSkillEntries(row: Row): CustomSkillEntry[] {
       source,
       userCreated: source === 'user-created' || entry._user_created === true,
       requiresCredentials: stringList(entry.requires_credentials),
+      requiresConnectors: connectorList(entry.requires_connectors),
       notWritten: key === STARTER_TASK_KEY && entry._edited === false,
       ownerSkills: stringList(entry._owner_skills),
       skillOff: entry._skill_off === true,
@@ -2495,61 +1684,22 @@ export function customSkillEntries(row: Row): CustomSkillEntry[] {
 }
 
 /**
- * What connecting a credential does to the entries that need it. Saving it turns on an entry that is off only
- * when the entry's own list names it. For a skill's scheduled task Wiro says what it would still wait for once
- * that credential is connected: such a task turns on and runs (on), or turns on and stays paused while those
- * skills are off (paused). A scheduled task that is on already starts running when only this connection held
- * it back (starts), or stays paused while those skills are off (waiting).
- */
-export function entriesTurnedOnBy(row: Row, credential: string): {
-  on: CustomSkillEntry[];
-  paused: Array<{ key: string; groups: string[][] }>;
-  starts: CustomSkillEntry[];
-  waiting: Array<{ key: string; groups: string[][] }>;
-} {
-  const on: CustomSkillEntry[] = [];
-  const paused: Array<{ key: string; groups: string[][] }> = [];
-  const starts: CustomSkillEntry[] = [];
-  const waiting: Array<{ key: string; groups: string[][] }> = [];
-  for (const entry of customSkillEntries(row)) {
-    const groups = entry.ifConnected?.[credential];
-    if (entry.enabled) {
-      if (groups && groups.length > 0) waiting.push({ key: entry.key, groups });
-      else if (startsOnConnect(row, entry, credential)) starts.push(entry);
-      continue;
-    }
-    if (!entry.requiresCredentials.includes(credential)) continue;
-    if (!entry.ifConnected || (groups !== undefined && groups.length === 0)) on.push(entry);
-    else if (groups !== undefined) paused.push({ key: entry.key, groups });
-  }
-  return { on, paused, starts, waiting };
-}
-
-/**
- * Whether a scheduled task that is on runs once this credential is connected, and not before. A skill's task
- * runs then when Wiro says it needs nothing more ([]), and does not run now while it is paused for skills or
- * none of the connections it can use is ready. A task with no skill gate runs while any credential its list
- * names is ready. The starter task does not run until its text is written.
- */
-function startsOnConnect(row: Row, entry: CustomSkillEntry, credential: string): boolean {
-  if (entry.kind !== 'scheduled_task' || entry.notWritten) return false;
-  if (entry.ifConnected) {
-    const usable = entry.usableCredentials ?? [];
-    return entry.ifConnected[credential]?.length === 0
-      && (entry.skillOff === true || (usable.length > 0 && !usable.some(key => credentialReady(row, key))));
-  }
-  return entry.requiresCredentials.includes(credential) && !entry.requiresCredentials.some(key => credentialReady(row, key));
-}
-
-/**
  * The connection a scheduled task needs, as a sentence: the credentials it can use (a skill's task) or the
- * ones its row lists (a task of the user's own), by title where the agent's credential cards have one.
+ * ones its row lists (a task of the user's own), by title where the agent's credential cards have one, and
+ * the connectors it needs.
  */
-export function connectionNeededText(row: Row, entry: Pick<CustomSkillEntry, 'usableCredentials' | 'requiresCredentials'>): string {
+export function connectionNeededText(
+  row: Row,
+  entry: Pick<CustomSkillEntry, 'usableCredentials' | 'requiresCredentials' | 'requiresConnectors'>,
+): string {
   const keys = entry.usableCredentials ?? entry.requiresCredentials;
-  if (keys.length === 0) return '';
-  const labels = keys.map(key => credentialLabel(row, key));
-  return `It only runs while ${labels.length > 1 ? 'one of ' : ''}${nameList(labels, 'or')} is connected.`;
+  const credentials = keys.length > 0
+    ? `It only runs while ${keys.length > 1 ? 'one of ' : ''}${nameList(keys.map(key => credentialLabel(row, key)), 'or')} is connected.`
+    : '';
+  const connectors = entry.requiresConnectors.length > 0
+    ? `It needs ${entry.requiresConnectors.length > 1 ? 'one of the connectors ' : 'the connector '}${nameList(entry.requiresConnectors.map(slug => `\`${slug}\``), 'or')} connected to run.`
+    : '';
+  return [credentials, connectors].filter(Boolean).join(' ');
 }
 
 /**

@@ -31,7 +31,7 @@ export function registerGetAgentMessage(server: McpServer, client: WiroClient): 
         + 'nextAction, and share other links from it as plain links. Setup changes a deployed agent proposes '
         + '(setupChanges) are shown in full with their status; the Next line says how the user approves one. A '
         + 'change to a custom skill\'s text also shows the text the skill had before it (before), so an applied one '
-        + 'still shows what it changed. An add or remove of a Connector or Skill also shows what Wiro says the change '
+        + 'still shows what it changed. An add or remove of a Skill or Connector also shows what Wiro says the change '
         + 'does with it: what else turns on or off (with), the scheduled tasks that pause or run again, and for an '
         + 'add the connectors still to connect (needs). On '
         + 'Wiro\'s own listing of a proposed change (listedSetupChanges), nothing is applied yet: show the listing, '

@@ -87,7 +87,7 @@ export function describeAgentStatus(status: number | null | undefined): string {
 // can read it and message it, so their hints say who can act instead of naming
 // a call they cannot make.
 const TEAM_AGENT_MANAGERS = 'a team admin or the person who deployed it';
-export const MEMBER_SETUP_HELP = `On this team agent, ${TEAM_AGENT_MANAGERS} saves credentials, connects accounts such `
+export const MEMBER_SETUP_HELP = `On this team agent, ${TEAM_AGENT_MANAGERS} saves credentials, connects connectors such `
   + 'as Instagram or Google Ads, and pays for the plan.';
 
 const MEMBER_STATUS_HINT: Partial<Record<AgentStatusLabel, string>> = {
@@ -407,7 +407,6 @@ export const credentialStatusSchema = z.object({
   key: z.string(),
   title: z.string(),
   optional: z.boolean(),
-  oauth: z.boolean(),
   connected: z.boolean(),
   filled: z.boolean(),
   requiredMissing: z.boolean(),
@@ -426,7 +425,6 @@ export function summarizeCredentials(credentials: unknown, skipKeys: Set<string>
       key,
       title: asString(schema.title) ?? key,
       optional: group.optional === true,
-      oauth: isPlainObject(schema.oauth_provider),
       connected: group._connected === true,
       filled: group._filled === true,
       requiredMissing: group._required_missing === true,
@@ -610,7 +608,7 @@ export const agentDetailSchema = agentSummarySchema.extend({
     .describe('Setup from chat: where the agent may propose setup changes that a person then approves. off, webchat '
       + '(the Wiro web chat only) or all (also messages sent with an API key). Left out when Wiro does not report it.'),
   credentials: z.array(credentialStatusSchema),
-  missingCredentials: z.array(z.object({ key: z.string(), title: z.string(), oauth: z.boolean() })),
+  missingCredentials: z.array(z.object({ key: z.string(), title: z.string() })),
   channels: z.array(channelStatusSchema),
   scheduledTasks: z.array(agentTaskSchema),
   customInstructions: z.array(agentTaskSchema),
@@ -746,8 +744,7 @@ export function selectableModelSlugs(row: Record<string, unknown>): Set<string> 
 
 /**
  * The keys of the credentials an agent's setup waits for: a credential with a
- * required field empty, a required credential that holds no value yet, or a
- * required sign-in that is not connected. A custom build's setup waits only for
+ * required field empty, or a required credential that holds no value yet. A custom build's setup waits only for
  * the main credential of each active skill, which skillsmeta lists. Its chat
  * channels are never among them.
  */
@@ -763,7 +760,7 @@ export function credentialKeysSetupWaitsFor(row: Record<string, unknown>): Set<s
     // A required credential whose fields are all optional has no empty required
     // field to show, and the setup still waits until it holds a value.
     .filter(credential => credential.requiredMissing
-      || (!credential.optional && !credential.connected && (credential.oauth || (row.setuprequired === true && !credential.filled))))
+      || (!credential.optional && !credential.connected && row.setuprequired === true && !credential.filled))
     .filter(credential => !activeKeys || activeKeys.has(credential.key))
     // A group with no optional flag has no template row and no skill behind it, only saved values left over.
     .filter((credential) => {
@@ -826,7 +823,7 @@ export function toAgentDetail(row: Record<string, unknown>): AgentDetail {
     credentials,
     missingCredentials: credentials
       .filter(credential => credential.requiredMissing)
-      .map(({ key, title, oauth }) => ({ key, title, oauth })),
+      .map(({ key, title }) => ({ key, title })),
     channels,
     scheduledTasks: summarizeTasks(row.scheduledskills),
     customInstructions: summarizeTasks(row.customskills),
@@ -997,12 +994,12 @@ const KEY_WORDS: Readonly<Record<string, string>> = {
 const TITLE_CASE_2L = new Set(['my', 'us', 'we', 'me', 'he', 'an', 'at', 'in', 'on', 'of', 'to', 'by', 'do', 'go', 'if', 'is', 'it', 'no', 'or', 'so', 'up', 'am', 'as', 'be', 'oh', 'ok']);
 
 /**
- * A name made from a key, as the dashboard makes it, for when there is no title: int-brevo-email reads
- * Brevo Email and ga4-attribution-auditor GA4 Attribution Auditor. known: false leaves the list of brands
+ * A name made from a key, as the dashboard makes it, for when there is no title: util-video-creator reads
+ * Video Creator and ga4-attribution-auditor GA4 Attribution Auditor. known: false leaves the list of brands
  * and acronyms out, for a name the customer typed.
  */
 export function wordsFromKey(key: string, { known = true }: { known?: boolean } = {}): string {
-  return key.replace(/^(int|util)-/, '').replace(/-/g, ' ').replace(/\b\w+\b/g, word => {
+  return key.replace(/^util-/, '').replace(/-/g, ' ').replace(/\b\w+\b/g, word => {
     const lower = word.toLowerCase();
     if (known && Object.prototype.hasOwnProperty.call(KEY_WORDS, lower)) return KEY_WORDS[lower];
     if (word.length <= 2 && !TITLE_CASE_2L.has(lower)) return word.toUpperCase();
@@ -1026,8 +1023,8 @@ export function taskNamedByWiro(task: { source?: string; userCreated?: boolean; 
 }
 
 /**
- * A skill as people see it, by its catalog title, with the name apply_agent_skills takes: Gmail Check
- * (`int-gmail-check`). Without the title, words made from the name stand in for it.
+ * A skill as people see it, by its catalog title, with the name apply_agent_skills takes: Video Creator
+ * (`util-video-creator`). Without the title, words made from the name stand in for it.
  */
 export function skillLabel(name: string, titles?: ReadonlyMap<string, string>): string {
   return `${titles?.get(name) ?? wordsFromKey(name)} (\`${name}\`)`;
@@ -1120,7 +1117,13 @@ function formatModelsLine(agent: AgentDetail): string | null {
 }
 
 /** titles names skills as people see them: the agent's own (activeSkillTitles) and those a paused task waits for (pausedSkillTitles). */
-export function formatAgentDetail(agent: AgentDetail, plainMember = false, titles?: ReadonlyMap<string, string>): string {
+/** extraLines: sections that go before the dashboard link, such as the agent's connectors. */
+export function formatAgentDetail(
+  agent: AgentDetail,
+  plainMember = false,
+  titles?: ReadonlyMap<string, string>,
+  extraLines: readonly string[] = [],
+): string {
   const lines = formatAgentSummaryLines(agent, plainMember);
   if (agent.lastActivityAt) lines.push(`**Last activity:** ${agent.lastActivityAt}`);
   const plans = agent.pricing ? planLineText(agent.pricing) : '';
@@ -1150,7 +1153,7 @@ export function formatAgentDetail(agent: AgentDetail, plainMember = false, title
       const state = credential.connected
         ? 'connected'
         : credential.requiredMissing
-          ? (credential.oauth ? 'not connected (required)' : 'missing (required)')
+          ? 'missing (required)'
           : credential.filled
             ? 'filled'
             : 'not set';
@@ -1165,7 +1168,7 @@ export function formatAgentDetail(agent: AgentDetail, plainMember = false, title
     lines.push('', '### Custom instructions', '');
     for (const task of agent.customInstructions) lines.push(formatCustomInstructionLine(task, shortenedNote(task.key)));
   }
-  lines.push('', `Dashboard: ${agent.dashboardUrl}`);
+  lines.push(...extraLines, '', `Dashboard: ${agent.dashboardUrl}`);
   return lines.join('\n');
 }
 
@@ -1297,17 +1300,11 @@ export function missingCredentialStep(agent: Pick<AgentDetail, 'guid' | 'missing
   if (missing.key === WIRO_PROJECT_CREDENTIAL) {
     return bindProjectStep(agent.guid, `Provide the missing credentials (${keys}), starting with ${missing.title}.`);
   }
-  return missing.oauth
-    ? {
-      tool: 'connect_agent_oauth',
-      arguments: { action: 'connect', agent_guid: agent.guid, credential: missing.key },
-      reason: `Provide the missing credentials (${keys}). This starts with ${missing.title}, which the user connects by signing in.`,
-    }
-    : {
-      tool: 'set_agent_credentials',
-      arguments: { agent_guid: agent.guid, credential: missing.key },
-      reason: `Provide the missing credentials (${keys}). This lists the ${missing.title} fields to ask the user for.`,
-    };
+  return {
+    tool: 'set_agent_credentials',
+    arguments: { agent_guid: agent.guid, credential: missing.key },
+    reason: `Provide the missing credentials (${keys}). This lists the ${missing.title} fields to ask the user for.`,
+  };
 }
 
 /**
