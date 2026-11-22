@@ -4,6 +4,7 @@ import { FIELD_HELP_MAX, WIRO_PROJECT_NOTE, isWiroProjectField } from './agent-c
 import { CONNECTOR_SLUG } from './agent-connectors.js';
 import {
   agentTaskSchema,
+  centsToUsd,
   htmlToText,
   isGuid,
   planPricingSchema,
@@ -26,12 +27,13 @@ export const templateSummarySchema = z.object({
   categories: z.array(z.string()),
   cover: z.string().optional(),
   pricing: planPricingSchema.nullable()
-    .describe('Each plan\'s price and monthly credits, the same for every template. null when it cannot be priced right now.'),
+    .describe('Each plan\'s price and the AI usage it includes, the same for every template. null when it cannot be priced right now.'),
 });
 
 export type TemplateSummary = z.infer<typeof templateSummarySchema>;
 
-export function toTemplateSummary(row: Record<string, unknown>): TemplateSummary {
+/** listPlans: the plans a list answer names once for every row. */
+export function toTemplateSummary(row: Record<string, unknown>, listPlans?: unknown): TemplateSummary {
   const summary = asString(row.headline)?.trim() || htmlToText(row.description, 300);
   const cover = asString(row.cover);
   return {
@@ -41,7 +43,7 @@ export function toTemplateSummary(row: Record<string, unknown>): TemplateSummary
     ...(summary ? { summary } : {}),
     categories: toStringArray(row.categories),
     ...(cover ? { cover } : {}),
-    pricing: toPlanPricing(row.tiers),
+    pricing: toPlanPricing({ plans: row.plans ?? listPlans, tiers: row.tiers }),
   };
 }
 
@@ -66,9 +68,12 @@ const modelOptionSchema = z.object({
   slug: z.string(),
   label: z.string().optional(),
   tier: z.string().optional(),
-  inputCreditsPer1M: z.number().optional(),
-  outputCreditsPer1M: z.number().optional(),
-  cachedInputCreditsPer1M: z.number().optional(),
+  inputUsdPer1M: z.number().optional()
+    .describe('What 1M input tokens cost, in USD.'),
+  outputUsdPer1M: z.number().optional()
+    .describe('What 1M output tokens cost, in USD.'),
+  cachedInputUsdPer1M: z.number().optional()
+    .describe('What 1M input tokens read from the cache cost, in USD.'),
 });
 
 export const templateDetailSchema = templateSummarySchema.extend({
@@ -152,9 +157,10 @@ function toModelOptions(tokenRates: unknown): TemplateDetail['models'] {
         slug,
         ...(label ? { label } : {}),
         ...(tier ? { tier } : {}),
-        ...(input !== null ? { inputCreditsPer1M: input } : {}),
-        ...(output !== null ? { outputCreditsPer1M: output } : {}),
-        ...(cached !== null ? { cachedInputCreditsPer1M: cached } : {}),
+        // Wiro lists the rates in hundredths of a dollar.
+        ...(input !== null ? { inputUsdPer1M: centsToUsd(input) } : {}),
+        ...(output !== null ? { outputUsdPer1M: centsToUsd(output) } : {}),
+        ...(cached !== null ? { cachedInputUsdPer1M: centsToUsd(cached) } : {}),
       };
     });
   return { ...(defaultModel ? { default: defaultModel } : {}), selectable };

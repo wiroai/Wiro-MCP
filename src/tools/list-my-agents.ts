@@ -5,9 +5,10 @@ import { errorResult, isPlainObject, requireApiSuccess, type ApiEnvelope } from 
 import {
   agentSummarySchema,
   agentTitleSpan,
+  aiUsageShortText,
   describeAgentStatus,
-  formatCredits,
   formatSubscriptionLine,
+  formatUsd,
   planSummaryText,
   toAgentSummary,
 } from '../utils/user-agent.js';
@@ -29,7 +30,9 @@ export function registerListMyAgents(server: McpServer, client: WiroClient): voi
       title: 'List my deployed Wiro agents',
       description: 'List the agents deployed in the connected project\'s workspace (a team project '
         + 'lists the team\'s agents, a personal project the personal ones). Each row shows the status, '
-        + 'the plan, the credit balance and when the agent last did anything, and marks an agent waiting in setup (status 6). An agent in '
+        + 'the plan, its AI usage this month in USD (what the plan includes and what is left, then the Wiro balance '
+        + 'that pays after it, and whether the agent is paused), what it spent this month and when it last did '
+        + 'anything, and marks an agent waiting in setup (status 6). An agent in '
         + 'another status can still miss a required credential. get_my_agent with an agent_guid gives the '
         + 'full state, including which credentials are missing, so read it before you say that an agent\'s '
         + 'setup is done.',
@@ -84,7 +87,8 @@ export function registerListMyAgents(server: McpServer, client: WiroClient): voi
         for (const agent of agents) {
           lines.push(
             `- ${agentTitleSpan(agent.title)} (\`${agent.guid}\`): ${describeAgentStatus(agent.status)}${agent.setupRequired ? ', setup required' : ''}; `
-            + `${planSummaryText(agent)}; ${formatCredits(agent.credits.remaining)} credits left; ${formatSubscriptionLine(agent.subscription, plainMember)}`
+            + `${planSummaryText(agent)}; ${aiUsageShortText(agent.usage)}; ${agent.spend ? `spent ${formatUsd(agent.spend.totalUsd)} this month; ` : ''}`
+            + `${formatSubscriptionLine(agent.subscription, plainMember)}`
             + `${agent.lastActivityAt ? `; last activity ${agent.lastActivityAt}` : ''}`,
           );
         }

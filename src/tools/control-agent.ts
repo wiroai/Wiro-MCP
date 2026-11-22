@@ -5,14 +5,18 @@ import { ApiResultError, errorResult, requireApiSuccess, type ApiEnvelope } from
 import { DEFAULT_WAIT_SECONDS, MAX_WAIT_SECONDS } from '../utils/poll.js';
 import {
   AGENT_PLANS,
+  addFundsText,
   agentStatusLabel,
   agentStatusLabelSchema,
+  aiUsageText,
   asPlan,
   agentSummarySchema,
   describeAgentStatus,
+  formatUsd,
   isTransitionalStatus,
   isUnsettledPlan,
   MEMBER_SETUP_HELP,
+  MIN_RUN_BALANCE_USD,
   missingCredentialStep,
   nextStepForAgent,
   readAgentDetail,
@@ -131,19 +135,23 @@ function setupRefusal(agent: AgentDetail, plainMember = false): Decision {
   };
 }
 
+// A start refused because the agent has no AI usage it can pay for: "No credits available" in older Wiro
+// releases, then the included usage used up with the balance under the minimum a turn needs.
+const NO_USAGE_LEFT = /no credits available|AI usage (its|the) plan includes|balance is (under|below|too low)/i;
+
 /** Turns the known refusals of Start and Stop into advice. Anything else stays an error. */
 function interpretRefusal(message: string, agent: AgentDetail): Decision | null {
   if (/subscription required/i.test(message)) {
     if (agent.subscription && isUnsettledPlan(agent.subscription)) {
       return {
         outcome: 'refused',
-        message: unsettledPlanText(agent.subscription, agent, 'Wiro refused the start: the plan is not active, and the agent has no extra credits left.'),
+        message: unsettledPlanText(agent.subscription, agent, 'Wiro refused the start: the plan is not active.'),
       };
     }
     const renewable = agent.subscription?.status === 'expired' && agent.subscription.billing === 'wallet';
     return {
       outcome: 'refused',
-      message: 'Wiro refused the start: the agent has no active plan and no extra credits left. '
+      message: 'Wiro refused the start: the agent has no active plan. '
         + (renewable
           ? 'Its wallet plan has expired; manage_agent_billing with action renew restarts it.'
           : 'manage_agent_billing with action subscribe pays for a plan and starts the agent.'),
@@ -154,21 +162,19 @@ function interpretRefusal(message: string, agent: AgentDetail): Decision | null 
       },
     };
   }
-  if (/no credits available/i.test(message)) {
-    // Every plan can buy packs; a larger plan, where there is one, also gives more credits each month.
+  if (NO_USAGE_LEFT.test(message)) {
+    // After the plan's included usage the agent runs on the workspace balance; a larger plan, where there is one,
+    // also includes more each month.
     const current = asPlan(agent.tier);
     const largest = current === AGENT_PLANS[AGENT_PLANS.length - 1];
+    const minimum = formatUsd(agent.usage.minBalanceUsd ?? MIN_RUN_BALANCE_USD);
     return {
       outcome: 'refused',
-      message: 'Wiro refused the start: the agent has used all of its credits for this period. '
+      message: `Wiro refused the start: the agent has used the AI usage its plan includes this period, and the workspace balance is under the ${minimum} a new turn needs. Nothing was charged. `
+        + `${addFundsText(agent.workspace)} Then start it again`
         + (largest
-          ? 'Buy an extra credit pack, or wait for the plan to renew.'
-          : 'Buy an extra credit pack, move to a larger plan for more credits each month (manage_agent_billing with action change_plan), or wait for the plan to renew.'),
-      nextAction: {
-        tool: 'manage_agent_billing',
-        arguments: { agent_guid: agent.guid, action: 'buy_credits' },
-        reason: 'This lists the credit packs with their prices; nothing is charged without confirm: true.',
-      },
+          ? ', or wait for the plan to renew.'
+          : '. A larger plan includes more AI usage each month (manage_agent_billing with action change_plan quotes a move), or wait for the plan to renew.'),
     };
   }
   if (/setup is not complete/i.test(message)) return setupRefusal(agent);
@@ -199,13 +205,14 @@ export function registerControlAgent(server: McpServer, client: WiroClient): voi
     'control_agent',
     {
       title: 'Start, stop or restart a Wiro agent',
-      description: 'Start, stop or restart a deployed agent. Starting needs an active plan or credits left '
-        + 'and charges nothing by itself. Stopping does not pause the plan: a wallet plan that is not cancelled '
+      description: 'Start, stop or restart a deployed agent. Starting needs an active plan, with AI usage left '
+        + 'in it or the Wiro balance to pay for more, and charges nothing by itself. Stopping does not pause the '
+        + 'plan: a wallet plan that is not cancelled '
         + 'still renews every 30 days and starts the agent again, so cancel the plan with manage_agent_billing to '
         + 'stop paying. The result says what happens with this agent\'s plan. '
         + 'A restart reloads the agent with its current settings. The change finishes in the background: pass '
         + 'wait_seconds, or follow the returned nextAction, to see the result. When a start is refused, the '
-        + 'result says what to do next (subscribe, renew, buy credits, fix a card payment in the dashboard or '
+        + 'result says what to do next (subscribe, renew, add funds on wiro.ai, fix a card payment in the dashboard or '
         + 'finish setup). On a team agent this '
         + 'needs a team admin or the person who deployed it; other team members can read the agent with '
         + 'get_my_agent and message it.',
@@ -376,7 +383,8 @@ export function registerControlAgent(server: McpServer, client: WiroClient): voi
           content: [{
             type: 'text' as const,
             text: `## ${action[0].toUpperCase()}${action.slice(1)}: ${result.outcome.replace('_', ' ')}\n\n${message}\n\n`
-              + `**Status:** ${describeAgentStatus(previous)} before, ${describeAgentStatus(status)} now.`,
+              + `**Status:** ${describeAgentStatus(previous)} before, ${describeAgentStatus(status)} now.\n`
+              + `**AI usage this month:** ${aiUsageText(afterView.usage)}`,
           }],
           structuredContent: {
             action,

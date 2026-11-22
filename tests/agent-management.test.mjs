@@ -811,10 +811,10 @@ test('get_agent_activity: an agent that cannot start gets what comes first, and 
   const detailOf = row => ({ result: true, errors: [], useragents: [row] });
 
   for (const [row, action, sentence] of [
-    [agentRow({ status: 0, subscription: expired, ...ended }), 'renew', 'It has no active plan and no extra credits left, so it cannot start. Its wallet plan has expired; manage_agent_billing with action renew restarts it.'],
-    [agentRow({ status: 0, subscription: { ...expired, provider: 'stripe' }, ...ended }), 'subscribe', 'It has no active plan and no extra credits left, so it cannot start. manage_agent_billing with action subscribe pays for a plan and starts the agent.'],
-    [agentRow({ status: 0, subscription: null, ...ended }), 'subscribe', 'It has no active plan and no extra credits left, so it cannot start. manage_agent_billing with action subscribe pays for a plan and starts the agent.'],
-    [agentRow({ status: 5, subscription: expired, ...ended }), 'renew', 'It has no active plan and no extra credits left, so it cannot start. Its wallet plan has expired; manage_agent_billing with action renew restarts it.'],
+    [agentRow({ status: 0, subscription: expired, ...ended }), 'renew', 'It has no active plan, so it cannot start. Its wallet plan has expired; manage_agent_billing with action renew restarts it.'],
+    [agentRow({ status: 0, subscription: { ...expired, provider: 'stripe' }, ...ended }), 'subscribe', 'It has no active plan, so it cannot start. manage_agent_billing with action subscribe pays for a plan and starts the agent.'],
+    [agentRow({ status: 0, subscription: null, ...ended }), 'subscribe', 'It has no active plan, so it cannot start. manage_agent_billing with action subscribe pays for a plan and starts the agent.'],
+    [agentRow({ status: 5, subscription: expired, ...ended }), 'renew', 'It has no active plan, so it cannot start. Its wallet plan has expired; manage_agent_billing with action renew restarts it.'],
     [agentRow({ status: 6, subscription: null, ...ended, setuprequired: true }), 'subscribe', 'The agent needs setup: it has no paid plan, or required credentials are missing.'],
   ]) {
     for (const answer of await read(detailOf(row))) {
@@ -834,7 +834,7 @@ test('get_agent_activity: an agent that cannot start gets what comes first, and 
     assert.doesNotMatch(textOf(answer), /control_agent/);
   }
 
-  // An active plan, or extra credits left without one: a start can happen, and the user decides on it.
+  // An active plan, or usage bought earlier that an older answer still shows: a start can happen, and the user decides on it.
   for (const row of [
     agentRow({ status: 0 }),
     agentRow({ status: 0, subscription: expired, ...ended, extracredits: 500, remainingcredits: 500 }),
@@ -920,11 +920,12 @@ test('get_agent_activity: a ledger line that names its tokens stays single, and 
   await withClient(fake, async client => {
     const result = await call(client, 'get_agent_activity', { agent_guid: GUID, kind: 'usage' });
     assert.notEqual(result.isError, true, textOf(result));
-    const lines = textOf(result).split('\n').filter(line => line.startsWith('- ') && /credits/.test(line));
-    assert.match(lines[0], /-5 credits, LLM openai\/gpt-5\.4 \(uncached in 3450, cached in 512, out 820, total 4782 tokens\)$/);
-    assert.match(lines[1], /\(uncached in 10, out 5, cache write 7, total 22 tokens\)$/);
-    assert.match(lines[2], /\(cached in 512, out 820, total 1332 tokens\)$/);
-    assert.match(lines[3], /Input Tokens: 3 \/ Output Tokens: 69 \/ Model: openai\/gpt-5\.6-terra, plus cached input tokens: 800 read \(872 tokens in all\)$/);
+    const lines = textOf(result).split('\n').filter(line => line.startsWith('- ') && /deduct/.test(line));
+    // A row from before agents were billed in USD counts hundredths of a dollar.
+    assert.match(lines[0], /deduct\/tokens: \$0\.05, LLM openai\/gpt-5\.4 \(uncached in 3450, cached in 512, out 820, total 4782 tokens\) \(recorded before agents were billed in USD\)$/);
+    assert.match(lines[1], /\(uncached in 10, out 5, cache write 7, total 22 tokens\) \(recorded before agents were billed in USD\)$/);
+    assert.match(lines[2], /\(cached in 512, out 820, total 1332 tokens\) \(recorded before agents were billed in USD\)$/);
+    assert.match(lines[3], /Input Tokens: 3 \/ Output Tokens: 69 \/ Model: openai\/gpt-5\.6-terra, openai\/gpt-5\.4, tokens: 3 input, 800 cache read, 820 output \(recorded before agents were billed in USD\)$/);
     assert.deepEqual(result.structuredContent.usage.transactions[0].tokens, { input: 3450, output: 820, cacheRead: 512, cacheWrite: 0, total: 4782 }, 'the columns stay in the structured row');
   });
 });
@@ -1449,12 +1450,12 @@ test('list_my_agents and get_my_agent show when the agent last did anything', as
 });
 
 // ---------------------------------------------------------------------------
-// Credits this period and from each renewal
+// Included AI usage this period and from each renewal
 // ---------------------------------------------------------------------------
 
-test('get_my_agent and list_my_agents show this period\'s credits apart from what each renewal gives', async () => {
-  // A skill added halfway through a period: 2,500 credits this period, 3,300 from each renewal.
-  const changed = { monthlycredits: 2500, renewalcredits: 3300, usedcredits: 100, remainingcredits: 2400 };
+test('get_my_agent and list_my_agents show this period\'s included AI usage apart from what each renewal includes', async () => {
+  // A plan change halfway through a period: $25.00 this period, $33.00 from each renewal.
+  const changed = { usage: { period: '2026-11', includedusd: 25, usedusd: 1, leftusd: 24, renewalusd: 33, balanceusd: 10, wallet: 'personal', minbalanceusd: 0.5, paused: false, pausedreason: null } };
   const fake = fakeClient({
     '/UserAgent/MyAgents': { result: true, errors: [], useragents: [agentRow(changed), agentRow({ guid: 'ua-2', title: 'Same', renewalcredits: 1200 })] },
     '/UserAgent/Detail': body => detail(body.guid === 'ua-2' ? { guid: 'ua-2', renewalcredits: 1200 } : changed),
@@ -1462,30 +1463,31 @@ test('get_my_agent and list_my_agents show this period\'s credits apart from wha
   await withClient(fake, async client => {
     const one = await call(client, 'get_my_agent', { agent_guid: GUID });
     assert.notEqual(one.isError, true, textOf(one));
-    assert.deepEqual(one.structuredContent.agent.credits, { monthly: 2500, renewal: 3300, extra: 0, used: 100, remaining: 2400 });
-    assert.match(textOf(one), /^\*\*Credits:\*\* 2,400 left \(2,500 credits this period, 3,300 from each renewal, extra 0, used 100\)$/m);
+    assert.deepEqual(one.structuredContent.agent.usage, { period: '2026-11', includedUsd: 25, usedUsd: 1, leftUsd: 24, renewalUsd: 33, balanceUsd: 10, wallet: 'personal', minBalanceUsd: 0.5, paused: false });
+    assert.match(textOf(one), /^\*\*AI usage this month:\*\* \$1\.00 of \$25\.00 included \(\$33\.00 from each renewal\); then the workspace balance \(\$10\.00\)$/m);
 
-    // The same figure twice is said once, as before.
+    // An older answer, worked out from its credit fields: the same figure twice is said once.
     const same = await call(client, 'get_my_agent', { agent_guid: 'ua-2' });
-    assert.equal(same.structuredContent.agent.credits.renewal, 1200);
-    assert.match(textOf(same), /^\*\*Credits:\*\* 1,000 left \(monthly 1,200, extra 0, used 200\)$/m);
+    assert.equal(same.structuredContent.agent.usage.renewalUsd, 12);
+    assert.equal(same.structuredContent.agent.usage.legacy, true);
+    assert.match(textOf(same), /^\*\*AI usage this month:\*\* \$2\.00 of \$12\.00 included$/m);
 
     const list = await call(client, 'list_my_agents', {});
-    assert.equal(list.structuredContent.agents[0].credits.monthly, 2500);
-    assert.equal(list.structuredContent.agents[0].credits.renewal, 3300);
-    assert.equal(list.structuredContent.agents[1].credits.renewal, 1200);
+    assert.equal(list.structuredContent.agents[0].usage.includedUsd, 25);
+    assert.equal(list.structuredContent.agents[0].usage.renewalUsd, 33);
+    assert.equal(list.structuredContent.agents[1].usage.renewalUsd, 12);
   });
 
   // An answer without the field leaves it out.
   const older = fakeClient({ '/UserAgent/Detail': detail({}) });
   await withClient(older, async client => {
     const one = await call(client, 'get_my_agent', { agent_guid: GUID });
-    assert.equal(Object.hasOwn(one.structuredContent.agent.credits, 'renewal'), false);
-    assert.match(textOf(one), /\(monthly 1,200, extra 0, used 200\)/);
+    assert.equal(Object.hasOwn(one.structuredContent.agent.usage, 'renewalUsd'), false);
+    assert.match(textOf(one), /\$2\.00 of \$12\.00 included/);
   });
 });
 
-test('get_agent_activity usage shows this period\'s credits apart from what each renewal gives', async () => {
+test('get_agent_activity usage reads an older answer\'s period and rows in dollars', async () => {
   const fake = fakeClient({
     '/UserAgent/TransactionList': {
       result: true,
@@ -1498,10 +1500,11 @@ test('get_agent_activity usage shows this period\'s credits apart from what each
   await withClient(fake, async client => {
     const result = await call(client, 'get_agent_activity', { agent_guid: GUID, kind: 'usage' });
     assert.notEqual(result.isError, true, textOf(result));
-    assert.equal(result.structuredContent.usage.balance.monthlyCredits, 690);
-    assert.equal(result.structuredContent.usage.balance.renewalCredits, 400);
-    assert.match(textOf(result), /^\*\*Balance:\*\* 380 credits left \(690 credits this period, 400 from each renewal, extra 0, used 310, period 2026-11\)$/m);
-    assert.match(textOf(result), /expired\/skills-apply: -2610 credits, Skill changes \(1\)/);
+    // An older answer counts hundredths of a dollar.
+    assert.deepEqual(result.structuredContent.usage.summary, { month: '2026-11', includedUsd: 6.9, aiUsagePlanUsd: 3.1, legacy: true });
+    assert.match(textOf(result), /^\*\*This period \(2026-11\):\*\* AI usage \$3\.10 within the plan's \$6\.90$/m);
+    assert.match(textOf(result), /expired\/skills-apply: \$26\.10, Skill changes \(1\) \(recorded before agents were billed in USD\)$/m);
+    assert.doesNotMatch(JSON.stringify(result.structuredContent), /creditsFromRenewal|usedCreditsUsd|balanceAfter/);
   });
 });
 

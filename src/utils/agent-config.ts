@@ -13,6 +13,7 @@ import {
   type ApiEnvelope,
 } from './api.js';
 import {
+  centsToUsd,
   credentialKeysSetupWaitsFor,
   nameList,
   skillLabel,
@@ -525,18 +526,20 @@ export interface PlanChange {
   /** When the current period ends, in unix seconds. */
   periodEnd: number | null;
   secondsLeft: number | null;
-  /** What this period gains, below 0 when it loses. */
-  creditsNow: number | null;
-  /** What this period grants in all after the change. */
-  creditsThisPeriod: number | null;
-  /** What each renewal grants after the change. */
-  creditsFromRenewal: number | null;
+  /** The included AI usage this period gains, in USD; below 0 when it loses. */
+  includedNowUsd: number | null;
+  /** The AI usage this period includes in all after the change, in USD. */
+  includedThisPeriodUsd: number | null;
+  /** The AI usage each renewal includes after the change, in USD. */
+  includedFromRenewalUsd: number | null;
   /** Taken from the wallet now, at list price. 0 on a card plan. */
   chargeNowUsd: number | null;
-  /** Credited back now on a wallet plan; null when Wiro works it out only when the change is applied. */
-  creditNowUsd: number | null;
-  /** The part of the credit that goes on credits already used. */
-  usedCreditsUsd: number | null;
+}
+
+/** An amount Wiro answers in hundredths of a dollar, in USD; null stays null. */
+function hundredthsToUsd(value: unknown): number | null {
+  const cents = toNumber(value);
+  return cents === null ? null : centsToUsd(cents);
 }
 
 /** The plan change of a pricing answer, or null when the agent has no active plan or Wiro sent none. */
@@ -546,12 +549,11 @@ export function readPlanChange(value: unknown): PlanChange | null {
     wallet: asString(value.provider) === 'prepaid',
     periodEnd: toNumber(value.periodEnd),
     secondsLeft: toNumber(value.secondsLeft),
-    creditsNow: toNumber(value.creditsNow),
-    creditsThisPeriod: toNumber(value.creditsThisPeriod),
-    creditsFromRenewal: toNumber(value.creditsFromRenewal),
+    // Wiro answers the included usage in hundredths of a dollar.
+    includedNowUsd: hundredthsToUsd(value.creditsNow),
+    includedThisPeriodUsd: hundredthsToUsd(value.creditsThisPeriod),
+    includedFromRenewalUsd: hundredthsToUsd(value.creditsFromRenewal),
     chargeNowUsd: toNumber(value.chargeNowUsd),
-    creditNowUsd: toNumber(value.creditNowUsd),
-    usedCreditsUsd: toNumber(value.usedCreditsUsd),
   };
 }
 

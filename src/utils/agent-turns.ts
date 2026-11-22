@@ -53,7 +53,7 @@ import { connectionOf, connectorLabel, listConnections, type AgentConnection } f
 import { createMediaContent, guessMimeType, isWiroHostedUrl, type MediaItem } from './media.js';
 import { DEFAULT_WAIT_SECONDS, defaultInterval, pollUntil, reportProgress, type ToolCallContext } from './poll.js';
 import { AGENT_REPLY_LABEL, jsonSpan, quotedBlock, quotedSpan, quotedSubItem } from './quoted-text.js';
-import { formatCredits, readAgentDetail } from './user-agent.js';
+import { formatCount, readAgentDetail } from './user-agent.js';
 import {
   STUDIO_RUNS_MAX,
   formatStudioRun,
@@ -1088,7 +1088,7 @@ export function formatTurn(target: AgentTarget, result: AgentTurnResult): string
     lines.push(`**Agent usage:** $${result.llmCostUsd}`);
   }
   if (target.kind === 'deployed' && (result.message.creditsUsed ?? 0) > 0) {
-    lines.push(`**Credits used:** ${formatCredits(result.message.creditsUsed)}`);
+    lines.push(`**Credits used:** ${formatCount(result.message.creditsUsed)}`);
   }
   if (result.modelChange?.toModel) {
     lines.push(`**Model:** switched to \`${result.modelChange.toModel}\` for this session`);
