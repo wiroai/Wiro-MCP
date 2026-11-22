@@ -14,6 +14,7 @@ import {
   unixToIso,
   type ApiEnvelope,
 } from '../utils/api.js';
+import { isSurface, SURFACES } from '../utils/controls.js';
 import { oneLine, quotedSpan } from '../utils/quoted-text.js';
 import { primaryWallet, walletBalance, workspaceOfWallet } from '../utils/workspace.js';
 import { strictInput } from './schemas.js';
@@ -52,15 +53,18 @@ const MAX_TRANSACTIONS = 50;
 const DEFAULT_TRANSACTIONS = 20;
 const TEXT_FIELD_MAX = 200;
 
-// A row for an agent gives the agent's guid first.
+// A row for an agent names it in useragentguid; an older row gives the agent's guid first in agentguid.
 const LEADING_GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
 // A credit for an agent's skill change names the agent's guid first too. Other rows can start with a guid, so the ending matters.
 const AGENT_CREDIT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?=-[a-z-]+-credit-)/i;
+// An agent's AI usage its plan covered: listed for the record, it moves no money (the wallet page shows it "(in plan)").
+const AGENT_PLAN_USAGE = 'USAGE (AGENT PLAN)';
 
 const walletTransactionSchema = z.object({
   time: z.string().optional(),
-  type: z.string().describe('The row\'s type as the wallet page names it, such as PAYMENT, PAYMENT (COUPON), DEPOSIT or TRANSFER IN.'),
-  direction: z.enum(['in', 'out']).describe('Whether the row adds to the wallet or takes from it.'),
+  type: z.string().describe('The row\'s type as the wallet page names it, such as PAYMENT, PAYMENT (COUPON), DEPOSIT, TRANSFER IN or USAGE (AGENT PLAN).'),
+  direction: z.enum(['in', 'out']).optional().describe('Whether the row adds to the wallet or takes from it. Absent when inPlan is true.'),
+  inPlan: z.boolean().optional().describe('True on a USAGE (AGENT PLAN) row: AI usage an agent\'s plan covered, listed for the record. No money moved, so leave it out of any total.'),
   amountUsd: z.number().describe('The amount in USD, always positive; direction gives the sign.'),
   description: z.string().optional(),
   model: z.string().optional(),
@@ -68,6 +72,7 @@ const walletTransactionSchema = z.object({
   store: z.string().optional(),
   taskId: z.string().optional(),
   agentGuid: z.string().optional(),
+  surface: z.enum(SURFACES).optional().describe('The way in that made the charge, as Spend Limits count it. Older rows have none.'),
   discountUsd: z.number().optional(),
   expiresAt: z.string().optional().describe('For credit that can be spent only for a while: when it ends.'),
 });
@@ -144,13 +149,17 @@ function toWalletTransaction(row: Record<string, unknown>): WalletTransaction {
   const project = textField(row.projectname);
   const store = textField(row.storename);
   const taskId = textField(row.taskid);
-  const agentGuid = LEADING_GUID.exec(asString(row.agentguid) ?? '')?.[0] ?? AGENT_CREDIT_ID.exec(asString(row.paymentid) ?? '')?.[0];
+  const agentGuid = LEADING_GUID.exec(asString(row.useragentguid) ?? '')?.[0]
+    ?? LEADING_GUID.exec(asString(row.agentguid) ?? '')?.[0]
+    ?? AGENT_CREDIT_ID.exec(asString(row.paymentid) ?? '')?.[0];
+  const surface = isSurface(row.surface) ? row.surface : undefined;
+  const inPlan = type.trim().toUpperCase() === AGENT_PLAN_USAGE;
   const discountUsd = Math.abs(toNumber(row.discountapplied) ?? 0);
   const expiresAt = unixToIso(row.expirytime);
   return {
     ...(time ? { time } : {}),
     type,
-    direction: isIncoming(type) ? 'in' : 'out',
+    ...(inPlan ? { inPlan: true } : { direction: isIncoming(type) ? 'in' as const : 'out' as const }),
     amountUsd: Math.round(Math.abs(toNumber(row.amount) ?? 0) * 1e6) / 1e6,
     ...(description ? { description } : {}),
     ...(model ? { model } : {}),
@@ -158,6 +167,7 @@ function toWalletTransaction(row: Record<string, unknown>): WalletTransaction {
     ...(store ? { store } : {}),
     ...(taskId ? { taskId } : {}),
     ...(agentGuid ? { agentGuid } : {}),
+    ...(surface ? { surface } : {}),
     ...(discountUsd > 0 ? { discountUsd: Math.round(discountUsd * 1e6) / 1e6 } : {}),
     ...(expiresAt ? { expiresAt } : {}),
   };
@@ -198,10 +208,15 @@ function transactionLine(row: WalletTransaction): string {
     row.store ? `store item ${quotedSpan(row.store)}` : null,
     row.taskId ? `task ${quotedSpan(row.taskId)}` : null,
     row.agentGuid ? `agent \`${row.agentGuid}\`` : null,
+    row.surface ? `surface \`${row.surface}\`` : null,
     row.discountUsd ? `after a ${transactionUsd(row.discountUsd)} discount` : null,
     row.expiresAt ? `can be spent until ${row.expiresAt}` : null,
   ].filter(Boolean).join(', ');
-  return `- ${row.time ?? 'unknown time'} ${row.direction === 'in' ? '+' : '-'}${transactionUsd(row.amountUsd)} ${row.type}${details ? `: ${details}` : ''}`;
+  // A plan row moved no money, so it carries no sign.
+  const amount = row.inPlan
+    ? `${transactionUsd(row.amountUsd)} ${row.type} (covered by the agent's plan, no money moved)`
+    : `${row.direction === 'in' ? '+' : '-'}${transactionUsd(row.amountUsd)} ${row.type}`;
+  return `- ${row.time ?? 'unknown time'} ${amount}${details ? `: ${details}` : ''}`;
 }
 
 function transactionLines(transactions: z.infer<typeof transactionsSchema>): string[] {
@@ -240,7 +255,8 @@ export function registerGetAccount(server: McpServer, client: WiroClient, option
         + 'wallet. In a team it also gives the team role calls act with, admin or member. Use it before paid '
         + 'work and when a call is refused for insufficient balance. With recent_transactions it also lists the '
         + 'wallet\'s latest transactions, the rows the Transactions page of the Wiro dashboard shows, which is how to '
-        + 'check that a charge or a credit landed. In a team the wallet is shared, so the list holds the activity of '
+        + 'check that a charge or a credit landed. A USAGE (AGENT PLAN) row is AI usage an agent\'s plan covered: it moved '
+        + 'no money, so it is no charge. In a team the wallet is shared, so the list holds the activity of '
         + 'the whole team. It also lists the workspace\'s spend limits and says whether this connection can change '
         + `Spend Limits and Model Access rules${controlsLoaded ? ' (get_controls shows the rules)' : ''}.`,
       inputSchema: strictInput({

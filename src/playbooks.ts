@@ -655,7 +655,7 @@ Where to see costs afterwards:
 - A workflow run reports its cost so far and, once settled, the amount charged. \`list_workflow_runs\` shows past runs.
 - A Studio or Workflow Agent reply shows the chat part of the turn as Agent usage. \`list_studio_results\` shows the cost of each model run Studio started.
 - \`get_agent_activity\` (usage) shows what an agent spent this month and its ledger in USD: AI usage, model runs, plan payments and funds added from its page.
-- \`get_account\` with \`recent_transactions\` lists the wallet's latest rows: each amount, what it paid for and whether it took from the wallet or added to it. Use it to check that a charge or a credit landed. A team's wallet is shared, so its list holds the activity of the whole team. A credit transfer shows as a TRANSFER row and as the deposit rows it moved, so count one of them.
+- \`get_account\` with \`recent_transactions\` lists the wallet's latest rows: each amount, what it paid for and whether it took from the wallet or added to it. A USAGE (AGENT PLAN) row is AI usage an agent's plan covered: no money moved, so never count it as a charge. Use it to check that a charge or a credit landed. A team's wallet is shared, so its list holds the activity of the whole team. A credit transfer shows as a TRANSFER row and as the deposit rows it moved, so count one of them.
 - \`get_controls\` with \`usage\` month or day shows this month's or today's spending by way in, team member, API key and agent.
 - For spending over a period, point the user to Transactions (wiro.ai/panel/wallet/transactions) and Project Usage (wiro.ai/panel/wallet/project-usage) in the Wiro dashboard. Both open on the current month.
 

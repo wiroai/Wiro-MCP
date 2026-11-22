@@ -143,3 +143,7 @@ runs `npx @wiro-ai/wiro-mcp@latest` takes it at its next start.
   `plan` in `get_my_agent` and `list_my_agents`, whatever the balance holds, and a message or
   a start Wiro refuses for it (code 97 with `agentusage`) points to `manage_agent_billing`
   with `renew` or `subscribe` instead of adding funds.
+- `get_account` lists an agent's AI usage its plan covered (`USAGE (AGENT PLAN)`) with
+  `inPlan: true`, no `direction` and no sign, as the Transactions page shows it "(in plan)":
+  it moved no money, so it is no charge. A row names its agent from `useragentguid` and the
+  way in that made it (`surface`).
