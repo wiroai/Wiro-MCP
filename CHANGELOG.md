@@ -21,8 +21,8 @@ runs `npx @wiro-ai/wiro-mcp@latest` takes it at its next start.
 | Tool | What it does |
 |------|-------------|
 | `list_agent_connectors` | Lists the connector catalog with how each one connects: a key (values typed on its Connect card), a sign-in, or a Wiro project. With `name` it shows one connector in full: each value to ask for and where it comes from, its account choices, the tools the agent gets, and its setup and revoke steps. With `agent_guid` it adds each connector's state on that agent and lists the agent's connections. |
-| `connect_agent_connector` | Connects a connector to an agent. A key connector takes its values and connects at once; values are never shown back. A sign-in returns a link the user opens in their own browser; a sign-in with the service's own OAuth takes the keys of the user's own app in the same call. A connector that offers both takes `mode`. A connector that runs with a Wiro project shows the project and the wallet that pays first. `accounts` saves the accounts the connection may act on where the connector's setup steps name an account key. `status` waits for a sign-in to finish. A call with values missing sends nothing and lists what to ask for. Replacing a working connection, or connecting a Wiro project, takes `confirm: true`. |
-| `set_agent_connector_accounts` | Lists the account choices of a connected connector (ad accounts, pages, properties, channels, apps) with the accounts its connection reaches, and saves the ones the user picks. The agent then acts only on those. |
+| `connect_agent_connector` | Connects a connector to an agent. A key connector takes its values and connects at once; values are never shown back. A sign-in returns a link the user opens in their own browser; a sign-in with the service's own OAuth takes the keys of the user's own app in the same call. A connector that offers both takes `mode`. The `wiro` connector runs with the agent's own Wiro project: connecting it binds the project it names (or this connection's) to the agent as `bind_agent_project` does, and first shows the project, the one it replaces (`replacesProject`) and the wallet that pays. `accounts` saves account ids the user already knows with the connect, such as TikTok Ads advertisers. A sign-in with account choices says to choose them once it finishes. `status` waits for a sign-in to finish. A call with values missing sends nothing and lists what to ask for. Replacing a working connection, or connecting a Wiro project, takes `confirm: true`. |
+| `set_agent_connector_accounts` | Lists the account choices of a connected connector (ad accounts, pages, properties, channels, apps) with the accounts its connection reaches, and saves the ones the user picks. The agent then acts only on those. It works the same for a connector served by the service itself, such as the advertisers of a TikTok Ads sign-in, and a sign-in the service revoked is answered with the step to connect it again. |
 | `disconnect_agent_connector` | Shows what a disconnect removes and which scheduled tasks stop (a task keeps running while another connector it can use is connected), then removes the connection with `confirm: true` and asks the service to revoke a sign-in where it supports that. |
 
 ### Breaking changes
@@ -47,15 +47,27 @@ runs `npx @wiro-ai/wiro-mcp@latest` takes it at its next start.
   connector tools to use.
 - Setup proposals in an agent's chat: an add or remove names a Skill (`util-*`), and its
   `with` list holds Skills only. Connectors are proposed with connect and disconnect
-  changes that name the connector's slug. A connector an add needs connects with `key` or
-  `signin` (`appkeys`, `token` and `page` are gone). Chat channels are never proposed, and
-  a key a proposal asks for is saved with `connect_agent_connector`.
+  changes that name the connector's slug. A connector connects with `key`, `signin` or
+  `project` (the `wiro` connector's Wiro project; `appkeys`, `token` and `page` are gone),
+  as an add's `needs` and a connect change's own `mode` say. Chat channels are never
+  proposed, and a key a proposal asks for is saved with `connect_agent_connector`.
 
 ### Changes
 
 - `get_my_agent` lists the agent's connectors with their state and the accounts chosen.
 - `bind_agent_project` sets the Wiro project the agent's video and voice skills run models
-  with; the agent's own model tools come from the `wiro` connector.
+  with. The agent's own model tools come from the `wiro` connector, which always runs with
+  that same project; connecting it binds its project the same way. Its tools are model and
+  task tools only, and its calls count as the agent's own: the agent's spend limits and
+  Model Access rules apply, and account, agent and billing calls are refused.
+- `send_agent_message` and `get_agent_message`: a proposed connect change carries how its
+  connector connects (`mode`). A sign-in or a Wiro project is never connected by a reply, so
+  its next step is `connect_agent_connector`; a key card's is what its connector needs. Wiro's
+  answer to a reply lists the connectors it leaves to connect (`setupNext`), and the next step
+  connects a sign-in or a Wiro project among them without waiting for a restart.
+- A message refused because the agent's setup is not finished names its missing settings
+  only: connectors do not hold an agent's start. `control_agent` reads Start's new wording of
+  that refusal as before.
 - The `deploy_agent` quote and result name the connectors a template suggests.
 - `manage_agent_custom_skill` says which connectors a scheduled task needs to run, and that
   a custom skill is how the agent learns to use a connector's tools.

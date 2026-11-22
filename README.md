@@ -324,15 +324,24 @@ your wallet after each reply. Your own agents run on a monthly plan with credits
 | `update_agent` | Change an agent's name, description, time zone, models, chat commands and setup from chat |
 | `apply_agent_skills` | Turn skills on or off; every plan includes every skill, so a change costs nothing |
 | `set_agent_credentials` | Save an agent's chat channel keys (such as a Telegram bot token), Twilio Voice and settings |
-| `connect_agent_connector` | Connect a connector to an agent: save its keys, or start its sign-in, which you approve in your browser. A connector that runs with a Wiro project shows the project and its wallet first |
-| `set_agent_connector_accounts` | Choose the accounts a connected connector may act on, such as its ad accounts, pages or channels |
+| `connect_agent_connector` | Connect a connector to an agent: save its keys, or start its sign-in, which you approve in your browser. The `wiro` connector, the agent's model and task tools, runs with the agent's own Wiro project: connecting it binds that project to the agent, after showing the project, what it replaces and its wallet |
+| `set_agent_connector_accounts` | Choose the accounts a connected connector may act on, such as its ad accounts, pages or channels, or the advertisers a TikTok Ads sign-in reaches |
 | `disconnect_agent_connector` | Disconnect a connector from an agent, after your confirmation |
 | `list_projects` | List the projects of the connected project's workspace, to pick one for an agent; no keys are shown |
-| `bind_agent_project` | Set the Wiro project an agent's video and voice skills run models with, with no key in the chat; shows the project first, then asks for your confirmation. The agent's model tools come from the `wiro` connector, connected with `connect_agent_connector` |
+| `bind_agent_project` | Set the Wiro project an agent's video and voice skills run models with, with no key in the chat; shows the project first, then asks for your confirmation. The agent's model tools come from the `wiro` connector, which runs with this same project and is connected with `connect_agent_connector` |
 | `manage_agent_custom_skill` | Add, edit, schedule, restore or remove an agent's own instructions and scheduled tasks; turning off its approval policy or changing its rules needs your confirmation |
 | `manage_agent_billing` | Subscribe, move to another plan, cancel, renew or buy extra credits from your wallet, after your confirmation |
 | `get_agent_activity` | Read an agent's credit usage and activity logs, including who changed what on it |
 | `delete_agent` | Delete an agent, after your confirmation |
+
+A connector connects with a key typed on its Connect card, a sign-in you approve in your
+browser, or a Wiro project. The `wiro` connector gives the agent Wiro's model and task tools
+only, and always runs with the agent's own Wiro project, so its calls count as the agent's own:
+the agent's spend limits and Model Access rules apply, and account, agent and billing calls are
+refused. Where a connector has account choices, the agent acts only on the accounts you choose,
+also for a connector served by the service itself, such as TikTok Ads and its advertisers.
+When an agent proposes a connection in its chat, a key goes in with `connect_agent_connector`,
+never in a message, and a sign-in or a Wiro project is never connected by a reply.
 
 ### Controls
 
