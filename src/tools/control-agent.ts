@@ -12,12 +12,11 @@ import {
   asPlan,
   agentSummarySchema,
   describeAgentStatus,
-  formatUsd,
   isTransitionalStatus,
   isUnsettledPlan,
   MEMBER_SETUP_HELP,
-  MIN_RUN_BALANCE_USD,
   missingCredentialStep,
+  pausedUsage,
   nextStepForAgent,
   readAgentDetail,
   readAgentStatus,
@@ -64,8 +63,8 @@ function planAfterStop(plan: AgentSubscription | null): string {
   }
   // A card plan is not renewed by card any more: it moves to the Wiro balance at its period end.
   return `Stopping does not pause the plan: it is paid by card through ${periodEnd}, then moves to the Wiro balance `
-    + 'and renews from it every 30 days, which starts the agent again. Once the balance bills it, cancel it with '
-    + 'manage_agent_billing to stop paying.';
+    + 'and renews from it every 30 days, which starts the agent again. Cancel it with manage_agent_billing to stop '
+    + 'paying: it then ends with its period.';
 }
 
 /** What a finished wait found, in words that fit the action. A stop that ended stopped needs none: the status line says so. */
@@ -133,12 +132,20 @@ function setupRefusal(agent: AgentDetail, plainMember = false): Decision {
   };
 }
 
-// A start refused because the agent has no AI usage it can pay for: "No credits available" in older Wiro
-// releases, then the included usage used up with the balance under the minimum a turn needs.
-const NO_USAGE_LEFT = /no credits available|AI usage (its|the) plan includes|balance is (under|below|too low)/i;
-
 /** Turns the known refusals of Start and Stop into advice. Anything else stays an error. */
-function interpretRefusal(message: string, agent: AgentDetail): Decision | null {
+function interpretRefusal(error: ApiResultError, agent: AgentDetail): Decision | null {
+  const message = error.message;
+  // A paused agent: its included usage is used up and the balance is short. Wiro says so with code 97 and the
+  // agent's usage (agentusage), in the sentence Send answers with too.
+  if (pausedUsage(error.body)) {
+    const current = asPlan(agent.tier);
+    const largest = current === AGENT_PLANS[AGENT_PLANS.length - 1];
+    return {
+      outcome: 'refused',
+      message: `Wiro refused the start: ${message} Nothing was charged. ${addFundsText(agent.workspace)} Then start it again.`
+        + (largest ? '' : ' A larger plan includes more AI usage each month: manage_agent_billing with action change_plan quotes a move.'),
+    };
+  }
   if (/subscription required/i.test(message)) {
     if (agent.subscription && isUnsettledPlan(agent.subscription)) {
       return {
@@ -146,33 +153,19 @@ function interpretRefusal(message: string, agent: AgentDetail): Decision | null 
         message: unsettledPlanText(agent.subscription, agent, 'Wiro refused the start: the plan is not active.'),
       };
     }
-    const renewable = agent.subscription?.status === 'expired' && agent.subscription.billing === 'wallet';
+    // An expired plan, a card plan's included, renews from the Wiro balance.
+    const renewable = agent.subscription?.status === 'expired';
     return {
       outcome: 'refused',
       message: 'Wiro refused the start: the agent has no active plan. '
         + (renewable
-          ? 'Its wallet plan has expired; manage_agent_billing with action renew restarts it.'
+          ? 'Its plan has expired; manage_agent_billing with action renew restarts it, paid from the Wiro balance.'
           : 'manage_agent_billing with action subscribe pays for a plan and starts the agent.'),
       nextAction: {
         tool: 'manage_agent_billing',
         arguments: { agent_guid: agent.guid, action: renewable ? 'renew' : 'subscribe' },
         reason: 'This returns the price first; nothing is charged without confirm: true.',
       },
-    };
-  }
-  if (NO_USAGE_LEFT.test(message)) {
-    // After the plan's included usage the agent runs on the workspace balance; a larger plan, where there is one,
-    // also includes more each month.
-    const current = asPlan(agent.tier);
-    const largest = current === AGENT_PLANS[AGENT_PLANS.length - 1];
-    const minimum = formatUsd(agent.usage.minBalanceUsd ?? MIN_RUN_BALANCE_USD);
-    return {
-      outcome: 'refused',
-      message: `Wiro refused the start: the agent has used the AI usage its plan includes this period, and the workspace balance is under the ${minimum} a new turn needs. Nothing was charged. `
-        + `${addFundsText(agent.workspace)} Then start it again`
-        + (largest
-          ? ', or wait for the plan to renew.'
-          : '. A larger plan includes more AI usage each month (manage_agent_billing with action change_plan quotes a move), or wait for the plan to renew.'),
     };
   }
   if (/setup is not complete/i.test(message)) return setupRefusal(agent);
@@ -323,7 +316,7 @@ export function registerControlAgent(server: McpServer, client: WiroClient): voi
                 ...(closing ? { closing } : {}),
               };
             } else {
-              const refusal = error instanceof ApiResultError ? interpretRefusal(error.message, current) : null;
+              const refusal = error instanceof ApiResultError ? interpretRefusal(error, current) : null;
               if (!refusal) throw error;
               decision = refusal;
             }

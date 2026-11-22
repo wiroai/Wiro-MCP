@@ -811,10 +811,11 @@ test('get_agent_activity: an agent that cannot start gets what comes first, and 
   const detailOf = row => ({ result: true, errors: [], useragents: [row] });
 
   for (const [row, action, sentence] of [
-    [agentRow({ status: 0, subscription: expired, ...ended }), 'renew', 'It has no active plan, so it cannot start. Its wallet plan has expired; manage_agent_billing with action renew restarts it.'],
-    [agentRow({ status: 0, subscription: { ...expired, provider: 'stripe' }, ...ended }), 'subscribe', 'It has no active plan, so it cannot start. manage_agent_billing with action subscribe pays for a plan and starts the agent.'],
+    [agentRow({ status: 0, subscription: expired, ...ended }), 'renew', 'It has no active plan, so it cannot start. Its plan has expired; manage_agent_billing with action renew restarts it, paid from the Wiro balance.'],
+    // A card plan that ended renews from the balance too.
+    [agentRow({ status: 0, subscription: { ...expired, provider: 'stripe' }, ...ended }), 'renew', 'It has no active plan, so it cannot start. Its plan has expired; manage_agent_billing with action renew restarts it, paid from the Wiro balance.'],
     [agentRow({ status: 0, subscription: null, ...ended }), 'subscribe', 'It has no active plan, so it cannot start. manage_agent_billing with action subscribe pays for a plan and starts the agent.'],
-    [agentRow({ status: 5, subscription: expired, ...ended }), 'renew', 'It has no active plan, so it cannot start. Its wallet plan has expired; manage_agent_billing with action renew restarts it.'],
+    [agentRow({ status: 5, subscription: expired, ...ended }), 'renew', 'It has no active plan, so it cannot start. Its plan has expired; manage_agent_billing with action renew restarts it, paid from the Wiro balance.'],
     [agentRow({ status: 6, subscription: null, ...ended, setuprequired: true }), 'subscribe', 'The agent needs setup: it has no paid plan, or required credentials are missing.'],
   ]) {
     for (const answer of await read(detailOf(row))) {

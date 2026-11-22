@@ -424,24 +424,16 @@ async function planFor(
         };
       }
       if (active) {
-        if (!prepaid) {
-          // A card plan is not renewed by card any more: at its period end it moves to the balance, unless it
-          // was set to end, and then a new plan is paid from the balance.
-          if (agent.subscription?.atPeriodEnd === 'ends') {
-            return {
-              outcome: 'refused',
-              message: `This plan was paid by card and ends after ${periodEnd}. Card plans are not renewed any more: `
-                + `once it has ended, action subscribe starts a plan paid from ${balance}.`,
-            };
-          }
+        // A card plan is not renewed by card any more: at its period end it moves to the balance by itself, and
+        // one that was cancelled moves there when the cancellation is undone.
+        const ends = cancelled || agent.subscription?.atPeriodEnd === 'ends';
+        if (!ends) {
           return {
             outcome: 'not_needed',
-            message: `This plan is paid by card through ${periodEnd}. Then it moves to ${balance} and renews from it `
-              + 'every 30 days by itself. Nothing to do.',
+            message: prepaid
+              ? 'The plan is active and renews by itself. Nothing to do.'
+              : `This plan is paid by card through ${periodEnd}. Then it moves to ${balance} and renews from it every 30 days by itself. Nothing to do.`,
           };
-        }
-        if (!cancelled) {
-          return { outcome: 'not_needed', message: 'The plan is active and renews by itself. Nothing to do.' };
         }
         // A renewal charges the plan set for it, or the agent's own, at today's price. A wallet cancel keeps a
         // move set for the renewal, so the plan is named: it can be another plan than the agent's.
@@ -458,7 +450,8 @@ async function planFor(
             paidFrom,
             ...(renewsOn ? { plan: renewsOn } : {}),
           },
-          message: `Undo the cancellation: nothing is charged now. The plan then renews${renewsOn ? ` on ${planName(renewsOn)}` : ''} for ${formatUsd(amount)} after ${periodEnd} and every 30 days after that until it is cancelled, paid from ${balance}.`,
+          message: `Undo the cancellation: nothing is charged now.${prepaid ? '' : ` The plan stays paid by card through ${periodEnd}.`} `
+            + `The plan then renews${renewsOn ? ` on ${planName(renewsOn)}` : ''} for ${formatUsd(amount)} after ${periodEnd} and every 30 days after that until it is cancelled, paid from ${balance}.`,
           confirmReason: 'Ask the user to confirm first: the plan will charge the Wiro balance again at each renewal.',
           perform: async signal => {
             requireApiSuccess(
@@ -467,7 +460,9 @@ async function planFor(
             );
             return {
               outcome: 'done',
-              message: 'The cancellation was undone. The plan keeps renewing every 30 days.',
+              message: prepaid
+                ? 'The cancellation was undone. The plan keeps renewing every 30 days.'
+                : `The cancellation was undone. The plan is paid by card through ${periodEnd}, then renews from ${balance} every 30 days.`,
               result: { chargedUsd: 0, renewal: 'undo_cancel' },
             };
           },
@@ -482,13 +477,7 @@ async function planFor(
           nextAction: billingCall(guid, 'subscribe'),
         };
       }
-      if (!prepaid) {
-        return {
-          outcome: 'refused',
-          message: `The expired plan was paid by card, and card plans are not renewed. Action subscribe starts a new plan paid from ${balance}.`,
-          nextAction: billingCall(guid, 'subscribe'),
-        };
-      }
+      // A plan that ended by card starts again from the balance too.
       const own = agent.monthlyPriceUsd ?? toNumber(raw.amount);
       const planKey = asPlan(agent.nextPlan) ?? asPlan(agent.tier);
       // A renewal charges the plan set for it, or the agent's own, at its price today, which can differ
@@ -567,30 +556,17 @@ async function planFor(
         };
       };
       if (!prepaid) {
-        // A card plan moving to the balance is cancelled only once the balance bills it.
-        if (raw?.nextprovider === 'prepaid') {
-          return {
-            outcome: 'refused',
-            message: `This card plan moves to ${balance} after ${periodEnd}, and Wiro does not cancel it before that. `
-              + 'Once the balance bills it, action cancel stops its renewals.',
-          };
-        }
-        if (agent.subscription?.cancelAtPeriodEnd) {
+        // A card plan, its owner's or (on a team agent) a billing admin's to cancel: it ends with its period and
+        // no longer moves to the balance; renew undoes that before then.
+        if (cancelled || agent.subscription?.cancelAtPeriodEnd) {
           return { outcome: 'not_needed', message: `The plan is already set to end after ${periodEnd}.` };
-        }
-        // Wiro stops a team's card plan here for its billing admins; a personal card plan is not cancelled here.
-        if (agent.workspace === 'personal') {
-          return {
-            outcome: 'refused',
-            message: `This plan is paid by card through ${periodEnd}, and Wiro does not cancel a personal card plan here. `
-              + `Agent plans are paid from the Wiro balance now: at the end of its period the plan moves to ${balance}, `
-              + 'and action cancel then stops its renewals.',
-          };
         }
         return {
           outcome: 'quote',
           quote: { chargeNowUsd: 0, estimated: false, paidFrom: 'card' },
-          message: `Cancel the team's card plan at the end of the current period (${periodEnd}). Nothing is refunded.${dropsMove}`,
+          message: `Cancel the card plan at the end of its period (${periodEnd}): nothing is charged or refunded, and `
+            + `it does not move to ${balance}. The agent keeps working until then, then stops. Action renew undoes the `
+            + `cancellation before then.${dropsMove}`,
           confirmReason: 'Ask the user to confirm the cancellation first.',
           perform: performCancel,
         };
@@ -625,11 +601,12 @@ async function planFor(
       if (!active) {
         const open = unsettled('A plan change needs an active plan.');
         if (open) return { outcome: 'refused', message: open };
-        // A wallet plan that ended comes back with renew on the plan set for its renewal, else on its own
-        // plan, so renew answers a target that is that plan; any other target takes a new plan. When the plan
-        // ends, Wiro writes that plan on the agent: the one set for its renewal, else the one nearest its last price.
+        // A plan that ended, by card or from the wallet, comes back from the balance with renew on the plan set
+        // for its renewal, else on its own plan, so renew answers a target that is that plan; any other target
+        // takes a new plan. When the plan ends, Wiro writes that plan on the agent: the one set for its renewal,
+        // else the one nearest its last price.
         const renewsOn = asPlan(agent.nextPlan) ?? current;
-        if (renewsOn === target && raw?.status === 'expired' && prepaid) {
+        if (renewsOn === target && raw?.status === 'expired') {
           return {
             outcome: 'refused',
             message: renewsOn === current
@@ -788,11 +765,9 @@ async function planFor(
       if (cancelled || agent.subscription?.atPeriodEnd === 'ends') {
         return {
           outcome: 'refused',
-          message: `The plan is set to end after ${periodEnd}, so it does not renew on another plan. `
-            + (cancelled
-              ? `To keep the agent on ${planName(target)}, undo the cancellation first with action renew, then change the plan.`
-              : `Card plans are not renewed any more: once it has ended, action subscribe starts a plan on ${planName(target)} paid from ${balance}.`),
-          ...(cancelled ? { nextAction: billingCall(guid, 'renew') } : {}),
+          message: `The plan is set to end after ${periodEnd}, so it does not renew on another plan. To keep the agent on `
+            + `${planName(target)}, undo the cancellation first with action renew, then change the plan.`,
+          nextAction: billingCall(guid, 'renew'),
         };
       }
       if (next === target) {
@@ -981,7 +956,7 @@ export function registerManageAgentBilling(server: McpServer, client: WiroClient
         + 'between, nothing is charged and a new quote comes back. Never repeat a confirmed charge that failed or '
         + 'timed out without checking get_my_agent first. '
         + 'subscribe starts a plan for an agent without one; renew undoes a cancellation or renews an expired '
-        + 'wallet plan; change_plan moves to another plan: a larger plan starts now and charges the prorated '
+        + 'plan; change_plan moves to another plan: a larger plan starts now and charges the prorated '
         + 'difference for the rest of the period, a smaller plan starts with the next renewal and charges or refunds '
         + 'nothing, and asking for the plan the agent is on undoes a move set for the next renewal; cancel stops '
         + 'renewals with no refund. Extra credit packs are retired: buy_credits only says so and charges nothing, and '
@@ -989,9 +964,9 @@ export function registerManageAgentBilling(server: McpServer, client: WiroClient
         + 'cancelled. Renewals and plan changes leave a running agent running. Agent plans are paid only from the '
         + 'Wiro balance: no card payment is taken, and a quote refused because the balance is short says how much '
         + 'to add on wiro.ai, with nothing charged. A card plan from before that is paid by card through its period, '
-        + 'then moves to the balance and renews from it; its plan changes are paid from the balance, and cancel works '
-        + 'once the balance bills it. A card plan whose last payment did not go through has not ended and takes no new '
-        + 'plan until it ends. On a team '
+        + 'then moves to the balance and renews from it; its plan changes are paid from the balance, cancel ends it '
+        + 'with its period instead, and renew undoes that, or brings back a card plan that ended, from the balance. A '
+        + 'card plan whose last payment did not go through has not ended and takes no new plan until it ends. On a team '
         + 'agent only a team admin, the organization\'s owner or the person who deployed the agent can pay for it or '
         + 'change its plan; other members are refused and nothing is charged.',
       inputSchema: strictInput({

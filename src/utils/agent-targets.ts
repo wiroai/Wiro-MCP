@@ -26,7 +26,7 @@ import {
 } from './agent-message.js';
 import { quotedSpan } from './quoted-text.js';
 import { fetchPublicFile } from './remote-file.js';
-import { ADD_FUNDS_URL, centsToUsd, isWalletNotRead, toAgentUsage, WALLET_NOT_READ_NOTE } from './user-agent.js';
+import { ADD_FUNDS_URL, centsToUsd, isWalletNotRead, pausedUsage, WALLET_NOT_READ_NOTE } from './user-agent.js';
 
 // Studio, the Workflow Agent and the user's own deployed agents speak the same
 // message protocol behind three route families. Everything that differs
@@ -467,11 +467,9 @@ export async function explainSendRefusal(
 
   if (target.kind === 'deployed') {
     // The agent used the AI usage its plan includes and the balance is short: Wiro says so with code 97 and the
-    // agent's usage, and its sentence names the amounts.
-    if (isPlainObject(response.agentusage) || (hasErrorCode(error, 97) && /AI usage|balance/i.test(message))) {
-      const usage = isPlainObject(response.agentusage) ? toAgentUsage({ usage: response.agentusage }) : null;
-      return `${message}\n\n${noUsageLeftNote(usage?.wallet)}`;
-    }
+    // agent's usage (agentusage), and its sentence names the amounts.
+    const paused = pausedUsage(response);
+    if (paused) return `${message}\n\n${noUsageLeftNote(paused.wallet)}`;
     // An older Wiro answers with the agent's credits, which count hundredths of a dollar.
     const balance = response.agentbalance;
     if (isPlainObject(balance)) {

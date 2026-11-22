@@ -4,7 +4,6 @@ import {
   AGENT_NOT_FOUND_TEXT,
   ApiResultError,
   asString,
-  hasErrorCode,
   isPlainObject,
   requireApiSuccess,
   toNumber,
@@ -236,16 +235,21 @@ export function addFundsText(workspace: 'personal' | 'team'): string {
 }
 
 /**
- * What Wiro says is missing from the balance for a plan payment it refused: code 97 with neededusd, the amount to
- * add in USD (at least the deposit minimum), or the older "Insufficient wallet balance" answer. null for any other
- * answer, a 97 that refuses a team member included.
+ * What Wiro says is missing from the balance for a plan payment it refused: its neededusd, the amount to add in USD
+ * (rounded up to the cent, at least the deposit minimum), or the older "Insufficient wallet balance" answer. A
+ * refusal for a paused agent carries agentusage instead, and any other refusal, a 97 that refuses a team member
+ * included, is null.
  */
 export function balanceShortfall(error: unknown): { neededUsd: number | null } | null {
   if (!(error instanceof ApiResultError)) return null;
   const needed = toNumber(error.body.neededusd);
-  const short = (hasErrorCode(error, 97) && (needed !== null || /balance/i.test(error.message)))
-    || /insufficient wallet balance/i.test(error.message);
-  return short ? { neededUsd: needed !== null && needed > 0 ? needed : null } : null;
+  if (needed !== null) return { neededUsd: needed > 0 ? needed : null };
+  return /insufficient wallet balance/i.test(error.message) ? { neededUsd: null } : null;
+}
+
+/** The agent's AI usage a refusal carries (agentusage), when Wiro refused it because the agent is paused. */
+export function pausedUsage(body: Record<string, unknown>): AgentUsage | null {
+  return isPlainObject(body.agentusage) ? toAgentUsage({ usage: body.agentusage }) : null;
 }
 
 /**
@@ -1030,7 +1034,7 @@ export function formatSubscriptionLine(subscription: AgentSubscription | null, p
   }
   const parts = [`${subscription.status}, billed ${subscription.billing === 'wallet' ? 'from the wallet' : 'by card'}`];
   if (subscription.amountUsd !== null) {
-    parts.push(subscription.status === 'expired' && subscription.billing === 'wallet'
+    parts.push(subscription.status === 'expired'
       ? `a new period costs ${formatUsd(subscription.amountUsd)} per 30 days`
       : `${formatUsd(subscription.amountUsd)} per 30 days`);
   }
@@ -1065,12 +1069,13 @@ export function startNeedsPlan(agent: Pick<AgentSummary, 'subscription' | 'usage
 }
 
 /**
- * renew brings back an expired wallet plan; any other agent without an active plan takes a new one. A plan that
- * has not ended, such as a card plan whose last payment did not go through, takes neither: null.
+ * renew brings back an expired plan, a card plan's included, from the Wiro balance; any other agent without an
+ * active plan takes a new one. A plan that has not ended, such as a card plan whose last payment did not go
+ * through, takes neither: null.
  */
 function planActionForStart(agent: Pick<AgentSummary, 'subscription'>): 'renew' | 'subscribe' | null {
   if (isUnsettledPlan(agent.subscription)) return null;
-  return agent.subscription?.status === 'expired' && agent.subscription.billing === 'wallet' ? 'renew' : 'subscribe';
+  return agent.subscription?.status === 'expired' ? 'renew' : 'subscribe';
 }
 
 const NO_PLAN_TO_START = 'It has no active plan, so it cannot start.';
@@ -1081,7 +1086,7 @@ function noPlanStartHint(agent: Pick<AgentSummary, 'guid' | 'workspace' | 'subsc
   }
   return `${NO_PLAN_TO_START} `
     + (planActionForStart(agent) === 'renew'
-      ? 'Its wallet plan has expired; manage_agent_billing with action renew restarts it.'
+      ? 'Its plan has expired; manage_agent_billing with action renew restarts it, paid from the Wiro balance.'
       : 'manage_agent_billing with action subscribe pays for a plan and starts the agent.');
 }
 

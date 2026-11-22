@@ -512,10 +512,10 @@ test('send_agent_message follows Wiro\'s refusal of an agent with no AI usage it
   for (const [agentusage, team] of [
     [{ ...usage, wallet: 'personal' }, ''],
     [{ ...usage, wallet: 'team' }, ' (select the agent\'s team in the dashboard first)'],
-    [undefined, ' (for a team agent, select its team in the dashboard first)'],
+    [{ ...usage, wallet: undefined }, ' (for a team agent, select its team in the dashboard first)'],
   ]) {
     const fake = fakeClient({
-      '/UserAgent/Message/Send': { result: false, errors: [{ code: 97, message: sentence }], agentstatus: 4, ...(agentusage ? { agentusage } : {}) },
+      '/UserAgent/Message/Send': { result: false, errors: [{ code: 97, message: sentence }], agentstatus: 4, agentusage },
     });
     await withClient(fake, async client => {
       const result = await client.callTool({ name: 'send_agent_message', arguments: { agent: 'agent-guid-1', message: 'hello' } });
@@ -529,14 +529,15 @@ test('send_agent_message follows Wiro\'s refusal of an agent with no AI usage it
     });
   }
 
-  // A 97 that is not about the balance keeps Wiro's own words.
-  const member = fakeClient({
-    '/UserAgent/Message/Send': { result: false, errors: [{ code: 97, message: 'Only a team admin can perform this action on a team-owned agent.' }] },
-  });
-  await withClient(member, async client => {
-    const result = await client.callTool({ name: 'send_agent_message', arguments: { agent: 'agent-guid-1', message: 'hello' } });
-    assert.doesNotMatch(textOf(result), /Funds are added/);
-  });
+  // A refusal is a pause only with the agent's usage: a 97 without it keeps Wiro's own words.
+  for (const message of ['Only a team admin can perform this action on a team-owned agent.', sentence]) {
+    const member = fakeClient({ '/UserAgent/Message/Send': { result: false, errors: [{ code: 97, message }] } });
+    await withClient(member, async client => {
+      const result = await client.callTool({ name: 'send_agent_message', arguments: { agent: 'agent-guid-1', message: 'hello' } });
+      assert.doesNotMatch(textOf(result), /Funds are added/);
+      assert.ok(textOf(result).includes(message), textOf(result));
+    });
+  }
 });
 
 test('Studio wallet and availability refusals say what to do without repeating credit numbers', async () => {
