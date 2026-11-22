@@ -605,6 +605,33 @@ test('get_agent_activity: a change row shows the fields its title leaves out, an
   assert.equal(lines[3], '2026-11-01T09:00:00.000Z AGENT_SKILLS_UPDATED: Skills updated: util-a on, util-b off; $1.00 charged, by Ada Lovelace');
 });
 
+test('get_agent_activity: a connector row names who changed the connector, as an agent change row does', async () => {
+  const result = await readLogs({
+    result: true,
+    errors: [],
+    date: '2026-11-01',
+    events: [
+      changeRow({ kind: 'CONNECTOR_CONNECTED', title: 'Connector connected: serper', summary: { connector: 'serper' } }),
+      changeRow({ kind: 'CONNECTOR_ACCOUNTS_SET', title: 'Connector accounts set: tiktok-ads', summary: { connector: 'tiktok-ads' } }),
+      changeRow({ kind: 'CONNECTOR_DISCONNECTED', title: 'Connector disconnected: serper', summary: { connector: 'serper' } }),
+      changeRow({ kind: 'CONNECTOR_REAUTH', title: 'Connector needs to be connected again: tiktok-ads', summary: { connector: 'tiktok-ads' }, userUuid: 'system', user: null }),
+    ],
+  });
+  const { events } = result.structuredContent.logs;
+  assert.deepEqual(events.map(event => event.actor), ['Ada Lovelace', 'Ada Lovelace', 'Ada Lovelace', undefined]);
+  for (const event of events) {
+    assert.equal(event.fields, undefined, 'a connector row names its connector in its title');
+    assert.equal(event.summary, undefined, 'an object summary is not a text');
+  }
+
+  const lines = textOf(result).split('```text\n')[1].split('\n```')[0].split('\n');
+  assert.equal(lines[0], '2026-11-01T09:00:00.000Z CONNECTOR_CONNECTED: Connector connected: serper, by Ada Lovelace');
+  assert.equal(lines[1], '2026-11-01T09:00:00.000Z CONNECTOR_ACCOUNTS_SET: Connector accounts set: tiktok-ads, by Ada Lovelace');
+  assert.equal(lines[2], '2026-11-01T09:00:00.000Z CONNECTOR_DISCONNECTED: Connector disconnected: serper, by Ada Lovelace');
+  assert.equal(lines[3], '2026-11-01T09:00:00.000Z CONNECTOR_REAUTH: Connector needs to be connected again: tiktok-ads');
+  assertNothingLeaks(result);
+});
+
 test('get_agent_activity: a long change title keeps its names', async () => {
   const names = Array.from({ length: 20 }, (_, index) => `util-skill-number-${index} on`).join(', ');
   const title = `Skills updated: ${names}`;

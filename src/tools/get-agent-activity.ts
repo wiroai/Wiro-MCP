@@ -313,9 +313,10 @@ function numericRecord(value: unknown): Record<string, number> | undefined {
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
-/** The kinds of the rows that say who changed the agent, and when its own lines were deleted. */
+/** The kinds of the rows that say who changed the agent or its connectors, and when its own lines were deleted. */
 function isChangeRow(kind: unknown): boolean {
-  return typeof kind === 'string' && (kind.startsWith('AGENT_') || kind === 'runtime_log_deleted');
+  return typeof kind === 'string'
+    && (kind.startsWith('AGENT_') || kind.startsWith('CONNECTOR_') || kind === 'runtime_log_deleted');
 }
 
 /** The display name Wiro sends for the person behind a row. An email or an id never counts as one. */

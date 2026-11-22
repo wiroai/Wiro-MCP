@@ -75,6 +75,10 @@ runs `npx @wiro-ai/wiro-mcp@latest` takes it at its next start.
 ### Changes
 
 - `get_my_agent` lists the agent's connectors with their state and the accounts chosen.
+- `get_agent_activity` (logs) names who connected or disconnected a connector, or set its
+  accounts (`CONNECTOR_CONNECTED`, `CONNECTOR_DISCONNECTED`, `CONNECTOR_ACCOUNTS_SET`), as
+  it names who changed the agent. `CONNECTOR_REAUTH`, a connector that has to be connected
+  again, is Wiro's own row and names no one.
 - `bind_agent_project` sets the Wiro project the agent's video and voice skills run models
   with. The agent's own model tools come from the Wiro AI Models connector (`wiro`), which
   always runs with that same project; connecting it binds its project the same way, and
