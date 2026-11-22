@@ -634,9 +634,9 @@ test('the playbooks and send_agent_message say how setup replies, keys and the h
   assert.doesNotMatch(agents, /Get the user's yes for the add, and once it is applied/);
   // Wiro pairs a connect card with an add for a sign-in too, and a reply never connects it.
   assert.match(agents, /A connector connected with a sign-in comes with its connect card too, but a reply never connects it: once the add is applied, `connect_agent_connector` returns its link \(with the keys of the user's own app where it needs them\), or the user connects it on the agent page\./);
-  // A Wiro project is never picked by a reply either, at any age of its card, and send_agent_message returns what
-  // Wiro's answer leaves to connect: Wiro's message reads do not return it.
-  assert.match(agents, /The `wiro` connector, which connects with a Wiro project, is the same: a reply never connects it, and `connect_agent_connector` binds its project with no key\. A sign-in or a Wiro project card is connected that way at any age, and a connector that is connected already needs nothing more, even while its card reads pending\. `send_agent_message` returns the connectors Wiro's answer to a reply leaves to connect \(`setupNext`\), each with how it connects\. A disconnect needs no key/);
+  // A Wiro project is never picked by a reply either, at any age of its card, and send_agent_message and
+  // get_agent_message return what Wiro's answer leaves to connect: Wiro's message reads keep it.
+  assert.match(agents, /The `wiro` connector, which connects with a Wiro project, is the same: a reply never connects it, and `connect_agent_connector` binds its project with no key\. A sign-in or a Wiro project card is connected that way at any age, and a connector that is connected already needs nothing more, even while its card reads pending\. `send_agent_message` and `get_agent_message` return the connectors Wiro's answer to a reply leaves to connect \(`setupNext`\), each with how it connects\. A disconnect needs no key/);
   assert.doesNotMatch(agents, /Wiro's answer to a reply names the connectors it leaves to connect/);
   // Every connector an add needs gets its connect card, and a proposal never names a chat channel.
   assert.doesNotMatch(agents, /gets no connect card|any other setup on the agent page|Connector or a chat channel/);
@@ -665,6 +665,8 @@ test('the playbooks and send_agent_message say how setup replies, keys and the h
     const message = tools.find(tool => tool.name === 'get_agent_message').description;
     assert.match(message, /An add or remove of a Skill also shows what Wiro says the change does with it: the other Skills that turn on or off \(with\)/);
     assert.match(message, /Connectors are proposed with connect and disconnect changes, never added or removed\./);
+    // Wiro's message reads keep what its answer to a reply leaves to connect, so a read shows it as the send does.
+    assert.match(message, /Wiro's own answer to a reply lists the connectors it leaves to connect \(setupNext\)\./);
     const update = tools.find(tool => tool.name === 'update_agent');
     assert.match(JSON.stringify(update), /propose setup changes in its chat \(connect or disconnect a Connector, add or remove a Skill, scheduled tasks, custom skills and its time zone\)/);
     for (const tool of [send, message, JSON.stringify(update)]) assert.doesNotMatch(tool, /Connector or (a chat )?channel|Skill or Connector/);

@@ -36,7 +36,8 @@ export function registerGetAgentMessage(server: McpServer, client: WiroClient): 
         + 'add the connectors still to connect (needs). Connectors are proposed with connect and disconnect '
         + 'changes, never added or removed. A connect change says how its connector connects (mode: key, signin or '
         + 'project), and only connect_agent_connector connects a signin or project one, never a reply, whatever the '
-        + 'card\'s age; a connector that is connected already needs no step. On '
+        + 'card\'s age; a connector that is connected already needs no step. Wiro\'s own answer to a reply lists the '
+        + 'connectors it leaves to connect (setupNext). On '
         + 'Wiro\'s own listing of a proposed change (listedSetupChanges), nothing is applied yet: show the listing, '
         + 'and send "yes" (or "yes N") again only after the user agrees to exactly that change, never on your own.',
       inputSchema: strictInput({

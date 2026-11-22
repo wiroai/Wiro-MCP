@@ -53,10 +53,10 @@ export const agentMessageSchema = z.object({
     .describe('Set on Wiro\'s own answer that lists the exact setup changes the agent proposed (in reply): how many '
       + 'it lists. Nothing is applied yet; a later "yes" (or "yes N") the user agreed to applies one.'),
   setupNext: z.array(setupNeedSchema).optional()
-    .describe('Set by send_agent_message, from Send\'s answer, on Wiro\'s own answer to a setup reply that leaves '
-      + 'connectors to connect: each one with how it connects, key (its values), signin (a sign-in) or project (a Wiro '
-      + 'project bound to the agent). connect_agent_connector connects each one; a reply never connects a signin or '
-      + 'project one.'),
+    .describe('Set on Wiro\'s own answer to a setup reply that leaves connectors to connect, when it is sent and when '
+      + 'it is read later: each one with how it connects, key (its values), signin (a sign-in) or project (a Wiro '
+      + 'project bound to the agent), as they stood when Wiro answered. connect_agent_connector connects each one; a '
+      + 'reply never connects a signin or project one.'),
   attachments: z.array(z.object({
     url: z.string(),
     name: z.string().optional(),

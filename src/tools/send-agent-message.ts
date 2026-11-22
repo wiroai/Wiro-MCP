@@ -193,8 +193,8 @@ export function registerSendAgentMessage(server: McpServer, client: WiroClient, 
         const setupResult = target.kind === 'deployed' && response.status === 'agent_end'
           ? toSetupResult(response.setupresult)
           : undefined;
-        // What the answer leaves to connect comes only with Send's answer: Wiro stores it on the row, but its message
-        // reads leave it out of the metadata they return.
+        // What the answer leaves to connect comes with Send's answer. Wiro stores it on the row, and its message reads
+        // return it there too; a Wiro API before that left it out of the metadata they return.
         const setupNext = isPlainObject(response.setupresult) && Array.isArray(response.setupresult.next)
           ? { next: response.setupresult.next }
           : {};
@@ -215,7 +215,7 @@ export function registerSendAgentMessage(server: McpServer, client: WiroClient, 
           try {
             const stored = await readAgentMessage(client, target, messageId, resolved.session, extra.signal);
             if (stored.status === 'agent_end' && messageKind(stored) === 'setup_result') {
-              // The stored row keeps Send's next, which the read does not return.
+              // The stored row keeps Send's next, also where the read does not return it.
               handledRow = { ...stored, metadata: { ...(isPlainObject(stored.metadata) ? stored.metadata : {}), ...setupNext } };
             }
           } catch (error) {

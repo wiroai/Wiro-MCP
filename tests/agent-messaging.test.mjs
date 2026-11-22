@@ -4192,8 +4192,8 @@ test('a setup reply that leaves the wiro connector to connect leads to connect_a
     assert.doesNotMatch(textOf(result), /asks for a key/);
   });
 
-  // A yes while only the project card waits applies nothing, so the stored row is read for a listing. Wiro's message
-  // reads return only the type of that row's metadata, never its next: Send's next stays with the answer.
+  // A yes while only the project card waits applies nothing, so the stored row is read for a listing. A Wiro API before
+  // its message reads kept next returned only the type of that row's metadata: Send's next stays with the answer.
   const stored = fakeClient({
     '/UserAgent/Message/Send': {
       ...LISTING_SEND,
@@ -4225,11 +4225,36 @@ test('a setup reply that leaves the wiro connector to connect leads to connect_a
     });
     assert.match(textOf(result), /A yes cannot connect Wiro AI Models\./);
 
-    // A later read of that answer gets the same row, which names no next: nothing is made up for it.
+    // A later read of that answer from such an API gets the same row, which names no next: nothing is made up for it.
     const read = await client.callTool({ name: 'get_agent_message', arguments: { agent: 'agent-guid-1', message_id: 'msg-yes', wait_seconds: 0 } });
     assert.equal(read.structuredContent.message.setupNext, undefined);
   });
   assert.equal(stored.callsTo('/UserAgent/Message/Detail').length, 2);
+
+  // Wiro's message reads keep the next it stored, so the stored row read for a listing names it too.
+  const kept = fakeClient({
+    '/UserAgent/Message/Send': {
+      ...LISTING_SEND,
+      messageguid: 'msg-yes',
+      response: 'A yes cannot connect Wiro AI Models. Its project is picked outside this chat.',
+      setupresult: { applied: [], dismissed: [], failed: [], restarting: false, next: NEXT },
+    },
+    '/UserAgent/Message/Detail': {
+      result: true,
+      errors: [],
+      data: listingRow(undefined, {
+        guid: 'msg-yes',
+        response: 'A yes cannot connect Wiro AI Models. Its project is picked outside this chat.',
+        metadata: { type: 'setup_result', next: NEXT },
+      }),
+    },
+    '/UserAgent/ConnectorList': connectorListRoute(),
+  });
+  await withClient(kept, async client => {
+    const result = await client.callTool({ name: 'send_agent_message', arguments: { agent: 'agent-guid-1', session: 'default', message: 'yes', wait_seconds: 0 } });
+    assert.deepEqual(result.structuredContent.message.setupNext, [{ connector: 'wiro', title: 'Wiro AI Models', mode: 'project' }]);
+    assert.equal(result.structuredContent.nextAction.tool, 'connect_agent_connector');
+  });
 
   // A sign-in left to connect gets its own step; a key Wiro asks for keeps the rule that saves it now.
   const signIn = fakeClient({
@@ -4245,6 +4270,87 @@ test('a setup reply that leaves the wiro connector to connect leads to connect_a
     const result = await client.callTool({ name: 'send_agent_message', arguments: { agent: 'agent-guid-1', session: 'default', message: 'yes', wait_seconds: 0 } });
     assert.deepEqual(result.structuredContent.nextAction.arguments, { action: 'connect', agent_guid: 'agent-guid-1', connector: 'hubspot' });
     assert.match(result.structuredContent.nextAction.reason, /^This connector connects with a sign-in/);
+  });
+});
+
+// Wiro's message reads keep what its answer to a reply left to connect (next) and the cards a listing listed (listed,
+// listedfrom), in the shape Send stores them, and nothing else of that metadata. A later read shows them with the same
+// steps as the send: a connector left to connect gets its connect step until it reads connected.
+test('a later read of Wiro\'s answer to a reply shows what it left to connect, with its step until it is connected', async () => {
+  const answer = '✅ Applied: Video Creator added. Still to connect: Wiro AI Models.\n'
+    + 'Next: connect Wiro AI Models to finish. Its project is picked outside this chat.';
+  const row = listingRow(undefined, {
+    guid: 'msg-yes',
+    response: answer,
+    debugoutput: answer,
+    metadata: { type: 'setup_result', next: [{ connector: 'wiro', title: 'Wiro AI Models', mode: 'project', cardid: 'pppppppppp04', messageguid: '3f1d2c4b-5a6e-4f70-8a91-b2c3d4e5f607' }] },
+  });
+  const note = 'Wiro\'s answer leaves this connector to connect: `Wiro AI Models` (`wiro`), with a Wiro project: '
+    + 'connect_agent_connector binds it to the agent with no key, showing the project and the wallet that pays first, and a '
+    + 'reply does not connect it.';
+  const wiroConnected = { slug: 'wiro', title: 'Wiro AI Models', authtype: 'headers', status: 'connected', catalogstatus: 'active', accounts: {}, wiroprojectid: '111', savedvariables: [] };
+  for (const connected of [false, true]) {
+    const fake = fakeClient({
+      '/UserAgent/Message/Detail': { result: true, errors: [], data: row },
+      '/UserAgent/ConnectorList': connectorListRoute(connected ? [wiroConnected] : []),
+    });
+    await withClient(fake, async client => {
+      const read = await client.callTool({ name: 'get_agent_message', arguments: { agent: 'agent-guid-1', message_id: 'msg-yes', wait_seconds: 0 } });
+      assert.notEqual(read.isError, true, textOf(read));
+      const output = read.structuredContent;
+      assert.equal(output.message.kind, 'setup_result');
+      assert.deepEqual(output.message.setupNext, [{ connector: 'wiro', title: 'Wiro AI Models', mode: 'project' }]);
+      assert.equal(output.message.listedSetupChanges, undefined);
+      assert.ok(output.notes.includes(note), output.notes.join('|'));
+      assert.match(textOf(read), /^## Wiro answered the setup reply\n/);
+      if (connected) {
+        assert.equal(output.nextAction, undefined);
+        assert.ok(output.notes.some(entry => entry.startsWith('Wiro AI Models (`wiro`) is already connected to the agent')), output.notes.join('|'));
+      } else {
+        assert.deepEqual(output.nextAction, {
+          tool: 'connect_agent_connector',
+          arguments: { action: 'connect', agent_guid: 'agent-guid-1', connector: 'wiro' },
+          reason: PROJECT_STEP_REASON,
+        });
+      }
+      // The card id and the message guid it names stay out of the result.
+      assert.equal(/pppppppppp04|3f1d2c4b/.test(JSON.stringify(output) + textOf(read)), false);
+    });
+    assert.equal(fake.callsTo('/UserAgent/ConnectorList').length, 1);
+  }
+});
+
+test('get_agent_conversation carries what Wiro\'s answers to setup replies left to connect and listed', async () => {
+  const fake = fakeClient({
+    '/UserAgent/Message/History': {
+      result: true,
+      errors: [],
+      data: {
+        count: 2,
+        hasmore: false,
+        messages: [
+          listingRow(undefined, {
+            guid: 'msg-yes',
+            response: '✅ Applied: Ads Manager added.',
+            debugoutput: '✅ Applied: Ads Manager added.',
+            metadata: { type: 'setup_result', next: [{ connector: 'hubspot', title: 'HubSpot', mode: 'signin', cardid: 'pppppppppp05' }] },
+          }),
+          listingRow(['aaaaaaaaaaa1'], { metadata: { type: 'setup_result', listed: ['aaaaaaaaaaa1'], listedfrom: '3f1d2c4b-5a6e-4f70-8a91-b2c3d4e5f607' } }),
+        ],
+      },
+    },
+  });
+  await withClient(fake, async client => {
+    const history = await client.callTool({ name: 'get_agent_conversation', arguments: { agent: 'agent-guid-1', session: 'default' } });
+    assert.notEqual(history.isError, true, textOf(history));
+    const [applied, listing] = history.structuredContent.messages;
+    assert.equal(applied.kind, 'setup_result');
+    assert.deepEqual(applied.setupNext, [{ connector: 'hubspot', title: 'HubSpot', mode: 'signin' }]);
+    assert.equal(applied.listedSetupChanges, undefined);
+    assert.equal(listing.kind, 'setup_result');
+    assert.equal(listing.listedSetupChanges, 1);
+    assert.equal(listing.setupNext, undefined);
+    assert.equal(/pppppppppp05|aaaaaaaaaaa1|3f1d2c4b/.test(JSON.stringify(history.structuredContent) + textOf(history)), false);
   });
 });
 
