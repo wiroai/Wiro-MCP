@@ -96,9 +96,9 @@ runs `npx @wiro-ai/wiro-mcp@latest` takes it at its next start.
   that refusal as before.
 - The `deploy_agent` quote and result name the connectors a template suggests, or a custom
   build's skills work with. `list_agent_skills` names the Connectors each Skill works with
-  (`suggestedConnectors`), by their catalog titles; none connects by itself. `apply_agent_skills`
-  names the ones the skills it turned on work with that the agent has not connected
-  (`connectorsToConnect`), as an add card's `needs` does.
+  (`suggestedConnectors`), by their catalog titles; none connects by itself.
+  `apply_agent_skills` names the ones the skills it turned on work with that the agent has
+  not connected (`connectorsToConnect`), as an add card's `needs` does.
 - `manage_agent_custom_skill` says which connectors a scheduled task needs to run, and that
   a custom skill is how the agent learns to use a connector's tools.
 - The agents playbook, the server instructions, the `deploy_agent` prompt and the README
@@ -131,19 +131,19 @@ runs `npx @wiro-ai/wiro-mcp@latest` takes it at its next start.
   `agent` surface, and a plan payment made with an API key, as every payment through this
   server is, also toward that key's limits, which can refuse it with code 93.
 - The model runs Studio starts are your own tasks: `list_tasks` lists them, and `get_task`,
-  `wait_for_task`, `cancel_task` and `kill_task` work on them by their id. `list_studio_results`
-  still lists them with their prompts, and only it reads Studio's older runs, which Studio ran
-  on its own account. `list_tasks` also says that a deployed agent calling it through its
-  Wiro AI Models connector sees only its own tasks.
+  `wait_for_task`, `cancel_task` and `kill_task` work on them by their id.
+  `list_studio_results` still lists them with their prompts, and only it reads Studio's older
+  runs, which Studio ran on its own account. `list_tasks` also says that a deployed agent
+  calling it through its Wiro AI Models connector sees only its own tasks.
 - Controls know nine surfaces: `studio`, `workflow-agent` and `workflow` join the six.
   Messages to Studio and the Workflow Agent, the models Studio runs for a person and workflow
   runs with their steps count on them, whichever way they come in, so a limit or a rule on
   `web`, `api` or `mcp` does not cover that work. `get_controls` shows their spending, and
-  spend limits, Model Access rules and `check_model_access` can name them; `check_model_access`
-  checks a Studio or Workflow Agent message, and a workflow run, with this connection's key
-  unless a project or a member is named. Studio's and the Workflow Agent's work is checked on the turn's
-  project: the key the message came with, or the workspace's Studio project for a message
-  sent on wiro.ai.
+  spend limits, Model Access rules and `check_model_access` can name them.
+  `check_model_access` checks a Studio or Workflow Agent message, and a workflow run, with
+  this connection's key unless a project or a member is named. Studio's and the Workflow
+  Agent's work is checked on the turn's project: the key the message came with, or the
+  workspace's Studio project for a message sent on wiro.ai.
 - The `wiro-mcp-server` command names itself to Wiro with `x-wiro-client: wiro-mcp/<version>`,
   so the runs of a local install, the Docker image included, count on the `mcp` surface (Spend
   Limits, Model Access, Task/List) instead of `api`. A `WiroClient` that other code builds
