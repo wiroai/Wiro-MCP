@@ -611,13 +611,19 @@ test('the agents playbook says a card plan whose payment did not go through take
   assert.doesNotMatch(PLAYBOOKS.agents, /fixes the payment in the dashboard by paying/);
 });
 
+test('the agents playbook says a card plan is cancelled with its period, and renew undoes that or brings it back', () => {
+  assert.match(PLAYBOOKS.agents, /`cancel` ends a card plan with its period instead, with nothing charged or refunded, and it does not move to the balance; `renew` undoes that before the period ends, and brings back a card plan that has ended, paid from the balance\./);
+  assert.match(PLAYBOOKS.agents, /2\. Cancel the plan with `manage_agent_billing` \(cancel\)\. A card plan has to end first: cancel it, and delete the agent once its period has ended\./);
+  assert.doesNotMatch(PLAYBOOKS.agents, /once the balance bills it|A card plan set to end ends with its period and is not renewed/);
+});
+
 test('the agents playbook says a wallet cancel keeps the move set for its renewal', () => {
-  assert.match(PLAYBOOKS.agents, /`cancel` stops the next renewal, with no refund\. On a wallet plan a move set for that renewal stays: undoing the cancellation keeps it, and once the plan has ended, `renew` brings it back on that plan\. A team's card plan drops the move\./);
+  assert.match(PLAYBOOKS.agents, /`cancel` stops the next renewal, with no refund\. On a wallet plan a move set for that renewal stays: undoing the cancellation keeps it, and once the plan has ended, `renew` brings it back on that plan\. A card plan drops the move\./);
   assert.doesNotMatch(PLAYBOOKS.agents, /and drops a move set for it/);
 });
 
-test('the agents playbook says which plan an ended wallet plan renews on', () => {
-  assert.match(PLAYBOOKS.agents, /renews a wallet plan that already ended, on the plan `get_my_agent` shows for it, at that plan's price today\. When a wallet plan ends, Wiro shows it on the plan set for its renewal, else on the plan nearest its last monthly price\./);
+test('the agents playbook says which plan an ended plan renews on, a card plan\'s included', () => {
+  assert.match(PLAYBOOKS.agents, /renews a plan that already ended, a card plan's included, from the Wiro balance, on the plan `get_my_agent` shows for it, at that plan's price today\. When a wallet plan ends, Wiro shows it on the plan set for its renewal, else on the plan nearest its last monthly price\./);
   assert.doesNotMatch(PLAYBOOKS.agents, /on the plan set for its renewal \(else its own\)/);
 });
 

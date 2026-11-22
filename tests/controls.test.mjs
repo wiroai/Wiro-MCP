@@ -1787,12 +1787,15 @@ test('the controls playbook and texts are true to Studio\'s chat model, an agent
     // An agent pauses mid-reply, and its scheduled tasks pause instead of failing.
     /pauses at its next step, even in the middle of a reply/,
     /Its scheduled tasks pause too, without failing\./,
-    // Automatic renewals count on the wallet and the buyer, never on a way in.
-    /toward the limits of the member who started the plan, but toward no way in, API key or agent/,
+    // Every agent plan charge, the automatic renewal included, counts on the wallet, the buyer and the agent surface.
+    /Every agent plan charge, the renewal included, counts toward the whole wallet's limits \(in a team, the team's\), toward the limits of the member who paid for it in a team \(for a renewal, the member who started the plan\) and toward the `agent` surface's limits, but toward no API key and not toward the agent's own limit\./,
+    /Every agent plan charge, the renewal included, counts in the total, under the member who paid for it \(for a renewal, the member who started the plan\) and under the `agent` way in, but under no API key or agent\./,
+    /- `agent`: what deployed agents do on their own: the runs they start and their chat model\. Its spend limits also count their AI usage that the Wiro balance pays and their plan charges, renewals included\./,
     // Who changed it last.
     /who changed each limit and rule last/,
   ]) assert.match(text, pattern);
   assert.doesNotMatch(text, /The cost of their chat counts toward the spend limits too\.|Their own chat is not a Model Access matter/);
+  assert.doesNotMatch(text, /toward no way in|under no way in|add up to less than the total/);
   // Allowing Audio & Speech does not bring back a Gemini agent's voice notes while LLM & Chat is blocked.
   assert.doesNotMatch(text, /allow Audio & Speech too to keep it/);
   assert.ok(text.split('\n').includes('Find who changed a limit or a rule:'));
