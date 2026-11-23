@@ -56,7 +56,7 @@ const outputSchema = {
   catalogStatus: z.enum(['active', 'hidden', 'retired']).optional(),
   ...permissionsViewSchema,
   waiting: z.array(approvalSchema)
-    .describe('Approval cards a scheduled task, a channel chat or the agent\'s own work asked for, still waiting for an answer, each with its request and its answer_agent_approval step.'),
+    .describe('Approval cards a scheduled task, a channel chat or the agent\'s own work asked for, still waiting for an answer, each with its request and its answer_agent_approval step. A card asked in a Telegram, Slack or Discord chat has no step: it is answered there (answeredIn).'),
   message: z.string(),
   nextAction: nextActionSchema.optional(),
 };
@@ -151,7 +151,8 @@ export function registerGetAgentConnectorPermissions(server: McpServer, client: 
         + 'of its own. It lists the groups with their values (Mixed where their actions differ), every action with its '
         + 'values and defaults, what an action the connector has not listed yet does, and the approval cards that a '
         + 'scheduled task, a channel chat or the agent\'s own work asked for and that still wait, with their requests '
-        + '(waiting); answer_agent_approval answers them. set_agent_connector_permissions changes the values. Only '
+        + '(waiting); answer_agent_approval answers them, except one asked in a Telegram, Slack or Discord chat, which is '
+        + 'answered there. set_agent_connector_permissions changes the values. Only '
         + 'the person who deployed the agent or a team admin of its team can read them. Read-only.',
       inputSchema: strictInput({
         agent_guid: z.string().min(1).max(100).describe('The deployed agent\'s guid, from list_my_agents.'),
@@ -181,8 +182,9 @@ export function registerGetAgentConnectorPermissions(server: McpServer, client: 
           .filter((item): item is Approval => item !== undefined);
         const pending = waiting.filter(item => item.status === 'pending');
         const message = `${read.connector.title} on this agent: ${permissionSummary(read)}`
-          + `${pending.length > 0 ? ` ${waitingApprovalNote(pending.length)}` : ''}`;
-        const nextAction = pending[0]?.nextAction;
+          + `${pending.length > 0 ? ` ${waitingApprovalNote(pending)}` : ''}`;
+        // A card asked in a chat app has no step here: it is answered in that chat.
+        const nextAction = pending.find(item => item.nextAction)?.nextAction;
         const lines = [
           `## ${read.connector.title} permissions (\`${read.connector.slug}\`)`,
           '',
@@ -194,9 +196,10 @@ export function registerGetAgentConnectorPermissions(server: McpServer, client: 
           ...permissionLines(read),
         ];
         if (waiting.length > 0) {
-          lines.push('', '### Waiting for approval', '', 'Scheduled tasks, channel chats and the agent\'s own work asked for '
-            + 'these actions. An approved action runs in the chat where its card is.');
-          if (pending.length > 0) lines.push(waitingApprovalNote(pending.length));
+          lines.push('', '### Waiting for approval', '', 'Scheduled tasks and the agent\'s own work asked for these actions, '
+            + 'and an approved one runs in the chat where its card is. An action asked in a Telegram, Slack or Discord chat '
+            + 'is answered in that chat.');
+          if (pending.length > 0) lines.push(waitingApprovalNote(pending));
           waiting.forEach((approval, index) => lines.push('', ...formatApproval(approval, `Approval ${index + 1}`)));
         }
         if (nextAction) lines.push('', `**Next:** \`${nextAction.tool}\` with the first waiting card. ${nextAction.reason}`);

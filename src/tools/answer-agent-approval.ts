@@ -18,6 +18,7 @@ import {
   approvalHeadline,
   approvalSchema,
   formatApproval,
+  inChannelNote,
   toApproval,
   waitingApproval,
   withActionListed,
@@ -150,7 +151,8 @@ async function findWaitingCard(client: WiroClient, call: Call, signal: AbortSign
  * the card stays as it is.
  */
 async function withListing(client: WiroClient, call: Call, approval: Approval, signal: AbortSignal): Promise<Approval> {
-  if (approval.status !== 'pending' || approval.actionListed !== undefined) return approval;
+  // A card asked in a chat app offers no Always allow, so nothing more needs reading.
+  if (approval.status !== 'pending' || approval.actionListed !== undefined || approval.origin === 'channel') return approval;
   try {
     const read = await readConnectorPermissions(client, call.agentGuid, approval.connector, signal);
     return withActionListed(approval, actionListedIn(read.view, approval.tool));
@@ -182,6 +184,14 @@ function preview(call: Call, approval: Approval) {
     return {
       content: [{ type: 'text' as const, text: [`## Approval: ${approvalHeadline(approval)}`, '', message, '', ...formatApproval(approval, 'The card')].join('\n') }],
       structuredContent: { ...base(call), outcome: 'not_waiting' as const, approval, message },
+    };
+  }
+  if (approval.origin === 'channel') {
+    // Only a reply in that chat answers it: there is no confirm step to offer.
+    const message = inChannelNote(approval);
+    return {
+      content: [{ type: 'text' as const, text: [`## Approval: ${approvalHeadline(approval)}`, '', message, '', ...formatApproval(approval, 'The card')].join('\n') }],
+      structuredContent: { ...base(call), outcome: 'preview' as const, approval, message },
     };
   }
   const nextAction = confirmStep(call);
@@ -264,10 +274,14 @@ const REFUSAL_NOTES: Record<string, string> = {
   96: 'Only the agent\'s owner and its team can answer its approvals.',
 };
 
+/** A card asked in a Telegram, Slack or Discord chat: only a reply there answers it. */
+const IN_CHANNEL = 'approval_in_channel';
+
 function refused(call: Call, error: ApiResultError) {
   const approval = toApproval(error.body.approval, { messageguid: call.messageguid, agent: call.target.agent });
-  const code = error.codes.map(String).find(item => item in REFUSAL_NOTES);
-  const message = `${error.message}${code ? ` ${REFUSAL_NOTES[code]}` : ''}`;
+  const code = error.codes.map(String).find(item => item in REFUSAL_NOTES || item === IN_CHANNEL);
+  const note = code === IN_CHANNEL ? inChannelNote(approval) : code ? REFUSAL_NOTES[code] : undefined;
+  const message = `${error.message}${note ? ` ${note}` : ''}`;
   const nextAction: NextAction | undefined = code === '97' && approval?.status === 'pending'
     ? {
       tool: 'answer_agent_approval',

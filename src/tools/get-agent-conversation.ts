@@ -315,14 +315,14 @@ export function registerGetAgentConversation(server: McpServer, client: WiroClie
         const nextBefore = hasMore ? messages[messages.length - 1]!.messageId : undefined;
         // An action waiting for approval comes before older pages: it did not run, and its card expires.
         const waiting = messages.flatMap(message => (message.approvals ?? []).filter(approval => approval.status === 'pending'));
-        const nextAction: NextAction | undefined = waiting[0]?.nextAction ?? (nextBefore
+        const nextAction: NextAction | undefined = waiting.find(approval => approval.nextAction)?.nextAction ?? (nextBefore
           ? {
             tool: 'get_agent_conversation',
             arguments: { agent: target.agent, session, limit, before: nextBefore },
             reason: 'Read the next page of older messages.',
           }
           : undefined);
-        const note = waiting.length > 0 ? waitingApprovalNote(waiting.length) : undefined;
+        const note = waiting.length > 0 ? waitingApprovalNote(waiting) : undefined;
 
         return {
           content: [{ type: 'text' as const, text: formatHistory(session, messages, nextAction, note, nextBefore) }],

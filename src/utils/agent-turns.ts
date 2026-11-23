@@ -696,7 +696,7 @@ export async function collectTurn(options: CollectTurnOptions): Promise<AgentTur
     }
 
     const waiting = (result.message.approvals ?? []).filter(approval => approval.status === 'pending');
-    if (waiting.length > 0) notes.push(waitingApprovalNote(waiting.length));
+    if (waiting.length > 0) notes.push(waitingApprovalNote(waiting));
     if (result.message.kind === 'approval_resume') {
       notes.push('Wiro started this turn after a person allowed an action the agent asked about, so the agent goes on '
         + 'with it here. Its text is Wiro\'s line, not a person\'s message.');

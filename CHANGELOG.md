@@ -89,6 +89,10 @@ runs `npx @wiro-ai/wiro-mcp@latest` takes it at its next start.
   shows it, and it comes first in the next step. The turn Wiro starts after an approval
   reads as its line, such as "Allowed: Create a post in WordPress", with kind
   `approval_resume` and `approvalResume`, never as the prompt Wiro wrote for the agent.
+- A card asked in a Telegram, Slack or Discord chat is answered there, by a reply in that
+  chat; `answer_agent_approval` cannot answer it. Such a card carries `answeredIn` and no
+  answer step, the listings say where it is answered, and `answer_agent_approval` passes on
+  Wiro's `approval_in_channel` refusal.
 - A scheduled task that comes with the agent's template keeps the template's text, which is
   the text the agent runs. `manage_agent_custom_skill` refuses a different text with Wiro's
   sentence and what can still change; the template's own text sent back changes nothing, and

@@ -213,6 +213,8 @@ test('get_agent_message reads every state a card can be in, a hidden request and
     // A message holds three cards at most.
     assert.deepEqual(approvals.map(item => [item.cardid, item.status]), [['redd1t000001', 'pending'], ['l0ng00000001', 'pending'], ['a110wed00001', 'allowed']]);
     assert.deepEqual([approvals[0].hidden, approvals[0].arguments, approvals[0].originText], [true, undefined, 'Asked in a Telegram chat.']);
+    // A card asked in a Telegram chat is answered there: it carries no answer step.
+    assert.deepEqual([approvals[0].answeredIn, approvals[0].nextAction], ['telegram', undefined]);
     assert.deepEqual([approvals[1].requestTooLong, approvals[1].preview.length, approvals[1].requestBytes], [true, 3012, 70_000]);
     assert.match(approvals[1].alwaysChanges, /in Chat from now on\. Autopilot keeps its own setting\.$/);
     assert.deepEqual([approvals[2].ran, approvals[2].resume, approvals[2].nextAction], [true, { status: 'queued', messageId: RESUME_MESSAGE }, undefined]);
@@ -221,8 +223,8 @@ test('get_agent_message reads every state a card can be in, a hidden request and
     assert.match(text, /The request can't be shown under Reddit's data terms \(2\.0 KB\)\./);
     assert.match(text, /The request is too long to show in full \(68\.4 KB\); its start:/);
     assert.match(text, /- Status: Allowed once \([^)]+\)\. The agent went on in a new turn \(message `0d9c8b7a-6f5e-4d3c-8b2a-1f0e9d8c7b6a`\)\. The approved call ran\./);
-    // The first card that still waits is the next step.
-    assert.deepEqual(result.structuredContent.nextAction.arguments, { ...ANSWER_NEXT.arguments, cardid: 'redd1t000001' });
+    // The first card that still waits and can be answered here is the next step.
+    assert.deepEqual(result.structuredContent.nextAction.arguments, { ...ANSWER_NEXT.arguments, cardid: 'l0ng00000001' });
     assertNoSecrets(result);
   });
 });
@@ -929,5 +931,134 @@ test('the permission tools say which runs read Autopilot, and an Autopilot Allow
     const summary = await call(client, 'set_agent_connector_permissions', { agent_guid: AGENT, connector: 'wordpress', tools: { create_page: { autopilot: 'allow' } } });
     assert.notEqual(summary.isError, true, textOf(summary));
     assert.match(textOf(summary), /\*\*Note:\*\* Allow lets that action run without anyone approving it, in Autopilot also from scheduled tasks and the work before and after a voice call, with no one watching\. Make sure the user wants that\./);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Cards asked in a Telegram, Slack or Discord chat: answered there, by a reply
+// ---------------------------------------------------------------------------
+
+const IN_TELEGRAM = 'Nothing changed: this card was asked in a Telegram chat and is answered there, by a reply in that chat.';
+
+function channelCard(overrides = {}) {
+  return card({ id: 'te1egram0001', origin: { kind: 'channel', channel: 'telegram' }, ...overrides });
+}
+
+test('answer_agent_approval shows a card asked in a chat app with where it is answered, and offers no confirm step', async () => {
+  const fake = fakeClient({
+    '/UserAgent/Message/Detail': { result: true, errors: [], data: messageRow({ guid: SYSTEM_MESSAGE, content: '', metadata: { type: 'system' }, timeline: [approvalBlock(channelCard())] }) },
+  });
+  await withClient(fake, async (client) => {
+    const result = await call(client, 'answer_agent_approval', { agent: AGENT, messageguid: SYSTEM_MESSAGE, cardid: 'te1egram0001', answer: 'allow' });
+    assert.notEqual(result.isError, true, textOf(result));
+    const output = result.structuredContent;
+    assert.equal(output.outcome, 'preview');
+    assert.equal(output.message, IN_TELEGRAM);
+    assert.equal(output.nextAction, undefined);
+    assert.deepEqual([output.approval.answeredIn, output.approval.origin, output.approval.nextAction], ['telegram', 'channel', undefined]);
+    assert.match(output.approval.alwaysChanges, /^Always allow is not offered for it: a reply in the Telegram chat it was asked in allows it once or declines it\.$/);
+    const text = textOf(result);
+    assert.match(text, /- Answered in the Telegram chat it was asked in\. answer_agent_approval cannot answer it\./);
+    assert.equal(text.split('\n').some(line => line.startsWith('**Next:**')), false);
+    assert.doesNotMatch(text, /confirm: true|Only an agent admin can choose it|What each answer does/);
+    // Nothing is answered, and Always allow is not offered, so no permissions are read.
+    assert.equal(fake.callsTo('/UserAgent/Message/ApprovalCardAct').length, 0);
+    assert.equal(fake.callsTo('/UserAgent/ConnectorPermissions').length, 0);
+    assertNoSecrets(result);
+  });
+});
+
+test('answer_agent_approval passes on Wiro\'s refusal of a card asked in a chat app, with where it is answered', async () => {
+  const fake = fakeClient({
+    '/UserAgent/Message/ApprovalCardAct': {
+      result: false,
+      errors: [{ code: 'approval_in_channel', message: 'This approval is answered in the Telegram chat it was asked in.' }],
+      approval: channelCard(),
+    },
+  });
+  await withClient(fake, async (client) => {
+    const result = await call(client, 'answer_agent_approval', { agent: AGENT, messageguid: SYSTEM_MESSAGE, cardid: 'te1egram0001', answer: 'always', confirm: true });
+    assert.equal(result.isError, true);
+    const output = result.structuredContent;
+    assert.equal(output.outcome, 'refused');
+    assert.equal(output.message, `This approval is answered in the Telegram chat it was asked in. ${IN_TELEGRAM}`);
+    assert.equal(output.nextAction, undefined);
+    assert.equal(output.approval.answeredIn, 'telegram');
+    assertNoSecrets(result);
+  });
+  // Without the card in the refusal, the chat app is not named.
+  const bare = fakeClient({
+    '/UserAgent/Message/ApprovalCardAct': { result: false, errors: [{ code: 'approval_in_channel', message: 'This approval is answered in the Slack chat it was asked in.' }] },
+  });
+  await withClient(bare, async (client) => {
+    const result = await call(client, 'answer_agent_approval', { agent: AGENT, messageguid: SYSTEM_MESSAGE, cardid: 'te1egram0001', answer: 'allow', confirm: true });
+    assert.match(result.structuredContent.message, /Nothing changed: this card was asked in a Telegram, Slack or Discord chat and is answered there, by a reply in that chat\.$/);
+  });
+});
+
+test('the listings show a card asked in a chat app read-only, with where it is answered and no answer step', async () => {
+  const waiting = (cardid, origin) => ({
+    cardid,
+    messageguid: SYSTEM_MESSAGE,
+    tool: 'create_page',
+    tooltitle: 'Create a page',
+    origin,
+    createdat: NOW - 60,
+    expiresat: NOW + 86_000,
+    args: { title: 'About' },
+    argspreview: null,
+    argsbytes: 17,
+    argsredacted: false,
+    toolcached: true,
+  });
+  const permissions = fakeClient({
+    '/UserAgent/ConnectorPermissions': permissionsAnswer(VIEW, { pending: [waiting('s1ack0000001', { kind: 'channel', channel: 'slack' }), waiting('task00000001', { kind: 'task', task: 'cs-cron-weekly-post', tasktitle: 'Weekly Post' })] }),
+  });
+  await withClient(permissions, async (client) => {
+    const result = await call(client, 'get_agent_connector_permissions', { agent_guid: AGENT, connector: 'wordpress' });
+    assert.notEqual(result.isError, true, textOf(result));
+    const [slack, task] = result.structuredContent.waiting;
+    assert.deepEqual([slack.answeredIn, slack.nextAction, task.answeredIn], ['slack', undefined, undefined]);
+    // The step answers the card that can be answered here.
+    assert.deepEqual(result.structuredContent.nextAction.arguments, { agent: AGENT, messageguid: SYSTEM_MESSAGE, cardid: 'task00000001', answer: 'allow' });
+    const text = textOf(result);
+    assert.match(text, /An action asked in a Telegram, Slack or Discord chat is answered in that chat\./);
+    assert.match(text, /- Answered in the Slack chat it was asked in\. answer_agent_approval cannot answer it\./);
+    assert.match(result.structuredContent.message, /^WordPress on this agent: .* An action waits for approval: the agent did not run it .* An action waits for approval in a Slack chat: the agent did not run it, and it is answered there, by a reply in that chat; answer_agent_approval cannot answer it\.$/);
+  });
+
+  // In a conversation: a waiting card says where it is answered, and one answered there says so.
+  const answered = channelCard({ id: 'te1egram0002', status: 'allowed', actedat: NOW - 20, actedvia: 'telegram', usedat: NOW - 10 });
+  const declined = channelCard({ id: 'd1sc0rd00001', origin: { kind: 'channel', channel: 'discord' }, status: 'declined', actedat: NOW - 15, actedvia: 'discord' });
+  const system = messageRow({ guid: SYSTEM_MESSAGE, content: '', response: '', metadata: { type: 'system' }, tokencost: null, timeline: [approvalBlock(channelCard(), 0), approvalBlock(answered, 1), approvalBlock(declined, 2)] });
+  const history = fakeClient({ '/UserAgent/Message/History': { result: true, errors: [], data: { messages: [system], hasmore: false } } });
+  await withClient(history, async (client) => {
+    const result = await call(client, 'get_agent_conversation', { agent: AGENT, session: 'default' });
+    assert.notEqual(result.isError, true, textOf(result));
+    assert.equal(result.structuredContent.nextAction, undefined, 'nothing here answers a card asked in a chat app');
+    const text = textOf(result);
+    assert.match(text, /- Waiting for approval: `Create a post` in WordPress \(`wordpress`\), card `te1egram0001`\. Answered in the Telegram chat it was asked in\.\n/);
+    assert.match(text, /- Allowed in the Telegram chat: `Create a post` in WordPress \(`wordpress`\) \([^)]+\)\. The approved call ran\./);
+    assert.match(text, /- Declined in the Discord chat: `Create a post` in WordPress \(`wordpress`\) \([^)]+\)\. The call was turned down\./);
+    assert.match(text, /\*\*Note:\*\* An action waits for approval in a Telegram chat: the agent did not run it, and it is answered there, by a reply in that chat; answer_agent_approval cannot answer it\./);
+    assert.doesNotMatch(text, /answer_agent_approval with this message id/);
+  });
+
+  // In a message read in full, an answered card says where it was answered.
+  const read = fakeClient({ '/UserAgent/Message/Detail': { result: true, errors: [], data: system } });
+  await withClient(read, async (client) => {
+    const result = await call(client, 'get_agent_message', { agent: AGENT, message_id: SYSTEM_MESSAGE, wait_seconds: 0 });
+    assert.notEqual(result.isError, true, textOf(result));
+    assert.equal(result.structuredContent.nextAction, undefined);
+    assert.deepEqual(result.structuredContent.message.approvals.map(item => [item.cardid, item.status, item.answeredIn]), [
+      ['te1egram0001', 'pending', 'telegram'],
+      ['te1egram0002', 'allowed', 'telegram'],
+      ['d1sc0rd00001', 'declined', 'discord'],
+    ]);
+    const text = textOf(result);
+    assert.match(text, /- Status: Allowed in the Telegram chat \([^)]+\)\. The approved call ran\./);
+    assert.match(text, /- Status: Declined in the Discord chat \([^)]+\)\. The call was turned down\./);
+    assert.ok(result.structuredContent.notes.some(note => /^An action waits for approval in a Telegram chat: the agent did not run it/.test(note)), result.structuredContent.notes.join('\n'));
+    assert.equal(result.structuredContent.notes.some(note => /^An action waits for approval: /.test(note)), false);
   });
 });

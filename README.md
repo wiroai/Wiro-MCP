@@ -364,6 +364,8 @@ with its exact request, and `answer_agent_approval` answers it once you have dec
 approval the agent goes on in a new turn of the same chat, and its answer is that session's next
 message. A card waits 24 hours. Approval cards that a scheduled task asked for are in your chat
 on wiro.ai, or in the agent's `approvals` session, and `get_agent_connector_permissions` lists them.
+A card asked in a Telegram, Slack or Discord chat is answered there, by a reply in that chat;
+`answer_agent_approval` cannot answer it.
 
 ### Controls
 
