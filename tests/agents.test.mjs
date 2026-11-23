@@ -3449,46 +3449,84 @@ test('manage_agent_billing explains a workspace mismatch', async () => {
 // get_agent_activity
 // ---------------------------------------------------------------------------
 
-test('get_agent_activity usage drops the people behind each row', async () => {
+// The way Wiro answers TransactionList: the ledger in USD in `rows`, counted for the kind asked in `rowstotal`,
+// next to the credit ledger from before agents were billed in USD in `transactions` and `total`, which ignores
+// the kind and names the person behind each row.
+const CREDIT_LEDGER = {
+  transactions: [{
+    guid: 'tx-1',
+    type: 'grant',
+    action: 'initial',
+    amount: 3000,
+    balanceafter: 3000,
+    description: 'Subscription activated on the Pro plan',
+    createdat: NOW - 600,
+    provider: 'prepaid',
+    sessionkey: 'session-secret',
+    agentsessionkey: 'session-secret',
+    messageguid: 'msg-1',
+    providerref: 'prepaid-1-abc',
+    metadata: { requestid: 'abc' },
+    uuid: 'member-uuid',
+    user: { uuid: 'member-uuid', firstname: 'Ada', lastname: 'Lovelace', email: 'member@example.com', avatar: 'avatar.png' },
+  }],
+  total: 40,
+};
+const CREDIT_SUMMARY = { monthlycredits: 3000, extracredits: 0, usedcredits: 1240, remainingcredits: 1760, renewalcredits: 3000, creditperiod: '2026-11', extrapacks: [], byModel: [] };
+
+function ledgerRow(overrides) {
+  return {
+    id: 'wt-1',
+    createdat: NOW - 60,
+    kind: 'ai-usage',
+    title: 'AI Usage',
+    description: null,
+    model: null,
+    tokens: null,
+    costs: null,
+    amountusd: 0,
+    paidfrom: null,
+    direction: 'out',
+    surface: null,
+    taskid: null,
+    legacy: false,
+    ...overrides,
+  };
+}
+
+test('get_agent_activity usage lists the ledger in USD that Wiro sends in rows, and drops the people behind each row', async () => {
   const fake = fakeClient({
     '/UserAgent/TransactionList': {
       result: true,
       errors: [],
-      total: 3,
-      summary: { month: '2026-11', aiusageplanusd: 12.4, aiusagebalanceusd: 0.6, modelrunsusd: 3.2, fundsaddedusd: 20, includedusd: 30 },
-      transactions: [{
-        id: 901,
-        createdat: NOW - 60,
-        kind: 'ai-usage',
-        title: 'AI usage',
+      ...CREDIT_LEDGER,
+      summary: { ...CREDIT_SUMMARY, month: '2026-11', aiusageplanusd: 12.4, aiusagebalanceusd: 0.6, modelrunsusd: 3.2, fundsaddedusd: 20, planusd: 30, includedusd: 30, usage: null },
+      rows: [ledgerRow({
+        id: 'wt-901',
         model: 'openai/gpt-5.6-terra',
         tokens: { input: 6, cacheRead: 50147, cacheWrite: 4683, output: 133 },
         costs: { input: 0.0000132, cacheRead: 0.0110323, cacheWrite: 0.0128783, output: 0.0017556 },
         amountusd: 0.03,
         paidfrom: 'plan',
-        direction: 'out',
         surface: 'agent',
-        legacy: false,
-        sessionkey: 'session-secret',
-        agentsessionkey: 'session-secret',
-        messageguid: 'msg-1',
-        providerref: 'prepaid-1-abc',
-        metadata: { requestid: 'abc' },
-        uuid: 'member-uuid',
-        user: { uuid: 'member-uuid', firstname: 'Ada', lastname: 'Lovelace', email: 'member@example.com', avatar: 'avatar.png' },
-      }],
+      })],
+      rowstotal: 3,
+      kind: 'all',
     },
   });
   await withClient(fake, async client => {
     const result = await call(client, 'get_agent_activity', { agent_guid: 'ua-1', kind: 'usage', limit: 1 });
-    assert.notEqual(result.isError, true);
+    assert.notEqual(result.isError, true, textOf(result));
     assert.deepEqual(fake.calls[0].body, { useragentguid: 'ua-1', limit: 1, start: 0 });
     const { usage } = result.structuredContent;
     assert.deepEqual(usage.summary, { month: '2026-11', includedUsd: 30, aiUsagePlanUsd: 12.4, aiUsageBalanceUsd: 0.6, modelRunsUsd: 3.2, fundsAddedUsd: 20 });
+    // The rows and their count come from rows and rowstotal; the credit ledger is not listed.
+    assert.equal(usage.total, 3);
+    assert.equal(usage.transactions.length, 1);
     assert.deepEqual(usage.transactions[0], {
       createdAt: new Date((NOW - 60) * 1000).toISOString(),
       kind: 'ai-usage',
-      title: 'AI usage',
+      title: 'AI Usage',
       model: 'openai/gpt-5.6-terra',
       tokens: { input: 6, cacheRead: 50147, cacheWrite: 4683, output: 133 },
       costs: { input: 0.0000132, cacheRead: 0.0110323, cacheWrite: 0.0128783, output: 0.0017556 },
@@ -3501,8 +3539,10 @@ test('get_agent_activity usage drops the people behind each row', async () => {
     assert.equal(usage.entries, 'all');
     const text = textOf(result);
     assert.match(text, /^\*\*This month \(2026-11\):\*\* AI usage \$12\.40 within the plan's \$30\.00; AI usage from the balance \$0\.60; model runs \$3\.20; funds added \$20\.00$/m);
-    assert.ok(text.split('\n').includes(`- ${new Date((NOW - 60) * 1000).toISOString()} ai-usage: $0.03 from the plan, AI usage, openai/gpt-5.6-terra, tokens: 6 input, 50,147 cache read, 4,683 cache write, 133 output`), text);
-    assert.doesNotMatch(text, /credit/i);
+    assert.match(text, /^### Ledger \(1 of 3, newest first\)$/m);
+    assert.ok(text.split('\n').includes(`- ${new Date((NOW - 60) * 1000).toISOString()} ai-usage: $0.03 from the plan, AI Usage, openai/gpt-5.6-terra, tokens: 6 input, 50,147 cache read, 4,683 cache write, 133 output`), text);
+    assert.match(text, /^More entries: call get_agent_activity with kind usage and start 1\.$/m);
+    assert.doesNotMatch(text, /credit|grant|Subscription activated|recorded before agents were billed in USD/i);
     const serialized = JSON.stringify(result);
     for (const leaked of ['Lovelace', 'session-secret', 'prepaid-1-abc', 'msg-1']) {
       assert.equal(serialized.includes(leaked), false, `leaked ${leaked}`);
@@ -3511,31 +3551,103 @@ test('get_agent_activity usage drops the people behind each row', async () => {
   });
 });
 
-test('get_agent_activity reads one kind of ledger row and keeps it for the next page', async () => {
-  const fake = fakeClient({
-    '/UserAgent/TransactionList': {
-      result: true,
-      errors: [],
-      total: 3,
-      summary: { month: '2026-11', modelrunsusd: 0.4, fundsaddedusd: 20 },
-      transactions: [
-        { createdat: NOW - 30, kind: 'model-run', title: 'google/veo3-1', amountusd: 0.4, paidfrom: 'balance', direction: 'out', surface: 'agent' },
-        { createdat: NOW - 90, kind: 'funds', title: 'Funds added', amountusd: 20, paidfrom: 'card', direction: 'in' },
-      ],
-    },
+test('get_agent_activity reads one kind of ledger row and pages it by the count Wiro gives for that kind', async () => {
+  const answer = rowstotal => ({
+    result: true,
+    errors: [],
+    ...CREDIT_LEDGER,
+    summary: { ...CREDIT_SUMMARY, month: '2026-11', aiusageplanusd: 1.2, aiusagebalanceusd: 0, modelrunsusd: 0.45, fundsaddedusd: 20, planusd: 30, includedusd: 30 },
+    rows: [
+      ledgerRow({ id: 'wt-31', createdat: NOW - 30, kind: 'model-run', title: 'Model Run', model: 'google/veo3-1', amountusd: 0.4, paidfrom: 'balance', surface: 'agent', taskid: '771' }),
+      ledgerRow({ id: 'wt-29', createdat: NOW - 90, kind: 'model-run', title: 'Model Run', model: 'wiro/flux', amountusd: 0.05, paidfrom: 'coupon', surface: 'agent', taskid: '769' }),
+    ],
+    rowstotal,
+    kind: 'model-run',
   });
+  const fake = fakeClient({ '/UserAgent/TransactionList': answer(5) });
   await withClient(fake, async client => {
     const result = await call(client, 'get_agent_activity', { agent_guid: 'ua-1', kind: 'usage', limit: 2, entries: 'model-run' });
     assert.notEqual(result.isError, true, textOf(result));
     assert.deepEqual(fake.calls[0].body, { useragentguid: 'ua-1', limit: 2, start: 0, kind: 'model-run' });
     const text = textOf(result);
-    assert.match(text, /^\*\*This month \(2026-11\):\*\* model runs \$0\.40; funds added \$20\.00$/m);
-    assert.match(text, /^### Ledger: model-run \(2 of 3, newest first\)$/m);
-    assert.match(text, / model-run: \$0\.40 from the balance, google\/veo3-1$/m);
+    assert.match(text, /^\*\*This month \(2026-11\):\*\* AI usage \$1\.20 within the plan's \$30\.00; AI usage from the balance \$0\.00; model runs \$0\.45; funds added \$20\.00$/m);
+    assert.match(text, /^### Ledger: model-run \(2 of 5, newest first\)$/m);
+    const lines = text.split('\n').filter(line => line.startsWith('- '));
+    assert.equal(lines.length, 2, text);
+    assert.match(lines[0], / model-run: \$0\.40 from the balance, Model Run, google\/veo3-1$/);
+    assert.match(lines[1], / model-run: \$0\.05 from coupon credit, Model Run, wiro\/flux$/);
+    assert.doesNotMatch(text, /grant|Subscription activated/);
+    const { usage, nextAction } = result.structuredContent;
+    assert.equal(usage.entries, 'model-run');
+    assert.equal(usage.total, 5);
+    assert.equal(usage.nextStart, 2);
+    assert.deepEqual(nextAction.arguments, { agent_guid: 'ua-1', kind: 'usage', start: 2, limit: 2, entries: 'model-run' });
+  });
+
+  // The last page of the kind ends the ledger, however many rows the credit ledger counts.
+  const last = fakeClient({ '/UserAgent/TransactionList': answer(2) });
+  await withClient(last, async client => {
+    const result = await call(client, 'get_agent_activity', { agent_guid: 'ua-1', kind: 'usage', limit: 2, entries: 'model-run' });
+    assert.notEqual(result.isError, true, textOf(result));
+    assert.match(textOf(result), /^### Ledger: model-run \(2 of 2, newest first\)$/m);
+    assert.doesNotMatch(textOf(result), /More entries/);
+    assert.equal(result.structuredContent.usage.total, 2);
+    assert.equal(result.structuredContent.usage.nextStart, null);
+    assert.equal(result.structuredContent.nextAction, undefined);
+  });
+});
+
+test('get_agent_activity lists every kind of row in USD, and a plan payment Wiro kept no amount for shows none', async () => {
+  const fake = fakeClient({
+    '/UserAgent/TransactionList': {
+      result: true,
+      errors: [],
+      ...CREDIT_LEDGER,
+      summary: { ...CREDIT_SUMMARY, month: '2026-11', aiusageplanusd: 4.1, aiusagebalanceusd: 0.25, modelrunsusd: 0.4, fundsaddedusd: 40, planusd: 30, includedusd: 30 },
+      rows: [
+        ledgerRow({ id: 'wt-50', createdat: NOW - 10, model: 'openai/gpt-5.4', tokens: { input: 1200, cacheRead: 0, cacheWrite: 0, output: 300 }, amountusd: 0.25, paidfrom: 'balance', surface: 'agent' }),
+        ledgerRow({ id: 'wt-49', createdat: NOW - 20, kind: 'model-run', title: 'Model Run', model: 'google/veo3-1', amountusd: 0.4, paidfrom: 'balance', surface: 'agent', taskid: '771' }),
+        ledgerRow({ id: 'wt-48', createdat: NOW - 30, kind: 'plan', title: 'Agent renewal: Pro plan', amountusd: 30, paidfrom: 'balance' }),
+        ledgerRow({ id: 'wt-47', createdat: NOW - 40, kind: 'funds', title: 'Funds Added', amountusd: 40, paidfrom: 'card', direction: 'in' }),
+        // A card renewal from before Wiro kept what a plan payment paid.
+        ledgerRow({ id: 'ut-plan-1', createdat: NOW - 50, kind: 'plan', title: 'Agent renewal: Pro plan', description: 'Monthly credits', amountusd: null, paidfrom: 'card', direction: 'out', legacy: true }),
+        ledgerRow({ id: 'ut-usage-1', createdat: NOW - 60, model: 'openai/gpt-5.6-terra', tokens: { input: 3, cacheRead: 0, cacheWrite: 0, output: 69 }, amountusd: 0.05, paidfrom: 'plan', legacy: true }),
+      ],
+      rowstotal: 6,
+      kind: 'all',
+    },
+  });
+  await withClient(fake, async client => {
+    const result = await call(client, 'get_agent_activity', { agent_guid: 'ua-1', kind: 'usage' });
+    assert.notEqual(result.isError, true, textOf(result));
+    const { usage } = result.structuredContent;
+    assert.equal(usage.total, 6);
+    assert.equal(usage.nextStart, null);
+    assert.deepEqual(usage.transactions.map(entry => entry.kind), ['ai-usage', 'model-run', 'plan', 'funds', 'plan', 'ai-usage']);
+    // No amount is not $0.00: the row has none.
+    assert.equal(Object.hasOwn(usage.transactions[4], 'amountUsd'), false);
+    assert.deepEqual(usage.transactions[4], {
+      createdAt: new Date((NOW - 50) * 1000).toISOString(),
+      kind: 'plan',
+      title: 'Agent renewal: Pro plan',
+      direction: 'out',
+      paidFrom: 'card',
+      legacy: true,
+    });
+    assert.equal(usage.transactions[5].amountUsd, 0.05);
+    assert.equal(usage.transactions[5].legacy, true);
+    const text = textOf(result);
+    const lines = text.split('\n').filter(line => line.startsWith('- '));
+    assert.equal(lines.length, 6, text);
+    assert.match(lines[0], / ai-usage: \$0\.25 from the balance, AI Usage, openai\/gpt-5\.4, tokens: 1,200 input, 300 output$/);
+    assert.match(lines[1], / model-run: \$0\.40 from the balance, Model Run, google\/veo3-1$/);
+    assert.match(lines[2], / plan: \$30\.00 from the balance, Agent renewal: Pro plan$/);
     // Funds added come in: no payer is named.
-    assert.match(text, / funds: \+\$20\.00, Funds added$/m);
-    assert.equal(result.structuredContent.usage.entries, 'model-run');
-    assert.deepEqual(result.structuredContent.nextAction.arguments, { agent_guid: 'ua-1', kind: 'usage', start: 2, limit: 2, entries: 'model-run' });
+    assert.match(lines[3], / funds: \+\$40\.00, Funds Added$/);
+    assert.equal(lines[4], `- ${new Date((NOW - 50) * 1000).toISOString()} plan: no amount recorded, paid from a card, Agent renewal: Pro plan (recorded before agents were billed in USD)`);
+    assert.match(lines[5], / ai-usage: \$0\.05 from the plan, AI Usage, openai\/gpt-5\.6-terra, tokens: 3 input, 69 output \(recorded before agents were billed in USD\)$/);
+    assert.doesNotMatch(text, /\$0\.00/);
+    assert.doesNotMatch(text, /grant|Subscription activated/);
   });
 });
 
@@ -4341,11 +4453,12 @@ test('get_agent_activity reads an older answer\'s ledger in dollars, with every 
     outputtokens: 69,
     model: 'openai/gpt-5.6-terra',
   };
+  // An older Wiro sends only its credit ledger, in transactions, counted by total.
   const fake = fakeClient({
     '/UserAgent/TransactionList': {
       result: true,
       errors: [],
-      total: 4,
+      total: 9,
       summary: { monthlycredits: 400, extracredits: 0, usedcredits: 5, remainingcredits: 395, creditperiod: '2026-10' },
       transactions: [
         { ...row, cachereadtokens: 19_287, cachewritetokens: 5_520, totaltokens: 24_879 },
@@ -4356,9 +4469,12 @@ test('get_agent_activity reads an older answer\'s ledger in dollars, with every 
     },
   });
   await withClient(fake, async client => {
-    const result = await call(client, 'get_agent_activity', { agent_guid: 'ua-1', kind: 'usage' });
+    const result = await call(client, 'get_agent_activity', { agent_guid: 'ua-1', kind: 'usage', limit: 4 });
     assert.notEqual(result.isError, true, textOf(result));
     const text = textOf(result);
+    assert.match(text, /^### Ledger \(4 of 9, newest first\)$/m);
+    assert.equal(result.structuredContent.usage.total, 9);
+    assert.equal(result.structuredContent.usage.nextStart, 4);
     // An older answer counts hundredths of a dollar.
     assert.match(text, /^\*\*This period \(2026-10\):\*\* AI usage \$0\.05 within the plan's \$4\.00$/m);
     const lines = text.split('\n').filter(line => line.startsWith('- '));

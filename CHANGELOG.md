@@ -68,9 +68,10 @@ runs `npx @wiro-ai/wiro-mcp@latest` takes it at its next start.
   wiro.ai. Its `pack` and `request_id` are ignored, and no answer carries a `requestId`.
 - `get_agent_activity` (usage) reads the dollar ledger: `summary` holds this month's AI
   usage within the plan and from the balance, model runs and funds added, and each of
-  `transactions` its kind, title, model, tokens and costs by kind, `amountUsd`, `direction`
-  and `paidFrom`. `balance`, `extraPacks` and `byModel` are gone, `entries` reads one kind of
-  row, and a log event's cost is `costUsd`.
+  `transactions` its kind, title, model, tokens and costs by kind, `amountUsd` (absent on a
+  plan payment from before Wiro kept what was paid), `direction` and `paidFrom`. `balance`,
+  `extraPacks` and `byModel` are gone, `entries` reads one kind of row, and a log event's
+  cost is `costUsd`.
 
 ### Changes
 

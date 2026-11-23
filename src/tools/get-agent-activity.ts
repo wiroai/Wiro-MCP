@@ -58,7 +58,8 @@ const ledgerEntrySchema = z.object({
   tokens: tokenCountsSchema.optional(),
   costs: tokenCostsSchema.optional()
     .describe('What each kind of token cost, in USD, before the row was rounded to whole cents.'),
-  amountUsd: z.number(),
+  amountUsd: z.number().optional()
+    .describe('Absent when Wiro kept no amount: a plan payment recorded before Wiro kept what was paid.'),
   direction: z.enum(['out', 'in']).optional()
     .describe('out for spending, in for funds added.'),
   paidFrom: z.string().optional()
@@ -194,13 +195,14 @@ function ledgerCosts(value: unknown): z.infer<typeof tokenCostsSchema> | undefin
 const OLDER_PAYERS: Record<string, string> = { prepaid: 'balance', stripe: 'card' };
 
 /**
- * One ledger row. A row from an older Wiro release has no amountusd: its amount counts hundredths of a dollar,
- * signed, and its type and action stand for the kind.
+ * One ledger row. A row of the ledger in USD always has amountusd, null when Wiro kept no amount. A row of the
+ * credit ledger an older Wiro release lists has none: its amount counts hundredths of a dollar, signed, and its
+ * type and action stand for the kind.
  */
 function toLedgerEntry(row: Record<string, unknown>): LedgerEntry {
-  const amountUsd = toNumber(row.amountusd);
-  const older = amountUsd === null;
-  const signed = amountUsd ?? centsToUsd(toNumber(row.amount) ?? 0);
+  const older = !('amountusd' in row);
+  const amountUsd = older ? centsToUsd(toNumber(row.amount) ?? 0) : toNumber(row.amountusd);
+  const signed = amountUsd ?? 0;
   const type = asString(row.type);
   const action = asString(row.action);
   const kind = asString(row.kind) ?? (type ? `${type}${action ? `/${action}` : ''}` : 'unknown');
@@ -220,7 +222,7 @@ function toLedgerEntry(row: Record<string, unknown>): LedgerEntry {
     ...(model ? { model } : {}),
     ...(Object.keys(tokens).length > 0 ? { tokens } : {}),
     ...(costs ? { costs } : {}),
-    amountUsd: Math.abs(signed),
+    ...(amountUsd !== null ? { amountUsd: Math.abs(amountUsd) } : {}),
     ...(direction ? { direction } : {}),
     ...(paidFrom ? { paidFrom } : {}),
     ...(surface ? { surface } : {}),
@@ -273,10 +275,15 @@ function ledgerTokensText(tokens: LedgerEntry['tokens'], title: string | undefin
 
 const PAID_FROM_TEXT: Record<string, string> = { plan: 'the plan', balance: 'the balance', card: 'a card', coupon: 'coupon credit' };
 
-/** One ledger row as a line: "- <time> ai-usage: $0.03 from the plan, <title>, tokens: ...". */
+/**
+ * One ledger row as a line: "- <time> ai-usage: $0.03 from the plan, <title>, tokens: ...", or, for a row Wiro kept
+ * no amount for, "- <time> plan: no amount recorded, paid from a card, <title>".
+ */
 function ledgerLine(entry: LedgerEntry): string {
-  const amount = `${entry.direction === 'in' ? '+' : ''}${formatUsd(entry.amountUsd)}`;
-  const paid = entry.paidFrom && entry.direction !== 'in' ? ` from ${PAID_FROM_TEXT[entry.paidFrom] ?? entry.paidFrom}` : '';
+  const noAmount = entry.amountUsd === undefined;
+  const amount = noAmount ? 'no amount recorded' : `${entry.direction === 'in' ? '+' : ''}${formatUsd(entry.amountUsd)}`;
+  const payer = entry.paidFrom && entry.direction !== 'in' ? PAID_FROM_TEXT[entry.paidFrom] ?? entry.paidFrom : '';
+  const paid = payer ? `${noAmount ? ', paid' : ''} from ${payer}` : '';
   const model = entry.model && !entry.title?.includes(entry.model) ? `, ${entry.model}` : '';
   return oneLine(`- ${entry.createdAt ?? ''} ${entry.kind}: ${amount}${paid}${entry.title ? `, ${entry.title}` : ''}${model}`
     + `${ledgerTokensText(entry.tokens, entry.title)}${entry.legacy ? ' (recorded before agents were billed in USD)' : ''}`);
@@ -479,8 +486,13 @@ export function registerGetAgentActivity(server: McpServer, client: WiroClient):
             }, extra.signal),
             'The usage of this agent could not be read.',
           );
-          const rows = Array.isArray(body.transactions) ? body.transactions.filter(isPlainObject) : [];
-          const total = Math.max(0, Math.trunc(toNumber(body.total) ?? rows.length));
+          // Wiro lists the agent's ledger in USD in rows, of the kind asked, and counts it in rowstotal.
+          // transactions and total are its credit ledger from before agents were billed in USD, which
+          // ignores the kind, and the only list an older Wiro release sends.
+          const dollarRows = Array.isArray(body.rows);
+          const source = dollarRows ? body.rows : body.transactions;
+          const rows = Array.isArray(source) ? source.filter(isPlainObject) : [];
+          const total = Math.max(0, Math.trunc(toNumber(dollarRows ? body.rowstotal : body.total) ?? rows.length));
           const usage: z.infer<typeof usageSchema> = {
             total,
             start,
