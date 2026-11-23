@@ -48,6 +48,8 @@ const outputSchema = {
     column: z.enum(PERMISSION_COLUMNS),
     from: permissionValueSchema,
     to: permissionValueSchema,
+    or: permissionValueSchema.optional()
+      .describe('Set for an action the connector has not listed yet whose own setting goes, when Wiro may have a default of its own for it: the value is to without one and or with one, and the save\'s answer says which.'),
   })).describe('Every value the agent works with that the change moves, by action and column.'),
   restarts: z.boolean().optional()
     .describe('summary: whether saving restarts a running agent. Any change other than Ask to Allow does.'),
@@ -96,7 +98,7 @@ function restartText(plan: PermissionPlan): string {
 
 /** A warning when the change lets actions run with no one approving them. */
 function allowWarning(plan: PermissionPlan): string | undefined {
-  const toAllow = plan.moves.filter(move => move.to === 'allow' && move.from !== 'allow');
+  const toAllow = plan.moves.filter(move => move.from !== 'allow' && (move.to === 'allow' || move.or === 'allow'));
   if (toAllow.length === 0) return undefined;
   const autopilot = toAllow.some(move => move.column === 'autopilot');
   return `Allow lets ${toAllow.length === 1 ? 'that action run without anyone approving it' : 'those actions run without anyone approving them'}`

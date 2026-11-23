@@ -4,7 +4,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { AjvJsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/ajv';
 import { createMcpServer } from '../dist/server.js';
-import { planChanges, toPermissionView } from '../dist/utils/connector-permissions.js';
+import { moveLines, planChanges, toPermissionView } from '../dist/utils/connector-permissions.js';
 
 // Approval cards on a deployed agent's messages, answer_agent_approval, and a connector's permissions
 // (get_agent_connector_permissions, set_agent_connector_permissions).
@@ -691,8 +691,8 @@ test('a change is worked out the way Wiro applies it', () => {
     ['create_page', 'autopilot', 'ask', 'block'],
   ]);
   assert.equal(group.restarts, true);
-  // An unlisted action follows Change and delete once its own setting goes, and so do actions not listed at all.
-  const unlisted = planChanges(view, { categories: { change: { chat: 'allow' } } });
+  // Actions not listed at all follow Change and delete.
+  const unlisted = planChanges(toPermissionView(VIEW), { categories: { change: { chat: 'allow' } } });
   assert.deepEqual(unlisted.moves.map(move => [move.action, move.column, move.from, move.to]), [
     ['Delete a post', 'chat', 'ask', 'allow'],
     [null, 'chat', 'ask', 'allow'],
@@ -705,6 +705,66 @@ test('a change is worked out the way Wiro applies it', () => {
   const tightened = planChanges(view, { tools: { get_post: { chat: 'block', autopilot: 'block' } } });
   assert.deepEqual(tightened.hides, ['Get a post']);
   assert.equal(planChanges(view, { tools: { get_post: { chat: null } } }).stored, false);
+});
+
+test('an action not listed yet whose own setting goes reads Wiro\'s default for it or Change and delete\'s, and the summary names both when the view cannot tell', async () => {
+  // Without its own setting, an action the connector has not listed yet reads Wiro's own default for it when there is
+  // one, else Change and delete's value. new_tool's default in the view is Ask, Change and delete's default: Wiro may
+  // have that default for it, or none.
+  const unlistedTool = (name, chat, defaults) => tool(name, name, 'change', chat, 'block', {
+    cached: false,
+    source: { chat: 'tool', autopilot: 'unknown' },
+    defaults: { chat: defaults, autopilot: 'allow' },
+  });
+  const withChange = (chat, tools) => ({
+    ...VIEW,
+    categories: VIEW.categories.map(row => (row.key === 'change'
+      ? { ...row, chat: { value: chat, mixed: false }, chosen: { chat, autopilot: 'block' } }
+      : row)),
+    tools: [
+      ...VIEW.tools.filter(item => item.name !== 'delete_post'),
+      tool('delete_post', 'Delete a post', 'change', chat, 'block', { source: { chat: 'category', autopilot: 'category' }, defaults: { chat: 'ask', autopilot: 'allow' } }),
+      ...tools,
+    ],
+    unknown: { chat, autopilot: 'block' },
+  });
+
+  // This connection allows Change and delete in Chat: new_tool then reads Allow without a default of Wiro's, or Ask with one.
+  const allowed = withChange('allow', [unlistedTool('new_tool', 'block', 'ask')]);
+  const ambiguous = planChanges(toPermissionView(allowed), { tools: { new_tool: { chat: null } } });
+  assert.deepEqual(ambiguous.moves, [{ action: 'new_tool', name: 'new_tool', column: 'chat', from: 'block', to: 'allow', or: 'ask' }]);
+  assert.equal(ambiguous.restarts, true, 'Block to Allow or Ask restarts either way');
+  // It is blocked in both columns now, and neither outcome blocks it in Chat.
+  assert.deepEqual([ambiguous.hides, ambiguous.shows], [[], ['new_tool']]);
+  assert.deepEqual(moveLines(ambiguous.moves), [
+    '- new_tool (not listed yet), Chat: Block to Allow, or Ask if Wiro sets a default for it; the save\'s answer says which.',
+  ]);
+
+  // Where Change and delete reads Ask in Chat, both outcomes read Ask: certain.
+  const agreeing = planChanges(toPermissionView({ ...VIEW, tools: [...VIEW.tools, unlistedTool('new_tool', 'block', 'ask')] }), { tools: { new_tool: { chat: null } } });
+  assert.deepEqual(agreeing.moves, [{ action: 'new_tool', name: 'new_tool', column: 'chat', from: 'block', to: 'ask' }]);
+  assert.deepEqual(moveLines(agreeing.moves), ['- Chat: Block to Ask for 1 action (new_tool).']);
+
+  // A default that differs from Change and delete's default is Wiro's own: certain, whatever the connection sets.
+  const blocking = withChange('block', [unlistedTool('new_tool', 'allow', 'ask'), unlistedTool('old_tool', 'ask', 'allow')]);
+  const certain = planChanges(toPermissionView(blocking), { tools: { old_tool: { chat: null } } });
+  assert.deepEqual(certain.moves, [{ action: 'old_tool', name: 'old_tool', column: 'chat', from: 'ask', to: 'allow' }]);
+  assert.equal(certain.restarts, false);
+
+  // An action counts as hidden only when both outcomes hide it: here only Change and delete's Block would.
+  const either = planChanges(toPermissionView(blocking), { tools: { new_tool: { chat: null } } });
+  assert.deepEqual(either.moves.map(move => [move.name, move.from, move.to, move.or]), [['new_tool', 'allow', 'block', 'ask']]);
+  assert.deepEqual([either.hides, either.shows], [[], []]);
+
+  // The tool's summary carries both values, and its text names them.
+  const fake = fakeClient({ '/UserAgent/ConnectorPermissions': permissionsAnswer(allowed) });
+  await withClient(fake, async (client) => {
+    const summary = await call(client, 'set_agent_connector_permissions', { agent_guid: AGENT, connector: 'wordpress', tools: { new_tool: { chat: null } } });
+    assert.notEqual(summary.isError, true, textOf(summary));
+    assert.deepEqual(summary.structuredContent.changes, [{ action: 'new_tool', name: 'new_tool', column: 'chat', from: 'block', to: 'allow', or: 'ask' }]);
+    assert.match(textOf(summary), /What changes for the agent:\n- new_tool \(not listed yet\), Chat: Block to Allow, or Ask if Wiro sets a default for it; the save's answer says which\./);
+    assert.match(textOf(summary), /\*\*Note:\*\* Allow lets that action run without anyone approving it\./);
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -329,25 +329,40 @@ function applyChanges(view: PermissionView, before: StoredState, changes: Permis
 }
 
 /**
- * Wiro's own default of an action the connector has not listed, in one column, as far as the view tells it: a value
- * that came from it, else a default that differs from Change and delete's.
+ * A value a change leads to. or is set when the view cannot tell which of two it is: to when Wiro has no default of
+ * its own for the action, or when it has one.
  */
-function catalogDefault(action: ParsedAction, column: PermissionColumn): PermissionValue | undefined {
-  if (action.source[column] === 'catalog') return action[column];
-  if (action.source[column] === 'unknown') return undefined;
-  return action.defaults[column] !== CATEGORY_DEFAULTS.change[column] ? action.defaults[column] : undefined;
+interface Outcome {
+  to: PermissionValue;
+  or?: PermissionValue;
 }
 
 function unlistedValue(state: StoredState, column: PermissionColumn): PermissionValue {
   return state.categories.change?.[column] ?? CATEGORY_DEFAULTS.change[column];
 }
 
+/**
+ * What an action the connector has not listed reads in one column without a setting of its own: Wiro's own default
+ * for it when it has one, else Change and delete's value. The view tells a value that came from Wiro's default, and a
+ * default that differs from Change and delete's default, but not a default equal to Change and delete's default from
+ * none. So the value is certain when that default equals Change and delete's value under the state, and is one of the
+ * two when they differ: Change and delete's value, or the default.
+ */
+function catalogDefault(action: ParsedAction, state: StoredState, column: PermissionColumn): Outcome {
+  if (action.source[column] === 'catalog') return { to: action[column] };
+  const unlisted = unlistedValue(state, column);
+  if (action.source[column] === 'unknown') return { to: unlisted };
+  const fallback = action.defaults[column];
+  if (fallback !== CATEGORY_DEFAULTS.change[column] || fallback === unlisted) return { to: fallback };
+  return { to: unlisted, or: fallback };
+}
+
 /** An action's value in a column under a state: its own setting, else its group's, else its default. */
-function effectiveValue(action: ParsedAction, state: StoredState, column: PermissionColumn): PermissionValue {
+function effectiveValue(action: ParsedAction, state: StoredState, column: PermissionColumn): Outcome {
   const own = state.tools[action.name]?.[column];
-  if (own) return own;
-  if (action.listed) return state.categories[action.category]?.[column] ?? action.defaults[column];
-  return catalogDefault(action, column) ?? unlistedValue(state, column);
+  if (own) return { to: own };
+  if (action.listed) return { to: state.categories[action.category]?.[column] ?? action.defaults[column] };
+  return catalogDefault(action, state, column);
 }
 
 export interface CellMove {
@@ -357,6 +372,16 @@ export interface CellMove {
   column: PermissionColumn;
   from: PermissionValue;
   to: PermissionValue;
+  /**
+   * Set for an action the connector has not listed yet whose own setting goes, when Wiro may have a default of its
+   * own for it: the value is to without one, and this with one. The save's answer says which.
+   */
+  or?: PermissionValue;
+}
+
+/** Whether an outcome of a move needs a restart: anything but Ask turned into Allow does, and no change does not. */
+function restartsFor(from: PermissionValue, to: PermissionValue): boolean {
+  return to !== from && !(from === 'ask' && to === 'allow');
 }
 
 export interface PermissionPlan {
@@ -379,13 +404,24 @@ export function planChanges(view: PermissionView, changes: PermissionChanges): P
   const hides: string[] = [];
   const shows: string[] = [];
   for (const action of view.actions) {
-    const values = PERMISSION_COLUMNS.map(column => [action[column], effectiveValue(action, after, column)] as const);
-    values.forEach(([from, to], index) => {
-      if (from !== to) moves.push({ action: action.title, name: action.name, column: PERMISSION_COLUMNS[index]!, from, to });
-    });
-    const hiddenAfter = values.every(([, to]) => to === 'block');
-    if (hiddenAfter && !action.hidden) hides.push(action.title);
-    if (!hiddenAfter && action.hidden) shows.push(action.title);
+    const values = PERMISSION_COLUMNS.map(column => [column, action[column], effectiveValue(action, after, column)] as const);
+    for (const [column, from, outcome] of values) {
+      if (from === outcome.to && (outcome.or === undefined || from === outcome.or)) continue;
+      moves.push({
+        action: action.title,
+        name: action.name,
+        column,
+        from,
+        to: outcome.to,
+        ...(outcome.or !== undefined ? { or: outcome.or } : {}),
+      });
+    }
+    // Where a value is one of two, an action counts as hidden only when both outcomes hide it, and as shown again
+    // only when neither does.
+    const hiddenTo = values.every(([, , outcome]) => outcome.to === 'block');
+    const hiddenOr = values.every(([, , outcome]) => (outcome.or ?? outcome.to) === 'block');
+    if (hiddenTo && hiddenOr && !action.hidden) hides.push(action.title);
+    if (!hiddenTo && !hiddenOr && action.hidden) shows.push(action.title);
   }
   for (const column of PERMISSION_COLUMNS) {
     const to = unlistedValue(after, column);
@@ -394,7 +430,8 @@ export function planChanges(view: PermissionView, changes: PermissionChanges): P
   return {
     moves,
     stored: stableJson(before) !== stableJson(after),
-    restarts: moves.some(move => !(move.from === 'ask' && move.to === 'allow')),
+    // A move restarts unless each of its outcomes turns Ask into Allow or leaves the value as it is.
+    restarts: moves.some(move => restartsFor(move.from, move.to) || (move.or !== undefined && restartsFor(move.from, move.or))),
     hides,
     shows,
   };
@@ -460,14 +497,22 @@ export function requestLines(changes: PermissionChanges, titles: ReadonlyMap<str
   return lines;
 }
 
-/** What changes for the agent, grouped by column and by the move, one line each. */
+/**
+ * What changes for the agent, grouped by column and by the move, one line each. A move that can end at one of two
+ * values gets a line of its own that names both.
+ */
 export function moveLines(moves: readonly CellMove[], limit = 12): string[] {
   const groups = new Map<string, CellMove[]>();
+  const eitherWay: CellMove[] = [];
   for (const move of moves) {
+    if (move.or !== undefined) {
+      eitherWay.push(move);
+      continue;
+    }
     const key = `${move.column}:${move.from}:${move.to}`;
     groups.set(key, [...(groups.get(key) ?? []), move]);
   }
-  return [...groups.values()].map((group) => {
+  const lines = [...groups.values()].map((group) => {
     const first = group[0]!;
     const named = group.filter(move => move.action !== null).map(move => move.action as string);
     const unlisted = group.some(move => move.action === null);
@@ -479,4 +524,9 @@ export function moveLines(moves: readonly CellMove[], limit = 12): string[] {
     ].join(' and ');
     return `- ${COLUMN_TITLES[first.column]}: ${VALUE_TITLES[first.from]} to ${VALUE_TITLES[first.to]} for ${who}.`;
   });
+  for (const move of eitherWay) {
+    lines.push(`- ${move.action ?? 'An action'} (not listed yet), ${COLUMN_TITLES[move.column]}: ${VALUE_TITLES[move.from]} `
+      + `to ${VALUE_TITLES[move.to]}, or ${VALUE_TITLES[move.or!]} if Wiro sets a default for it; the save's answer says which.`);
+  }
+  return lines;
 }
