@@ -25,6 +25,7 @@ import {
   addFundsText,
   asPlan,
   balanceShortfall,
+  cardPlanOnceMoreNote,
   centsToUsd,
   comparePlans,
   formatAgentSummaryLines,
@@ -347,7 +348,8 @@ async function planFor(
   const prepaid = raw?.provider === 'prepaid';
   const cancelled = raw?.pendingdowngrade === 'cancel';
   // Agent plans are paid only from the Wiro balance of the agent's workspace: every new charge and every
-  // renewal. A card plan from before that is paid by card through its period, then moves to the balance.
+  // renewal. A card plan from before that is paid by card through its period, then moves to the balance; one
+  // whose period ends within 7 days after Wiro's email announcing the move renews once more by card first.
   const paidFrom: PaidFrom = agent.workspace === 'team' ? 'team_wallet' : 'personal_wallet';
   const balance = planBalanceName(agent.workspace);
   const periodEnd = agent.subscription?.periodEndsAt ?? 'the end of the current period';
@@ -424,15 +426,17 @@ async function planFor(
         };
       }
       if (active) {
-        // A card plan is not renewed by card any more: at its period end it moves to the balance by itself, and
-        // one that was cancelled moves there when the cancellation is undone.
+        // A card plan is not renewed by card any more: at its period end it moves to the balance by itself (one
+        // whose period ends within 7 days after the email announcing the move renews once more by card first),
+        // and one that was cancelled moves there when the cancellation is undone.
         const ends = cancelled || agent.subscription?.atPeriodEnd === 'ends';
         if (!ends) {
           return {
             outcome: 'not_needed',
             message: prepaid
               ? 'The plan is active and renews by itself. Nothing to do.'
-              : `This plan is paid by card through ${periodEnd}. Then it moves to ${balance} and renews from it every 30 days by itself. Nothing to do.`,
+              : `This plan is paid by card through ${periodEnd}. Then it moves to ${balance} and renews from it every 30 days by itself.`
+                + `${cardPlanOnceMoreNote(agent.subscription)} Nothing to do.`,
           };
         }
         // A renewal charges the plan set for it, or the agent's own, at today's price. A wallet cancel keeps a
@@ -966,10 +970,11 @@ export function registerManageAgentBilling(server: McpServer, client: WiroClient
         + 'to add on wiro.ai, with nothing charged. Every plan payment, the automatic renewal included, counts the '
         + 'balance\'s deposits, store revenue and coupon credit that is not limited to certain models; coupon credit '
         + 'limited to models pays no plan. A card plan from before plans were paid from the balance is paid by card '
-        + 'through its period, '
-        + 'then moves to the balance and renews from it; its plan changes are paid from the balance, cancel ends it '
-        + 'with its period instead, and renew undoes that, or brings back a card plan that ended, from the balance. A '
-        + 'card plan whose last payment did not go through has not ended and takes no new plan until it ends. On a team '
+        + 'through its period, then moves to the balance and renews from it (one whose period ends within 7 days '
+        + 'after Wiro\'s email announcing the move renews once more by card first); its plan changes are paid from '
+        + 'the balance, cancel ends it with its period instead, and renew undoes that, or brings back a card plan '
+        + 'that ended, from the balance. A card plan whose last payment did not go through has not ended and takes no '
+        + 'new plan until it ends. On a team '
         + 'agent only a team admin, the organization\'s owner or the person who deployed the agent can pay for it or '
         + 'change its plan; other members are refused and nothing is charged.',
       inputSchema: strictInput({

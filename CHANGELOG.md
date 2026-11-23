@@ -24,7 +24,7 @@ runs `npx @wiro-ai/wiro-mcp@latest` takes it at its next start.
 | `connect_agent_connector` | Connects a connector to an agent. A key connector takes its values and connects at once; values are never shown back. A sign-in returns a link the user opens in their own browser; a sign-in with the service's own OAuth takes the keys of the user's own app in the same call. A connector that offers both takes `mode`. The Wiro AI Models connector (`wiro`) runs with the agent's own Wiro project: connecting it binds the project it names (or this connection's) to the agent as `bind_agent_project` does, with the same checks, and first shows the project, the one it replaces (`replacesProject`), the wallet that pays and the scheduled tasks and custom skills the project turns on. `accounts` saves account ids the user already knows with the connect, such as TikTok Ads advertisers. A sign-in with account choices says to choose them once it finishes; a new sign-in keeps the ones the connection already holds and says so. `status` waits for a sign-in to finish. A call with values missing sends nothing and lists what to ask for. Replacing a working connection, or connecting a Wiro project, takes `confirm: true`. |
 | `set_agent_connector_accounts` | Lists the account choices of a connected connector (ad accounts, pages, properties, channels, apps) with the accounts its connection reaches, and saves the ones the user picks. The agent then acts only on those. It works the same for a connector served by the service itself, such as the advertisers of a TikTok Ads sign-in, and a sign-in the service revoked is answered with the `connect_agent_connector` call that connects it again, with no confirm step first. |
 | `disconnect_agent_connector` | Shows what a disconnect removes and which scheduled tasks stop (a task keeps running while another connector it can use is connected), then removes the connection with `confirm: true` and asks the service to revoke a sign-in where it supports that. |
-| `answer_agent_approval` | Answers an approval card: a Connector action whose permission is Ask, which the agent did not run. `allow` runs this call once, `always` also lets the action run without asking from now on in the columns that ask for it (agent admins only; a Block stays blocked), and `decline` turns this call down. Without `confirm` it shows the card, its exact request and what the answer does; with `confirm: true` it answers, and an approval returns the new turn the agent goes on in, which `get_agent_message` reads. Wiro's refusals (`approval_expired`, `approval_done`, `approval_blocked`, 96, 97) come back with what to do. |
+| `answer_agent_approval` | Answers an approval card: a Connector action whose permission is Ask, which the agent did not run. `allow` runs this call once, `always` also lets the action run without asking from now on in the columns that ask for it (agent admins only; a Block stays blocked, and an action the connector has not listed yet is allowed only this once), and `decline` turns this call down. Without `confirm` it shows the card, its exact request and what the answer does; with `confirm: true` it answers, and an approval returns the new turn the agent goes on in, which `get_agent_message` reads. Wiro's refusals (`approval_expired`, `approval_done`, `approval_blocked`, 96, 97) come back with what to do. |
 | `get_agent_connector_permissions` | Shows what an agent may do with a connector without asking: the three groups (Read-only, Create and send, Change and delete) and every action, each Allow, Ask or Block in Chat and in Autopilot, with its defaults and whether it has a setting of its own, what an action the connector has not listed yet does, and the approval cards a scheduled task, a channel chat or the agent's own work asked for that still wait. Agent admins only. |
 | `set_agent_connector_permissions` | Sets a group or one action in Chat and Autopilot, or resets them. Without `confirm` it shows what changes for the agent, which actions it stops seeing, and whether a running agent restarts (any change other than Ask to Allow); a confirm with the summary's `summary_id` saves exactly that change. |
 
@@ -83,11 +83,12 @@ runs `npx @wiro-ai/wiro-mcp@latest` takes it at its next start.
   `get_agent_message` and `get_agent_conversation` list a message's approval cards under
   `approvals`: `cardid`, `messageguid`, the connector, the action, where it came from, the
   request (`arguments`, or `preview` when it is too long, or `hidden` for a connector whose
-  data terms keep requests out of storage), `status`, `alwaysChanges` and `expiresAt`. A
-  pending card carries the `answer_agent_approval` step that shows it, and it comes first in
-  the next step. The turn Wiro starts after an approval reads as its line, such as "Allowed:
-  Create a post in WordPress", with kind `approval_resume` and `approvalResume`, never as
-  the prompt Wiro wrote for the agent.
+  data terms keep requests out of storage), `status`, `alwaysChanges` and `expiresAt`, and
+  `actionListed: false` when the connector has not listed the action yet, so Always allow
+  can only allow that call once. A pending card carries the `answer_agent_approval` step that
+  shows it, and it comes first in the next step. The turn Wiro starts after an approval
+  reads as its line, such as "Allowed: Create a post in WordPress", with kind
+  `approval_resume` and `approvalResume`, never as the prompt Wiro wrote for the agent.
 - A scheduled task that comes with the agent's template keeps the template's text, which is
   the text the agent runs. `manage_agent_custom_skill` refuses a different text with Wiro's
   sentence and what can still change; the template's own text sent back changes nothing, and
@@ -143,11 +144,13 @@ runs `npx @wiro-ai/wiro-mcp@latest` takes it at its next start.
   `deploy_agent` quote "paid from your Wiro balance" (the team's for a team agent), and no
   card checkout, billing portal or dashboard card payment is offered. A card plan from
   before that is paid by card through its period, then moves to the balance and renews from
-  it: its plan changes are quoted from the balance. `cancel` ends a card plan with its period
-  instead, with nothing charged or refunded, and `renew` undoes that before then or brings
-  back a card plan that has ended, paid from the balance; `delete_agent` waits until a card
-  plan has ended. A charge the balance cannot cover is refused with code 97 and `neededusd`,
-  and the answer says how much to add on wiro.ai, with nothing charged.
+  it (one whose period ends within 7 days after Wiro's email announcing the move renews
+  once more by card first): its plan changes are quoted from the balance. `cancel` ends a
+  card plan with its period instead, with nothing charged or refunded, and `renew` undoes
+  that before then or brings back a card plan that has ended, paid from the balance;
+  `delete_agent` waits until a card plan has ended. A charge the balance cannot cover is
+  refused with code 97 and `neededusd`, and the answer says how much to add on wiro.ai,
+  with nothing charged.
 - A message or a start refused because the agent's included usage is used up and the
   balance is short (code 97 with `agentusage`) keeps Wiro's answer and says where funds are
   added; `neededusd` marks a plan payment refusal instead, and no pack is offered.

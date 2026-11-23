@@ -14,11 +14,13 @@ import {
   APPROVAL_ANSWERS,
   APPROVAL_ANSWERS_EXPLAINED,
   APPROVAL_RIGHTS,
+  actionListedIn,
   approvalHeadline,
   approvalSchema,
   formatApproval,
   toApproval,
   waitingApproval,
+  withActionListed,
   type Approval,
   type ApprovalAnswer,
 } from '../utils/agent-approvals.js';
@@ -89,6 +91,11 @@ function answerText(approval: Approval, answer: ApprovalAnswer): string {
       return 'Allow runs this one call once: the agent goes on with it in a new turn of the chat the card is in, and '
         + 'the approval holds for an hour.';
     case 'always':
+      // An action the connector has not listed yet: Wiro allows the call once and saves no setting.
+      if (approval.actionListed === false) {
+        return `${approval.alwaysChanges} Only an agent admin can choose it: the person who deployed the agent, or a `
+          + 'team admin of its team.';
+      }
       return `Always allow runs this call once now. ${approval.alwaysChanges} A column set to Block stays blocked. `
         + 'Only an agent admin can choose it: the person who deployed the agent, or a team admin of its team.';
     default:
@@ -134,6 +141,23 @@ async function findWaitingCard(client: WiroClient, call: Call, signal: AbortSign
     }
   }
   return undefined;
+}
+
+/**
+ * A waiting card whose message does not say whether the connector has listed its action, with that read from the
+ * connector's permissions: Always allow saves a setting only for an action the connector has listed, and allows any
+ * other call once. Only an agent admin reads them, as only one can choose Always allow; when they cannot be read,
+ * the card stays as it is.
+ */
+async function withListing(client: WiroClient, call: Call, approval: Approval, signal: AbortSignal): Promise<Approval> {
+  if (approval.status !== 'pending' || approval.actionListed !== undefined) return approval;
+  try {
+    const read = await readConnectorPermissions(client, call.agentGuid, approval.connector, signal);
+    return withActionListed(approval, actionListedIn(read.view, approval.tool));
+  } catch (error) {
+    if (signal.aborted) throw error;
+    return approval;
+  }
 }
 
 function base(call: Call) {
@@ -335,13 +359,13 @@ export function registerAnswerAgentApproval(server: McpServer, client: WiroClien
         + 'get_agent_message and get_agent_conversation list these cards under approvals, with messageguid and cardid, '
         + 'and get_agent_connector_permissions lists the ones a scheduled task or the agent\'s own work asked for. '
         + 'answer allow runs this one call once; always runs it and also lets the action run without asking from now '
-        + 'on, in the columns that ask for it now (a column set to Block stays blocked), and needs an agent admin: the '
-        + 'person who deployed the agent or a team admin of its team; decline turns down this one call, and the next '
-        + 'call asks again. Without confirm it shows the card, its request and what the answer does, and changes '
-        + 'nothing: show it to the user and ask. With confirm: true, only after the user answered, it answers. After '
-        + 'an approval the agent goes on in a new turn of the chat the card is in, and get_agent_message with the '
-        + 'returned message id reads its answer. A card waits 24 hours, and an approval is used within an hour. Studio '
-        + 'and the Workflow Agent never ask.',
+        + 'on, in the columns that ask for it now (a column set to Block stays blocked, and an action the connector has '
+        + 'not listed yet is allowed only this once), and needs an agent admin: the person who deployed the agent or a '
+        + 'team admin of its team; decline turns down this one call, and the next call asks again. Without confirm it '
+        + 'shows the card, its request and what the answer does, and changes nothing: show it to the user and ask. '
+        + 'With confirm: true, only after the user answered, it answers. After an approval the agent goes on in a new '
+        + 'turn of the chat the card is in, and get_agent_message with the returned message id reads its answer. A '
+        + 'card waits 24 hours, and an approval is used within an hour. Studio and the Workflow Agent never ask.',
       inputSchema: strictInput({
         agent: z.string().min(1).max(100).describe('The deployed agent\'s guid, from list_my_agents.'),
         messageguid: z.string().min(1).max(100)
@@ -349,7 +373,7 @@ export function registerAnswerAgentApproval(server: McpServer, client: WiroClien
         cardid: z.string().regex(/^[a-z0-9]{12}$/, 'cardid is the card\'s 12-character id, lowercase letters and digits, from the approval.')
           .describe('The card\'s id: cardid of the approval.'),
         answer: z.enum(APPROVAL_ANSWERS)
-          .describe('allow (this call once), always (this call, and the action runs without asking from now on; agent admins only) or decline (turn down this call).'),
+          .describe('allow (this call once), always (this call, and the action runs without asking from now on; an action the connector has not listed yet is allowed only this once; agent admins only) or decline (turn down this call).'),
         confirm: z.boolean().default(false)
           .describe('false (default) shows the card and what the answer does, and changes nothing. true answers it: set it only after the user answered.'),
       }),
@@ -379,7 +403,7 @@ export function registerAnswerAgentApproval(server: McpServer, client: WiroClien
             + 'the agent\'s connectors that it can read. Check the ids with get_agent_conversation, or with '
             + 'get_agent_connector_permissions, which an agent admin reads. Nothing was answered.');
         }
-        return preview(call, found);
+        return preview(call, await withListing(client, call, found, extra.signal));
       } catch (error) {
         return errorResult(error);
       }

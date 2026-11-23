@@ -3312,16 +3312,26 @@ test('manage_agent_billing undoes a card plan\'s cancellation from the balance, 
       assert.deepEqual(done.structuredContent.result, { chargedUsd: 0, renewal: 'undo_cancel' });
     });
   }
-  // A card plan that is not set to end moves to the balance at its period end, by itself.
+  // A card plan that is not set to end moves to the balance at its period end, by itself. One not set to move yet
+  // may be one whose period ends within 7 days after Wiro's email announcing the move: that one renews once more by
+  // card first, which the answer cannot tell, so it says so.
   for (const stripecancelatperiodend of [false, undefined]) {
     const renewing = fakeClient({ '/UserAgent/Detail': detailResponse(agentRow({ subscription: card, stripecancelatperiodend })) });
     await withClient(renewing, async client => {
       const renew = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'renew' });
       assert.equal(renew.structuredContent.outcome, 'not_needed');
-      assert.match(renew.structuredContent.message, /^This plan is paid by card through \S+\. Then it moves to your Wiro balance and renews from it every 30 days by itself\. Nothing to do\.$/);
+      assert.match(renew.structuredContent.message, /^This plan is paid by card through \S+\. Then it moves to your Wiro balance and renews from it every 30 days by itself\. If this period ends within 7 days after Wiro's email announcing the move, it renews once more by card first\. Nothing to do\.$/);
       assert.equal(renewing.called('/UserAgent/RenewSubscription').length, 0);
     });
   }
+  // A plan already set to move does so at this period end.
+  const moving = fakeClient({ '/UserAgent/Detail': detailResponse(agentRow({ subscription: subscription({ provider: 'stripe', nextprovider: 'prepaid' }), stripecancelatperiodend: true })) });
+  await withClient(moving, async client => {
+    const renew = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'renew' });
+    assert.equal(renew.structuredContent.outcome, 'not_needed');
+    assert.match(renew.structuredContent.message, /^This plan is paid by card through \S+\. Then it moves to your Wiro balance and renews from it every 30 days by itself\. Nothing to do\.$/);
+    assert.equal(moving.called('/UserAgent/RenewSubscription').length, 0);
+  });
   // A card plan that ended renews from the balance, at its plan's price today.
   const ended = fakeClient({
     '/UserAgent/Detail': detailResponse(agentRow({ status: 0, subscription: subscription({ provider: 'stripe', status: 'expired' }) })),
@@ -3705,8 +3715,16 @@ test('a card plan moving to the balance is cancelled with its period, and its ag
   await withClient(fakeClient({}), async client => {
     const { tools } = await client.listTools();
     const description = tools.find(tool => tool.name === 'manage_agent_billing').description;
-    assert.match(description, /Agent plans are paid only from the Wiro balance: no card payment is taken, and a quote refused because the balance is short says how much to add on wiro\.ai, with nothing charged\. Every plan payment, the automatic renewal included, counts the balance's deposits, store revenue and coupon credit that is not limited to certain models; coupon credit limited to models pays no plan\. A card plan from before plans were paid from the balance is paid by card through its period, then moves to the balance and renews from it; its plan changes are paid from the balance, cancel ends it with its period instead, and renew undoes that, or brings back a card plan that ended, from the balance\./);
+    assert.match(description, /Agent plans are paid only from the Wiro balance: no card payment is taken, and a quote refused because the balance is short says how much to add on wiro\.ai, with nothing charged\. Every plan payment, the automatic renewal included, counts the balance's deposits, store revenue and coupon credit that is not limited to certain models; coupon credit limited to models pays no plan\. A card plan from before plans were paid from the balance is paid by card through its period, then moves to the balance and renews from it \(one whose period ends within 7 days after Wiro's email announcing the move renews once more by card first\); its plan changes are paid from the balance, cancel ends it with its period instead, and renew undoes that, or brings back a card plan that ended, from the balance\./);
     assert.doesNotMatch(description, /dashboard|portal|Billing in/);
+  });
+  // A card plan not set to move yet may renew once more by card first, and the blocker says so.
+  const notMoving = fakeClient({ '/UserAgent/Detail': detailResponse(agentRow({ status: 0, subscription: subscription({ provider: 'stripe' }), stripecancelatperiodend: false })) });
+  await withClient(notMoving, async client => {
+    const remove = await call(client, 'delete_agent', { agent_guid: 'ua-1', confirm: true });
+    assert.equal(remove.structuredContent.deleted, false);
+    assert.match(remove.structuredContent.blockers[0], /^The plan is paid by card through \S+, then moves to the Wiro balance and renews from it\. If this period ends within 7 days after Wiro's email announcing the move, it renews once more by card first\. Cancel it first with manage_agent_billing action cancel: it then ends with its period, and the agent can be deleted once it has ended\. The rest of the paid period is not refunded\.$/);
+    assert.equal(notMoving.called('/UserAgent/Delete').length, 0);
   });
   const switching = subscription({ provider: 'stripe', nextprovider: 'prepaid' });
   for (const teamguid of [null, 'team-1']) {
@@ -4397,11 +4415,13 @@ test('control_agent stop says what happens with this agent\'s plan', async () =>
   assert.match(cancelled, new RegExp(`already cancelled: it ends after ${end.replace(/[.]/g, '\\.')} and does not renew`));
   assert.doesNotMatch(cancelled, /still renews|starts the agent again\. /);
 
-  // A card plan moves to the balance at its period end and renews from there, whatever the card would have done.
+  // A card plan moves to the balance at its period end and renews from there, whatever the card would have done,
+  // unless its period ends within 7 days after Wiro's email announcing the move: then it renews once more by card
+  // first. A plan not set to move yet may be one of those, so the stop says so.
   const cardUnknown = await stop(subscription({ provider: 'stripe' }));
   const cardRenews = await stop(subscription({ provider: 'stripe' }), { stripecancelatperiodend: false });
   for (const card of [cardUnknown, cardRenews]) {
-    assert.match(card, new RegExp(`it is paid by card through ${end.replace(/[.]/g, '\\.')}, then moves to the Wiro balance and renews from it every 30 days, which starts the agent again\\. Cancel it with manage_agent_billing to stop paying: it then ends with its period\\.$`));
+    assert.match(card, new RegExp(`it is paid by card through ${end.replace(/[.]/g, '\\.')}, then moves to the Wiro balance and renews from it every 30 days, which starts the agent again\\. If this period ends within 7 days after Wiro's email announcing the move, it renews once more by card first\\. Cancel it with manage_agent_billing to stop paying: it then ends with its period\\.$`));
     assert.doesNotMatch(card, /dashboard/);
   }
 
@@ -4409,12 +4429,12 @@ test('control_agent stop says what happens with this agent\'s plan', async () =>
   assert.match(cardEnds, /already cancelled/);
 
   const switching = await stop(subscription({ provider: 'stripe', nextprovider: 'prepaid' }));
-  assert.match(switching, new RegExp(`it is paid by card through ${end.replace(/[.]/g, '\\.')}, then moves to the Wiro balance and renews from it every 30 days`));
-  assert.doesNotMatch(switching, /a wallet plan/);
+  assert.match(switching, new RegExp(`it is paid by card through ${end.replace(/[.]/g, '\\.')}, then moves to the Wiro balance and renews from it every 30 days, which starts the agent again\\. Cancel it with manage_agent_billing`));
+  assert.doesNotMatch(switching, /a wallet plan|once more by card/);
   // The plan still renews from the balance when a row carries the card subscription's end flag.
   const switchingTeam = await stop(subscription({ provider: 'stripe', nextprovider: 'prepaid' }), { stripecancelatperiodend: true });
   assert.match(switchingTeam, /then moves to the Wiro balance and renews from it every 30 days/);
-  assert.doesNotMatch(switchingTeam, /already cancelled/);
+  assert.doesNotMatch(switchingTeam, /already cancelled|once more by card/);
 
   const ended = await stop(subscription({ status: 'expired' }));
   assert.match(ended, /no active plan, so no renewal starts it again/);

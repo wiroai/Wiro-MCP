@@ -607,8 +607,14 @@ test('the agents playbook says what a plan change does at each renewal, not when
 test('the agents playbook says a card plan whose payment did not go through takes no new plan', () => {
   assert.match(PLAYBOOKS.agents, /`subscribe` starts a plan for an agent whose plan has ended or that never had one/);
   assert.match(PLAYBOOKS.agents, /A card plan whose last payment did not go through \(past_due, then unpaid\) has not ended: `subscribe` starts no plan beside it, and no action here renews, changes or cancels it; once it has ended, a new plan is paid from the balance\./);
-  assert.match(PLAYBOOKS.agents, /- Agent plans are paid only from the Wiro balance, and no tool takes a card payment\. A card plan from before that is paid by card through its period, then moves to the balance and renews from it/);
+  assert.match(PLAYBOOKS.agents, /- Agent plans are paid only from the Wiro balance, and no tool takes a card payment\. A card plan from before that is paid by card through its period, then moves to the balance and renews from it \(one whose period ends within 7 days after Wiro's email announcing the move renews once more by card first\): its plan changes are paid from the balance\./);
   assert.doesNotMatch(PLAYBOOKS.agents, /fixes the payment in the dashboard by paying/);
+});
+
+test('the agents playbook says which runs read Autopilot, and that Always allow saves nothing for an action not listed yet', () => {
+  assert.match(PLAYBOOKS.agents, /and Autopilot, its scheduled tasks and the work before and after a voice call\. Any other work it does on its own, such as sub-agents and work in the background, takes the stricter of Chat and Autopilot for each action\./);
+  assert.doesNotMatch(PLAYBOOKS.agents, /anything it does on its own/);
+  assert.match(PLAYBOOKS.agents, /always also lets the action run without asking from now on \(agent admins only; a Block stays blocked, and an action the connector has not listed yet is allowed only this once\)/);
 });
 
 test('the agents playbook says a card plan is cancelled with its period, and renew undoes that or brings it back', () => {

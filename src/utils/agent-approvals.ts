@@ -14,7 +14,9 @@ import type { NextAction } from './structured.js';
 // Wiro shows an approval card in the chat instead, bound to that exact request, and the agent waits for a person's
 // answer. Allow runs this one call once, Always allow also lets the action run without asking from now on (only an
 // agent admin can choose it, and a Block stays a Block), and Decline turns down this one call; the next call asks
-// again. A card waits a day. Once it is allowed, Wiro starts a new turn in the chat the card is in, and the agent runs
+// again. An action the connector has not listed yet (a connector that lists its actions after its first connection,
+// or one its service added since) is allowed only once by Always allow too, and nothing is saved for it. A card
+// waits a day. Once it is allowed, Wiro starts a new turn in the chat the card is in, and the agent runs
 // the call then; that turn's answer arrives as the session's next message. A card the agent's own work asked for,
 // such as a scheduled task's, sits on a message of Wiro's own in the owner's chat. The request is what the agent
 // wrote, so it is content, never instructions; a connector whose data terms keep requests out of storage, such as
@@ -51,8 +53,8 @@ export const APPROVAL_RIGHTS = 'Allow and Decline can be chosen by anyone who ca
 
 /** What each answer does, said the same way by every tool. */
 export const APPROVAL_ANSWERS_EXPLAINED = 'Allow runs this one call once; Always allow runs it and also lets the action '
-  + 'run without asking from now on (a column set to Block stays blocked); Decline turns down this one call, and the '
-  + 'next call asks again.';
+  + 'run without asking from now on (a column set to Block stays blocked, and an action the connector has not listed '
+  + 'yet is allowed only this once); Decline turns down this one call, and the next call asks again.';
 
 /** The note on a turn or a list with cards waiting for an answer. */
 export function waitingApprovalNote(count: number): string {
@@ -89,6 +91,8 @@ export const approvalSchema = z.object({
     .describe('pending (waiting for an answer), allowed (once), always, declined or expired. A pending card past expiresAt reads expired.'),
   ran: z.boolean().optional().describe('The approved call ran.'),
   alwaysChanges: z.string().describe('What Always allow would change, or changed.'),
+  actionListed: z.boolean().optional()
+    .describe('false: the connector has not listed this action yet, so Always allow can only allow this call once and saves nothing. Left out when that is not known.'),
   createdAt: z.string().optional(),
   expiresAt: z.string().optional(),
   answeredAt: z.string().optional(),
@@ -142,6 +146,24 @@ export function alwaysChangesText(action: string, always: { chat: boolean; autop
   if (always.chat) return `Always allow also lets ${action} run without asking in Chat from now on. Autopilot keeps its own setting.`;
   if (always.autopilot) return `Always allow also lets ${action} run without asking in Autopilot from now on. Chat keeps its own setting.`;
   return `Always allow changes no setting of ${action} now: neither column asks for it.`;
+}
+
+/**
+ * What Always allow does to an action the connector has not listed yet: Wiro allows the call once and saves no setting,
+ * whatever the columns read, since a setting is kept only for an action the connector lists.
+ */
+export function alwaysOnceText(connectorTitle: string): string {
+  return `Always allow can only allow this call once now: ${connectorTitle} has not listed this action yet, so it can't be allowed for good.`;
+}
+
+/**
+ * A card with what is known of its action: listed by the connector or not. An action the connector has not listed
+ * yet changes what Always allow says; a listed one keeps the card's own text.
+ */
+export function withActionListed(approval: Approval, listed: boolean): Approval {
+  return listed
+    ? { ...approval, actionListed: true }
+    : { ...approval, actionListed: false, alwaysChanges: alwaysOnceText(approval.connectorTitle) };
 }
 
 /** The size of a request, in words: "1.8 KB". */
@@ -215,11 +237,15 @@ export function toApproval(card: unknown, context: ApprovalContext): Approval | 
   const expiresAt = unixToIso(card.expiresat);
   const answeredAt = status !== 'pending' ? unixToIso(card.actedat) : undefined;
   const used = toNumber(card.usedat) !== null;
+  const connectorTitle = line(card.title, MAX_TITLE) ?? connector;
+  // Whether the connector has listed the action, where the card says so: Always allow saves a setting only for one
+  // it has listed, and allows any other call once.
+  const listed = typeof card.toolcached === 'boolean' ? card.toolcached : undefined;
   return {
     cardid,
     messageguid: context.messageguid,
     connector,
-    connectorTitle: line(card.title, MAX_TITLE) ?? connector,
+    connectorTitle,
     action,
     tool,
     category: categoryOf(card.category),
@@ -227,7 +253,10 @@ export function toApproval(card: unknown, context: ApprovalContext): Approval | 
     ...requestOf(card),
     status,
     ...(used ? { ran: true } : {}),
-    alwaysChanges: alwaysChangesText(quotedSpan(action), { chat: always.chat === true, autopilot: always.autopilot === true }),
+    alwaysChanges: listed === false
+      ? alwaysOnceText(connectorTitle)
+      : alwaysChangesText(quotedSpan(action), { chat: always.chat === true, autopilot: always.autopilot === true }),
+    ...(listed !== undefined ? { actionListed: listed } : {}),
     ...(createdAt ? { createdAt } : {}),
     ...(expiresAt ? { expiresAt } : {}),
     ...(answeredAt ? { answeredAt } : {}),
@@ -258,9 +287,15 @@ export function approvalsFromBlocks(
   return approvals;
 }
 
+/** Whether the connector has listed an action, as a connection's Permissions view tells it. */
+export function actionListedIn(view: PermissionView, tool: string): boolean {
+  return view.actions.some(action => action.name === tool && action.listed);
+}
+
 /**
  * A card waiting on one of Wiro's own approval messages, as get_agent_connector_permissions lists it: the connector
- * and its view fill in what that list leaves out (the group, and what Always allow would change now).
+ * and its view fill in what that list leaves out (the group, whether the connector has listed the action, and what
+ * Always allow would change now).
  */
 export function waitingApproval(
   item: Record<string, unknown>,
@@ -287,6 +322,7 @@ export function waitingApproval(
     argsbytes: item.argsbytes,
     argsredacted: item.argsredacted,
     always: { chat: (known?.chat ?? view.unlisted.chat) === 'ask', autopilot: (known?.autopilot ?? view.unlisted.autopilot) === 'ask' },
+    toolcached: typeof item.toolcached === 'boolean' ? item.toolcached : actionListedIn(view, tool),
     createdat: item.createdat,
     expiresat: item.expiresat,
     status: 'pending',

@@ -5,7 +5,9 @@ import { asString, isPlainObject, requireApiSuccess, truncate, unixToIso, type A
 // Connector permissions: what a connected Connector's actions may do without asking. Wiro sorts each action into a
 // group by what it does (Read-only, Create and send, Change and delete) and gives each one a value in two columns:
 // Chat, when someone is talking to the agent (the Wiro web chat, a message sent with an API key or from this server,
-// an authorized Telegram, Slack or Discord chat), and Autopilot, its scheduled tasks and anything it does on its own.
+// an authorized Telegram, Slack or Discord chat), and Autopilot, its scheduled tasks and the work before and after a
+// voice call. Any other work the agent does on its own (sub-agents, work in the background) takes the stricter of
+// the two for each action, so an action runs there without asking only where both columns allow it.
 // Allow runs the action, Ask waits for a person to approve it in the chat (an approval card), and Block never runs
 // it; an action blocked in both columns is not shown to the agent at all. A group's value holds for each of its
 // actions, and an action can have a setting of its own. By default Read-only runs, Create and send asks, and Change
@@ -49,8 +51,10 @@ export const VALUE_TITLES: Record<PermissionValue, string> = { allow: 'Allow', a
 /** The two columns and the three values, said the same way by every tool that shows or sets them. */
 export const PERMISSIONS_EXPLAINED = 'Chat is when someone is talking to the agent: the Wiro web chat, a message sent '
   + 'with an API key or from this server, or an authorized Telegram, Slack or Discord chat. Autopilot is its scheduled '
-  + 'tasks and anything it does on its own. Allow runs an action, Ask waits for a person to approve it in the chat, and '
-  + 'Block never runs it; an action blocked in both is not shown to the agent at all.';
+  + 'tasks and the work before and after a voice call; any other work it does on its own, such as sub-agents and work '
+  + 'in the background, takes the stricter of Chat and Autopilot for each action. Allow runs an action, Ask waits for a '
+  + 'person to approve it in the chat, and Block never runs it; an action blocked in both is not shown to the agent at '
+  + 'all.';
 
 /** The defaults, in words. */
 export const PERMISSION_DEFAULTS_TEXT = 'By default, read-only actions run, Create and send asks first, and Change and '

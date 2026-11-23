@@ -33,7 +33,7 @@ const cellsSchema = z.strictObject({
   chat: permissionValueSchema.nullable().optional()
     .describe('allow, ask or block when someone is talking to the agent; null removes the setting.'),
   autopilot: permissionValueSchema.nullable().optional()
-    .describe('allow, ask or block in scheduled tasks and the agent\'s own work; null removes the setting.'),
+    .describe('allow, ask or block in scheduled tasks and the work before and after a voice call (other work the agent does on its own takes the stricter of chat and autopilot); null removes the setting.'),
 });
 
 const outputSchema = {
@@ -99,8 +99,8 @@ function allowWarning(plan: PermissionPlan): string | undefined {
   const toAllow = plan.moves.filter(move => move.to === 'allow' && move.from !== 'allow');
   if (toAllow.length === 0) return undefined;
   const autopilot = toAllow.some(move => move.column === 'autopilot');
-  return `Allow lets ${toAllow.length === 1 ? 'that action' : 'those actions'} run without anyone approving them`
-    + `${autopilot ? ', in Autopilot also from scheduled tasks and the agent\'s own work, with no one watching' : ''}. Make sure the user wants that.`;
+  return `Allow lets ${toAllow.length === 1 ? 'that action run without anyone approving it' : 'those actions run without anyone approving them'}`
+    + `${autopilot ? ', in Autopilot also from scheduled tasks and the work before and after a voice call, with no one watching' : ''}. Make sure the user wants that.`;
 }
 
 function summaryResult(input: Input, read: ConnectorPermissions, changes: PermissionChanges, plan: PermissionPlan, id: string, lead?: string) {

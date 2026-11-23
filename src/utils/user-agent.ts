@@ -325,6 +325,20 @@ export function toSubscription(value: unknown, cardEnds?: unknown): AgentSubscri
   };
 }
 
+/**
+ * A card plan from before agent plans were paid from the Wiro balance moves to the balance at its period end, except
+ * one whose period ends within 7 days after Wiro's email announcing the move: that one renews once more by card
+ * first. A plan already set to move (switchingToWallet) moves at this period end; for any other card plan the answer
+ * cannot tell, so what is said of it names the exception.
+ */
+const CARD_PLAN_ONCE_MORE = 'If this period ends within 7 days after Wiro\'s email announcing the move, it '
+  + 'renews once more by card first.';
+
+/** The exception a card plan's text adds, with a leading space; none for a plan already set to move. */
+export function cardPlanOnceMoreNote(plan: Pick<AgentSubscription, 'switchingToWallet'> | null | undefined): string {
+  return plan?.switchingToWallet ? '' : ` ${CARD_PLAN_ONCE_MORE}`;
+}
+
 // The plan statuses Wiro counts as ended. Every other status is a plan that has not ended, a card plan
 // whose renewal payment did not go through included, and Wiro starts no second plan beside it.
 const ENDED_PLAN_STATUSES: ReadonlySet<string> = new Set(['expired', 'cancelled', 'refunded']);

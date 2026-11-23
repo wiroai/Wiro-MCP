@@ -11,6 +11,7 @@ import {
   aiUsageText,
   asPlan,
   agentSummarySchema,
+  cardPlanOnceMoreNote,
   describeAgentStatus,
   isTransitionalStatus,
   isUnsettledPlan,
@@ -61,10 +62,11 @@ function planAfterStop(plan: AgentSubscription | null): string {
     return 'Stopping does not pause the plan: a wallet plan still renews every 30 days and starts the agent again. '
       + 'Cancel it with manage_agent_billing to stop paying.';
   }
-  // A card plan is not renewed by card any more: it moves to the Wiro balance at its period end.
+  // A card plan is not renewed by card any more: it moves to the Wiro balance at its period end, or renews once
+  // more by card first when its period ends within 7 days after the email announcing the move.
   return `Stopping does not pause the plan: it is paid by card through ${periodEnd}, then moves to the Wiro balance `
-    + 'and renews from it every 30 days, which starts the agent again. Cancel it with manage_agent_billing to stop '
-    + 'paying: it then ends with its period.';
+    + `and renews from it every 30 days, which starts the agent again.${cardPlanOnceMoreNote(plan)} Cancel it with `
+    + 'manage_agent_billing to stop paying: it then ends with its period.';
 }
 
 /** What a finished wait found, in words that fit the action. A stop that ended stopped needs none: the status line says so. */

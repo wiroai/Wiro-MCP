@@ -354,8 +354,10 @@ never in a message, and a sign-in or a Wiro project is never connected by a repl
 Each connected connector's actions fall into three groups: Read-only, Create and send, and
 Change and delete. Each group, and each action, has a permission in two columns: Chat, when
 someone is talking to the agent (the Wiro web chat, a message sent with an API key or from this
-server, or a Telegram, Slack or Discord chat), and Autopilot, its scheduled tasks and anything it
-does on its own. Allow runs the action, Ask waits for a person's approval, and Block never runs it.
+server, or a Telegram, Slack or Discord chat), and Autopilot, its scheduled tasks and the work
+before and after a voice call. Any other work it does on its own, such as sub-agents and work in
+the background, takes the stricter of the two for each action. Allow runs the action, Ask waits
+for a person's approval, and Block never runs it.
 By default, read-only actions run, Create and send asks, and Change and delete asks in Chat and
 never runs in Autopilot. An action that asks does not run: the reply lists it under `approvals`
 with its exact request, and `answer_agent_approval` answers it once you have decided. After an

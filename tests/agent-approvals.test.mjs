@@ -298,18 +298,24 @@ test('get_agent_conversation lists cards, shortens long requests, and reads a re
 // ---------------------------------------------------------------------------
 
 test('answer_agent_approval without confirm shows the card and what the answer does, and answers nothing', async () => {
-  const fake = fakeClient({ '/UserAgent/Message/Detail': { result: true, errors: [], data: messageRow() } });
+  const fake = fakeClient({
+    '/UserAgent/Message/Detail': { result: true, errors: [], data: messageRow() },
+    // The card does not say whether WordPress has listed the action, so its permissions tell: create_post is listed.
+    '/UserAgent/ConnectorPermissions': () => permissionsAnswer(),
+  });
   await withClient(fake, async (client) => {
     const result = await call(client, 'answer_agent_approval', { agent: AGENT, messageguid: MESSAGE, cardid: CARD, answer: 'always' });
     assert.notEqual(result.isError, true, textOf(result));
     const output = result.structuredContent;
     assert.equal(output.outcome, 'preview');
     assert.equal(output.approval.cardid, CARD);
+    assert.equal(output.approval.actionListed, true);
     assert.match(output.message, /^`Create a post` in WordPress waits for an answer until [^,]+, and nothing has changed yet\. Always allow runs this call once now\. Always allow also lets `Create a post` run without asking from now on, in Chat and in Autopilot\. A column set to Block stays blocked\. Only an agent admin can choose it/);
     assert.deepEqual(output.nextAction.arguments, { agent: AGENT, messageguid: MESSAGE, cardid: CARD, answer: 'always', confirm: true });
     assert.deepEqual(fake.callsTo('/UserAgent/Message/Detail')[0].body, { useragentguid: AGENT, messageguid: MESSAGE });
+    assert.deepEqual(fake.callsTo('/UserAgent/ConnectorPermissions').map(item => item.body), [{ useragentguid: AGENT, slug: 'wordpress' }]);
     assert.equal(fake.callsTo('/UserAgent/Message/ApprovalCardAct').length, 0);
-    assert.match(textOf(result), /What each answer does: Allow runs this one call once; Always allow runs it/);
+    assert.match(textOf(result), /What each answer does: Allow runs this one call once; Always allow runs it and also lets the action run without asking from now on \(a column set to Block stays blocked, and an action the connector has not listed yet is allowed only this once\)/);
     assertNoSecrets(result);
   });
 });
@@ -521,6 +527,7 @@ test('get_agent_connector_permissions shows the groups, each action and the card
     assert.deepEqual(output.waiting.map(item => [item.cardid, item.messageguid, item.origin, item.category, item.status]), [[CARD, SYSTEM_MESSAGE, 'background', 'create', 'pending']]);
     // Create a page asks in both columns now, so Always allow would let it run in both.
     assert.match(output.waiting[0].alwaysChanges, /from now on, in Chat and in Autopilot\.$/);
+    assert.equal(output.waiting[0].actionListed, true);
     assert.deepEqual(output.nextAction.arguments, { agent: AGENT, messageguid: SYSTEM_MESSAGE, cardid: CARD, answer: 'allow' });
     const text = textOf(result);
     assert.match(text, /### Read-only \(2 actions\): Chat Allow, Autopilot Allow\n\nLooks things up and changes nothing\.\n- As the group: `get_post`, `list_posts`/);
@@ -528,6 +535,9 @@ test('get_agent_connector_permissions shows the groups, each action and the card
     assert.match(text, /- `Create a post` \(`create_post`\): Chat Ask, Autopilot Allow \(its own setting in Autopilot\)/);
     assert.match(text, /Actions the connector has not listed yet: Chat Ask, Autopilot Block, as Change and delete/);
     assert.match(text, /### Waiting for approval/);
+    // Which runs read which column: only scheduled tasks and voice call work read Autopilot alone.
+    assert.match(text, /Autopilot is its scheduled tasks and the work before and after a voice call; any other work it does on its own, such as sub-agents and work in the background, takes the stricter of Chat and Autopilot for each action\./);
+    assert.doesNotMatch(text, /anything it does on its own/);
     assertNoSecrets(result);
   });
 });
@@ -689,4 +699,169 @@ test('a change is worked out the way Wiro applies it', () => {
   const tightened = planChanges(view, { tools: { get_post: { chat: 'block', autopilot: 'block' } } });
   assert.deepEqual(tightened.hides, ['Get a post']);
   assert.equal(planChanges(view, { tools: { get_post: { chat: null } } }).stored, false);
+});
+
+// ---------------------------------------------------------------------------
+// Always allow on an action the connector has not listed yet
+// ---------------------------------------------------------------------------
+
+const ONCE_ONLY = (title) => `Always allow can only allow this call once now: ${title} has not listed this action yet, so it can't be allowed for good.`;
+
+test('answer_agent_approval says Always allow only allows once an action the connector has not listed yet', async () => {
+  const cases = [
+    // A connector that lists its actions after its first connection: the card names the action as the agent asked for it.
+    {
+      label: 'no actions listed yet',
+      stored: card({ connector: 'gitbook', title: 'GitBook', tool: 'edit-page', tooltitle: 'edit-page', category: 'change' }),
+      answer: { ...permissionsAnswer({ ...VIEW, tools: [] }), connector: { slug: 'gitbook', title: 'GitBook', toolscached: false, catalogstatus: 'active' } },
+      title: 'GitBook',
+    },
+    // An action the service added after WordPress's actions were listed.
+    { label: 'an action added later', stored: card({ tool: 'schedule_post', tooltitle: 'Schedule a post' }), answer: permissionsAnswer(), title: 'WordPress' },
+    // An action with a setting of its own that the connector still does not list.
+    {
+      label: 'an own setting, not listed',
+      stored: card({ tool: 'new_tool', tooltitle: 'new_tool', category: 'change' }),
+      answer: permissionsAnswer({ ...VIEW, tools: [...VIEW.tools, tool('new_tool', 'new_tool', 'change', 'ask', 'block', { cached: false })] }),
+      title: 'WordPress',
+    },
+  ];
+  for (const { label, stored, answer, title } of cases) {
+    const fake = fakeClient({
+      '/UserAgent/Message/Detail': { result: true, errors: [], data: messageRow({ timeline: [approvalBlock(stored)] }) },
+      '/UserAgent/ConnectorPermissions': structuredClone(answer),
+    });
+    await withClient(fake, async (client) => {
+      const result = await call(client, 'answer_agent_approval', { agent: AGENT, messageguid: MESSAGE, cardid: CARD, answer: 'always' });
+      assert.notEqual(result.isError, true, `${label}: ${textOf(result)}`);
+      const { approval, message, outcome } = result.structuredContent;
+      assert.equal(outcome, 'preview', label);
+      assert.equal(approval.actionListed, false, label);
+      assert.equal(approval.alwaysChanges, ONCE_ONLY(title), label);
+      assert.match(message, new RegExp(`and nothing has changed yet\\. Always allow can only allow this call once now: ${title} has not listed this action yet, so it can't be allowed for good\\. Only an agent admin can choose it: the person who deployed the agent, or a team admin of its team\\.`), label);
+      assert.doesNotMatch(message, /from now on|Always allow runs this call once now/, label);
+      const text = textOf(result);
+      assert.ok(text.includes(`- ${ONCE_ONLY(title)} Only an agent admin can choose it.`), `${label}: ${text}`);
+      assert.deepEqual(fake.callsTo('/UserAgent/ConnectorPermissions').map(item => item.body), [{ useragentguid: AGENT, slug: stored.connector }], label);
+      assert.equal(fake.callsTo('/UserAgent/Message/ApprovalCardAct').length, 0, label);
+    });
+  }
+  // Confirmed, Wiro allows the call once and saves no setting: its answer is passed on as it says it.
+  const act = fakeClient({
+    '/UserAgent/Message/ApprovalCardAct': {
+      result: true,
+      errors: [],
+      approval: card({ connector: 'gitbook', title: 'GitBook', tool: 'edit-page', tooltitle: 'edit-page', category: 'change', status: 'allowed', actedat: NOW, actedby: ACTOR, resume: { status: 'queued', messageguid: RESUME_MESSAGE } }),
+      summary: 'Allowed once. GitBook\'s actions are listed after its first connection, so this one can\'t be allowed for good yet.',
+      resume: { status: 'queued', messageguid: RESUME_MESSAGE, sessionkey: 'default' },
+    },
+  });
+  await withClient(act, async (client) => {
+    const result = await call(client, 'answer_agent_approval', { agent: AGENT, messageguid: MESSAGE, cardid: CARD, answer: 'always', confirm: true });
+    assert.notEqual(result.isError, true, textOf(result));
+    const output = result.structuredContent;
+    assert.match(output.message, /^Allowed once\. GitBook's actions are listed after its first connection, so this one can't be allowed for good yet\. The agent goes on with it in a new turn/);
+    assert.equal(output.permissions, undefined);
+    assert.equal(output.approval.status, 'allowed');
+    assert.match(textOf(result), /- Status: Allowed once/);
+  });
+});
+
+test('a card that says whether the connector has listed its action is read as it says, with no permissions read', async () => {
+  const listed = card({ toolcached: true });
+  const notListed = card({ id: 'n0tl1st00001', toolcached: false });
+  const unknown = card({ id: 'unkn0wn00001', toolcached: 'yes' });
+  const row = messageRow({ timeline: [approvalBlock(listed, 0), approvalBlock(notListed, 1), approvalBlock(unknown, 2)] });
+  const fake = fakeClient({ '/UserAgent/Message/Detail': { result: true, errors: [], data: row } });
+  await withClient(fake, async (client) => {
+    const read = await call(client, 'get_agent_message', { agent: AGENT, message_id: MESSAGE, wait_seconds: 0 });
+    assert.notEqual(read.isError, true, textOf(read));
+    const [first, second, third] = read.structuredContent.message.approvals;
+    assert.deepEqual([first.actionListed, first.alwaysChanges], [true, 'Always allow also lets `Create a post` run without asking from now on, in Chat and in Autopilot.']);
+    assert.deepEqual([second.actionListed, second.alwaysChanges], [false, ONCE_ONLY('WordPress')]);
+    // A value that is not true or false says nothing.
+    assert.equal('actionListed' in third, false);
+    assert.equal(third.alwaysChanges, first.alwaysChanges);
+    assert.ok(textOf(read).includes(`- ${ONCE_ONLY('WordPress')} Only an agent admin can choose it.`));
+
+    const preview = await call(client, 'answer_agent_approval', { agent: AGENT, messageguid: MESSAGE, cardid: 'n0tl1st00001', answer: 'always' });
+    assert.notEqual(preview.isError, true, textOf(preview));
+    assert.equal(preview.structuredContent.approval.actionListed, false);
+    assert.match(preview.structuredContent.message, /Always allow can only allow this call once now: WordPress has not listed this action yet/);
+    const listedPreview = await call(client, 'answer_agent_approval', { agent: AGENT, messageguid: MESSAGE, cardid: CARD, answer: 'always' });
+    assert.match(listedPreview.structuredContent.message, /Always allow runs this call once now\. Always allow also lets `Create a post` run without asking from now on/);
+    assert.equal(fake.callsTo('/UserAgent/ConnectorPermissions').length, 0, 'the card already said');
+  });
+});
+
+test('answer_agent_approval keeps the card as it is when the connector\'s permissions cannot be read, as for a member', async () => {
+  const fake = fakeClient({
+    '/UserAgent/Message/Detail': { result: true, errors: [], data: messageRow() },
+    '/UserAgent/ConnectorPermissions': { result: false, errors: [{ code: 97, message: 'Only a team admin can perform this action on a team-owned agent.' }] },
+  });
+  await withClient(fake, async (client) => {
+    const result = await call(client, 'answer_agent_approval', { agent: AGENT, messageguid: MESSAGE, cardid: CARD, answer: 'allow' });
+    assert.notEqual(result.isError, true, textOf(result));
+    const { approval, message, outcome } = result.structuredContent;
+    assert.equal(outcome, 'preview');
+    assert.equal('actionListed' in approval, false);
+    assert.equal(approval.alwaysChanges, 'Always allow also lets `Create a post` run without asking from now on, in Chat and in Autopilot.');
+    assert.match(message, /Allow runs this one call once: the agent goes on with it in a new turn/);
+    assert.equal(fake.callsTo('/UserAgent/ConnectorPermissions').length, 1);
+  });
+});
+
+test('get_agent_connector_permissions says Always allow only allows once a waiting action the connector has not listed yet', async () => {
+  const waiting = (cardid, toolName, tooltitle, extra = {}) => ({
+    cardid,
+    messageguid: SYSTEM_MESSAGE,
+    tool: toolName,
+    tooltitle,
+    origin: { kind: 'task', task: 'cs-cron-weekly-post', tasktitle: 'Weekly Post' },
+    createdat: NOW - 60,
+    expiresat: NOW + 86_000,
+    args: { title: 'Week' },
+    argspreview: null,
+    argsbytes: 16,
+    argsredacted: false,
+    ...extra,
+  });
+  const pending = [
+    waiting('l1sted000001', 'create_page', 'Create a page'),
+    waiting('n0tl1st00001', 'schedule_post', 'Schedule a post'),
+    // The list's own word wins over the view's.
+    waiting('t0ldfa1se001', 'create_post', 'Create a post', { toolcached: false }),
+  ];
+  const fake = fakeClient({ '/UserAgent/ConnectorPermissions': permissionsAnswer(VIEW, { pending }) });
+  await withClient(fake, async (client) => {
+    const result = await call(client, 'get_agent_connector_permissions', { agent_guid: AGENT, connector: 'wordpress' });
+    assert.notEqual(result.isError, true, textOf(result));
+    const cards = result.structuredContent.waiting;
+    assert.deepEqual(cards.map(item => [item.cardid, item.actionListed]), [['l1sted000001', true], ['n0tl1st00001', false], ['t0ldfa1se001', false]]);
+    assert.match(cards[0].alwaysChanges, /from now on, in Chat and in Autopilot\.$/);
+    assert.equal(cards[1].alwaysChanges, ONCE_ONLY('WordPress'));
+    assert.equal(cards[2].alwaysChanges, ONCE_ONLY('WordPress'));
+    assert.ok(textOf(result).includes(`- ${ONCE_ONLY('WordPress')} Only an agent admin can choose it.`));
+  });
+});
+
+test('the permission tools say which runs read Autopilot, and an Autopilot Allow warns of runs no one watches', async () => {
+  const fake = fakeClient({ '/UserAgent/ConnectorPermissions': permissionsAnswer() });
+  await withClient(fake, async (client) => {
+    const { tools } = await client.listTools();
+    for (const name of ['get_agent_connector_permissions', 'set_agent_connector_permissions']) {
+      const { description } = tools.find(item => item.name === name);
+      assert.match(description, /Autopilot is its scheduled tasks and the work before and after a voice call; any other work it does on its own, such as sub-agents and work in the background, takes the stricter of Chat and Autopilot for each action\./, name);
+      assert.doesNotMatch(description, /anything it does on its own/, name);
+    }
+    const set = tools.find(item => item.name === 'set_agent_connector_permissions');
+    const autopilot = set.inputSchema.properties.categories.properties.create.properties.autopilot.description;
+    assert.equal(autopilot, 'allow, ask or block in scheduled tasks and the work before and after a voice call (other work the agent does on its own takes the stricter of chat and autopilot); null removes the setting.');
+    const answer = tools.find(item => item.name === 'answer_agent_approval');
+    assert.match(answer.description, /a column set to Block stays blocked, and an action the connector has not listed yet is allowed only this once/);
+
+    const summary = await call(client, 'set_agent_connector_permissions', { agent_guid: AGENT, connector: 'wordpress', tools: { create_page: { autopilot: 'allow' } } });
+    assert.notEqual(summary.isError, true, textOf(summary));
+    assert.match(textOf(summary), /\*\*Note:\*\* Allow lets that action run without anyone approving it, in Autopilot also from scheduled tasks and the work before and after a voice call, with no one watching\. Make sure the user wants that\./);
+  });
 });
