@@ -107,7 +107,6 @@ export type TemplateDetail = z.infer<typeof templateDetailSchema>;
 
 function writableSchemaField(field: Record<string, unknown>): boolean {
   return field.platform_managed !== true
-    && field.server_managed !== true
     && field.type !== 'computed';
 }
 

@@ -366,7 +366,7 @@ function templateRow(overrides = {}) {
           fields: [
             { key: 'accountsid', label: 'Account SID', type: 'text', required: true },
             { key: 'authtoken', label: 'Auth Token', type: 'password', required: true },
-            { key: 'webhookstatus', label: 'Webhook status', type: 'text', required: false, server_managed: true },
+            { key: 'webhookstatus', label: 'Webhook status', type: 'computed', required: false },
           ],
         },
       },
@@ -686,7 +686,7 @@ test('list_agent_skills with a name returns the setup fields of every credential
       oauth_provider: null,
       credential_schema: [
         { key: 'accountsid', label: 'Account SID', type: 'text', required: true, help: '<ol><li>Open the <a href="https://console.twilio.com/">Twilio Console</a></li></ol>' },
-        { key: 'webhookstatus', label: 'Webhook status', type: 'text', required: false, server_managed: true },
+        { key: 'webhookstatus', label: 'Webhook status', type: 'computed', required: false },
       ],
       used_by_skills: ['util-voice-receptionist'],
     },

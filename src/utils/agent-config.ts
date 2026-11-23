@@ -683,7 +683,6 @@ export interface CredentialField {
   type: string;
   required: boolean;
   encrypted: boolean;
-  serverManaged: boolean;
   platformManaged: boolean;
   pattern?: string;
   minLength?: number;
@@ -770,7 +769,6 @@ export function parseCredentialField(raw: Row): CredentialField {
     type: asString(raw.type) ?? 'text',
     required: raw.required === true,
     encrypted: raw.encrypted === true,
-    serverManaged: raw.server_managed === true,
     platformManaged: raw.platform_managed === true,
     ...(asString(raw.pattern) ? { pattern: asString(raw.pattern) } : {}),
     ...(toNumber(raw.minlength) !== null ? { minLength: toNumber(raw.minlength) as number } : {}),
@@ -852,7 +850,7 @@ export function credentialFieldShape(field: Pick<CredentialField, 'type' | 'item
 
 /** Fields Wiro fills; customers cannot write them. */
 export function isWritableField(field: CredentialField): boolean {
-  return !field.serverManaged && !field.platformManaged && field.type !== 'computed';
+  return !field.platformManaged && field.type !== 'computed';
 }
 
 export interface CredentialFieldInput {
