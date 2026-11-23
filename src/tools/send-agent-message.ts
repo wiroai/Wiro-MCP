@@ -9,6 +9,7 @@ import {
   isPlainObject,
   type RefusalNoteOptions,
 } from '../utils/api.js';
+import { storedApprovalReply, toApprovalReply } from '../utils/agent-approvals.js';
 import { setupResultActed, toSetupResult } from '../utils/agent-setup.js';
 import { messageKind, SESSION_NAME_RULE } from '../utils/agent-message.js';
 import {
@@ -100,8 +101,10 @@ export function registerSendAgentMessage(server: McpServer, client: WiroClient, 
         + 'A deployed agent runs a Connector action whose permission is Ask (by default every Create and send and Change '
         + 'and delete action in chat) only after a person approves it. Such an action does not run; the reply lists it under '
         + 'approvals with the exact request. Show the user the request and ask, and answer only with their answer, with '
-        + 'answer_agent_approval. Once allowed, the agent goes on in a new turn whose answer arrives as the session\'s next '
-        + 'message. get_agent_connector_permissions shows what runs without asking. '
+        + 'answer_agent_approval. A reply that is only yes, always or no, sent while a card waits, is answered by Wiro, '
+        + 'not the agent: the first yes sent from here gets Wiro\'s listing of the exact request, and only a later yes '
+        + 'allows it once; always from here allows it once. Once allowed, the agent goes on in a new turn whose answer '
+        + 'arrives as the session\'s next message. get_agent_connector_permissions shows what runs without asking. '
         + 'get_playbook has the step-by-step guides.',
       inputSchema: strictInput({
         agent: z.string().min(1).describe(AGENT_INPUT_DESCRIPTION),
@@ -194,28 +197,36 @@ export function registerSendAgentMessage(server: McpServer, client: WiroClient, 
         if (!messageId) throw sendWithoutIdError(target, resolved.session);
 
         const marker = isPlainObject(response.modelChangeMarker) ? response.modelChangeMarker : undefined;
-        // A reply to a setup change the agent proposed (such as "yes") is answered by Wiro itself: the
-        // finished row comes back with Send, the agent takes no turn and there is nothing to wait for.
-        const setupResult = target.kind === 'deployed' && response.status === 'agent_end'
-          ? toSetupResult(response.setupresult)
-          : undefined;
+        // A reply to a setup change the agent proposed (such as "yes"), or to an approval card (only yes, always or
+        // no), is answered by Wiro itself: the finished row comes back with Send, the agent takes no turn and there
+        // is nothing to wait for.
+        const handled = target.kind === 'deployed' && response.status === 'agent_end';
+        const setupResult = handled ? toSetupResult(response.setupresult) : undefined;
+        // Send's answer says what Wiro did with each card, or which it listed, and the card itself; the turn an
+        // approval started comes without its live token.
+        const approvalReply = handled ? toApprovalReply(response.approvalresult, target.agent) : undefined;
         // What the answer leaves to connect comes with Send's answer. Wiro stores it on the row, and its message reads
         // return it there too; a Wiro API before that left it out of the metadata they return.
         const setupNext = isPlainObject(response.setupresult) && Array.isArray(response.setupresult.next)
           ? { next: response.setupresult.next }
           : {};
-        let handledRow: Record<string, unknown> | undefined = setupResult
+        let handledRow: Record<string, unknown> | undefined = setupResult || approvalReply
           ? {
             guid: messageId,
             status: 'agent_end',
             content: asString(response.content) ?? message,
             response: asString(response.response) ?? '',
-            metadata: { type: 'setup_result', ...setupNext },
+            metadata: {
+              type: 'setup_result',
+              ...setupNext,
+              ...(approvalReply ? { approvalresult: storedApprovalReply(approvalReply) } : {}),
+            },
             createdat: sentAt,
             endedat: Math.floor(Date.now() / 1000),
           }
           : undefined;
-        if (handledRow && setupResult && !setupResultActed(setupResult)) {
+        // Send's answer to an approval reply says everything, a listing included, so nothing more is read.
+        if (handledRow && setupResult && !approvalReply && !setupResultActed(setupResult)) {
           // An answer that acted on nothing may be Wiro's listing of the proposal, and only the
           // stored row says so. One read; if it fails, Send's own answer is shown as it is.
           try {
@@ -248,7 +259,7 @@ export function registerSendAgentMessage(server: McpServer, client: WiroClient, 
             }
             : {}),
           ...(attached ? { attachedWorkflow: attached.workflow } : {}),
-          ...(handledRow ? { handledRow, setupResult } : {}),
+          ...(handledRow ? { handledRow, setupResult, approvalReply } : {}),
         };
         let turn: AgentTurnResult;
         try {

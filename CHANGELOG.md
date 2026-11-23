@@ -89,6 +89,13 @@ runs `npx @wiro-ai/wiro-mcp@latest` takes it at its next start.
   shows it, and it comes first in the next step. The turn Wiro starts after an approval
   reads as its line, such as "Allowed: Create a post in WordPress", with kind
   `approval_resume` and `approvalResume`, never as the prompt Wiro wrote for the agent.
+- A reply that is only yes, always or no, sent while an approval card waits, is answered by
+  Wiro, not the agent, and starts no turn: the first yes sent from here gets Wiro's listing of
+  the exact request, only a later yes (or "yes N") allows it once, and always from here allows
+  it once. `send_agent_message` returns `approvalReply`: the cards Wiro answered with the turn
+  an approval started (read with `get_agent_message`; its live token is never passed on), or
+  the cards it listed with their numbers. A reply read later carries `approvalAnswers` and
+  `listedApprovals`.
 - A card asked in a Telegram, Slack or Discord chat is answered there, by a reply in that
   chat; `answer_agent_approval` cannot answer it. Such a card carries `answeredIn` and no
   answer step, the listings say where it is answered, and `answer_agent_approval` passes on

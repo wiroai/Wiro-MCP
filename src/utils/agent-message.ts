@@ -3,15 +3,19 @@ import { asString, isPlainObject, toNumber, truncate, unixToIso } from './api.js
 import { isWiroHostedFile, isWiroHostedUrl, listedAddress } from './media.js';
 import { listedSetupCount, setupChangeSchema, setupChangesFromBlocks, setupNeedSchema, toSetupNext } from './agent-setup.js';
 import {
+  APPROVAL_ANSWERS,
   approvalResumeLabel,
   approvalResumeSchema,
   approvalSchema,
   approvalsFromBlocks,
   isApprovalResumeMetadata,
+  toApprovalReply,
   toApprovalResume,
 } from './agent-approvals.js';
 import {
   AGENT_REPLY_LABEL,
+  APPROVAL_LISTING_LABEL,
+  APPROVAL_RESULT_LABEL,
   quotedBlock,
   quotedSpan,
   REPLY_FILES_LABEL,
@@ -72,6 +76,19 @@ export const agentMessageSchema = z.object({
       + 'state. A pending one did not run: answer_agent_approval answers it, only with the user\'s answer.'),
   approvalResume: approvalResumeSchema.optional()
     .describe('Set on the turn Wiro started after a person allowed an action: which card it goes on with.'),
+  approvalAnswers: z.array(z.object({
+    cardid: z.string(),
+    messageguid: z.string(),
+    action: z.enum(APPROVAL_ANSWERS),
+    result: z.boolean(),
+    code: z.string().optional().describe('Why Wiro did not take the answer, when result is false.'),
+  })).optional()
+    .describe('Set on Wiro\'s own answer to a reply that was only yes, always or no while an approval card waited: what '
+      + 'it did with each card (allow once, always or decline). Empty when it answered nothing, such as while the '
+      + 'agent was still replying or when it listed the cards instead.'),
+  listedApprovals: z.number().int().optional()
+    .describe('Set on Wiro\'s own listing of the approval cards such a reply could answer: how many it lists. Nothing ran '
+      + 'yet; a later yes (or "yes N") the user agreed to allows one once.'),
   attachments: z.array(z.object({
     url: z.string(),
     name: z.string().optional(),
@@ -300,6 +317,8 @@ export function toAgentMessage(
   const kind = messageKind(row);
   // Wiro's answer to a setup reply names what it leaves to connect, beside its own text.
   const next = kind === 'setup_result' && isPlainObject(row.metadata) ? toSetupNext(row.metadata.next) : [];
+  // Its answer to a reply to an approval card says what it did with each card, or which it listed.
+  const approvalReply = kind === 'setup_result' && isPlainObject(row.metadata) ? toApprovalReply(row.metadata.approvalresult) : undefined;
   const messageId = asString(row.guid) ?? '';
   const approvals = approvalsFromBlocks(sortedBlocks(row.timeline), { messageguid: messageId, agent: options.agent });
   // A resume turn's text is the prompt Wiro wrote for the agent, which can quote the request: it reads as its line.
@@ -321,12 +340,35 @@ export function toAgentMessage(
     ...(next.length > 0 ? { setupNext: next } : {}),
     ...(approvals.length > 0 ? { approvals } : {}),
     ...(resume ? { approvalResume: resume } : {}),
+    ...(approvalReply
+      ? {
+        approvalAnswers: approvalReply.answered.map(item => ({
+          cardid: item.cardid,
+          messageguid: item.messageguid,
+          action: item.action,
+          result: item.result,
+          ...(item.error ? { code: item.error.code } : {}),
+        })),
+        ...(approvalReply.listed.length > 0 ? { listedApprovals: approvalReply.listed.length } : {}),
+      }
+      : {}),
     attachments: attachments(row.attachments),
     ...(typeof row.model === 'string' && row.model ? { model: row.model } : {}),
     aiUsageUsd: cost === null ? null : Math.round(cost * 10_000) / 1_000_000,
     ...(unixToIso(row.createdat) ? { createdAt: unixToIso(row.createdat) } : {}),
     ...(unixToIso(row.endedat) ? { endedAt: unixToIso(row.endedat) } : {}),
   };
+}
+
+/**
+ * The label a reply's text is quoted under: the agent's own text, or Wiro's answer to a reply it handled itself, which
+ * can quote a proposal or a request the agent wrote.
+ */
+export function replyLabel(message: Pick<AgentMessage, 'kind' | 'listedSetupChanges' | 'approvalAnswers' | 'listedApprovals'>): string {
+  if (message.kind !== 'setup_result') return AGENT_REPLY_LABEL;
+  if (message.listedApprovals) return APPROVAL_LISTING_LABEL;
+  if (message.approvalAnswers) return APPROVAL_RESULT_LABEL;
+  return message.listedSetupChanges ? SETUP_LISTING_LABEL : SETUP_RESULT_LABEL;
 }
 
 /** Markdown block for one message, for clients that show only text. */
@@ -338,10 +380,7 @@ export function formatAgentMessage(message: AgentMessage, heading = 'Reply'): st
     lines.push(`**Tools used:** ${message.toolsUsed.map(tool => quotedSpan(tool.name)).join(', ')}`);
   }
   if (message.reply) {
-    const label = message.listedSetupChanges
-      ? SETUP_LISTING_LABEL
-      : message.kind === 'setup_result' ? SETUP_RESULT_LABEL : AGENT_REPLY_LABEL;
-    lines.push('', `### ${heading}`, '', ...quotedBlock(label, message.reply));
+    lines.push('', `### ${heading}`, '', ...quotedBlock(replyLabel(message), message.reply));
   }
   if (message.mediaUrls.length > 0) {
     lines.push('', '### Media', '', ...quotedBlock(REPLY_FILES_LABEL, message.mediaUrls.join('\n')));

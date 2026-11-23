@@ -15,15 +15,18 @@ import {
   APPROVAL_ANSWERS_EXPLAINED,
   APPROVAL_RIGHTS,
   actionListedIn,
+  approvalAnswerResumeSchema,
   approvalHeadline,
   approvalSchema,
   formatApproval,
   inChannelNote,
   toApproval,
+  toApprovalAnswerResume,
   waitingApproval,
   withActionListed,
   type Approval,
   type ApprovalAnswer,
+  type ApprovalAnswerResume,
 } from '../utils/agent-approvals.js';
 import { listConnections } from '../utils/agent-connectors.js';
 import { toAgentMessage } from '../utils/agent-message.js';
@@ -44,17 +47,6 @@ import { nextActionSchema, strictInput } from './schemas.js';
 const MAX_WAITING_LOOKUPS = 12;
 const MESSAGE_NOT_FOUND = /message not found/i;
 
-const resumeSchema = z.object({
-  status: z.enum(['queued', 'not_running', 'refused'])
-    .describe('queued: Wiro started a new turn in the chat the card is in, and the agent goes on with the action there. not_running: the agent is not running, so nothing ran. refused: the turn could not start, for the reason in message.'),
-  messageId: z.string().optional()
-    .describe('The new turn\'s message, for get_agent_message. Left out when this connection does not read that chat.'),
-  session: z.string().optional().describe('The session the new turn runs in.'),
-  message: z.string().optional(),
-});
-
-type Resume = z.infer<typeof resumeSchema>;
-
 const outputSchema = {
   agent: z.string(),
   messageguid: z.string(),
@@ -64,7 +56,7 @@ const outputSchema = {
     .describe('preview: the card is shown and nothing changed. answered: Wiro took the answer. not_waiting: the card was already answered or expired. refused: Wiro did not take the answer, for the reason in message.'),
   approval: approvalSchema.optional().describe('The card, as it is now.'),
   summary: z.string().optional().describe('Wiro\'s summary of the answer, such as "Allowed once."'),
-  resume: resumeSchema.optional(),
+  resume: approvalAnswerResumeSchema.optional(),
   permissions: z.object({
     connector: z.string(),
     tool: z.string(),
@@ -218,23 +210,7 @@ function preview(call: Call, approval: Approval) {
   };
 }
 
-function toResume(value: unknown): Resume | undefined {
-  if (!isPlainObject(value)) return undefined;
-  const status = asString(value.status);
-  if (status !== 'queued' && status !== 'not_running' && status !== 'refused') return undefined;
-  const messageId = asString(value.messageguid);
-  const session = asString(value.sessionkey);
-  const message = asString(value.message)?.replace(/\s+/g, ' ').trim();
-  // The turn's live token is never passed on.
-  return {
-    status,
-    ...(messageId ? { messageId } : {}),
-    ...(session ? { session } : {}),
-    ...(message ? { message } : {}),
-  };
-}
-
-function resumeText(resume: Resume | undefined, answer: ApprovalAnswer): string {
+function resumeText(resume: ApprovalAnswerResume | undefined, answer: ApprovalAnswer): string {
   if (answer === 'decline' || !resume) {
     return answer === 'decline' ? 'The agent gets no new turn, and a later call of the same action asks again.' : '';
   }
@@ -323,7 +299,7 @@ async function answerCard(client: WiroClient, call: Call, signal: AbortSignal) {
   }
   const approval = toApproval(body.approval, { messageguid: call.messageguid, agent: call.target.agent });
   const summary = asString(body.summary)?.replace(/\s+/g, ' ').trim();
-  const resume = toResume(body.resume);
+  const resume = toApprovalAnswerResume(body.resume);
   const permissions = toPermissions(body.permissions);
   const action = approval ? quotedSpan(approval.action) : 'The action';
   const message = [
@@ -378,8 +354,9 @@ export function registerAnswerAgentApproval(server: McpServer, client: WiroClien
         + 'team admin of its team; decline turns down this one call, and the next call asks again. Without confirm it '
         + 'shows the card, its request and what the answer does, and changes nothing: show it to the user and ask. '
         + 'With confirm: true, only after the user answered, it answers. After an approval the agent goes on in a new '
-        + 'turn of the chat the card is in, and get_agent_message with the returned message id reads its answer. A '
-        + 'card waits 24 hours, and an approval is used within an hour. Studio and the Workflow Agent never ask.',
+        + 'turn of the chat the card is in, and get_agent_message with the returned message id reads its answer. A yes '
+        + 'or no the user types in the agent\'s chat answers a card too. A card waits 24 hours, and an approval is used '
+        + 'within an hour. Studio and the Workflow Agent never ask.',
       inputSchema: strictInput({
         agent: z.string().min(1).max(100).describe('The deployed agent\'s guid, from list_my_agents.'),
         messageguid: z.string().min(1).max(100)

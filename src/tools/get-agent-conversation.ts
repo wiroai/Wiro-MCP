@@ -16,6 +16,7 @@ import {
   extractReply,
   isTerminalMessageStatus,
   isVoiceCallText,
+  replyLabel,
   toAgentMessage,
   voiceCallEndText,
   type AgentMessage,
@@ -37,7 +38,7 @@ import {
   workflowReplyProse,
   type WorkflowArtifactSummary,
 } from '../utils/workflow-agent.js';
-import { AGENT_REPLY_LABEL, jsonSpan, quotedBlock, quotedSpan, quotedSubItem, REPLY_FILES_LABEL } from '../utils/quoted-text.js';
+import { jsonSpan, quotedBlock, quotedSpan, quotedSubItem, REPLY_FILES_LABEL } from '../utils/quoted-text.js';
 import type { NextAction } from '../utils/structured.js';
 import { nextActionSchema, strictInput } from './schemas.js';
 
@@ -172,7 +173,8 @@ function formatHistory(
     } else if (message.userText) {
       lines.push(...quotedBlock(USER_MESSAGE_LABEL, truncate(message.userText, 500)));
     }
-    if (message.reply) lines.push(...quotedBlock(AGENT_REPLY_LABEL, truncate(message.reply, 1_500)));
+    // Wiro's own answer to a reply it handled is labelled as Wiro's, quoting what the agent proposed or asked to run.
+    if (message.reply) lines.push(...quotedBlock(replyLabel(message), truncate(message.reply, 1_500)));
     if (message.mediaUrls.length > 0) lines.push(...quotedBlock(REPLY_FILES_LABEL, message.mediaUrls.join('\n')));
     if (message.setupChanges) lines.push(...setupChangeSummaryLines(message.setupChanges));
     if (message.approvals) lines.push(...approvalSummaryLines(message.approvals));

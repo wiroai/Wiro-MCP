@@ -498,6 +498,132 @@ export function approvalSummaryLines(approvals: readonly Approval[]): string[] {
   });
 }
 
+// ─── An answer's turn, and replies Wiro answers itself ─────────────
+
+export const approvalAnswerResumeSchema = z.object({
+  status: z.enum(RESUME_STATUSES)
+    .describe('queued: Wiro started a new turn in the chat the card is in, and the agent goes on with the action there. not_running: the agent is not running, so nothing ran. refused: the turn could not start, for the reason in message.'),
+  messageId: z.string().optional()
+    .describe('The new turn\'s message, for get_agent_message. Left out when this connection does not read that chat.'),
+  session: z.string().optional().describe('The session the new turn runs in.'),
+  message: z.string().optional(),
+});
+
+export type ApprovalAnswerResume = z.infer<typeof approvalAnswerResumeSchema>;
+
+/** The turn an answer started, as Wiro reports it. Its live token is never passed on. */
+export function toApprovalAnswerResume(value: unknown): ApprovalAnswerResume | undefined {
+  if (!isPlainObject(value)) return undefined;
+  const status = asString(value.status);
+  if (status !== 'queued' && status !== 'not_running' && status !== 'refused') return undefined;
+  const messageId = asString(value.messageguid);
+  const session = asString(value.sessionkey);
+  const message = asString(value.message)?.replace(/\s+/g, ' ').trim();
+  return {
+    status,
+    ...(messageId ? { messageId } : {}),
+    ...(session ? { session } : {}),
+    ...(message ? { message } : {}),
+  };
+}
+
+/** Wiro answers at most one approval card per reply, or declines the turn's three, and lists up to six numbers. */
+const MAX_REPLY_ANSWERS = 3;
+const MAX_REPLY_LISTED = 6;
+const MAX_SUMMARY = 500;
+const REFUSAL_CODE = /^[A-Za-z0-9_]{1,64}$/;
+
+export const approvalReplySchema = z.object({
+  answered: z.array(z.object({
+    cardid: z.string(),
+    messageguid: z.string().describe('The message the card is on.'),
+    action: z.enum(APPROVAL_ANSWERS)
+      .describe('What Wiro did with the card: allow (once), always or decline. An always sent from here reads allow: a reply sent with an API key allows a call only once.'),
+    result: z.boolean().describe('false: Wiro did not take the answer, for the reason in error.'),
+    approval: approvalSchema.optional().describe('The card after the answer.'),
+    summary: z.string().optional().describe('Wiro\'s summary of the answer, such as "Allowed once.", with its reason when an always allowed the call once.'),
+    resume: approvalAnswerResumeSchema.optional(),
+    error: z.object({ code: z.string(), message: z.string().optional() }).optional()
+      .describe('Why Wiro did not take the answer: its code, such as approval_expired, and its sentence.'),
+  })).describe('The cards the reply answered: one for a yes or an always, one per card for a no.'),
+  listed: z.array(z.object({
+    number: z.number().int().min(1).max(MAX_REPLY_LISTED)
+      .describe('The card\'s number in Wiro\'s listing: "yes <number>" allows it once, "no <number>" declines it.'),
+    cardid: z.string(),
+    messageguid: z.string().describe('The message the card is on.'),
+    approval: approvalSchema.optional().describe('The card as listed, with its whole request.'),
+  })).describe('The cards Wiro listed instead of answering: nothing ran, and a later yes allows one once.'),
+});
+
+export type ApprovalReply = z.infer<typeof approvalReplySchema>;
+
+function messageGuidOf(value: unknown): string | undefined {
+  const guid = asString(value)?.trim();
+  return guid && guid.length <= 100 && !/\s/.test(guid) ? guid : undefined;
+}
+
+/**
+ * Wiro's own answer to a reply that was only yes, always or no while an approval card waited: the cards it answered
+ * and the ones it listed. It reads Send's answer, where each entry carries the card, the summary and the turn it
+ * started, and the stored reply, where an entry carries only its ids, what was done and a refusal's code. Undefined
+ * for anything else.
+ */
+export function toApprovalReply(value: unknown, agent?: string, nowMs?: number): ApprovalReply | undefined {
+  if (!isPlainObject(value)) return undefined;
+  const answered: ApprovalReply['answered'] = [];
+  for (const item of (Array.isArray(value.answered) ? value.answered : []).filter(isPlainObject)) {
+    if (answered.length === MAX_REPLY_ANSWERS) break;
+    const cardid = asString(item.cardid);
+    const messageguid = messageGuidOf(item.messageguid);
+    const action = asString(item.action);
+    if (!cardid || !CARD_ID.test(cardid) || !messageguid || typeof item.result !== 'boolean'
+      || !(APPROVAL_ANSWERS as readonly string[]).includes(action ?? '')) continue;
+    const approval = toApproval(item.approval, { messageguid, agent, nowMs });
+    const summary = line(item.summary, MAX_SUMMARY);
+    const resume = toApprovalAnswerResume(item.resume);
+    const failure = isPlainObject(item.error) ? item.error : {};
+    const rawCode = item.code ?? failure.code;
+    const code = typeof rawCode === 'number' || typeof rawCode === 'string' ? String(rawCode) : undefined;
+    const message = line(failure.message, MAX_ERROR);
+    answered.push({
+      cardid,
+      messageguid,
+      action: action as ApprovalAnswer,
+      result: item.result,
+      ...(approval ? { approval } : {}),
+      ...(summary ? { summary } : {}),
+      ...(resume ? { resume } : {}),
+      ...(!item.result && code && REFUSAL_CODE.test(code) ? { error: { code, ...(message ? { message } : {}) } } : {}),
+    });
+  }
+  const listed: ApprovalReply['listed'] = [];
+  for (const item of (Array.isArray(value.listed) ? value.listed : []).filter(isPlainObject)) {
+    if (listed.length === MAX_REPLY_LISTED) break;
+    const number = toNumber(item.number);
+    const cardid = asString(item.cardid);
+    const messageguid = messageGuidOf(item.messageguid);
+    if (number === null || !Number.isInteger(number) || number < 1 || number > MAX_REPLY_LISTED
+      || !cardid || !CARD_ID.test(cardid) || !messageguid || listed.some(entry => entry.number === number)) continue;
+    const approval = toApproval(item.approval, { messageguid, agent, nowMs });
+    listed.push({ number, cardid, messageguid, ...(approval ? { approval } : {}) });
+  }
+  return { answered, listed };
+}
+
+/** A reply's result as Wiro stores it on the reply: ids, what was done and a refusal's code, never a card or a token. */
+export function storedApprovalReply(reply: ApprovalReply): Record<string, unknown> {
+  return {
+    answered: reply.answered.map(item => ({
+      cardid: item.cardid,
+      messageguid: item.messageguid,
+      action: item.action,
+      result: item.result,
+      ...(item.error ? { code: item.error.code } : {}),
+    })),
+    listed: reply.listed.map(item => ({ number: item.number, cardid: item.cardid, messageguid: item.messageguid })),
+  };
+}
+
 // ─── The turn an approval starts ───────────────────────────────────
 
 export const approvalResumeSchema = z.object({

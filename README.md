@@ -360,12 +360,15 @@ the background, takes the stricter of the two for each action. Allow runs the ac
 for a person's approval, and Block never runs it.
 By default, read-only actions run, and Create and send and Change and delete ask in chat and run
 in scheduled tasks. An action that asks does not run: the reply lists it under `approvals`
-with its exact request, and `answer_agent_approval` answers it once you have decided. After an
-approval the agent goes on in a new turn of the same chat, and its answer is that session's next
-message. A card waits 24 hours. Approval cards that a scheduled task asked for are in your chat
-on wiro.ai, or in the agent's `approvals` session, and `get_agent_connector_permissions` lists them.
-A card asked in a Telegram, Slack or Discord chat is answered there, by a reply in that chat;
-`answer_agent_approval` cannot answer it.
+with its exact request, and `answer_agent_approval` answers it once you have decided. A reply of
+only yes, always or no sent with `send_agent_message` while a card waits is answered by Wiro, not
+the agent: the first yes gets Wiro's listing of the exact request, and only a later yes allows it
+once; always from there allows it once. A yes or no typed in the agent's chat answers a card too.
+After an approval the agent goes on in a new turn of the same chat, and its answer is that
+session's next message. A card waits 24 hours. Approval cards that a scheduled task asked for are
+in your chat on wiro.ai, or in the agent's `approvals` session, and
+`get_agent_connector_permissions` lists them. A card asked in a Telegram, Slack or Discord chat
+is answered there, by a reply in that chat; `answer_agent_approval` cannot answer it.
 
 ### Controls
 
