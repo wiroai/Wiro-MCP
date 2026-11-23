@@ -3,6 +3,14 @@ import { asString, isPlainObject, toNumber, truncate, unixToIso } from './api.js
 import { isWiroHostedFile, isWiroHostedUrl, listedAddress } from './media.js';
 import { listedSetupCount, setupChangeSchema, setupChangesFromBlocks, setupNeedSchema, toSetupNext } from './agent-setup.js';
 import {
+  approvalResumeLabel,
+  approvalResumeSchema,
+  approvalSchema,
+  approvalsFromBlocks,
+  isApprovalResumeMetadata,
+  toApprovalResume,
+} from './agent-approvals.js';
+import {
   AGENT_REPLY_LABEL,
   quotedBlock,
   quotedSpan,
@@ -38,7 +46,9 @@ export const agentMessageSchema = z.object({
   messageId: z.string(),
   state: messageStateSchema,
   status: z.string(),
-  kind: z.enum(['user_turn', 'agent_message', 'model_change', 'voice_call', 'setup_result']).optional(),
+  kind: z.enum(['user_turn', 'agent_message', 'model_change', 'voice_call', 'setup_result', 'approval_resume']).optional()
+    .describe('approval_resume: the turn Wiro started after a person allowed an action the agent asked about; its '
+      + 'userText is that line, and its reply is the agent going on with the action.'),
   userText: z.string().optional(),
   reply: z.string().optional(),
   replyTruncated: z.boolean().optional(),
@@ -57,6 +67,11 @@ export const agentMessageSchema = z.object({
       + 'it is read later: each one with how it connects, key (its values), signin (a sign-in) or project (a Wiro '
       + 'project bound to the agent), as they stood when Wiro answered. connect_agent_connector connects each one; a '
       + 'reply never connects a signin or project one.'),
+  approvals: z.array(approvalSchema).optional()
+    .describe('Connector actions the agent asked a person to approve on this message, each with its request and '
+      + 'state. A pending one did not run: answer_agent_approval answers it, only with the user\'s answer.'),
+  approvalResume: approvalResumeSchema.optional()
+    .describe('Set on the turn Wiro started after a person allowed an action: which card it goes on with.'),
   attachments: z.array(z.object({
     url: z.string(),
     name: z.string().optional(),
@@ -110,9 +125,10 @@ export function messageState(status: unknown): AgentMessage['state'] {
 
 interface TimelineBlock {
   type?: unknown;
-  // Null on a setup block, which carries its proposal in `setup` instead.
+  // Null on a setup or approval block, which carries its card in `setup` or `approval` instead.
   text?: unknown;
   setup?: unknown;
+  approval?: unknown;
   toollabel?: unknown;
   toolstatus?: unknown;
   callindex?: unknown;
@@ -223,6 +239,8 @@ export function messageKind(row: Record<string, unknown>): AgentMessage['kind'] 
   if (type === 'model_change' || row.status === 'agent_done') return 'model_change';
   // Wiro answered the user's reply to a setup proposal itself; the agent took no turn.
   if (type === 'setup_result') return 'setup_result';
+  // The turn Wiro started after a person allowed an action: its text is Wiro's prompt to the agent, not a person's.
+  if (isApprovalResumeMetadata(metadata)) return 'approval_resume';
   if (type.startsWith('realtime_session') || type === 'voice_prep_completed') return 'voice_call';
   if (!asString(row.content) && (type === 'system' || type === 'subagent')) return 'agent_message';
   return 'user_turn';
@@ -245,6 +263,8 @@ export interface ToAgentMessageOptions {
   includeUserText?: boolean;
   /** Return the partial streamed text while the turn is still running. */
   includePartial?: boolean;
+  /** A deployed agent's guid: a waiting approval card then carries the step that answers it. */
+  agent?: string;
 }
 
 export function toAgentMessage(
@@ -280,13 +300,18 @@ export function toAgentMessage(
   const kind = messageKind(row);
   // Wiro's answer to a setup reply names what it leaves to connect, beside its own text.
   const next = kind === 'setup_result' && isPlainObject(row.metadata) ? toSetupNext(row.metadata.next) : [];
+  const messageId = asString(row.guid) ?? '';
+  const approvals = approvalsFromBlocks(sortedBlocks(row.timeline), { messageguid: messageId, agent: options.agent });
+  // A resume turn's text is the prompt Wiro wrote for the agent, which can quote the request: it reads as its line.
+  const resume = kind === 'approval_resume' ? toApprovalResume(row.metadata) : undefined;
+  const userText = kind === 'approval_resume' ? approvalResumeLabel(resume) : content;
 
   return {
-    messageId: asString(row.guid) ?? '',
+    messageId,
     state: messageState(status),
     status,
     kind,
-    ...(options.includeUserText && content ? { userText: truncate(content, 4_000) } : {}),
+    ...(options.includeUserText && userText ? { userText: truncate(userText, 4_000) } : {}),
     ...(reply ? { reply } : {}),
     ...(reply.length < fullReply.length ? { replyTruncated: true } : {}),
     mediaUrls: terminal ? extractMediaUrls(fullReply) : [],
@@ -294,6 +319,8 @@ export function toAgentMessage(
     ...(proposals.length > 0 ? { setupChanges: proposals } : {}),
     ...(listed > 0 ? { listedSetupChanges: listed } : {}),
     ...(next.length > 0 ? { setupNext: next } : {}),
+    ...(approvals.length > 0 ? { approvals } : {}),
+    ...(resume ? { approvalResume: resume } : {}),
     attachments: attachments(row.attachments),
     ...(typeof row.model === 'string' && row.model ? { model: row.model } : {}),
     aiUsageUsd: cost === null ? null : Math.round(cost * 10_000) / 1_000_000,

@@ -532,12 +532,13 @@ const EXPECTED_TOOLS = [
   'resume_workflow_run', 'list_workflow_runs', 'save_workflow_from_agent',
   // Agents
   'send_agent_message', 'get_agent_message', 'get_agent_conversation',
-  'cancel_agent_message', 'delete_agent_session', 'list_studio_results',
+  'cancel_agent_message', 'delete_agent_session', 'list_studio_results', 'answer_agent_approval',
   'list_agent_templates', 'get_agent_template', 'list_agent_skills', 'deploy_agent',
   'list_my_agents', 'get_my_agent', 'control_agent', 'update_agent',
   'manage_agent_billing', 'get_agent_activity', 'delete_agent',
   'apply_agent_skills', 'set_agent_credentials', 'list_agent_connectors', 'connect_agent_connector',
-  'set_agent_connector_accounts', 'disconnect_agent_connector', 'manage_agent_custom_skill', 'list_projects',
+  'set_agent_connector_accounts', 'disconnect_agent_connector', 'get_agent_connector_permissions',
+  'set_agent_connector_permissions', 'manage_agent_custom_skill', 'list_projects',
   'bind_agent_project',
   // Controls
   'get_controls', 'check_model_access', 'manage_spend_limit', 'manage_model_access',
@@ -624,9 +625,9 @@ test('tool annotations follow the MCP meaning of each hint', async () => {
   ]);
   // Repeating one of these with the same arguments has no further effect.
   const repeatable = new Set([
-    'apply_agent_skills', 'bind_agent_project', 'cancel_agent_message', 'cancel_task', 'delete_agent',
-    'delete_agent_session', 'delete_workflow', 'disconnect_agent_connector', 'kill_task', 'manage_model_access',
-    'manage_spend_limit', 'set_agent_connector_accounts',
+    'answer_agent_approval', 'apply_agent_skills', 'bind_agent_project', 'cancel_agent_message', 'cancel_task',
+    'delete_agent', 'delete_agent_session', 'delete_workflow', 'disconnect_agent_connector', 'kill_task',
+    'manage_model_access', 'manage_spend_limit', 'set_agent_connector_accounts', 'set_agent_connector_permissions',
   ]);
   await withClient({}, async client => {
     const { tools } = await client.listTools();
@@ -662,7 +663,11 @@ test('tool annotations follow the MCP meaning of each hint', async () => {
     // A change can lift or lower a cap or a rule; asking for the same values again changes nothing.
     assert.deepEqual(hints('manage_spend_limit'), [true, true]);
     assert.deepEqual(hints('manage_model_access'), [true, true]);
-    for (const name of ['get_controls', 'check_model_access']) {
+    // An approval lets an action run on an outside service, and a permission change restarts the agent; an answered
+    // card is not answered again, and the same permissions set again change nothing.
+    assert.deepEqual(hints('answer_agent_approval'), [true, true]);
+    assert.deepEqual(hints('set_agent_connector_permissions'), [true, true]);
+    for (const name of ['get_controls', 'check_model_access', 'get_agent_connector_permissions']) {
       assert.equal(tools.find(tool => tool.name === name).annotations.readOnlyHint, true, `${name} only reads`);
     }
   });

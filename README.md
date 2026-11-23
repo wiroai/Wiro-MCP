@@ -307,6 +307,7 @@ under another name can be read and deleted, and to go on with it you start a new
 | `cancel_agent_message` | Stop a reply that is still being written |
 | `delete_agent_session` | Delete a conversation and the agent's memory of it, after your confirmation |
 | `list_studio_results` | List the images, videos and other results Studio generated for you |
+| `answer_agent_approval` | Answer an action one of your agents asked to run, such as publishing a post: allow it once, always allow it (agent admins), or decline it. Shows the exact request first, then asks for your confirmation |
 
 **Studio** is Wiro's creative agent: it picks and runs models for you and charges
 your wallet after each reply. Your own agents run on a monthly plan that includes its own price
@@ -328,6 +329,8 @@ in AI usage each month; after that, they use your Wiro balance.
 | `connect_agent_connector` | Connect a connector to an agent: save its keys, or start its sign-in, which you approve in your browser. The Wiro AI Models connector (`wiro`), the agent's model and task tools, runs with the agent's own Wiro project: connecting it binds that project to the agent, after showing the project, what it replaces and its wallet |
 | `set_agent_connector_accounts` | Choose the accounts a connected connector may act on, such as its ad accounts, pages or channels, or the advertisers a TikTok Ads sign-in reaches |
 | `disconnect_agent_connector` | Disconnect a connector from an agent, after your confirmation |
+| `get_agent_connector_permissions` | Read what an agent may do with a connector without asking: each group of actions (Read-only, Create and send, Change and delete) and each action in Chat and Autopilot, and the approvals still waiting |
+| `set_agent_connector_permissions` | Change a connector's permissions for a group or one action; shows what changes for the agent and whether it restarts, then asks for your confirmation |
 | `list_projects` | List the projects of the connected project's workspace, to pick one for an agent; no keys are shown |
 | `bind_agent_project` | Set the Wiro project an agent's video and voice skills run models with, with no key in the chat; shows the project first, then asks for your confirmation. The agent's model tools come from the Wiro AI Models connector (`wiro`), which runs with this same project and is connected with `connect_agent_connector` |
 | `manage_agent_custom_skill` | Add, edit, schedule, restore or remove an agent's own instructions and scheduled tasks; turning off its approval policy or changing its rules needs your confirmation |
@@ -347,6 +350,18 @@ Where a connector has account choices, the agent acts only on the accounts you c
 for a connector served by the service itself, such as TikTok Ads and its advertisers.
 When an agent proposes a connection in its chat, a key goes in with `connect_agent_connector`,
 never in a message, and a sign-in or a Wiro project is never connected by a reply.
+
+Each connected connector's actions fall into three groups: Read-only, Create and send, and
+Change and delete. Each group, and each action, has a permission in two columns: Chat, when
+someone is talking to the agent (the Wiro web chat, a message sent with an API key or from this
+server, or a Telegram, Slack or Discord chat), and Autopilot, its scheduled tasks and anything it
+does on its own. Allow runs the action, Ask waits for a person's approval, and Block never runs it.
+By default, read-only actions run, Create and send asks, and Change and delete asks in Chat and
+never runs in Autopilot. An action that asks does not run: the reply lists it under `approvals`
+with its exact request, and `answer_agent_approval` answers it once you have decided. After an
+approval the agent goes on in a new turn of the same chat, and its answer is that session's next
+message. A card waits 24 hours. Approval cards that a scheduled task asked for are in your chat
+on wiro.ai, or in the agent's `approvals` session, and `get_agent_connector_permissions` lists them.
 
 ### Controls
 
@@ -436,7 +451,9 @@ replacing a workflow's steps with `update_workflow` or
 `save_workflow_from_agent`: you see a summary of the change first, with the old
 and new value of each step input that changes. Changing a spend limit or a Model
 Access rule also waits for `confirm: true`: you see the old and new values and
-what was spent this period first. No tool adds
+what was spent this period first. Answering an agent's approval card and changing
+a connector's permissions wait for `confirm: true` too: you see the exact request, or
+what changes for the agent and whether it restarts, first. No tool adds
 funds or takes a card payment: funds are added in the Wiro dashboard, and a
 charge your balance cannot cover says how much to add, with nothing charged. The connected project
 decides the workspace: a personal project uses your personal wallet, a team

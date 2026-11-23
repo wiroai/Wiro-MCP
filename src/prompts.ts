@@ -91,7 +91,7 @@ function talkToMyAgentText(agentName: string | undefined, message: string | unde
     '2. Call `get_my_agent`. The agent must be running (status 4) and have AI usage it can pay for (included usage left, or $0.50 in the Wiro balance), unless my message is a "yes" or "yes N" to its setup proposals: Wiro answers those itself at any status and at no cost, and a "no" too while the agent is not running. If it is stopped, ask me before starting it with `control_agent`, then wait until it runs. If its AI usage is paused, tell me why and stop there.',
     '3. Call `send_agent_message` with agent set to the agent\'s guid and the message. Use its main session ("default") unless I name another one.',
     '4. If the reply is not ready, follow its `nextAction` with `get_agent_message`. If the agent moves the work to the background, read the result later with `get_agent_conversation`, unless the turn\'s notes say it will not appear for this project.',
-    '5. Show me the reply and any files.',
+    '5. Show me the reply and any files. If an action waits for my approval, show me its request and ask me; answer it with `answer_agent_approval` only with my answer.',
     '',
     'Each message uses the agent\'s AI usage, except a reply Wiro answers itself. Confirm with me before any action that costs money, such as a plan change or renewing the plan.',
   ].join('\n');

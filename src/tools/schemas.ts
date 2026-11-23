@@ -37,6 +37,12 @@ const ARGUMENT_ALIASES: Record<string, string[]> = {
   summary_id: ['summaryid', 'digest', 'confirmdigest', 'summarydigest', 'changeid'],
   usage: ['spending', 'breakdown'],
   members: ['team', 'teammembers'],
+  // An approval card's answer.
+  messageguid: ['messageid', 'message', 'msgid', 'msgguid'],
+  cardid: ['card', 'approvalid', 'approval', 'approvalcard'],
+  answer: ['action', 'decision', 'choice', 'response'],
+  // Connector permissions.
+  tools: ['actions', 'action', 'tool', 'overrides'],
 };
 
 function argumentKey(name: string): string {

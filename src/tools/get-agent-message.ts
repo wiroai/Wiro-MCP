@@ -39,7 +39,11 @@ export function registerGetAgentMessage(server: McpServer, client: WiroClient): 
         + 'card\'s age; a connector that is connected already needs no step. Wiro\'s own answer to a reply lists the '
         + 'connectors it leaves to connect (setupNext). On '
         + 'Wiro\'s own listing of a proposed change (listedSetupChanges), nothing is applied yet: show the listing, '
-        + 'and send "yes" (or "yes N") again only after the user agrees to exactly that change, never on your own.',
+        + 'and send "yes" (or "yes N") again only after the user agrees to exactly that change, never on your own. '
+        + 'A Connector action whose permission is Ask does not run: the message shows it under approvals, with the exact '
+        + 'request, and waits for a person\'s answer. Show the user the request and ask; answer_agent_approval answers it '
+        + 'with their answer only. Once allowed, the agent goes on in a new turn whose answer arrives as the session\'s '
+        + 'next message.',
       inputSchema: strictInput({
         agent: z.string().min(1).describe(AGENT_INPUT_DESCRIPTION),
         message_id: z.string().min(1).describe('The message id from send_agent_message or get_agent_conversation.'),

@@ -34,6 +34,7 @@ import { registerCancelAgentMessage } from './cancel-agent-message.js';
 import { registerDeleteAgentSession } from './delete-agent-session.js';
 import { registerListStudioResults } from './list-studio-results.js';
 import { registerSaveWorkflowFromAgent } from './save-workflow-from-agent.js';
+import { registerAnswerAgentApproval } from './answer-agent-approval.js';
 import { registerListAgentTemplates } from './list-agent-templates.js';
 import { registerGetAgentTemplate } from './get-agent-template.js';
 import { registerListAgentSkills } from './list-agent-skills.js';
@@ -51,6 +52,8 @@ import { registerListAgentConnectors } from './list-agent-connectors.js';
 import { registerConnectAgentConnector } from './connect-agent-connector.js';
 import { registerSetAgentConnectorAccounts } from './set-agent-connector-accounts.js';
 import { registerDisconnectAgentConnector } from './disconnect-agent-connector.js';
+import { registerGetAgentConnectorPermissions } from './get-agent-connector-permissions.js';
+import { registerSetAgentConnectorPermissions } from './set-agent-connector-permissions.js';
 import { registerManageAgentCustomSkill } from './manage-agent-custom-skill.js';
 import { registerListProjects } from './list-projects.js';
 import { registerBindAgentProject } from './bind-agent-project.js';
@@ -167,7 +170,8 @@ export function registerTools(
   // One conversation API serves Studio, the Workflow Agent and deployed agents,
   // so Studio and the Workflow Agent are reachable from either toolset. The Studio
   // guidance collects late results with list_studio_results, and a Workflow Agent
-  // reply points at save_workflow_from_agent, so both come along.
+  // reply points at save_workflow_from_agent, so both come along. A deployed
+  // agent's reply can carry an approval card, which answer_agent_approval answers.
   if (enabled.has('agents') || enabled.has('workflows')) {
     registerSendAgentMessage(server, client, notes);
     registerGetAgentMessage(server, client);
@@ -176,6 +180,7 @@ export function registerTools(
     registerDeleteAgentSession(server, client);
     registerListStudioResults(server, client);
     registerSaveWorkflowFromAgent(server, client);
+    registerAnswerAgentApproval(server, client);
   }
 
   if (enabled.has('agents')) {
@@ -196,6 +201,8 @@ export function registerTools(
     registerConnectAgentConnector(server, client);
     registerSetAgentConnectorAccounts(server, client);
     registerDisconnectAgentConnector(server, client);
+    registerGetAgentConnectorPermissions(server, client);
+    registerSetAgentConnectorPermissions(server, client);
     registerManageAgentCustomSkill(server, client);
     registerListProjects(server, client);
     registerBindAgentProject(server, client);
@@ -246,6 +253,7 @@ export {
   registerDeleteAgentSession,
   registerListStudioResults,
   registerSaveWorkflowFromAgent,
+  registerAnswerAgentApproval,
   registerListAgentTemplates,
   registerGetAgentTemplate,
   registerListAgentSkills,
@@ -263,6 +271,8 @@ export {
   registerConnectAgentConnector,
   registerSetAgentConnectorAccounts,
   registerDisconnectAgentConnector,
+  registerGetAgentConnectorPermissions,
+  registerSetAgentConnectorPermissions,
   registerManageAgentCustomSkill,
   registerListProjects,
   registerBindAgentProject,

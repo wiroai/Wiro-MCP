@@ -27,7 +27,7 @@ const PLANNED_TOOLS = new Set([
   'manage_agent_billing', 'get_agent_activity', 'delete_agent',
   'apply_agent_skills', 'set_agent_credentials', 'list_agent_connectors', 'connect_agent_connector',
   'set_agent_connector_accounts', 'disconnect_agent_connector', 'manage_agent_custom_skill', 'list_projects',
-  'bind_agent_project',
+  'bind_agent_project', 'answer_agent_approval', 'get_agent_connector_permissions', 'set_agent_connector_permissions',
   'get_controls', 'check_model_access', 'manage_spend_limit', 'manage_model_access',
 ]);
 

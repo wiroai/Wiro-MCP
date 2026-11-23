@@ -97,6 +97,11 @@ export function registerSendAgentMessage(server: McpServer, client: WiroClient, 
         + 'reply. For an add that needs a connector\'s key, ask the user for that key together with their yes, and '
         + 'save it as soon as the add is applied, with no wait in between, so the restart the add started loads it '
         + 'too. '
+        + 'A deployed agent runs a Connector action whose permission is Ask only after a person approves it: by default '
+        + 'every Create and send action, and Change and delete ones in chat. Such an action does not run; the reply lists it under '
+        + 'approvals with the exact request. Show the user the request and ask, and answer only with their answer, with '
+        + 'answer_agent_approval. Once allowed, the agent goes on in a new turn whose answer arrives as the session\'s next '
+        + 'message. get_agent_connector_permissions shows what runs without asking. '
         + 'get_playbook has the step-by-step guides.',
       inputSchema: strictInput({
         agent: z.string().min(1).describe(AGENT_INPUT_DESCRIPTION),

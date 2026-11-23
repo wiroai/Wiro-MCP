@@ -50,6 +50,7 @@ import {
   type SetupResult,
 } from './agent-setup.js';
 import { connectionOf, connectorLabel, listConnections, type AgentConnection } from './agent-connectors.js';
+import { formatApprovals, waitingApprovalNote } from './agent-approvals.js';
 import { createMediaContent, guessMimeType, isWiroHostedUrl, type MediaItem } from './media.js';
 import { DEFAULT_WAIT_SECONDS, defaultInterval, pollUntil, reportProgress, type ToolCallContext } from './poll.js';
 import { AGENT_REPLY_LABEL, jsonSpan, quotedBlock, quotedSpan, quotedSubItem } from './quoted-text.js';
@@ -223,7 +224,9 @@ function readFailureReason(error: unknown): string {
  * has no cost, and a cancelled turn can be read before its end time is written.
  */
 export function isCostPending(row: Record<string, unknown>, justEnded = false): boolean {
-  if (toNumber(row.tokencost) !== null || messageKind(row) !== 'user_turn' || isVoiceCallRow(row)) return false;
+  // A turn Wiro started after an approval is the agent's turn like any other, and billed the same way.
+  const kind = messageKind(row);
+  if (toNumber(row.tokencost) !== null || (kind !== 'user_turn' && kind !== 'approval_resume') || isVoiceCallRow(row)) return false;
   const started = toNumber(row.startedat);
   if (row.status === 'agent_cancel' ? started === null : row.status !== 'agent_end') return false;
   if (justEnded) return true;
@@ -289,7 +292,10 @@ export function projectAgentMessage(
   row: Record<string, unknown>,
   includeUserText: boolean,
 ): ProjectedMessage {
-  const message = toAgentMessage(row, { includeUserText });
+  const message = toAgentMessage(row, {
+    includeUserText,
+    ...(target.kind === 'deployed' && target.agentGuid ? { agent: target.agent } : {}),
+  });
   // Wiro's own voice call records are summarized without caller details: id, status and times.
   if (message.kind === 'voice_call') return { message };
   const terminal = isTerminalMessageStatus(row.status);
@@ -689,6 +695,13 @@ export async function collectTurn(options: CollectTurnOptions): Promise<AgentTur
       }
     }
 
+    const waiting = (result.message.approvals ?? []).filter(approval => approval.status === 'pending');
+    if (waiting.length > 0) notes.push(waitingApprovalNote(waiting.length));
+    if (result.message.kind === 'approval_resume') {
+      notes.push('Wiro started this turn after a person allowed an action the agent asked about, so the agent goes on '
+        + 'with it here. Its text is Wiro\'s line, not a person\'s message.');
+    }
+
     if (target.kind !== 'deployed') {
       const credits = toNumber(row.tokencost);
       result.llmCostUsd = credits === null ? null : Math.round(credits * 100) / 10_000;
@@ -825,6 +838,11 @@ function chooseNextAction(
         + 'message again.',
     };
   }
+  // An action that waits for approval comes before a setup proposal: it did not run, and its card expires.
+  const approval = target.kind === 'deployed'
+    ? result.message.approvals?.find(item => item.status === 'pending' && item.nextAction)?.nextAction
+    : undefined;
+  if (approval) return approval;
   const setup = setupNextAction(target, result, connected);
   if (setup) return setup;
   if (result.background) {
@@ -1102,6 +1120,7 @@ export function formatTurn(target: AgentTarget, result: AgentTurnResult): string
     lines.push('', '### Partial reply', '', ...quotedBlock(AGENT_REPLY_LABEL, result.partialReply));
   }
   if (result.message.setupChanges) lines.push(...formatSetupChanges(result.message.setupChanges));
+  if (result.message.approvals) lines.push(...formatApprovals(result.message.approvals));
   if (result.modelRuns && result.modelRuns.length > 0) {
     lines.push('', '### Model runs started by this turn', '');
     for (const run of result.modelRuns) lines.push(formatStudioRun(run));
