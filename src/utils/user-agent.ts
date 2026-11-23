@@ -412,6 +412,8 @@ export const agentUsageSchema = z.object({
     .describe('What the Wiro balance that pays after the included usage holds now: the personal wallet, or the team wallet for a team agent.'),
   wallet: z.enum(['personal', 'team']).optional()
     .describe('Which Wiro balance pays after the included usage.'),
+  planBalanceUsd: z.number().optional()
+    .describe('What the wallet that pays for the agent can pay a plan with: deposits, store revenue and coupons that can pay a plan; a coupon limited to models does not count. Set where the agent\'s full detail is read, such as get_my_agent; list_my_agents leaves it out.'),
   minBalanceUsd: z.number().optional()
     .describe('Without included usage left, a new turn needs at least this much in the balance.'),
   paused: z.boolean()
@@ -459,6 +461,10 @@ export function toAgentUsage(row: Record<string, unknown>): AgentUsage {
     const fromBalance = toNumber(usage.frombalanceusd);
     const balance = toNumber(usage.balanceusd);
     const wallet = usage.wallet === 'personal' || usage.wallet === 'team' ? usage.wallet : undefined;
+    // Only the agent's detail carries it, and null when Wiro could not read it.
+    const planBalance = typeof usage.planbalanceusd === 'number' && Number.isFinite(usage.planbalanceusd)
+      ? usage.planbalanceusd
+      : null;
     const minBalance = toNumber(usage.minbalanceusd);
     const reason = usage.pausedreason === 'plan' || usage.pausedreason === 'balance' || usage.pausedreason === 'spendlimit'
       ? usage.pausedreason
@@ -473,6 +479,7 @@ export function toAgentUsage(row: Record<string, unknown>): AgentUsage {
       ...(fromBalance !== null ? { fromBalanceUsd: fromBalance } : {}),
       ...(balance !== null ? { balanceUsd: balance } : {}),
       ...(wallet ? { wallet } : {}),
+      ...(planBalance !== null ? { planBalanceUsd: planBalance } : {}),
       ...(minBalance !== null ? { minBalanceUsd: minBalance } : {}),
       paused: usage.paused === true || reason !== undefined,
       ...(reason ? { pausedReason: reason } : {}),
@@ -545,7 +552,11 @@ export function aiUsageText(usage: AgentUsage): string {
   const parts = [`${formatUsd(usage.usedUsd)} of ${formatUsd(usage.includedUsd)} included${renewal}`];
   if (usage.extraUsd) parts.push(`${formatUsd(usage.extraUsd)} bought earlier left`);
   if (!usage.legacy) {
-    parts.push(`then the workspace balance${usage.balanceUsd !== undefined ? ` (${formatUsd(usage.balanceUsd)})` : ''}`);
+    const amounts = [
+      ...(usage.balanceUsd !== undefined ? [formatUsd(usage.balanceUsd)] : []),
+      ...(usage.planBalanceUsd !== undefined ? [`${formatUsd(usage.planBalanceUsd)} of it can pay a plan`] : []),
+    ];
+    parts.push(`then the workspace balance${amounts.length > 0 ? ` (${amounts.join('; ')})` : ''}`);
   }
   if (usage.fromBalanceUsd) parts.push(`${formatUsd(usage.fromBalanceUsd)} paid from the balance so far`);
   return `${parts.join('; ')}${usage.paused ? `. Paused: ${pausedText(usage)}` : ''}`;

@@ -5730,6 +5730,50 @@ test('get_my_agent and list_my_agents show the AI usage, the balance after it an
   assert.doesNotMatch(textOf(moved.list), /spent/);
 });
 
+test('get_my_agent shows what the agent\'s wallet can pay a plan with, and leaves it out when Wiro could not read it', async () => {
+  const read = async (usage) => {
+    const fake = fakeClient({
+      '/UserAgent/Detail': detailResponse(agentRow({ usage })),
+      // Lists carry no plan balance.
+      '/UserAgent/MyAgents': { result: true, errors: [], useragents: [agentRow()] },
+    });
+    let detail;
+    let list;
+    await withClient(fake, async client => {
+      detail = await call(client, 'get_my_agent', { agent_guid: 'ua-1' });
+      list = await call(client, 'list_my_agents', {});
+    });
+    return { detail, list, usage: detail.structuredContent.agent.usage, lines: textOf(detail).split('\n') };
+  };
+
+  // A coupon limited to models stays in the balance and pays no plan, so Wiro's plan balance is the smaller amount.
+  const counted = await read(usageOf({ planbalanceusd: 30.5 }));
+  assert.equal(counted.usage.planBalanceUsd, 30.5);
+  assert.equal(counted.usage.balanceUsd, 42.1);
+  assert.ok(counted.lines.includes('**AI usage this month:** $2.00 of $5.00 included; then the workspace balance ($42.10; $30.50 of it can pay a plan)'), textOf(counted.detail));
+  assert.equal('planBalanceUsd' in counted.list.structuredContent.agents[0].usage, false);
+  assert.doesNotMatch(textOf(counted.list), /can pay a plan/);
+
+  // Wiro answers null when it could not read it, and for Studio and the Workflow Agent: nothing is said then.
+  for (const planbalanceusd of [null, undefined, 'n/a']) {
+    const unread = await read(usageOf({ planbalanceusd }));
+    assert.equal('planBalanceUsd' in unread.usage, false, String(planbalanceusd));
+    assert.ok(unread.lines.includes('**AI usage this month:** $2.00 of $5.00 included; then the workspace balance ($42.10)'), textOf(unread.detail));
+  }
+  // An empty wallet that can pay nothing says so.
+  const empty = await read(usageOf({ balanceusd: 0, planbalanceusd: 0 }));
+  assert.equal(empty.usage.planBalanceUsd, 0);
+  assert.ok(empty.lines.includes('**AI usage this month:** $2.00 of $5.00 included; then the workspace balance ($0.00; $0.00 of it can pay a plan)'), textOf(empty.detail));
+
+  const fake = fakeClient({});
+  await withClient(fake, async client => {
+    const { tools } = await client.listTools();
+    const tool = tools.find(item => item.name === 'get_my_agent');
+    assert.match(tool.description, /what that balance can pay a plan with \(planBalanceUsd: deposits, store revenue and coupons that can pay a plan; a coupon limited to models does not count\)/);
+    assert.match(JSON.stringify(tool.outputSchema), /a coupon limited to models does not count/);
+  });
+});
+
 test('an answer from an older Wiro release still shows the AI usage in dollars, from its credit fields', async () => {
   const usageFrom = overrides => toAgentDetail(agentRow({ usage: undefined, spend: undefined, ...overrides })).usage;
   // Hundredths of a dollar: $2.00 of the plan's $5.00 used.

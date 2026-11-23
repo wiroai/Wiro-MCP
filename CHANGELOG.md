@@ -99,7 +99,8 @@ runs `npx @wiro-ai/wiro-mcp@latest` takes it at its next start.
   balance's deposits, store revenue and coupon credit that is not limited to certain models.
   The `deploy_agent` quote shows the paying balance in its parts
   (`quote.wallet.couponCreditUsd` joins `storeRevenueUsd`), and a refusal for a short
-  balance says what counts.
+  balance says what counts. `get_my_agent` shows what the agent's wallet can pay a plan with
+  (`usage.planBalanceUsd`).
 - `get_my_agent` lists the agent's connectors with their state and the accounts chosen.
 - `get_agent_activity` (logs) names who connected or disconnected a connector, or set its
   accounts (`CONNECTOR_CONNECTED`, `CONNECTOR_DISCONNECTED`, `CONNECTOR_ACCOUNTS_SET`), as
