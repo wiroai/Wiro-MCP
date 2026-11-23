@@ -100,6 +100,8 @@ const quoteWalletSchema = z.object({
   balanceUsd: z.number().optional(),
   storeRevenueUsd: z.number().optional()
     .describe('The part of balanceUsd that is store revenue, when there is any.'),
+  couponCreditUsd: z.number().optional()
+    .describe('The part of balanceUsd that is coupon credit, when there is any. Coupon credit limited to certain models does not pay a plan.'),
 });
 
 const quoteSchema = z.object({
@@ -135,7 +137,7 @@ const customSkillSchema = z.object({
   key: z.string().min(1).max(70)
     .describe('The entry\'s key: a full key (cs-... or cs-cron-...) or a bare slug such as "weekly-report" (lowercase letters, digits, single dashes). A bare slug names the template\'s own entry of that name when it has one; otherwise it becomes cs-<slug>, or cs-cron-<slug> with interval.'),
   value: z.string().max(20_000).optional()
-    .describe('The instruction text the agent follows, or the prompt a scheduled task runs. Required for a new entry. Leave it out for an entry that comes with the template: a custom skill then keeps the template\'s text, and a scheduled task always runs the template\'s own prompt, so only its interval and enabled can change.'),
+    .describe('The instruction text the agent follows, or the prompt a scheduled task runs. Required for a new entry. Leave it out for an entry that comes with the template: a custom skill then keeps the template\'s text, and a scheduled task the template wrote a text for always runs that text, which cannot be changed: only its interval and enabled can.'),
   description: z.string().max(500).optional()
     .describe('Short description shown in the dashboard.'),
   interval: z.string().max(100).optional()
@@ -202,7 +204,7 @@ function paidFromText({ workspace }: PayingWallet): string {
   return `The Wiro balance of ${team}${workspace.organizationName?.trim() ? ` (${quotedSpan(workspace.organizationName)})` : ''}.`;
 }
 
-function quoteWallet({ workspace, balanceUsd, storeRevenueUsd }: PayingWallet): z.infer<typeof quoteWalletSchema> | undefined {
+function quoteWallet({ workspace, balanceUsd, storeRevenueUsd, couponCreditUsd }: PayingWallet): z.infer<typeof quoteWalletSchema> | undefined {
   if (workspace.kind === 'unknown' && balanceUsd === null) return undefined;
   return {
     kind: workspace.kind,
@@ -210,15 +212,28 @@ function quoteWallet({ workspace, balanceUsd, storeRevenueUsd }: PayingWallet): 
     ...(workspace.organizationName ? { organizationName: workspace.organizationName } : {}),
     ...(balanceUsd !== null ? { balanceUsd } : {}),
     ...(storeRevenueUsd ? { storeRevenueUsd } : {}),
+    ...(couponCreditUsd ? { couponCreditUsd } : {}),
   };
 }
 
-/** What the paying wallet holds, with store revenue apart from deposits and coupon credit. */
+/**
+ * What the paying wallet holds, in its parts when it holds more than deposits. A plan is paid from deposits, store
+ * revenue and coupon credit that is not limited to certain models, so coupon credit is named with that rule.
+ */
 function walletHoldsText(wallet: Quote['wallet']): string {
   if (wallet?.balanceUsd === undefined) return 'get_account shows the balance.';
-  if (!wallet.storeRevenueUsd) return `It holds ${formatUsd(wallet.balanceUsd)}.`;
-  const others = Math.round((wallet.balanceUsd - wallet.storeRevenueUsd) * 100) / 100;
-  return `It holds ${formatUsd(others)} in deposits and coupon credit, and ${formatUsd(wallet.storeRevenueUsd)} in store revenue.`;
+  const store = wallet.storeRevenueUsd ?? 0;
+  const coupon = wallet.couponCreditUsd ?? 0;
+  if (!store && !coupon) return `It holds ${formatUsd(wallet.balanceUsd)}.`;
+  const deposits = Math.round((wallet.balanceUsd - store - coupon) * 100) / 100;
+  const parts = [
+    `${formatUsd(deposits)} in deposits`,
+    ...(coupon ? [`${formatUsd(coupon)} in coupon credit`] : []),
+    ...(store ? [`${formatUsd(store)} in store revenue`] : []),
+  ];
+  const listed = parts.length > 2 ? `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}` : parts.join(' and ');
+  return `It holds ${formatUsd(wallet.balanceUsd)}: ${listed}.`
+    + (coupon ? ' Coupon credit pays the plan only when it is not limited to certain models.' : '');
 }
 
 /** The plans that were not asked for, with their prices and the AI usage each includes. */
@@ -378,7 +393,8 @@ export function registerDeployAgent(server: McpServer, client: WiroClient): void
         + 'workspace only a team admin can deploy; anyone else is refused before anything is created or charged. This costs '
         + 'money: the first 30 days are paid from the Wiro balance of the connected project\'s workspace '
         + '(a team project pays from the team\'s balance), never by card, and the plan renews from that balance every 30 '
-        + 'days until it is cancelled. Without confirm: true the tool only returns the exact quote. Show it to '
+        + 'days until it is cancelled. A plan payment counts the balance\'s deposits, store revenue and coupon credit '
+        + 'that is not limited to certain models. Without confirm: true the tool only returns the exact quote. Show it to '
         + 'the user, get their approval, then repeat the call with confirm: true and confirm_charge_usd set to '
         + 'the quoted price; if the price changed in between, nothing is charged and a new quote comes back. '
         + 'Never repeat a confirmed deploy that timed out or whose outcome is unknown without checking '

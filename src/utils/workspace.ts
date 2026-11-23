@@ -167,6 +167,8 @@ export interface PayingWallet {
   balanceUsd: number | null;
   /** The part of the balance that is store revenue, when the wallet could be read. */
   storeRevenueUsd?: number;
+  /** The part of the balance that is coupon credit, when the wallet could be read. */
+  couponCreditUsd?: number;
 }
 
 /**
@@ -183,6 +185,7 @@ export async function readPayingWallet(client: WiroClient, signal?: AbortSignal)
       workspace: await workspaceOfWallet(client, wallet, signal),
       balanceUsd: balance.totalUsd,
       storeRevenueUsd: balance.storeRevenueUsd,
+      couponCreditUsd: balance.couponCreditUsd,
     };
   } catch (error) {
     if (signal?.aborted) throw error;

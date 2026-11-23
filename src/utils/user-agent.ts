@@ -229,6 +229,14 @@ export const AGENT_AI_USAGE = 'the agent\'s AI usage (its plan first, then the w
 /** The Wiro dashboard page where funds are added to a balance. No tool adds funds. */
 export const ADD_FUNDS_URL = 'https://wiro.ai/panel/wallet/deposit/credit-card';
 
+/**
+ * What pays an agent plan: one rule for every plan payment, a new plan, a renewal, a move to a larger plan and the
+ * automatic renewal alike. The balance's deposits, its store revenue and its coupon credit count, except coupon credit
+ * limited to certain models, which pays no plan.
+ */
+export const PLAN_FUNDS_TEXT = 'A plan payment, the automatic renewal included, counts the balance\'s deposits, store '
+  + 'revenue and coupon credit that is not limited to certain models; coupon credit limited to models pays no plan.';
+
 /** Where funds are added, as a sentence. A team agent's balance is its team's wallet. */
 export function addFundsText(workspace: 'personal' | 'team'): string {
   return `Funds are added at ${ADD_FUNDS_URL}${workspace === 'team' ? ' (select the agent\'s team in the dashboard first)' : ''}.`;
@@ -257,7 +265,7 @@ export function pausedUsage(body: Record<string, unknown>): AgentUsage | null {
  * teamHint says which team to select in the dashboard, when one is to be selected.
  */
 export function shortBalanceNote(neededUsd: number | null, teamHint: string, nothingDone = 'Nothing was charged.'): string {
-  return `${nothingDone} ${neededUsd !== null ? `Add at least ${formatUsd(neededUsd)} to the Wiro balance on wiro.ai. ` : ''}`
+  return `${nothingDone} ${PLAN_FUNDS_TEXT} ${neededUsd !== null ? `Add at least ${formatUsd(neededUsd)} to the Wiro balance on wiro.ai. ` : ''}`
     + `Funds are added at ${ADD_FUNDS_URL}${teamHint ? ` (${teamHint})` : ''}.`;
 }
 
@@ -691,6 +699,8 @@ export const agentTaskSchema = z.object({
   enabled: z.boolean(),
   notWritten: z.boolean().optional()
     .describe('The starter task whose text was never written. It does not run, even when it shows on, until its text is saved with manage_agent_custom_skill.'),
+  editable: z.boolean().optional()
+    .describe('false: a scheduled task that comes with the agent\'s template. The agent runs the template\'s text, which cannot be changed; its schedule and on/off state can.'),
   ownerSkills: z.array(z.string()).optional()
     .describe('The skills that bring this task.'),
   skillOff: z.boolean().optional()
@@ -712,7 +722,7 @@ const TASK_SOURCES: Record<string, AgentTask['source']> = {
 };
 
 /** Custom instructions and scheduled tasks, with the instruction text cut short. */
-export function summarizeTasks(value: unknown, maxInstructionLength = 300): AgentTask[] {
+export function summarizeTasks(value: unknown, maxInstructionLength = 300, options: { deployed?: boolean } = {}): AgentTask[] {
   if (!Array.isArray(value)) return [];
   return value.filter(isPlainObject).map(task => {
     const description = asString(task.description);
@@ -727,6 +737,9 @@ export function summarizeTasks(value: unknown, maxInstructionLength = 300): Agen
       ...(description ? { description } : {}),
       enabled: task.enabled !== false,
       ...(asString(task.key) === STARTER_TASK_KEY && task._edited === false ? { notWritten: true } : {}),
+      // On a deployed agent, Wiro marks a scheduled task whose text its template owns as not editable. A template's
+      // own list means something else by the flag, so it is read only there.
+      ...(options.deployed && asString(task.key)?.startsWith('cs-cron-') && task._editable === false ? { editable: false } : {}),
       ...(ownerSkills.length > 0 ? { ownerSkills } : {}),
       ...(task._skill_off === true ? { skillOff: true } : {}),
       ...(offSkills.length > 0 ? { offSkills } : {}),
@@ -1021,8 +1034,8 @@ export function toAgentDetail(row: Record<string, unknown>): AgentDetail {
       .filter(credential => credential.requiredMissing)
       .map(({ key, title }) => ({ key, title })),
     channels,
-    scheduledTasks: summarizeTasks(row.scheduledskills),
-    customInstructions: summarizeTasks(row.customskills),
+    scheduledTasks: summarizeTasks(row.scheduledskills, undefined, { deployed: true }),
+    customInstructions: summarizeTasks(row.customskills, undefined, { deployed: true }),
     ...timestamps(row, {
       queuedAt: 'queuedat',
       startedAt: 'startedat',
@@ -1285,7 +1298,7 @@ export function skillOffTasksNote(
  * was cut. titles names the skills a paused task waits for as people see them.
  */
 export function formatScheduledTaskLine(task: AgentTask, shortenedNote = '', titles?: ReadonlyMap<string, string>): string {
-  return `- ${taskLabel(task.key, taskNamedByWiro(task))} ${task.enabled ? 'on' : 'off'}${task.notWritten ? ' (its text is not written yet, so it does not run)' : ''}${task.skillOff ? ` (${skillOffText(task, titles)})` : ''}${task.interval ? `, ${task.interval}` : ''}${task.description ? `: ${quotedSpan(task.description)}` : ''}${task.instructionsTruncated ? shortenedNote : ''}`;
+  return `- ${taskLabel(task.key, taskNamedByWiro(task))} ${task.enabled ? 'on' : 'off'}${task.notWritten ? ' (its text is not written yet, so it does not run)' : ''}${task.editable === false ? ' (the template\'s text, which cannot be changed)' : ''}${task.skillOff ? ` (${skillOffText(task, titles)})` : ''}${task.interval ? `, ${task.interval}` : ''}${task.description ? `: ${quotedSpan(task.description)}` : ''}${task.instructionsTruncated ? shortenedNote : ''}`;
 }
 
 /** A custom instruction as a list line: name and key, on or off and description, then shortenedNote if its text was cut. */

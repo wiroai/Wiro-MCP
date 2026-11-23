@@ -49,6 +49,8 @@ const entrySchema = z.object({
   enabled: z.boolean(),
   interval: z.string().nullable(),
   text: z.string(),
+  editable: z.boolean().optional()
+    .describe('false: a scheduled task that comes with the agent\'s template. The agent runs this text, the template\'s, which cannot be changed; its schedule and on/off state can.'),
 });
 
 export function registerGetMyAgent(server: McpServer, client: WiroClient): void {
@@ -120,6 +122,7 @@ export function registerGetMyAgent(server: McpServer, client: WiroClient): void 
             enabled: found.enabled,
             interval: found.interval,
             text: found.value,
+            ...(found.templateText ? { editable: false } : {}),
           };
         }
         const plainMember = await isPlainTeamMember(client, row, extra.signal);
@@ -147,7 +150,13 @@ export function registerGetMyAgent(server: McpServer, client: WiroClient): void 
             type: 'text' as const,
             text: [
               formatAgentDetail(agent, plainMember, titles, connectorLines(connections)),
-              ...(full ? ['', `### \`${full.key}\` in full`, '', ...textBlock(full.text)] : []),
+              ...(full ? [
+                '',
+                `### \`${full.key}\` in full`,
+                ...(full.editable === false ? ['', 'It comes with the agent\'s template: the agent runs this text, the template\'s, which cannot be changed. Its schedule and on/off state can.'] : []),
+                '',
+                ...textBlock(full.text),
+              ] : []),
               ...(setupNote ? ['', setupNote] : []),
               '',
               advice,

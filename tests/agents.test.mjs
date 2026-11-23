@@ -1211,7 +1211,7 @@ test('deploy_agent checks custom skills against the template before quoting', as
     assert.match(textOf(noText), /cs-brand-voice is a new custom skill, so it needs value/);
     assert.equal(fake.called('/UserAgent/Deploy').length, 0);
 
-    // The agent always runs the template's own prompt for its scheduled tasks.
+    // The agent always runs the text the template wrote for its scheduled task.
     const newText = await call(client, 'deploy_agent', {
       template: 'instagram-manager',
       tier: 'starter',
@@ -1219,7 +1219,7 @@ test('deploy_agent checks custom skills against the template before quoting', as
     });
     assert.equal(newText.isError, true);
     assert.match(textOf(newText), /Nothing was deployed/);
-    assert.match(textOf(newText), /The text of cs-cron-daily-digest comes from the agent's template and cannot be changed; only its schedule \(interval\) and on\/off state \(enabled\) can/);
+    assert.match(textOf(newText), /- cs-cron-daily-digest: This scheduled task comes with the agent's template, so its instructions cannot be changed\. You can still turn it on or off and change its schedule\./);
     assert.equal(fake.called('/UserAgent/Deploy').length, 0);
 
     const quote = await call(client, 'deploy_agent', {
@@ -2788,7 +2788,7 @@ test('manage_agent_billing says a wallet that could not be read is no low balanc
   });
   await withClient(short, async client => {
     const result = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'change_plan', plan: 'pro', confirm_charge_usd: 25, confirm: true });
-    assert.match(textOf(result), /Nothing was charged\. Funds are added at/);
+    assert.match(textOf(result), /Nothing was charged\. A plan payment, the automatic renewal included, counts the balance's deposits, store revenue and coupon credit that is not limited to certain models; coupon credit limited to models pays no plan\. Funds are added at/);
   });
 });
 
@@ -3705,7 +3705,7 @@ test('a card plan moving to the balance is cancelled with its period, and its ag
   await withClient(fakeClient({}), async client => {
     const { tools } = await client.listTools();
     const description = tools.find(tool => tool.name === 'manage_agent_billing').description;
-    assert.match(description, /Agent plans are paid only from the Wiro balance: no card payment is taken, and a quote refused because the balance is short says how much to add on wiro\.ai, with nothing charged\. A card plan from before that is paid by card through its period, then moves to the balance and renews from it; its plan changes are paid from the balance, cancel ends it with its period instead, and renew undoes that, or brings back a card plan that ended, from the balance\./);
+    assert.match(description, /Agent plans are paid only from the Wiro balance: no card payment is taken, and a quote refused because the balance is short says how much to add on wiro\.ai, with nothing charged\. Every plan payment, the automatic renewal included, counts the balance's deposits, store revenue and coupon credit that is not limited to certain models; coupon credit limited to models pays no plan\. A card plan from before plans were paid from the balance is paid by card through its period, then moves to the balance and renews from it; its plan changes are paid from the balance, cancel ends it with its period instead, and renew undoes that, or brings back a card plan that ended, from the balance\./);
     assert.doesNotMatch(description, /dashboard|portal|Billing in/);
   });
   const switching = subscription({ provider: 'stripe', nextprovider: 'prepaid' });
@@ -3942,7 +3942,7 @@ test('manage_agent_billing says nothing was charged when the balance is short, a
     await withClient(fake, async client => {
       const result = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'subscribe', confirm_charge_usd: 5, confirm: true });
       assert.equal(result.isError, true);
-      assert.ok(textOf(result).endsWith('Your balance is $1.00; this plan needs $5.00. Add funds to continue.\n\nNothing was charged. Add at least $10.00 to the Wiro balance on wiro.ai. '
+      assert.ok(textOf(result).endsWith('Your balance is $1.00; this plan needs $5.00. Add funds to continue.\n\nNothing was charged. A plan payment, the automatic renewal included, counts the balance\'s deposits, store revenue and coupon credit that is not limited to certain models; coupon credit limited to models pays no plan. Add at least $10.00 to the Wiro balance on wiro.ai. '
         + `Funds are added at https://wiro.ai/panel/wallet/deposit/credit-card${team}. Once the user has added them and says yes, confirm the same quote again. get_account shows the balance.`), textOf(result));
       assert.doesNotMatch(textOf(result), /may have|does not show whether/);
       assert.equal(fake.called('/UserAgent/CreateSubscriptionCheckout').length, 1);
@@ -3957,7 +3957,7 @@ test('manage_agent_billing says nothing was charged when the balance is short, a
   });
   await withClient(older, async client => {
     const result = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'subscribe', confirm_charge_usd: 5, confirm: true });
-    assert.match(textOf(result), /\n\nNothing was charged\. Funds are added at https:\/\/wiro\.ai\/panel\/wallet\/deposit\/credit-card\. Once the user/);
+    assert.match(textOf(result), /\n\nNothing was charged\. A plan payment, the automatic renewal included, counts the balance's deposits, store revenue and coupon credit that is not limited to certain models; coupon credit limited to models pays no plan\. Funds are added at https:\/\/wiro\.ai\/panel\/wallet\/deposit\/credit-card\. Once the user/);
   });
 
   // A 97 that refuses a team member is no short balance.
@@ -4570,11 +4570,11 @@ test('a deploy quote names the team wallet, its balance, the other plans and the
     assert.notEqual(result.isError, true, textOf(result));
     const { quote } = result.structuredContent;
     assert.equal(quote.paidFrom, 'The Wiro balance of the team `Growth` (`Acme`).');
-    assert.deepEqual(quote.wallet, { kind: 'team', teamName: 'Growth', organizationName: 'Acme', balanceUsd: 60.5 });
+    assert.deepEqual(quote.wallet, { kind: 'team', teamName: 'Growth', organizationName: 'Acme', balanceUsd: 60.5, couponCreditUsd: 10.5 });
     assert.deepEqual(quote.pricing, PLAN_PRICING);
     assert.equal(quote.teamSessionMode, 'collaborative');
     const lines = textOf(result).split('\n');
-    assert.ok(lines.includes('- Paid from: The Wiro balance of the team `Growth` (`Acme`). It holds $60.50.'), textOf(result));
+    assert.ok(lines.includes('- Paid from: The Wiro balance of the team `Growth` (`Acme`). It holds $60.50: $50.00 in deposits and $10.50 in coupon credit. Coupon credit pays the plan only when it is not limited to certain models.'), textOf(result));
     assert.ok(lines.includes('- Other plans: Pro $30 a month, includes $30 of AI usage; Max $100 a month, includes $100 of AI usage. Every plan includes every skill and connector.'), textOf(result));
     assert.ok(lines.includes(TEAM_CHATS_LINE), textOf(result));
     assert.equal(fake.called('/UserAgent/Deploy').length, 0);
@@ -4582,7 +4582,7 @@ test('a deploy quote names the team wallet, its balance, the other plans and the
   });
 });
 
-test('a deploy quote shows store revenue apart from deposits and coupon credit', async () => {
+test('a deploy quote shows the balance in its parts, and that coupon credit limited to models does not pay a plan', async () => {
   const fake = fakeClient({
     '/Organization/List': organizations('member'),
     '/Team/List': TEAMS_OF_ORGANIZATION,
@@ -4591,8 +4591,8 @@ test('a deploy quote shows store revenue apart from deposits and coupon credit',
   });
   await withClient(fake, async client => {
     const result = await call(client, 'deploy_agent', { template: 'instagram-manager', tier: 'starter' });
-    assert.deepEqual(result.structuredContent.quote.wallet, { kind: 'personal', balanceUsd: 310, storeRevenueUsd: 300 });
-    assert.ok(textOf(result).split('\n').includes('- Paid from: Your Wiro balance (the personal wallet). It holds $10.00 in deposits and coupon credit, and $300.00 in store revenue.'), textOf(result));
+    assert.deepEqual(result.structuredContent.quote.wallet, { kind: 'personal', balanceUsd: 310, storeRevenueUsd: 300, couponCreditUsd: 6 });
+    assert.ok(textOf(result).split('\n').includes('- Paid from: Your Wiro balance (the personal wallet). It holds $310.00: $4.00 in deposits, $6.00 in coupon credit and $300.00 in store revenue. Coupon credit pays the plan only when it is not limited to certain models.'), textOf(result));
   });
 });
 
@@ -4656,7 +4656,7 @@ test('a deploy quote names the team wallet of an organization owner with no memb
   await withClient(quote, async client => {
     const result = await call(client, 'deploy_agent', { template: 'instagram-manager', tier: 'starter' });
     assert.equal(result.structuredContent.quote.paidFrom, 'The Wiro balance of the team `Growth` (`Acme`).');
-    assert.deepEqual(result.structuredContent.quote.wallet, { kind: 'team', teamName: 'Growth', organizationName: 'Acme', balanceUsd: 60.5 });
+    assert.deepEqual(result.structuredContent.quote.wallet, { kind: 'team', teamName: 'Growth', organizationName: 'Acme', balanceUsd: 60.5, couponCreditUsd: 10.5 });
     assertNoSecrets(result);
   });
 });
@@ -4692,7 +4692,7 @@ test('a team list that cannot be read leaves the workspace unknown', async () =>
   await withClient(fake, async client => {
     const result = await call(client, 'deploy_agent', { template: 'instagram-manager', tier: 'starter' });
     assert.equal(result.structuredContent.quote.paidFrom, 'The Wiro balance of the connected project\'s workspace: the team wallet for a team project, otherwise the personal wallet.');
-    assert.deepEqual(result.structuredContent.quote.wallet, { kind: 'unknown', balanceUsd: 60.5 });
+    assert.deepEqual(result.structuredContent.quote.wallet, { kind: 'unknown', balanceUsd: 60.5, couponCreditUsd: 10.5 });
   });
 });
 
@@ -4722,8 +4722,8 @@ test('a deploy quote keeps the general wallet line when the workspace cannot be 
     const result = await call(client, 'deploy_agent', { template: 'instagram-manager', tier: 'starter' });
     assert.equal(result.structuredContent.stage, 'quote');
     assert.equal(result.structuredContent.quote.paidFrom, general);
-    assert.deepEqual(result.structuredContent.quote.wallet, { kind: 'unknown', balanceUsd: 60.5 });
-    assert.match(textOf(result), /otherwise the personal wallet\. It holds \$60\.50\./);
+    assert.deepEqual(result.structuredContent.quote.wallet, { kind: 'unknown', balanceUsd: 60.5, couponCreditUsd: 10.5 });
+    assert.match(textOf(result), /otherwise the personal wallet\. It holds \$60\.50: \$50\.00 in deposits and \$10\.50 in coupon credit\. Coupon credit pays the plan only when it is not limited to certain models\./);
     assert.equal(result.structuredContent.quote.teamSessionMode, undefined);
   });
 });
@@ -5802,7 +5802,7 @@ test('deploy_agent says how much to add on wiro.ai when the balance is short, wi
     await withClient(fake, async client => {
       const result = await call(client, 'deploy_agent', { template: 'instagram-manager', tier: 'starter', confirm_charge_usd: 5, confirm: true });
       assert.equal(result.isError, true);
-      assert.ok(textOf(result).endsWith('Your balance is $1.00; this plan needs $5.00. Add funds to continue.\n\nNothing was created or charged. Add at least $10.00 to the Wiro balance on wiro.ai. '
+      assert.ok(textOf(result).endsWith('Your balance is $1.00; this plan needs $5.00. Add funds to continue.\n\nNothing was created or charged. A plan payment, the automatic renewal included, counts the balance\'s deposits, store revenue and coupon credit that is not limited to certain models; coupon credit limited to models pays no plan. Add at least $10.00 to the Wiro balance on wiro.ai. '
         + `Funds are added at https://wiro.ai/panel/wallet/deposit/credit-card${team}. Give the user the amounts. Once the user has added them and says yes, confirm the same quote again.`), textOf(result));
       assert.doesNotMatch(textOf(result), /may have been created|list_my_agents/);
       assert.equal(fake.called('/UserAgent/Deploy').length, 1);

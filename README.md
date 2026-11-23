@@ -333,7 +333,7 @@ in AI usage each month; after that, they use your Wiro balance.
 | `set_agent_connector_permissions` | Change a connector's permissions for a group or one action; shows what changes for the agent and whether it restarts, then asks for your confirmation |
 | `list_projects` | List the projects of the connected project's workspace, to pick one for an agent; no keys are shown |
 | `bind_agent_project` | Set the Wiro project an agent's video and voice skills run models with, with no key in the chat; shows the project first, then asks for your confirmation. The agent's model tools come from the Wiro AI Models connector (`wiro`), which runs with this same project and is connected with `connect_agent_connector` |
-| `manage_agent_custom_skill` | Add, edit, schedule, restore or remove an agent's own instructions and scheduled tasks; turning off its approval policy or changing its rules needs your confirmation |
+| `manage_agent_custom_skill` | Add, edit, schedule, restore or remove an agent's own instructions and scheduled tasks; turning off its approval policy or changing its rules needs your confirmation. A scheduled task that comes with the agent's template keeps the template's text: its schedule and on/off switch can change |
 | `manage_agent_billing` | Subscribe, move to another plan, cancel or renew, paid from your Wiro balance, after your confirmation |
 | `get_agent_activity` | Read what an agent spent and its ledger in dollars, and its activity logs, including who changed what on it |
 | `delete_agent` | Delete an agent, after your confirmation |
@@ -435,8 +435,9 @@ group that is not loaded, the server instructions tell the assistant to say so.
 Running a model or workflow, sending a message to Studio or the Workflow Agent,
 and messages to your own agents (which use the AI usage their plan includes, then
 your Wiro balance) cost money. Agent plans and moves to a larger plan are charged
-to your Wiro balance, never by card, so
-those tools first return the price (for a move inside a billing period, the
+to your Wiro balance, never by card: its deposits, store revenue and coupon credit
+that is not limited to certain models count toward a plan, the automatic renewal
+included. Those tools first return the price (for a move inside a billing period, the
 amount Wiro works out for the time left) and only act when called again with
 `confirm: true` and `confirm_charge_usd`, the approved amount, after you agree.
 If the price changed in between, nothing is charged and you get a new quote.

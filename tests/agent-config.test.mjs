@@ -196,7 +196,8 @@ function detailRow(overrides = {}) {
       { key: 'cs-approval-policy', description: 'Approval rules', value: 'Ask before spending.', interval: null, enabled: true, requires_credentials: [], _source: 'preset-strategy', _editable: true },
     ],
     scheduledskills: [
-      { key: 'cs-cron-metaads-performance-reporter', description: 'Weekly Meta report', value: 'Report on Meta Ads.', interval: '0 9 * * 1', enabled: true, requires_credentials: [], requires_connectors: ['meta-ads'], _source: 'skill-bundle', _editable: true },
+      // The template wrote this task's text, so Wiro shows the template's text and marks it not editable.
+      { key: 'cs-cron-metaads-performance-reporter', description: 'Weekly Meta report', value: 'Report on Meta Ads.', interval: '0 9 * * 1', enabled: true, requires_credentials: [], requires_connectors: ['meta-ads'], _source: 'skill-bundle', _editable: false },
       { key: 'cs-cron-my-task', description: 'My task', value: 'Do my task.', interval: '0 8 * * *', enabled: true, requires_credentials: [], _source: 'user-created', _editable: true, _user_created: true },
     ],
     ...overrides,
@@ -1581,7 +1582,7 @@ test('manage_agent_custom_skill refuses invalid upserts without writing', async 
       [{ key: 'Lead Strategy', value: 'x' }, /Invalid key/],
       [{ key: 'brand-new' }, /needs value/],
       [{ key: 'cs-approval-policy', description: 'New text' }, /comes with the agent, so its description cannot be changed/],
-      [{ key: 'cs-cron-metaads-performance-reporter', value: 'Different prompt' }, /comes from the agent's template/],
+      [{ key: 'cs-cron-metaads-performance-reporter', value: 'Different prompt' }, /^## Error\n\ncs-cron-metaads-performance-reporter: This scheduled task comes with the agent's template, so its instructions cannot be changed\. You can still turn it on or off and change its schedule\. enabled turns it on or off and interval changes its schedule\./],
     ];
     for (const [args, pattern] of cases) {
       const result = await client.callTool({ name: 'manage_agent_custom_skill', arguments: { action: 'upsert', agent_guid: AGENT, ...args } });
@@ -1589,6 +1590,72 @@ test('manage_agent_custom_skill refuses invalid upserts without writing', async 
       assert.match(text(result), pattern);
     }
     assert.equal(fake.paths().includes('/UserAgent/CustomSkillUpsert'), false);
+  });
+});
+
+test('a scheduled task that comes with the template keeps its text: its own text sent back changes nothing, its switch and schedule still change', async () => {
+  const fake = fakeClient({
+    '/UserAgent/Detail': detail(),
+    '/UserAgent/CustomSkillUpsert': { result: true, errors: [], restarting: true },
+  });
+  await withClient(fake, async client => {
+    const upsert = args => client.callTool({ name: 'manage_agent_custom_skill', arguments: { action: 'upsert', agent_guid: AGENT, key: 'cs-cron-metaads-performance-reporter', ...args } });
+    // The template's own text, line endings and surrounding blanks aside, is no change.
+    const same = await upsert({ value: '  Report on Meta Ads.\r\n' });
+    assert.notEqual(same.isError, true, text(same));
+    assert.equal(same.structuredContent.status, 'no_change');
+    assert.equal(same.structuredContent.entry.editable, false);
+    assert.equal(fake.paths().includes('/UserAgent/CustomSkillUpsert'), false);
+
+    // With the switch, only the switch is sent.
+    const off = await upsert({ value: 'Report on Meta Ads.', enabled: false });
+    assert.equal(off.structuredContent.status, 'saved');
+    assert.deepEqual(fake.called('/UserAgent/CustomSkillUpsert')[0].body, { useragentguid: AGENT, skillkey: 'cs-cron-metaads-performance-reporter', enabled: false });
+    const schedule = await upsert({ interval: '0 8 * * 1' });
+    assert.equal(schedule.structuredContent.status, 'saved');
+    assert.deepEqual(fake.called('/UserAgent/CustomSkillUpsert')[1].body, { useragentguid: AGENT, skillkey: 'cs-cron-metaads-performance-reporter', interval: '0 8 * * 1' });
+  });
+});
+
+test('a scheduled task Wiro shows as editable takes a new text, and Wiro\'s refusal of a template\'s text says what still changes', async () => {
+  // A task the template wrote no text for, or one of a custom build, is the agent's own.
+  const own = { key: 'cs-cron-own-words', description: 'Own words', value: 'Post a photo.', interval: '0 9 * * 1', enabled: true, requires_credentials: [], _source: 'skill-bundle', _editable: true };
+  const fake = fakeClient({
+    '/UserAgent/Detail': detail({ scheduledskills: [own] }),
+    '/UserAgent/CustomSkillUpsert': body => (body.skillkey === 'cs-cron-own-words' && body.value === 'Refused text.'
+      ? { result: false, errors: [{ code: 0, message: 'This scheduled task comes with the agent\'s template, so its instructions cannot be changed. You can still turn it on or off and change its schedule.' }] }
+      : { result: true, errors: [] }),
+  });
+  await withClient(fake, async client => {
+    const saved = await client.callTool({ name: 'manage_agent_custom_skill', arguments: { action: 'upsert', agent_guid: AGENT, key: 'own-words', value: 'Post the week\'s best photo.' } });
+    assert.notEqual(saved.isError, true, text(saved));
+    assert.equal(saved.structuredContent.entry.editable, undefined);
+    assert.equal(fake.called('/UserAgent/CustomSkillUpsert')[0].body.value, 'Post the week\'s best photo.');
+    // Wiro is the judge: its refusal comes back with what can still change.
+    const refused = await client.callTool({ name: 'manage_agent_custom_skill', arguments: { action: 'upsert', agent_guid: AGENT, key: 'own-words', value: 'Refused text.' } });
+    assert.equal(refused.isError, true);
+    assert.match(text(refused), /so its instructions cannot be changed\. You can still turn it on or off and change its schedule\. enabled turns it on or off and interval changes its schedule\. To change what it does, edit the related custom skill/);
+  });
+});
+
+test('get_my_agent and history say which scheduled task runs the template\'s text', async () => {
+  const fake = fakeClient({
+    '/UserAgent/Detail': detail(),
+    '/UserAgent/CustomSkillHistory': { result: true, errors: [], entries: [], preset_default: null },
+    '/UserAgent/CustomSkillAlternatives': { result: true, errors: [], alternatives: [] },
+    '/UserAgent/ConnectorList': { result: true, errors: [], useragentconnectors: [] },
+  });
+  await withClient(fake, async client => {
+    const agent = await client.callTool({ name: 'get_my_agent', arguments: { agent_guid: AGENT, entry: 'metaads-performance-reporter' } });
+    assert.notEqual(agent.isError, true, text(agent));
+    const tasks = agent.structuredContent.agent.scheduledTasks;
+    assert.equal(tasks.find(task => task.key === 'cs-cron-metaads-performance-reporter').editable, false);
+    assert.equal(tasks.find(task => task.key === 'cs-cron-my-task').editable, undefined);
+    assert.equal(agent.structuredContent.entry.editable, false);
+    assert.match(text(agent), /cs-cron-metaads-performance-reporter`?\)? on \(the template's text, which cannot be changed\)/);
+    assert.match(text(agent), /It comes with the agent's template: the agent runs this text, the template's, which cannot be changed\. Its schedule and on\/off state can\./);
+    const history = await client.callTool({ name: 'manage_agent_custom_skill', arguments: { action: 'history', agent_guid: AGENT, key: 'cs-cron-metaads-performance-reporter' } });
+    assert.match(history.structuredContent.message, /It comes with the agent's template, so the agent runs the template's text, which cannot be changed; its schedule and on\/off state can\./);
   });
 });
 
@@ -1978,7 +2045,9 @@ test('skill plans follow dependency cycles and keys are bound to their change', 
 test('deploy custom skills resolve bare keys against the template and need text when new', () => {
   const template = [
     { key: 'cs-content-strategy', interval: null },
-    { key: 'cs-cron-daily-digest', interval: '0 8 * * *' },
+    { key: 'cs-cron-daily-digest', interval: '0 8 * * *', instructions: 'Digest the inbox.' },
+    // A task the template wrote no text for is the agent's own to write.
+    { key: 'cs-cron-own-words', interval: '0 7 * * *' },
   ];
   const { skills, errors } = resolveDeployCustomSkills([
     { key: 'daily-digest', enabled: false },
@@ -1995,11 +2064,15 @@ test('deploy custom skills resolve bare keys against the template and need text 
   assert.deepEqual(resolveDeployCustomSkills([{ key: 'daily-digest', interval: '0 7 * * 1-5' }], template).skills, [
     { key: 'cs-cron-daily-digest', kind: 'scheduled_task', fromTemplate: true, interval: '0 7 * * 1-5' },
   ]);
-  // The runtime always runs a template's scheduled task with the template's own prompt.
+  // The agent always runs the text the template wrote for its scheduled task.
   const text = resolveDeployCustomSkills([{ key: 'daily-digest', value: 'Only customer mail', enabled: true }], template);
   assert.deepEqual(text.skills, []);
   assert.equal(text.errors[0], templateTaskTextError('cs-cron-daily-digest'));
-  assert.match(text.errors[0], /only its schedule \(interval\) and on\/off state \(enabled\) can/);
+  assert.match(text.errors[0], /^cs-cron-daily-digest: This scheduled task comes with the agent's template, so its instructions cannot be changed\. You can still turn it on or off and change its schedule\./);
+  assert.deepEqual(resolveDeployCustomSkills([{ key: 'own-words', value: 'Post the week\'s best photo.' }], template), {
+    skills: [{ key: 'cs-cron-own-words', kind: 'scheduled_task', fromTemplate: true, value: 'Post the week\'s best photo.', interval: '0 7 * * *' }],
+    errors: [],
+  });
   assert.match(resolveDeployCustomSkills([{ key: 'x', value: 'a' }, { key: 'cs-x', value: 'b' }], []).errors[0], /listed twice/);
   assert.match(resolveDeployCustomSkills([{ key: 'tone', value: ' ' }], []).errors[0], /value cannot be empty/);
   assert.match(resolveDeployCustomSkills([{ key: 'cs-cron-x', value: 'a', interval: '* * *' }], null).errors[0], /five fields/);

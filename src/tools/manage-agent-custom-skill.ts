@@ -20,13 +20,13 @@ import {
   customSkillKindOf,
   humanizeCustomSkillKey,
   isAgentRunning,
-  isCustomBuild,
   looksLikeCron,
   normalizeCustomSkillKey,
   pausedSkillTitles,
   readUserAgent,
   resolveExistingCustomSkillKey,
   restartNote,
+  sameTaskText,
   templateTaskTextError,
   toIsoTime,
   upsertCustomSkillKey,
@@ -53,6 +53,8 @@ const entrySchema = z.object({
   origin: z.enum(['agent', 'user']),
   notWritten: z.boolean().optional()
     .describe('The starter task whose text was never written. It does not run, even when it shows on, until its text is saved.'),
+  editable: z.boolean().optional()
+    .describe('false: a scheduled task that comes with the agent\'s template. The agent runs the template\'s text, shown in value, which cannot be changed; its schedule and on/off state can.'),
   ownerSkills: z.array(z.string()).optional()
     .describe('The skills that bring this scheduled task.'),
   skillOff: z.boolean().optional()
@@ -144,6 +146,7 @@ function toEntry(entry: CustomSkillEntry, full = false) {
     enabled: entry.enabled,
     origin: entry.userCreated ? 'user' as const : 'agent' as const,
     ...(entry.notWritten ? { notWritten: true } : {}),
+    ...(entry.templateText ? { editable: false } : {}),
     ...(entry.ownerSkills && entry.ownerSkills.length > 0 ? { ownerSkills: entry.ownerSkills } : {}),
     ...(entry.skillOff ? { skillOff: true } : {}),
     ...(entry.offSkills && entry.offSkills.length > 0 ? { offSkills: entry.offSkills } : {}),
@@ -261,9 +264,16 @@ async function upsert(client: WiroClient, input: Input, signal: AbortSignal) {
   if (fromAgent && input.description !== undefined && input.description.trim() !== existing.description.trim()) {
     return errorResult(new Error(`${key} comes with the agent, so its description cannot be changed. Its text${kind === 'scheduled_task' ? ', schedule' : ''} and on/off state can.`));
   }
-  if (fromAgent && kind === 'scheduled_task' && existing.source === 'skill-bundle' && !isCustomBuild(row)
-    && input.value !== undefined && input.value !== existing.value) {
-    return errorResult(new Error(templateTaskTextError(key)));
+  // A scheduled task the agent's template owns runs the template's text, which Wiro shows: a different text is
+  // refused, and the template's own text sent back changes nothing. Its switch and its schedule are the agent's own.
+  if (existing?.templateText && input.value !== undefined) {
+    if (!sameTaskText(input.value, existing.value)) return errorResult(new Error(templateTaskTextError(key)));
+    input = { ...input, value: undefined };
+    if (input.interval === undefined && input.enabled === undefined && input.description === undefined) {
+      return reply(input, key, 'no_change',
+        `${key} already runs this text, the template's, so nothing changed and the agent does not restart.`,
+        { entry: toEntry(existing) });
+    }
   }
   const turnsPolicyOff = input.enabled === false;
   const changesPolicyText = input.value !== undefined && input.value !== existing?.value;
@@ -522,6 +532,7 @@ async function history(client: WiroClient, input: Input, signal: AbortSignal) {
   const message = [
     current ? `Current: ${current.enabled ? 'on' : 'off'}${current.interval ? `, schedule "${current.interval}"` : ''}.` : 'This key has no live entry on the agent.',
     current?.notWritten ? 'Its text is not written yet, so it does not run until its text is saved.' : '',
+    current?.templateText ? 'It comes with the agent\'s template, so the agent runs the template\'s text, which cannot be changed; its schedule and on/off state can.' : '',
     current?.skillOff ? skillOffSentence(current, titles) : '',
     `${data.entries.length} saved version${data.entries.length === 1 ? '' : 's'}${versions.length < data.entries.length ? `, showing the newest ${versions.length}` : ''}.`,
     presetDefault ? 'It has a template default (revert with source preset).' : 'It has no template default.',
@@ -570,6 +581,9 @@ async function revert(client: WiroClient, input: Input, signal: AbortSignal) {
       const restored = historyEntry(version);
       message = `Reverting restores the version of ${key} saved${restored.changedAt ? ` at ${restored.changedAt}` : ''}: its text${restored.interval ? `, schedule "${restored.interval}"` : ''} and on/off state. The current text is replaced.`;
       restoredPolicy = { enabled: restored.enabled, value: version.after_value === null || version.after_value === undefined ? null : String(version.after_value) };
+    }
+    if (current?.templateText) {
+      message += ' It comes with the agent\'s template, so the agent keeps running the template\'s text whatever a version holds: a revert changes only its schedule and on/off state.';
     }
     const policyState = key === APPROVAL_POLICY_KEY && restoredPolicy ? restoredPolicy : null;
     if (policyState) {
@@ -667,7 +681,9 @@ export function registerManageAgentCustomSkill(server: McpServer, client: WiroCl
         + 'UTC unless it was set with update_agent; a new task without interval runs Mondays at 10:00. '
         + `Every scheduled run uses ${AGENT_AI_USAGE}, so confirm the schedule with the user. `
         + 'Entries from the agent\'s template, cs-approval-policy and the scheduled tasks its skills '
-        + 'brought cannot be deleted or renamed: set enabled false instead. Turning off cs-approval-policy '
+        + 'brought cannot be deleted or renamed: set enabled false instead. A scheduled task that comes with the '
+        + 'agent\'s template runs the template\'s text, so its text cannot be changed (get_my_agent and this tool mark '
+        + 'it editable: false); its schedule and on/off state can. Turning off cs-approval-policy '
         + 'or changing its text also needs confirm: true: off, or a text that allows it, lets the agent act '
         + 'on outside services by itself without waiting for the user\'s yes. A running agent restarts for a '
         + 'new entry, a schedule change, turning one on or off, a rename, a delete or a revert; a text or '
@@ -685,7 +701,7 @@ export function registerManageAgentCustomSkill(server: McpServer, client: WiroCl
         kind: kindSchema.optional()
           .describe('skill (instructions, cs-) or scheduled_task (runs on a schedule, cs-cron-). Decides the prefix of a bare key; without it a new bare key becomes a custom skill unless interval is given.'),
         value: z.string().max(100_000).optional()
-          .describe('upsert: the instructions (custom skill) or the prompt to run (scheduled task). Required when creating.'),
+          .describe('upsert: the instructions (custom skill) or the prompt to run (scheduled task). Required when creating. A scheduled task that comes with the agent\'s template keeps the template\'s text.'),
         interval: z.string().max(120).optional()
           .describe('upsert, scheduled tasks only: a 5-field cron expression such as "0 9 * * 1-5" (weekdays 09:00). Omit to keep the current schedule, or Mondays 10:00 for a new task.'),
         enabled: z.boolean().optional()

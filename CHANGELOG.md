@@ -88,6 +88,17 @@ runs `npx @wiro-ai/wiro-mcp@latest` takes it at its next start.
   the next step. The turn Wiro starts after an approval reads as its line, such as "Allowed:
   Create a post in WordPress", with kind `approval_resume` and `approvalResume`, never as
   the prompt Wiro wrote for the agent.
+- A scheduled task that comes with the agent's template keeps the template's text, which is
+  the text the agent runs. `manage_agent_custom_skill` refuses a different text with Wiro's
+  sentence and what can still change; the template's own text sent back changes nothing, and
+  its schedule and switch change as before. `get_my_agent` and `manage_agent_custom_skill`
+  mark such a task `editable: false`. `deploy_agent` refuses a text only for a task the
+  template wrote a text for.
+- Every agent plan payment counts the same money, the automatic renewal included: the
+  balance's deposits, store revenue and coupon credit that is not limited to certain models.
+  The `deploy_agent` quote shows the paying balance in its parts
+  (`quote.wallet.couponCreditUsd` joins `storeRevenueUsd`), and a refusal for a short
+  balance says what counts.
 - `get_my_agent` lists the agent's connectors with their state and the accounts chosen.
 - `get_agent_activity` (logs) names who connected or disconnected a connector, or set its
   accounts (`CONNECTOR_CONNECTED`, `CONNECTOR_DISCONNECTED`, `CONNECTOR_ACCOUNTS_SET`), as

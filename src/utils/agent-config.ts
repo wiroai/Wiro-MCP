@@ -1526,11 +1526,33 @@ export interface DeployCustomSkill extends DeployCustomSkillInput {
 export interface TemplateCustomSkill {
   key: string;
   interval?: string | null;
+  /** The start of the entry's text in the template; a scheduled task with none is the agent's own to write. */
+  instructions?: string;
 }
 
-/** The runtime always runs a template's scheduled task with the template's own prompt. */
+/**
+ * Wiro's answer to a change of the text of a scheduled task the agent's template owns: one the template wrote a text
+ * for. The agent runs the template's text whatever its own copy says, so the text stays the template's; its switch and
+ * its schedule are the agent's own.
+ */
+export const TEMPLATE_TASK_TEXT_REFUSAL = 'This scheduled task comes with the agent\'s template, so its instructions '
+  + 'cannot be changed. You can still turn it on or off and change its schedule.';
+
+const TEMPLATE_TASK_TEXT_PATTERN = /comes with the agent's template, so its instructions cannot be changed/i;
+
+/** What to do instead of changing a template task's text. */
+const TEMPLATE_TASK_TEXT_HELP = 'enabled turns it on or off and interval changes its schedule. To change what it does, '
+  + 'edit the related custom skill (a cs- key without cron), or create a scheduled task of your own.';
+
+/** The refusal of a text change to a scheduled task the template owns, with the task's key and what to do instead. */
 export function templateTaskTextError(key: string): string {
-  return `The text of ${key} comes from the agent's template and cannot be changed; only its schedule (interval) and on/off state (enabled) can. To change what it does, edit the related custom skill (a cs- key without cron), or create your own scheduled task.`;
+  return `${key}: ${TEMPLATE_TASK_TEXT_REFUSAL} ${TEMPLATE_TASK_TEXT_HELP}`;
+}
+
+/** Whether a sent text is the one a task shows, line endings and surrounding blanks aside, as Wiro compares them. */
+export function sameTaskText(sent: string, shown: string): boolean {
+  const plain = (text: string) => text.replace(/\r\n/g, '\n').trim();
+  return plain(sent) === plain(shown);
 }
 
 /**
@@ -1582,11 +1604,13 @@ export function resolveDeployCustomSkills(
     }
     const fromTemplate = known.has(key);
     const templateTask = fromTemplate && kind === 'scheduled_task';
+    // A scheduled task the template wrote a text for runs that text: the agent's own copy never runs.
+    const templateText = templateTask && Boolean(known.get(key)?.instructions?.trim());
     if (entry.value !== undefined && !entry.value.trim()) {
       errors.push(`${key}: value cannot be empty.${fromTemplate ? ' Leave it out to keep the template\'s text.' : ''}`);
       continue;
     }
-    if (templateTask && entry.value !== undefined) {
+    if (templateText && entry.value !== undefined) {
       errors.push(templateTaskTextError(key));
       continue;
     }
@@ -1632,6 +1656,11 @@ export interface CustomSkillEntry {
   requiresConnectors: string[];
   /** The starter task whose text was never written: it does not run until its text is saved. */
   notWritten?: boolean;
+  /**
+   * A scheduled task the agent's template owns: Wiro shows the template's text, which the agent runs, and refuses a
+   * change to it (it marks the task not editable). Its switch and schedule are the agent's own.
+   */
+  templateText?: boolean;
   /** The skills that bring a scheduled task. */
   ownerSkills?: string[];
   /** The skills the scheduled task needs are off, so it is paused until one skill from each list in offSkills is on. */
@@ -1685,6 +1714,7 @@ export function customSkillEntries(row: Row): CustomSkillEntry[] {
       requiresCredentials: stringList(entry.requires_credentials),
       requiresConnectors: connectorList(entry.requires_connectors),
       notWritten: key === STARTER_TASK_KEY && entry._edited === false,
+      ...(customSkillKindOf(key) === 'scheduled_task' && entry._editable === false ? { templateText: true } : {}),
       ownerSkills: stringList(entry._owner_skills),
       skillOff: entry._skill_off === true,
       offSkills: toSkillGroups(entry._off_skills),
@@ -1738,6 +1768,7 @@ export function customSkillErrorMessage(message: string): string {
   if (/invalid-cron-expression|invalid cron/i.test(message)) {
     return 'The schedule is not a valid cron expression. Use five fields: minute hour day-of-month month day-of-week, for example "0 9 * * 1-5".';
   }
+  if (TEMPLATE_TASK_TEXT_PATTERN.test(message)) return `${message} ${TEMPLATE_TASK_TEXT_HELP}`;
   if (/customskill-preset-description-not-editable/.test(message)) {
     return 'This entry comes with the agent, so its description cannot be changed. Its text and on/off state can.';
   }
