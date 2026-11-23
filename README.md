@@ -358,8 +358,8 @@ server, or a Telegram, Slack or Discord chat), and Autopilot, its scheduled task
 before and after a voice call. Any other work it does on its own, such as sub-agents and work in
 the background, takes the stricter of the two for each action. Allow runs the action, Ask waits
 for a person's approval, and Block never runs it.
-By default, read-only actions run, Create and send asks, and Change and delete asks in Chat and
-never runs in Autopilot. An action that asks does not run: the reply lists it under `approvals`
+By default, read-only actions run, and Create and send and Change and delete ask in chat and run
+in scheduled tasks. An action that asks does not run: the reply lists it under `approvals`
 with its exact request, and `answer_agent_approval` answers it once you have decided. After an
 approval the agent goes on in a new turn of the same chat, and its answer is that session's next
 message. A card waits 24 hours. Approval cards that a scheduled task asked for are in your chat

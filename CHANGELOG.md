@@ -78,8 +78,8 @@ runs `npx @wiro-ai/wiro-mcp@latest` takes it at its next start.
 
 ### Changes
 
-- Connector actions can wait for approval. By default every Create and send action asks, and
-  Change and delete asks in chat and never runs in a scheduled task. `send_agent_message`,
+- Connector actions can wait for approval. By default Create and send and Change and delete
+  ask in chat and run in scheduled tasks. `send_agent_message`,
   `get_agent_message` and `get_agent_conversation` list a message's approval cards under
   `approvals`: `cardid`, `messageguid`, the connector, the action, where it came from, the
   request (`arguments`, or `preview` when it is too long, or `hidden` for a connector whose

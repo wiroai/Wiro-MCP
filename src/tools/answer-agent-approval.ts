@@ -354,7 +354,7 @@ export function registerAnswerAgentApproval(server: McpServer, client: WiroClien
     {
       title: 'Answer an agent\'s approval card',
       description: 'Answer a deployed agent\'s approval card. When the agent calls a Connector action whose permission '
-        + 'is Ask (by default every Create and send action, and Change and delete ones in chat), the action does not '
+        + 'is Ask (by default every Create and send and Change and delete action in chat), the action does not '
         + 'run: Wiro shows a card with the exact request, and the agent waits for a person\'s answer. send_agent_message, '
         + 'get_agent_message and get_agent_conversation list these cards under approvals, with messageguid and cardid, '
         + 'and get_agent_connector_permissions lists the ones a scheduled task or the agent\'s own work asked for. '

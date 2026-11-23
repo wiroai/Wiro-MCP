@@ -10,9 +10,9 @@ import { asString, isPlainObject, requireApiSuccess, truncate, unixToIso, type A
 // the two for each action, so an action runs there without asking only where both columns allow it.
 // Allow runs the action, Ask waits for a person to approve it in the chat (an approval card), and Block never runs
 // it; an action blocked in both columns is not shown to the agent at all. A group's value holds for each of its
-// actions, and an action can have a setting of its own. By default Read-only runs, Create and send asks, and Change
-// and delete asks in Chat and never runs in Autopilot. These are the words the Wiro dashboard uses; the keys the API
-// takes are read, create and change, chat and autopilot, allow, ask and block.
+// actions, and an action can have a setting of its own. By default Read-only runs, and Create and send and Change and
+// delete ask first in Chat and run in Autopilot. These are the words the Wiro dashboard uses; the keys the API takes
+// are read, create and change, chat and autopilot, allow, ask and block.
 
 export const PERMISSION_CATEGORIES = ['read', 'create', 'change'] as const;
 export type PermissionCategory = typeof PERMISSION_CATEGORIES[number];
@@ -28,8 +28,8 @@ export type PermissionCells = Partial<Record<PermissionColumn, PermissionValue>>
 /** The defaults of each group, the same on every connector unless Wiro sets an action's own default. */
 export const CATEGORY_DEFAULTS: Record<PermissionCategory, Record<PermissionColumn, PermissionValue>> = {
   read: { chat: 'allow', autopilot: 'allow' },
-  create: { chat: 'ask', autopilot: 'ask' },
-  change: { chat: 'ask', autopilot: 'block' },
+  create: { chat: 'ask', autopilot: 'allow' },
+  change: { chat: 'ask', autopilot: 'allow' },
 };
 
 export const CATEGORY_TITLES: Record<PermissionCategory, string> = {
@@ -57,8 +57,8 @@ export const PERMISSIONS_EXPLAINED = 'Chat is when someone is talking to the age
   + 'all.';
 
 /** The defaults, in words. */
-export const PERMISSION_DEFAULTS_TEXT = 'By default, read-only actions run, Create and send asks first, and Change and '
-  + 'delete asks first in Chat and never runs in Autopilot.';
+export const PERMISSION_DEFAULTS_TEXT = 'By default, read-only actions run, and Create and send and Change and delete '
+  + 'ask first in Chat and run in Autopilot.';
 
 /** What the permissions of the Wiro AI Models connector cover, and what they do not. */
 export const WIRO_SCOPE_NOTE = 'These permissions cover the actions of the Wiro AI Models connector. Skills that run '

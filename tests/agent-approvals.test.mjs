@@ -485,18 +485,20 @@ const tool = (name, title, category, chat, autopilot, extra = {}) => ({
   ...extra,
 });
 
+// By default Create and send and Change and delete run in Autopilot. This connection asks there for Create and send,
+// with create_post's own Allow, and blocks Change and delete there, so an action not listed yet reads Block too.
 const VIEW = {
   categories: [
     { key: 'read', tools: 2, chat: { value: 'allow', mixed: false }, autopilot: { value: 'allow', mixed: false }, chosen: {} },
-    { key: 'create', tools: 2, chat: { value: 'ask', mixed: false }, autopilot: { value: null, mixed: true }, chosen: {} },
-    { key: 'change', tools: 1, chat: { value: 'ask', mixed: false }, autopilot: { value: 'block', mixed: false }, chosen: {} },
+    { key: 'create', tools: 2, chat: { value: 'ask', mixed: false }, autopilot: { value: null, mixed: true }, chosen: { autopilot: 'ask' } },
+    { key: 'change', tools: 1, chat: { value: 'ask', mixed: false }, autopilot: { value: 'block', mixed: false }, chosen: { autopilot: 'block' } },
   ],
   tools: [
     tool('get_post', 'Get a post', 'read', 'allow', 'allow'),
     tool('list_posts', 'List posts', 'read', 'allow', 'allow'),
     tool('create_post', 'Create a post', 'create', 'ask', 'allow', { source: { chat: 'default', autopilot: 'tool' }, defaults: { chat: 'ask', autopilot: 'ask' } }),
-    tool('create_page', 'Create a page', 'create', 'ask', 'ask'),
-    tool('delete_post', 'Delete a post', 'change', 'ask', 'block'),
+    tool('create_page', 'Create a page', 'create', 'ask', 'ask', { source: { chat: 'default', autopilot: 'category' } }),
+    tool('delete_post', 'Delete a post', 'change', 'ask', 'block', { source: { chat: 'default', autopilot: 'category' } }),
   ],
   unknown: { chat: 'ask', autopilot: 'block' },
   updatedat: NOW - 600,
@@ -636,8 +638,12 @@ test('set_agent_connector_permissions needs no restart for Ask to Allow, and say
   });
   await withClient(unchanged, async (client) => {
     const summary = await call(client, 'set_agent_connector_permissions', { agent_guid: AGENT, connector: 'wordpress', reset: true });
-    // create_post's own Autopilot setting goes, so it asks again there.
-    assert.deepEqual(summary.structuredContent.changes, [{ action: 'Create a post', name: 'create_post', column: 'autopilot', from: 'allow', to: 'ask' }]);
+    // create_post's own Autopilot setting goes, so it asks again there (its catalog default). Change and delete's own
+    // Block goes too, so an action not listed yet runs in Autopilot again, as by default.
+    assert.deepEqual(summary.structuredContent.changes, [
+      { action: 'Create a post', name: 'create_post', column: 'autopilot', from: 'allow', to: 'ask' },
+      { action: null, column: 'autopilot', from: 'block', to: 'allow' },
+    ]);
     const saved = await call(client, 'set_agent_connector_permissions', summary.structuredContent.nextAction.arguments);
     assert.equal(saved.structuredContent.outcome, 'no_change');
     assert.match(saved.structuredContent.message, /were already this, so nothing changed and the agent does not restart/);
