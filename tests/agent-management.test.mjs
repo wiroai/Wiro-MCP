@@ -1001,10 +1001,13 @@ test('the refusals that come before any charge settle the outcome', () => {
     'This agent is on the Starter plan now, so Pro is an upgrade. Nothing was changed. Reload the plan and ask again.',
     'This agent is on the Starter plan now, so Max is an upgrade. Nothing was changed. Reload the plan and ask again.',
     'This agent is on the Pro plan now, so Max is an upgrade. Nothing was changed. Reload the plan and ask again.',
+    // A move to a larger plan while the plan's renewal is due changes and charges nothing.
+    "This plan's renewal is due, so it can't be upgraded until it renews. Once the balance can pay the renewal, it renews within 15 minutes; then upgrade it. Nothing was charged.",
   ]) {
     assert.equal(isPreChargeRefusal(apiError(message)), true, message);
     assert.equal(outcomeUnknown(apiError(message)), false, message);
   }
+  assert.equal(isPreChargeRefusal(apiError("This plan's renewal is due, so it can't be upgraded until it renews.")), false, 'only the sentence that says nothing was charged');
   // The wallet paid for this one, so it stays a paid outcome.
   assert.equal(
     isPreChargeRefusal(apiError('The wallet was charged $5.00, but the plan could not be saved. Please contact support and do not try again.')),

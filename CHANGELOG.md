@@ -178,6 +178,12 @@ runs `npx @wiro-ai/wiro-mcp@latest` takes it at its next start.
   `delete_agent`'s card plan. They named the period end, which is gone by while Wiro tries a
   wallet plan's renewal again. The subscription carries that moment as `renewsOrEndsAt`; an
   answer without it names the period end, as before.
+- A move to a larger plan while the plan's renewal is due is refused at the
+  `manage_agent_billing` quote with Wiro's own sentence, which its pricing answer carries
+  as `planChange.refusal`: no price, no confirm step, and nothing is sent. The quote read
+  "$0.00 now" with a confirm step that Wiro then refused, and that refusal read as an
+  outcome that may have taken effect. A Wiro that still quotes the charge refuses it at
+  the confirm in the same words, which now read as a refusal before any charge.
 - With nothing included (no live plan), the usage line reads AI usage instead of Included AI
   usage, as on the agent's page, and says "nothing included (no active plan)", where it read
   "$0.00 of $0.00 included" (`list_my_agents`: "no AI usage included"). `usage.period` is

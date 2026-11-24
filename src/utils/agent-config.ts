@@ -537,6 +537,11 @@ export interface PlanChange {
   includedFromRenewalUsd: number | null;
   /** Taken from the wallet now, at list price. 0 on a card plan. */
   chargeNowUsd: number | null;
+  /**
+   * Wiro's refusal of the change, in its own words, when it would refuse it now: a move to a larger plan while the
+   * plan's renewal is due. The answer then names no charge. null when Wiro would make the change.
+   */
+  refusal: string | null;
 }
 
 /** An amount Wiro answers in hundredths of a dollar, in USD; null stays null. */
@@ -557,6 +562,7 @@ export function readPlanChange(value: unknown): PlanChange | null {
     includedThisPeriodUsd: hundredthsToUsd(value.creditsThisPeriod),
     includedFromRenewalUsd: hundredthsToUsd(value.creditsFromRenewal),
     chargeNowUsd: toNumber(value.chargeNowUsd),
+    refusal: asString(value.refusal)?.trim() || null,
   };
 }
 

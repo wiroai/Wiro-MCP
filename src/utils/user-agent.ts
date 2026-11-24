@@ -1681,6 +1681,8 @@ const PRE_CHARGE_REFUSALS: RegExp[] = [
   /^the (starter|pro|max) plan is smaller than this agent's (starter|pro|max) plan, so this is not an upgrade\. nothing was changed\./i,
   /^this agent is on the (starter|pro|max) plan now, so (starter|pro|max) is an upgrade\. nothing was changed\./i,
   /^the move to the (starter|pro|max) plan started with this billing period, and its payment moves the agent there, so it can no longer be undone\. nothing was changed\./i,
+  // A move to a larger plan while the plan's renewal is due.
+  /^this plan's renewal is due, so it can't be upgraded until it renews\. .*nothing was charged\./i,
   /^the (scheduled )?plan change could not be (scheduled|cancelled)\./i,
   /^we couldn't (schedule|undo) the cancellation\./i,
   /enabledchannels is not accepted|credentials must be an object|credential field|is missing required fields/i,

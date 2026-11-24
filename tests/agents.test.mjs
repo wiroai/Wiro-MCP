@@ -3318,6 +3318,59 @@ test('a plan whose renewal is due names the renewal Wiro shows, never its period
   });
 });
 
+test('manage_agent_billing: a move to a larger plan while the renewal is due is Wiro\'s refusal, with no price and no confirm step', async () => {
+  // Wiro refuses a move to a larger plan while a wallet plan's renewal is due, and charges nothing. Its pricing answer
+  // says so in the same words (planChange.refusal), with no charge and no AI usage now.
+  const REFUSAL = "This plan's renewal is due, so it can't be upgraded until it renews. Once the balance can pay the renewal, it renews within 15 minutes; then upgrade it. Nothing was charged.";
+  const ended = NOW - 3_600;
+  const due = agentRow({
+    subscription: subscription({ currentperiodend: ended, renewaldate: new Date(NOW * 1000).toISOString(), daysremaining: 0 }),
+    usage: usageOf({ resetsat: NOW, planbalanceusd: 3 }),
+  });
+  const upgradeRefused = { result: false, errors: [{ code: 0, message: REFUSAL }] };
+  const fake = fakeClient({
+    '/UserAgent/Detail': detailResponse(due),
+    '/UserAgent/PricingPreview': proPreview({
+      change: 'upgrade', fromTier: 'starter', toTier: 'pro', nextplan: null, priceUsd: 30, monthlyCredits: 3000, effectiveAt: null,
+      newPeriod: false, periodEnd: ended, secondsLeft: 0, creditsNow: 0, creditsThisPeriod: 500, creditsFromRenewal: 500,
+      chargeNowUsd: 0, refusal: REFUSAL,
+    }),
+    '/UserAgent/UpgradeTier': upgradeRefused,
+  });
+  await withClient(fake, async client => {
+    const quote = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'change_plan', plan: 'pro' });
+    assert.notEqual(quote.isError, true, textOf(quote));
+    assert.equal(quote.structuredContent.outcome, 'refused', textOf(quote));
+    assert.equal(quote.structuredContent.message, REFUSAL);
+    assert.equal(quote.structuredContent.quote, undefined, 'no price');
+    assert.equal(quote.structuredContent.nextAction, undefined, 'no confirm step');
+    assert.ok(textOf(quote).startsWith(`## change_plan: Not possible\n\n${REFUSAL}\n\n`), textOf(quote));
+    assert.doesNotMatch(textOf(quote), /\$0\.00 now|every renewal includes|confirm: true/);
+    // A confirm, even with an amount approved before the renewal fell due, is refused the same way and sends nothing.
+    const confirmed = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'change_plan', plan: 'pro', confirm_charge_usd: 12.5, confirm: true });
+    assert.equal(confirmed.structuredContent.outcome, 'refused', textOf(confirmed));
+    assert.equal(confirmed.structuredContent.message, REFUSAL);
+  });
+  assert.equal(fake.called('/UserAgent/UpgradeTier').length, 0);
+
+  // A Wiro whose pricing answer has no refusal quotes the charge, then refuses it at the confirm in the same words:
+  // nothing was charged, so nothing is left to check.
+  const older = fakeClient({
+    '/UserAgent/Detail': detailResponse(due),
+    '/UserAgent/PricingPreview': proPreview({ periodEnd: ended, secondsLeft: 0, chargeNowUsd: 2.34, creditsNow: 234, creditsThisPeriod: 734 }),
+    '/UserAgent/UpgradeTier': upgradeRefused,
+  });
+  await withClient(older, async client => {
+    const quote = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'change_plan', plan: 'pro' });
+    assert.equal(quote.structuredContent.outcome, 'quote', textOf(quote));
+    const confirmed = await call(client, 'manage_agent_billing', quote.structuredContent.nextAction.arguments);
+    assert.equal(confirmed.isError, true);
+    assert.equal(textOf(confirmed), `## Error\n\n${REFUSAL}`);
+  });
+  assert.equal(older.called('/UserAgent/UpgradeTier').length, 1);
+  assert.equal(older.called('/UserAgent/Detail').length, 2, 'read for the quote and the confirm, not again to check the outcome');
+});
+
 test('manage_agent_billing pays a card plan\'s changes from the balance and opens no card checkout', async () => {
   const card = subscription({ provider: 'stripe' });
   let upgraded = false;

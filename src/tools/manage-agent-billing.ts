@@ -718,6 +718,9 @@ async function planFor(
 
       if (move > 0) {
         const preview = await readPlanPreview(client, guid, target, signal);
+        // Wiro refuses a move to a larger plan while the plan's renewal is due, and charges nothing. Its pricing
+        // answer says so in the same words, in place of a charge, so nothing is quoted or sent.
+        if (preview?.change?.refusal) return { outcome: 'refused', message: preview.change.refusal };
         const targetPrice = preview?.price ?? agent.pricing?.[target];
         if (!targetPrice) throw new Error(`The ${planName(target)} price of this agent is not available right now. Try again later.`);
         const ending = `The plan is cancelled, so it ends at ${periodEnd} and does not renew on ${planName(target)}; this charge covers only the time left. To keep the plan, undo the cancellation first with action renew.`;
