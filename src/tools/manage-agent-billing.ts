@@ -581,7 +581,8 @@ async function planFor(
       return {
         outcome: 'quote',
         quote: { chargeNowUsd: 0, estimated: false, paidFrom },
-        message: `Cancel the plan: nothing is refunded and it stops renewing. The agent keeps its plan and the AI usage it includes until about a day after ${periodEnd}; then the plan ends and the agent stops. Action renew undoes the cancellation before then.${keepsMove}`,
+        // Wiro ends a cancelled wallet plan at its period end, on its first check after it.
+        message: `Cancel the plan: nothing is refunded and it stops renewing. The agent keeps its plan and the AI usage it includes until ${periodEnd}; then the plan ends and the agent stops. Action renew undoes the cancellation before then.${keepsMove}`,
         confirmReason: 'Ask the user to confirm the cancellation first.',
         perform: performCancel,
       };
@@ -691,7 +692,7 @@ async function planFor(
         const preview = await readPlanPreview(client, guid, target, signal);
         const targetPrice = preview?.price ?? agent.pricing?.[target];
         if (!targetPrice) throw new Error(`The ${planName(target)} price of this agent is not available right now. Try again later.`);
-        const ending = `The plan is cancelled, so it ends about a day after ${periodEnd} and does not renew on ${planName(target)}; this charge covers only the time left. To keep the plan, undo the cancellation first with action renew.`;
+        const ending = `The plan is cancelled, so it ends at ${periodEnd} and does not renew on ${planName(target)}; this charge covers only the time left. To keep the plan, undo the cancellation first with action renew.`;
         const currentPrice = agent.monthlyPriceUsd || agent.subscription?.amountUsd || 0;
         const fullDifference = roundUsd(Math.max(0, targetPrice.priceUsd - currentPrice));
         // A wallet plan pays the amount Wiro works out on it now. A card plan is charged from the balance for
@@ -746,7 +747,7 @@ async function planFor(
                   ? upgradeUsageText(came, cancelled ? '' : `, and every renewal includes ${formatUsd(fromRenewal)}`, true)
                   : '')
                 + (cancelled
-                  ? `The plan is still cancelled and ends about a day after ${periodEnd}; action renew undoes the cancellation. `
+                  ? `The plan is still cancelled and ends at ${periodEnd}; action renew undoes the cancellation. `
                   : `The plan now costs ${formatUsd(newPrice)} every 30 days. `)
                 + planChangeAgentNote(agent.status, 'the plan change'),
               result: {

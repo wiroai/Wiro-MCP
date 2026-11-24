@@ -633,6 +633,15 @@ test('the agents playbook says which plan an ended plan renews on, a card plan\'
   assert.doesNotMatch(PLAYBOOKS.agents, /on the plan set for its renewal \(else its own\)/);
 });
 
+test('the playbooks say a wallet short at renewal keeps the plan for a retry day before it ends', () => {
+  const retry = /If the wallet is short at renewal, the plan stays active while Wiro tries again for up to a day after the period end: funds added by then renew it, and after that day the plan ends\./;
+  assert.match(PLAYBOOKS.agents, retry);
+  assert.match(PLAYBOOKS.billing, retry);
+  for (const [topic, markdown] of Object.entries(PLAYBOOKS)) {
+    assert.doesNotMatch(markdown, /ends instead of renewing|about a day after/, topic);
+  }
+});
+
 test('the playbooks name the three plans and say skills do not change the price', () => {
   assert.match(PLAYBOOKS.agents, /Every agent has one of three monthly plans, smallest first: Starter, Pro or Max\./);
   assert.match(PLAYBOOKS.agents, /every plan includes every skill/);

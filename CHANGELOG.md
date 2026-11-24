@@ -69,12 +69,14 @@ runs `npx @wiro-ai/wiro-mcp@latest` takes it at its next start.
   `manage_agent_billing` with `buy_credits` quotes and charges nothing: it says the agent
   uses the Wiro balance after its plan's included usage, and that funds are added on
   wiro.ai. Its `pack` and `request_id` are ignored, and no answer carries a `requestId`.
-- `get_agent_activity` (usage) reads the dollar ledger: `summary` holds this month's AI
-  usage within the plan and from the balance, model runs and funds added, and each of
-  `transactions` its kind, title, model, tokens and costs by kind, `amountUsd` (absent on a
-  plan payment from before Wiro kept what was paid), `direction` and `paidFrom`. `balance`,
-  `extraPacks` and `byModel` are gone, `entries` reads one kind of row, and a log event's
-  cost is `costUsd`.
+- `get_agent_activity` (usage) reads the dollar ledger: `summary` holds this calendar
+  month's AI usage the plan covered and from the balance, model runs and funds added, and
+  the AI usage the plan includes each period, renewal to renewal (`includedUsd`, never shown
+  beside the month's figures: a month that holds a renewal covers more than one period
+  includes), and each of `transactions` its kind, title, model, tokens and costs by kind,
+  `amountUsd` (absent on a plan payment from before Wiro kept what was paid), `direction`
+  and `paidFrom`. `balance`, `extraPacks` and `byModel` are gone, `entries` reads one kind
+  of row, and a log event's cost is `costUsd`.
 
 ### Changes
 
@@ -163,6 +165,11 @@ runs `npx @wiro-ai/wiro-mcp@latest` takes it at its next start.
   `delete_agent` waits until a card plan has ended. A charge the balance cannot cover is
   refused with code 97 and `neededusd`, and the answer says how much to add on wiro.ai,
   with nothing charged.
+- A cancelled wallet plan ends at its period end, as a card plan does: the cancel quote of
+  `manage_agent_billing` and a move to a larger plan on a cancelled plan name that end,
+  where they said about a day after it. A wallet short at renewal keeps the plan active
+  while Wiro tries again for up to a day after the period end, and the playbooks say so,
+  where they said the plan ends instead of renewing.
 - A message or a start refused because the agent's included usage is used up and the
   balance is short (code 97 with `agentusage`) keeps Wiro's answer and says where funds are
   added; `neededusd` marks a plan payment refusal instead, and no pack is offered.

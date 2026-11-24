@@ -72,11 +72,13 @@ const ledgerEntrySchema = z.object({
 type LedgerEntry = z.infer<typeof ledgerEntrySchema>;
 
 const ledgerSummarySchema = z.object({
-  month: z.string().optional(),
+  month: z.string().optional()
+    .describe('The calendar month (UTC), as YYYY-MM, that every amount but includedUsd covers.'),
   includedUsd: z.number().optional()
-    .describe('The AI usage the plan includes this period.'),
+    .describe('The AI usage the plan includes each plan period, renewal to renewal, not a calendar month\'s: a month that '
+      + 'holds a renewal can show more AI usage the plan covered than this.'),
   aiUsagePlanUsd: z.number().optional()
-    .describe('AI usage this month that the plan included.'),
+    .describe('AI usage this month that the plan covered, over every plan period the month holds.'),
   aiUsageBalanceUsd: z.number().optional()
     .describe('AI usage this month paid from the Wiro balance.'),
   modelRunsUsd: z.number().optional()
@@ -84,7 +86,8 @@ const ledgerSummarySchema = z.object({
   fundsAddedUsd: z.number().optional()
     .describe('Funds added to the balance from the agent\'s page this month.'),
   legacy: z.boolean().optional()
-    .describe('true when Wiro answered without these amounts, so they were worked out from its older fields.'),
+    .describe('true when Wiro answered without these amounts, so they were worked out from its older fields: month is '
+      + 'then the plan period, and both amounts count that period.'),
 });
 
 type LedgerSummary = z.infer<typeof ledgerSummarySchema>;
@@ -230,7 +233,7 @@ function toLedgerEntry(row: Record<string, unknown>): LedgerEntry {
   };
 }
 
-/** This month's totals in USD, or, in an answer from an older Wiro release, the period's included usage. */
+/** This month's totals in USD and the plan period's included amount, or, in an answer from an older Wiro release, the period's included usage. */
 function toLedgerSummary(summary: Record<string, unknown>): LedgerSummary {
   const fields: Array<[keyof LedgerSummary, unknown]> = [
     ['includedUsd', summary.includedusd],
@@ -289,12 +292,18 @@ function ledgerLine(entry: LedgerEntry): string {
     + `${ledgerTokensText(entry.tokens, entry.title)}${entry.legacy ? ' (recorded before agents were billed in USD)' : ''}`);
 }
 
-/** This month's totals as a line, or null when Wiro sent none. */
+/**
+ * This month's totals as a line, or null when Wiro sent none. The plan's included amount is one plan period's, renewal
+ * to renewal, so it is never set beside the month's: a month that holds a renewal covers more than one period includes.
+ * Only a legacy summary counts both over the same period.
+ */
 function ledgerSummaryLine(summary: LedgerSummary): string | null {
   const parts = [
-    ...(summary.aiUsagePlanUsd !== undefined
-      ? [`AI usage ${formatUsd(summary.aiUsagePlanUsd)} within the plan${summary.includedUsd !== undefined ? `'s ${formatUsd(summary.includedUsd)}` : ''}`]
-      : summary.includedUsd !== undefined ? [`the plan includes ${formatUsd(summary.includedUsd)} of AI usage`] : []),
+    ...(summary.aiUsagePlanUsd === undefined
+      ? []
+      : summary.legacy
+        ? [`AI usage ${formatUsd(summary.aiUsagePlanUsd)} within the plan${summary.includedUsd !== undefined ? `'s ${formatUsd(summary.includedUsd)}` : ''}`]
+        : [`AI usage the plan covered ${formatUsd(summary.aiUsagePlanUsd)}`]),
     ...(summary.aiUsageBalanceUsd !== undefined ? [`AI usage from the balance ${formatUsd(summary.aiUsageBalanceUsd)}`] : []),
     ...(summary.modelRunsUsd !== undefined ? [`model runs ${formatUsd(summary.modelRunsUsd)}`] : []),
     ...(summary.fundsAddedUsd !== undefined ? [`funds added ${formatUsd(summary.fundsAddedUsd)}`] : []),
@@ -428,7 +437,7 @@ export function registerGetAgentActivity(server: McpServer, client: WiroClient):
     {
       title: 'Get a Wiro agent\'s usage or activity log',
       description: 'Read what a deployed agent has done and spent. kind usage returns this month\'s spending in USD '
-        + '(AI usage within the plan and from the Wiro balance, model runs, funds added) and the agent\'s ledger, '
+        + '(AI usage the plan covered and from the Wiro balance, model runs, funds added) and the agent\'s ledger, '
         + 'newest first: AI usage with its model and tokens by kind, the model runs it started, plan payments and funds '
         + 'added from its page, each with its amount and what paid it (the plan, the balance, a card or a coupon). '
         + 'kind logs returns the activity log for one day, newest first: the '

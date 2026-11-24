@@ -3222,9 +3222,46 @@ test('manage_agent_billing does not promise renewals on a cancelled plan', async
     const upgrade = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'change_plan', plan: 'pro' });
     const { quote, message } = upgrade.structuredContent;
     assert.equal(quote.recurringUsd, null);
-    assert.match(message, /The plan is cancelled, so it ends about a day after .* and does not renew on Pro; this charge covers only the time left/);
+    assert.match(message, /The plan is cancelled, so it ends at .* and does not renew on Pro; this charge covers only the time left/);
     assert.match(message, /undo the cancellation first with action renew/);
     assert.doesNotMatch(message, /From the next renewal/);
+  });
+});
+
+test('manage_agent_billing: a cancelled wallet plan ends at its period end, with no day after it', async () => {
+  // Wiro ends a wallet plan set to cancel on its first check after the period end, so the undo a quote offers lasts until
+  // then, not a day longer.
+  const end = new Date((NOW + 15 * 86_400) * 1000).toISOString();
+  const active = fakeClient({ '/UserAgent/Detail': detailResponse(agentRow()) });
+  await withClient(active, async client => {
+    const cancel = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'cancel' });
+    assert.equal(cancel.structuredContent.outcome, 'quote', textOf(cancel));
+    assert.ok(cancel.structuredContent.message.startsWith('Cancel the plan: nothing is refunded and it stops renewing. The agent keeps its plan and the AI usage '
+      + `it includes until ${end}; then the plan ends and the agent stops. Action renew undoes the cancellation before then.`), cancel.structuredContent.message);
+    assert.doesNotMatch(cancel.structuredContent.message, /a day after/);
+  });
+
+  // A move to a larger plan on a cancelled plan names the same end, in its quote and once it is done.
+  let upgraded = false;
+  const cancelled = fakeClient({
+    '/UserAgent/Detail': () => detailResponse(agentRow({
+      ...(upgraded ? { tier: 'pro', monthlypriceusd: 30 } : {}),
+      subscription: subscription({ pendingdowngrade: 'cancel', ...(upgraded ? { amount: 30 } : {}) }),
+    })),
+    '/UserAgent/PricingPreview': proPreview(),
+    '/UserAgent/UpgradeTier': () => {
+      upgraded = true;
+      return UPGRADED;
+    },
+  });
+  await withClient(cancelled, async client => {
+    const quote = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'change_plan', plan: 'pro' });
+    assert.equal(quote.structuredContent.outcome, 'quote', textOf(quote));
+    assert.ok(quote.structuredContent.message.includes(`The plan is cancelled, so it ends at ${end} and does not renew on Pro; `), quote.structuredContent.message);
+    const done = await call(client, 'manage_agent_billing', quote.structuredContent.nextAction.arguments);
+    assert.equal(done.structuredContent.outcome, 'done', textOf(done));
+    assert.ok(done.structuredContent.message.includes(`The plan is still cancelled and ends at ${end}; action renew undoes the cancellation. `), done.structuredContent.message);
+    assert.doesNotMatch(done.structuredContent.message, /a day after/);
   });
 });
 
@@ -3552,7 +3589,7 @@ test('get_agent_activity usage lists the ledger in USD that Wiro sends in rows, 
     assert.equal(usage.nextStart, 1);
     assert.equal(usage.entries, 'all');
     const text = textOf(result);
-    assert.match(text, /^\*\*This month \(2026-11\):\*\* AI usage \$12\.40 within the plan's \$30\.00; AI usage from the balance \$0\.60; model runs \$3\.20; funds added \$20\.00$/m);
+    assert.match(text, /^\*\*This month \(2026-11\):\*\* AI usage the plan covered \$12\.40; AI usage from the balance \$0\.60; model runs \$3\.20; funds added \$20\.00$/m);
     assert.match(text, /^### Ledger \(1 of 3, newest first\)$/m);
     assert.ok(text.split('\n').includes(`- ${new Date((NOW - 60) * 1000).toISOString()} ai-usage: $0.03 from the plan, AI Usage, openai/gpt-5.6-terra, tokens: 6 input, 50,147 cache read, 4,683 cache write, 133 output`), text);
     assert.match(text, /^More entries: call get_agent_activity with kind usage and start 1\.$/m);
@@ -3562,6 +3599,51 @@ test('get_agent_activity usage lists the ledger in USD that Wiro sends in rows, 
       assert.equal(serialized.includes(leaked), false, `leaked ${leaked}`);
     }
     assertNoSecrets(result);
+  });
+});
+
+test('get_agent_activity usage says the month\'s AI usage the plan covered without one plan period\'s included amount beside it', async () => {
+  // A $30 plan that renewed on Nov 20: $30.00 of AI usage before the renewal and $12.40 since. The month's AI usage the
+  // plan covered is $42.40, more than the $30.00 one period includes, since the month holds two periods.
+  const fake = fakeClient({
+    '/UserAgent/TransactionList': {
+      result: true,
+      errors: [],
+      ...CREDIT_LEDGER,
+      summary: { ...CREDIT_SUMMARY, month: '2026-11', aiusageplanusd: 42.4, aiusagebalanceusd: 0, modelrunsusd: 0, fundsaddedusd: 0, planusd: 30, includedusd: 30 },
+      rows: [],
+      rowstotal: 0,
+      kind: 'all',
+    },
+  });
+  await withClient(fake, async client => {
+    const result = await call(client, 'get_agent_activity', { agent_guid: 'ua-1', kind: 'usage' });
+    assert.notEqual(result.isError, true, textOf(result));
+    const text = textOf(result);
+    assert.ok(text.split('\n').includes('**This month (2026-11):** AI usage the plan covered $42.40; AI usage from the balance $0.00; model runs $0.00; funds added $0.00'), text);
+    assert.doesNotMatch(text, /within the plan|\$30\.00/);
+    // The plan period's amount stays in the structured result.
+    assert.deepEqual(result.structuredContent.usage.summary, { month: '2026-11', includedUsd: 30, aiUsagePlanUsd: 42.4, aiUsageBalanceUsd: 0, modelRunsUsd: 0, fundsAddedUsd: 0 });
+  });
+
+  // A summary with no month's figures, such as one whose spend read failed, gets no line: the included amount alone is
+  // not this month's.
+  const included = fakeClient({
+    '/UserAgent/TransactionList': {
+      result: true,
+      errors: [],
+      ...CREDIT_LEDGER,
+      summary: { ...CREDIT_SUMMARY, month: null, aiusageplanusd: null, aiusagebalanceusd: null, modelrunsusd: null, fundsaddedusd: null, planusd: null, includedusd: 30 },
+      rows: [],
+      rowstotal: 0,
+      kind: 'all',
+    },
+  });
+  await withClient(included, async client => {
+    const result = await call(client, 'get_agent_activity', { agent_guid: 'ua-1', kind: 'usage' });
+    assert.notEqual(result.isError, true, textOf(result));
+    assert.doesNotMatch(textOf(result), /This month|the plan includes|\$30\.00/);
+    assert.deepEqual(result.structuredContent.usage.summary, { includedUsd: 30 });
   });
 });
 
@@ -3584,7 +3666,7 @@ test('get_agent_activity reads one kind of ledger row and pages it by the count 
     assert.notEqual(result.isError, true, textOf(result));
     assert.deepEqual(fake.calls[0].body, { useragentguid: 'ua-1', limit: 2, start: 0, kind: 'model-run' });
     const text = textOf(result);
-    assert.match(text, /^\*\*This month \(2026-11\):\*\* AI usage \$1\.20 within the plan's \$30\.00; AI usage from the balance \$0\.00; model runs \$0\.45; funds added \$20\.00$/m);
+    assert.match(text, /^\*\*This month \(2026-11\):\*\* AI usage the plan covered \$1\.20; AI usage from the balance \$0\.00; model runs \$0\.45; funds added \$20\.00$/m);
     assert.match(text, /^### Ledger: model-run \(2 of 5, newest first\)$/m);
     const lines = text.split('\n').filter(line => line.startsWith('- '));
     assert.equal(lines.length, 2, text);
