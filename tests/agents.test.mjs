@@ -3318,6 +3318,65 @@ test('a plan whose renewal is due names the renewal Wiro shows, never its period
   });
 });
 
+test('get_my_agent and list_my_agents say a renewal Wiro marks as due is due now, not "renews after" the time of the answer', async () => {
+  // While a wallet plan's renewal is due, the renewal Wiro shows is the time of the answer, and usage.renewaldue says
+  // it is due. The plan line then names no moment: the renewal is due now, and once the balance can pay it, it renews
+  // within 15 minutes.
+  const ended = NOW - 3 * 3_600;
+  const endedIso = new Date(ended * 1000).toISOString();
+  const dueIso = new Date(NOW * 1000).toISOString();
+  const DUE = 'renewal due now (once the balance can pay it, it renews within 15 minutes)';
+  const dueSub = subscription({ amount: 100, currentperiodend: ended, renewaldate: dueIso, daysremaining: 0 });
+  const read = async ({ sub = dueSub, usage = {}, ...extra }) => {
+    const row = agentRow({ tier: 'max', monthlypriceusd: 100, subscription: sub, usage: usageOf({ resetsat: NOW, ...usage }), ...extra });
+    const fake = fakeClient({
+      '/UserAgent/Detail': detailResponse(row),
+      '/UserAgent/MyAgents': { result: true, errors: [], useragents: [row] },
+    });
+    let detail;
+    let list;
+    await withClient(fake, async client => {
+      detail = await call(client, 'get_my_agent', { agent_guid: 'ua-1' });
+      list = await call(client, 'list_my_agents', {});
+    });
+    return { detail, list };
+  };
+
+  // Due, with a move to a smaller plan set for that renewal.
+  const due = await read({ usage: { renewaldue: true }, nextplan: 'pro' });
+  assert.ok(textOf(due.detail).split('\n').includes(`**Plan:** Max; active, billed from the wallet, $100.00 per 30 days, ${DUE}; moves to Pro from the renewal due now`), textOf(due.detail));
+  assert.ok(textOf(due.list).includes('; Max, moves to Pro from the renewal due now; AI usage '), textOf(due.list));
+  assert.ok(textOf(due.list).includes(`; active, billed from the wallet, $100.00 per 30 days, ${DUE}`), textOf(due.list));
+  for (const result of [due.detail, due.list]) {
+    assert.doesNotMatch(textOf(result), /renews after|renewal after/);
+    assert.equal(textOf(result).includes(dueIso), false, 'no time of the answer as a renewal');
+    assert.equal(textOf(result).includes(endedIso), false, 'no period end gone by');
+  }
+  assert.equal(due.detail.structuredContent.agent.usage.renewalDue, true);
+  assert.equal(due.list.structuredContent.agents[0].usage.renewalDue, true);
+  assert.equal(due.detail.structuredContent.agent.subscription.renewsOrEndsAt, dueIso);
+
+  // The agent's own plan, set to renew at its price today.
+  const same = await read({ usage: { renewaldue: true }, nextplan: 'max' });
+  assert.match(textOf(same.detail), /; from the renewal due now it is billed at today's Max price$/m);
+
+  // A renewal ahead, which Wiro says is not due: its date, as before.
+  const end = NOW + 15 * 86_400;
+  const endIso = new Date(end * 1000).toISOString();
+  const ahead = await read({ sub: subscription({ amount: 100, currentperiodend: end }), usage: { resetsat: end, renewaldue: false } });
+  assert.ok(textOf(ahead.detail).split('\n').includes(`**Plan:** Max; active, billed from the wallet, $100.00 per 30 days, renews after ${endIso}`), textOf(ahead.detail));
+  assert.ok(textOf(ahead.list).includes(`, renews after ${endIso}`), textOf(ahead.list));
+  assert.equal(ahead.detail.structuredContent.agent.usage.renewalDue, false);
+
+  // An answer without renewaldue, as from an older Wiro release, reads as before and carries no renewalDue.
+  const older = await read({ nextplan: 'pro' });
+  assert.ok(textOf(older.detail).split('\n').includes(`**Plan:** Max; active, billed from the wallet, $100.00 per 30 days, renews after ${dueIso}; moves to Pro from the renewal after ${dueIso}`), textOf(older.detail));
+  assert.ok(textOf(older.list).includes(`, renews after ${dueIso}`), textOf(older.list));
+  assert.doesNotMatch(textOf(older.detail), /due now/);
+  assert.equal('renewalDue' in older.detail.structuredContent.agent.usage, false);
+  assert.equal('renewalDue' in older.list.structuredContent.agents[0].usage, false);
+});
+
 test('manage_agent_billing: a move to a larger plan while the renewal is due is Wiro\'s refusal, with no price and no confirm step', async () => {
   // Wiro refuses a move to a larger plan while a wallet plan's renewal is due, and charges nothing. Its pricing answer
   // says so in the same words (planChange.refusal), with no charge and no AI usage now.

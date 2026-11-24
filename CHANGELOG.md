@@ -184,6 +184,11 @@ runs `npx @wiro-ai/wiro-mcp@latest` takes it at its next start.
   "$0.00 now" with a confirm step that Wiro then refused, and that refusal read as an
   outcome that may have taken effect. A Wiro that still quotes the charge refuses it at
   the confirm in the same words, which now read as a refusal before any charge.
+- While Wiro says a plan's renewal is due (`usage.renewalDue`), the plan line of
+  `get_my_agent` and `list_my_agents` reads "renewal due now (once the balance can pay it,
+  it renews within 15 minutes)", and a move set for the renewal starts "from the renewal
+  due now". It read "renews after" the time of the answer. An answer without the flag reads
+  as before.
 - With nothing included (no live plan), the usage line reads AI usage instead of Included AI
   usage, as on the agent's page, and says "nothing included (no active plan)", where it read
   "$0.00 of $0.00 included" (`list_my_agents`: "no AI usage included"). `usage.period` is

@@ -89,7 +89,7 @@ export function registerListMyAgents(server: McpServer, client: WiroClient): voi
           lines.push(
             `- ${agentTitleSpan(agent.title)} (\`${agent.guid}\`): ${describeAgentStatus(agent.status)}${agent.setupRequired ? ', setup required' : ''}; `
             + `${planSummaryText(agent)}; ${aiUsageShortText(agent.usage)}; ${agent.spend ? `spent ${formatUsd(agent.spend.totalUsd)} this month; ` : ''}`
-            + `${formatSubscriptionLine(agent.subscription, plainMember)}`
+            + `${formatSubscriptionLine(agent.subscription, plainMember, agent.usage.renewalDue)}`
             + `${agent.lastActivityAt ? `; last activity ${agent.lastActivityAt}` : ''}`,
           );
         }

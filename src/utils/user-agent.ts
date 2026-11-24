@@ -311,6 +311,12 @@ export function renewalMoment(plan: Pick<AgentSubscription, 'renewsOrEndsAt' | '
 }
 
 /**
+ * A renewal Wiro says is due (usage.renewalDue), in its own words: the period has ended, so the moment it shows is
+ * the time of the answer, which is not said as a renewal date.
+ */
+const RENEWAL_DUE_NOW = 'renewal due now (once the balance can pay it, it renews within 15 minutes)';
+
+/**
  * Whether a plan ends with its current period: true when it ends, false when
  * it renews, null when that is not known. A wallet plan says so itself, and a
  * card plan moving to the wallet renews from the Wiro balance, even though its
@@ -419,6 +425,8 @@ export const agentUsageSchema = z.object({
     .describe('A month tag (YYYY-MM, UTC), such as 2026-11: the month the current plan period started in, when its renewal ran. Not the period itself, which runs from one renewal to the next (resetsAt), so the amounts are not a calendar month\'s.'),
   resetsAt: z.string().optional()
     .describe('When the included AI usage starts again: the plan\'s next renewal.'),
+  renewalDue: z.boolean().optional()
+    .describe('true while the plan\'s renewal is due: a wallet plan whose period has ended and that Wiro has not renewed yet, so resetsAt reads the time of the answer. Once the balance can pay the renewal, it renews within 15 minutes; Wiro tries again for up to a day after the period end, and after that day the plan ends. Absent when Wiro does not send it.'),
   includedUsd: z.number()
     .describe('The AI usage the plan includes this period, in USD. A plan change inside a period moves it for the time left, so it can differ from renewalUsd.'),
   usedUsd: z.number()
@@ -493,6 +501,7 @@ export function toAgentUsage(row: Record<string, unknown>): AgentUsage {
     return {
       ...(period ? { period } : {}),
       ...(resetsAt ? { resetsAt } : {}),
+      ...(typeof usage.renewaldue === 'boolean' ? { renewalDue: usage.renewaldue } : {}),
       includedUsd: included,
       usedUsd: used,
       leftUsd: left,
@@ -1114,7 +1123,7 @@ export function toAgentDetail(row: Record<string, unknown>): AgentDetail {
   };
 }
 
-export function formatSubscriptionLine(subscription: AgentSubscription | null, plainMember = false): string {
+export function formatSubscriptionLine(subscription: AgentSubscription | null, plainMember = false, renewalDue = false): string {
   if (!subscription) {
     return plainMember
       ? 'No plan. On this team agent, a team admin, the organization\'s owner or the person who deployed it can start one.'
@@ -1140,7 +1149,7 @@ export function formatSubscriptionLine(subscription: AgentSubscription | null, p
     } else if (atPeriodEnd === 'ends') {
       parts.push(`cancelled, ends after ${at}`);
     } else if (atPeriodEnd === 'renews') {
-      parts.push(`renews after ${at}`);
+      parts.push(renewalDue ? RENEWAL_DUE_NOW : `renews after ${at}`);
     } else {
       // Whether this card plan renews is not known here.
       parts.push(`paid through ${at}`);
@@ -1188,21 +1197,22 @@ export function agentTitleSpan(title: string): string {
 /**
  * The move set for the next renewal, as a clause after the plan: "moves to Starter from the renewal after
  * <date>", or for the agent's own plan "from the renewal after <date> it is billed at today's Starter
- * price". Empty when none is set, or when the plan ends with its period instead of renewing.
+ * price". Empty when none is set, or when the plan ends with its period instead of renewing. While the renewal is
+ * due, it starts from the renewal due now.
  */
-export function nextPlanText(agent: Pick<AgentSummary, 'tier' | 'nextPlan' | 'subscription'>): string {
+export function nextPlanText(agent: Pick<AgentSummary, 'tier' | 'nextPlan' | 'subscription' | 'usage'>): string {
   const next = agent.nextPlan;
   const subscription = agent.subscription;
   if (!next || subscription?.status !== 'active' || subscription.atPeriodEnd === 'ends') return '';
   const at = renewalMoment(subscription);
-  const when = at ? `the renewal after ${at}` : 'the next renewal';
+  const when = agent.usage.renewalDue ? 'the renewal due now' : at ? `the renewal after ${at}` : 'the next renewal';
   return next === agent.tier
     ? `from ${when} it is billed at today's ${planName(next)} price`
     : `moves to ${planName(next)} from ${when}`;
 }
 
 /** The plan by name, with the move set for its next renewal: "Max, moves to Starter from the renewal after ...". */
-export function planSummaryText(agent: Pick<AgentSummary, 'tier' | 'nextPlan' | 'subscription'>): string {
+export function planSummaryText(agent: Pick<AgentSummary, 'tier' | 'nextPlan' | 'subscription' | 'usage'>): string {
   const next = nextPlanText(agent);
   return `${agent.tier ? planName(agent.tier) : 'no plan'}${next ? `, ${next}` : ''}`;
 }
@@ -1220,7 +1230,7 @@ export function formatAgentSummaryLines(agent: AgentSummary, plainMember = false
   return [
     `**Agent:** ${agentTitleSpan(agent.title)} (\`${agent.guid}\`), ${template}, ${agent.workspace} workspace`,
     `**Status:** ${describeAgentStatus(agent.status)}. ${hint}`,
-    `**Plan:** ${agent.tier ? planName(agent.tier) : 'no plan'}; ${formatSubscriptionLine(agent.subscription, plainMember)}${next ? `; ${next}` : ''}`,
+    `**Plan:** ${agent.tier ? planName(agent.tier) : 'no plan'}; ${formatSubscriptionLine(agent.subscription, plainMember, agent.usage.renewalDue)}${next ? `; ${next}` : ''}`,
     `**${aiUsageLabel(agent.usage)}:** ${aiUsageText(agent.usage)}`,
     ...(agent.spend ? [`**Spent this month:** ${spendText(agent.spend)}`] : []),
   ];
