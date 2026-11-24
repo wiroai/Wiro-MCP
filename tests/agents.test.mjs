@@ -4128,6 +4128,69 @@ test('manage_agent_billing says nothing was charged when the balance is short, a
   });
 });
 
+test('manage_agent_billing: a quote the balance cannot pay yet names the amount to add before the confirm step', async () => {
+  // An expired Max plan renews at $100.00, and the wallet can pay a plan with $26.34 of what it holds.
+  const ended = (planbalanceusd, overrides = {}) => agentRow({
+    tier: 'max',
+    nextplan: null,
+    status: 0,
+    monthlycredits: 0,
+    monthlypriceusd: 100,
+    subscription: subscription({ status: 'expired', amount: 100, currentperiodend: NOW - 86_400 }),
+    usage: usageOf({ includedusd: 0, usedusd: 0, leftusd: 0, renewalusd: 0, balanceusd: 26.34, planbalanceusd, paused: true, pausedreason: 'plan' }),
+    ...overrides,
+  });
+  const quote = async (row, args) => {
+    const fake = fakeClient({
+      '/UserAgent/Detail': detailResponse(row),
+      '/Organization/List': organizations('admin'),
+      '/UserAgent/PricingPreview': proPreview(),
+    });
+    let result;
+    await withClient(fake, async client => {
+      result = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', ...args });
+    });
+    assert.equal(fake.calls.some(item => item.path === '/UserAgent/RenewSubscription' || item.path === '/UserAgent/CreateSubscriptionCheckout'), false, 'a quote charges nothing');
+    return result;
+  };
+
+  const short = await quote(ended(26.34), { action: 'renew' });
+  assert.equal(short.structuredContent.outcome, 'quote', textOf(short));
+  assert.equal(short.structuredContent.quote.chargeNowUsd, 100);
+  assert.equal(short.structuredContent.message, 'Renew the expired plan on Max: $100.00 now, paid from your Wiro balance, then every 30 days until it is cancelled. A stopped or failed agent is queued to start again. '
+    + 'Your Wiro balance has $26.34 that can pay a plan, $73.66 less than this charge. Add at least $73.66 to it on wiro.ai before confirming; a confirm before then is refused, and nothing is charged. '
+    + 'Funds are added at https://wiro.ai/panel/wallet/deposit/credit-card.\n\n'
+    + 'Nothing has been done yet. To go ahead, call manage_agent_billing again with the same arguments plus confirm_charge_usd 100, confirm: true.');
+  // The same quote is confirmed once the funds are in: the amount to approve is still the charge.
+  assert.deepEqual(short.structuredContent.nextAction, {
+    tool: 'manage_agent_billing',
+    arguments: { agent_guid: 'ua-1', action: 'renew', confirm_charge_usd: 100, confirm: true },
+    reason: 'Ask the user to add at least $73.66 on wiro.ai first, then to approve this charge.',
+  });
+
+  // subscribe is checked the same way, and a team agent's balance is the team's, selected in the dashboard first.
+  const team = await quote(ended(26.34, { teamguid: 'team-guid-secret', subscription: null }), { action: 'subscribe', plan: 'pro' });
+  assert.match(team.structuredContent.message, /^Subscribe on Pro: \$30\.00 now, paid from the team's Wiro balance, .* The team's Wiro balance has \$26\.34 that can pay a plan, \$3\.66 less than this charge\. Add at least \$3\.66 to it on wiro\.ai before confirming; a confirm before then is refused, and nothing is charged\. Funds are added at https:\/\/wiro\.ai\/panel\/wallet\/deposit\/credit-card \(select the agent's team in the dashboard first\)\.\n\n/);
+  assert.equal(team.structuredContent.nextAction.reason, 'Ask the user to add at least $3.66 on wiro.ai first, then to approve this charge.');
+
+  // So is a move to a larger wallet plan, whose amount Wiro works out now.
+  const upgrade = await quote(agentRow({ usage: usageOf({ planbalanceusd: 5 }) }), { action: 'change_plan', plan: 'pro' });
+  assert.equal(upgrade.structuredContent.quote.chargeNowUsd, 12.5, textOf(upgrade));
+  assert.match(upgrade.structuredContent.message, / Your Wiro balance has \$5\.00 that can pay a plan, \$7\.50 less than this charge\. Add at least \$7\.50 to it on wiro\.ai before confirming; /);
+
+  // Enough to pay, a balance Wiro could not read, and a move whose amount is only the most it can charge: no more is said.
+  for (const [row, args] of [
+    [ended(100), { action: 'renew' }],
+    [ended(null), { action: 'renew' }],
+    [agentRow({ tier: 'pro', monthlypriceusd: 30, subscription: subscription({ amount: 30 }), usage: usageOf({ planbalanceusd: 1 }) }), { action: 'change_plan', plan: 'max' }],
+  ]) {
+    const result = await quote(row, args);
+    assert.equal(result.structuredContent.outcome, 'quote', textOf(result));
+    assert.doesNotMatch(result.structuredContent.message, /less than this charge|Add at least/);
+    assert.equal(result.structuredContent.nextAction.reason, 'Ask the user to approve this charge first.');
+  }
+});
+
 // ---------------------------------------------------------------------------
 // Team members without admin rights
 // ---------------------------------------------------------------------------
@@ -5860,9 +5923,12 @@ test('get_my_agent and list_my_agents show the AI usage, the balance after it an
   assert.doesNotMatch(textOf(noPlan.detail), /no AI usage left|until its plan renews/);
   assert.match(textOf(noPlan.list), /, paused \(no active plan\);/);
   // Nothing is included, so the line is AI usage, as the agent's page titles it, and the paused status points to it.
-  assert.ok(noPlan.lines.some(line => line.startsWith('**AI usage:** $0.00 of $0.00 included; then the workspace balance ($42.10). Paused: it has no active plan')), textOf(noPlan.detail));
+  // It says nothing is included without a plan, never "$0.00 of $0.00 included".
+  assert.ok(noPlan.lines.some(line => line.startsWith('**AI usage:** nothing included (no active plan); then the workspace balance ($42.10). Paused: it has no active plan')), textOf(noPlan.detail));
   assert.equal(noPlan.lines.some(line => line.startsWith('**Included AI usage:**')), false, textOf(noPlan.detail));
   assert.ok(noPlan.lines.includes('**Status:** Running (4). It is running, but paused: it takes no new turns now (see AI usage).'), textOf(noPlan.detail));
+  assert.match(textOf(noPlan.list), /: Running \(4\), setup required; Starter; no AI usage included, balance \$42\.10, paused \(no active plan\); spent /);
+  for (const result of [noPlan.detail, noPlan.list]) assert.doesNotMatch(textOf(result), /\$0\.00 of \$0\.00/);
 
   // A plan change inside the period moves what this period includes; each renewal includes the plan's own amount.
   const moved = await read({ usage: usageOf({ includedusd: 12.4, usedusd: 1, leftusd: 11.4, renewalusd: 30, wallet: 'team' }), spend: undefined });
@@ -5875,7 +5941,10 @@ test('get_my_agent and list_my_agents show the AI usage, the balance after it an
 
 test('control_agent names the usage line AI usage when nothing is included, and usage.period is a month tag', async () => {
   const nothingIncluded = usageOf({ includedusd: 0, usedusd: 0, leftusd: 0, renewalusd: 0, paused: true, pausedreason: 'plan' });
-  for (const [usage, label] of [[nothingIncluded, 'AI usage'], [usageOf(), 'Included AI usage']]) {
+  for (const [usage, start] of [
+    [nothingIncluded, '**AI usage:** nothing included (no active plan); '],
+    [usageOf(), '**Included AI usage:** $2.00 of $5.00 included; '],
+  ]) {
     const fake = fakeClient({
       '/UserAgent/Detail': () => detailResponse(agentRow({ status: fake.called('/UserAgent/Stop').length > 0 ? 0 : 4, usage })),
       '/UserAgent/Stop': { result: true, errors: [], useragents: [] },
@@ -5883,8 +5952,8 @@ test('control_agent names the usage line AI usage when nothing is included, and 
     await withClient(fake, async client => {
       const stopped = await call(client, 'control_agent', { agent_guid: 'ua-1', action: 'stop', wait_seconds: 10 });
       assert.notEqual(stopped.isError, true, textOf(stopped));
-      assert.ok(textOf(stopped).split('\n').some(line => line.startsWith(`**${label}:** $`)), textOf(stopped));
-      if (label === 'AI usage') assert.doesNotMatch(textOf(stopped), /Included AI usage/);
+      assert.ok(textOf(stopped).split('\n').some(line => line.startsWith(start)), textOf(stopped));
+      if (usage === nothingIncluded) assert.doesNotMatch(textOf(stopped), /Included AI usage|\$0\.00 of \$0\.00/);
     });
   }
 

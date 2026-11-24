@@ -164,7 +164,9 @@ runs `npx @wiro-ai/wiro-mcp@latest` takes it at its next start.
   that before then or brings back a card plan that has ended, paid from the balance;
   `delete_agent` waits until a card plan has ended. A charge the balance cannot cover is
   refused with code 97 and `neededusd`, and the answer says how much to add on wiro.ai,
-  with nothing charged.
+  with nothing charged. A `manage_agent_billing` quote whose charge the balance cannot pay
+  yet (a renewal, a new plan, or a move to a larger wallet plan) says so before the confirm
+  step: what that balance can pay a plan with, and the amount to add.
 - A cancelled wallet plan ends at its period end, as a card plan does: the cancel quote of
   `manage_agent_billing` and a move to a larger plan on a cancelled plan name that end,
   where they said about a day after it. A wallet short at renewal keeps the plan active
@@ -177,8 +179,10 @@ runs `npx @wiro-ai/wiro-mcp@latest` takes it at its next start.
   wallet plan's renewal again. The subscription carries that moment as `renewsOrEndsAt`; an
   answer without it names the period end, as before.
 - With nothing included (no live plan), the usage line reads AI usage instead of Included AI
-  usage, as on the agent's page. `usage.period` is described as what it is: a month tag, the
-  month the current plan period started in, not the period itself.
+  usage, as on the agent's page, and says "nothing included (no active plan)", where it read
+  "$0.00 of $0.00 included" (`list_my_agents`: "no AI usage included"). `usage.period` is
+  described as what it is: a month tag, the month the current plan period started in, not
+  the period itself.
 - A message or a start refused because the agent's included usage is used up and the
   balance is short (code 97 with `agentusage`) keeps Wiro's answer and says where funds are
   added; `neededusd` marks a plan payment refusal instead, and no pack is offered.

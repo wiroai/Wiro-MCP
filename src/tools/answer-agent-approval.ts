@@ -257,7 +257,8 @@ function refused(call: Call, error: ApiResultError) {
   const approval = toApproval(error.body.approval, { messageguid: call.messageguid, agent: call.target.agent });
   const code = error.codes.map(String).find(item => item in REFUSAL_NOTES || item === IN_CHANNEL);
   const note = code === IN_CHANNEL ? inChannelNote(approval) : code ? REFUSAL_NOTES[code] : undefined;
-  const message = `${error.message}${note ? ` ${note}` : ''}`;
+  // Wiro's own sentence can already say it, as for 96: a note is added only when it says more.
+  const message = note && !error.message.includes(note) ? `${error.message} ${note}` : error.message;
   const nextAction: NextAction | undefined = code === '97' && approval?.status === 'pending'
     ? {
       tool: 'answer_agent_approval',

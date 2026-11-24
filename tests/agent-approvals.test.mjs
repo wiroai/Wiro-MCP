@@ -468,6 +468,20 @@ test('answer_agent_approval explains Wiro\'s refusals by their codes, and offers
       }
     });
   }
+
+  // 96: Wiro's own sentence already says who can answer, so it is said once. A note is added only when it says more.
+  const outsiders = 'Only the agent\'s owner and its team can answer its approvals.';
+  for (const [message, expected] of [[outsiders, outsiders], ['Access denied.', `Access denied. ${outsiders}`]]) {
+    const fake = fakeClient({ '/UserAgent/Message/ApprovalCardAct': { result: false, errors: [{ code: 96, message }] } });
+    await withClient(fake, async (client) => {
+      const result = await call(client, 'answer_agent_approval', { agent: AGENT, messageguid: MESSAGE, cardid: CARD, answer: 'allow', confirm: true });
+      assert.equal(result.isError, true);
+      assert.equal(result.structuredContent.outcome, 'refused');
+      assert.equal(result.structuredContent.message, expected);
+      assert.equal(textOf(result), `## Error\n\n${expected}`);
+      assert.equal(result.structuredContent.nextAction, undefined);
+    });
+  }
 });
 
 // ---------------------------------------------------------------------------

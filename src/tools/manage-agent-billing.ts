@@ -44,6 +44,7 @@ import {
   shortBalanceNote,
   toAgentDetail,
   toAgentSummary,
+  toAgentUsage,
   toPlanPricing,
   unsettledPlanText,
   type AgentDetail,
@@ -309,6 +310,29 @@ function approvalProblem(action: BillingAction, quote: Quote | undefined, approv
     ? amount <= approved + AMOUNT_TOLERANCE_USD
     : sameAmount(amount, approved);
   return fits ? null : 'changed';
+}
+
+/**
+ * A quoted charge the Wiro balance that pays the plan cannot pay now: the words that say so with the amount to add,
+ * and the confirm step's reason. Wiro checks a plan payment against what that balance can pay a plan with
+ * (usage.planBalanceUsd), and refuses a short one with nothing charged. null when the balance can pay it, when the
+ * quote charges nothing now or gives only the most a move can charge, or when the balance was not read.
+ */
+function planBalanceShortfall(quote: Quote | undefined, row: Record<string, unknown>): { text: string; reason: string } | null {
+  const charge = quote && !quote.estimated ? quote.chargeNowUsd : null;
+  const planBalance = toAgentUsage(row).planBalanceUsd;
+  if (charge === null || charge <= 0 || planBalance === undefined) return null;
+  const shortCents = Math.round(charge * 100) - Math.round(planBalance * 100);
+  if (shortCents <= 0) return null;
+  const short = formatUsd(shortCents / 100);
+  const workspace = row.teamguid ? 'team' : 'personal';
+  const balance = planBalanceName(workspace);
+  return {
+    text: `${balance[0].toUpperCase()}${balance.slice(1)} has ${formatUsd(planBalance)} that can pay a plan, ${short} less `
+      + `than this charge. Add at least ${short} to it on wiro.ai before confirming; a confirm before then is refused, `
+      + `and nothing is charged. ${addFundsText(workspace)}`,
+    reason: `Ask the user to add at least ${short} on wiro.ai first, then to approve this charge.`,
+  };
 }
 
 /** The first lines of a new quote when the approved amount no longer fits. */
@@ -1079,15 +1103,17 @@ export function registerManageAgentBilling(server: McpServer, client: WiroClient
           ...(amount !== null ? [`confirm_charge_usd ${amount}`] : []),
           'confirm: true',
         ];
+        // A charge the balance cannot pay now is refused on confirm, so the amount to add comes first.
+        const short = planBalanceShortfall(quoted.quote, row);
         return respond({
           outcome: 'quote',
-          message: `${lead}${quoted.message}\n\nNothing has been done yet. To go ahead, call manage_agent_billing again with the same arguments plus ${additions.join(', ')}.`,
+          message: `${lead}${quoted.message}${short ? ` ${short.text}` : ''}\n\nNothing has been done yet. To go ahead, call manage_agent_billing again with the same arguments plus ${additions.join(', ')}.`,
           quote: quoted.quote,
           ...(priceChanged ? { priceChanged: true } : {}),
           nextAction: {
             tool: 'manage_agent_billing',
             arguments: confirmArguments(guid, action, quoted.quote),
-            reason: quoted.confirmReason ?? CHARGE_REASON,
+            reason: short?.reason ?? quoted.confirmReason ?? CHARGE_REASON,
           },
           agentRow: row,
         });

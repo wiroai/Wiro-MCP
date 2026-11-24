@@ -570,15 +570,23 @@ export function aiUsageLabel(usage: Pick<AgentUsage, 'includedUsd'>): string {
   return usage.includedUsd > 0 ? 'Included AI usage' : 'AI usage';
 }
 
+/** Whether the period includes nothing because the agent has no active plan, as Wiro says it (pausedReason plan). */
+function nothingIncludedWithoutPlan(usage: AgentUsage): boolean {
+  return usage.pausedReason === 'plan' && usage.includedUsd <= 0;
+}
+
 /**
  * The agent's AI usage this period as said in a line: "$12.40 of $30.00 included; then the workspace balance
- * ($42.10)", with what the balance paid so far and why the agent is paused when it is.
+ * ($42.10)", or "nothing included (no active plan)" for an agent without one, with what the balance paid so far and
+ * why the agent is paused when it is.
  */
 export function aiUsageText(usage: AgentUsage): string {
   const renewal = usage.renewalUsd !== undefined && !sameAmount(usage.renewalUsd, usage.includedUsd)
     ? ` (${formatUsd(usage.renewalUsd)} from each renewal)`
     : '';
-  const parts = [`${formatUsd(usage.usedUsd)} of ${formatUsd(usage.includedUsd)} included${renewal}`];
+  const parts = [nothingIncludedWithoutPlan(usage)
+    ? 'nothing included (no active plan)'
+    : `${formatUsd(usage.usedUsd)} of ${formatUsd(usage.includedUsd)} included${renewal}`];
   if (usage.extraUsd) parts.push(`${formatUsd(usage.extraUsd)} bought earlier left`);
   if (!usage.legacy) {
     const amounts = [
@@ -591,12 +599,17 @@ export function aiUsageText(usage: AgentUsage): string {
   return `${parts.join('; ')}${usage.paused ? `. Paused: ${pausedText(usage)}` : ''}`;
 }
 
-/** The agent's AI usage in a list row: "AI usage $12.40 of $30.00 included, balance $42.10, paused (balance short)". */
+/**
+ * The agent's AI usage in a list row: "AI usage $12.40 of $30.00 included, balance $42.10, paused (balance short)",
+ * or "no AI usage included, balance $42.10, paused (no active plan)" for an agent without a plan.
+ */
 export function aiUsageShortText(usage: AgentUsage): string {
   const reason = usage.pausedReason === 'plan'
     ? 'no active plan'
     : usage.pausedReason === 'spendlimit' ? 'spend limit reached' : usage.pausedReason === 'balance' ? 'balance short' : 'no usage left';
-  return `AI usage ${formatUsd(usage.usedUsd)} of ${formatUsd(usage.includedUsd)} included`
+  return (nothingIncludedWithoutPlan(usage)
+    ? 'no AI usage included'
+    : `AI usage ${formatUsd(usage.usedUsd)} of ${formatUsd(usage.includedUsd)} included`)
     + `${usage.extraUsd ? `, ${formatUsd(usage.extraUsd)} bought earlier left` : ''}`
     + `${usage.balanceUsd !== undefined ? `, balance ${formatUsd(usage.balanceUsd)}` : ''}`
     + `${usage.paused ? `, paused (${reason})` : ''}`;
