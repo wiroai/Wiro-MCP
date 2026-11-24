@@ -1463,7 +1463,7 @@ test('get_my_agent shows the plans and where a shortened entry is read in full',
     assert.ok(lines.some(line => line.startsWith('**Plan:** Pro; active, billed from the wallet, $5.00 per 30 days, renews after ')), textOf(result));
     const prices = lines.findIndex(line => line.startsWith('**Plans:**'));
     assert.equal(lines[prices], '**Plans:** Starter $5 a month, includes $5 of AI usage; Pro $30 a month, includes $30 of AI usage; Max $100 a month, includes $100 of AI usage. Every plan includes every skill. After the included AI usage, the agent uses the workspace\'s Wiro balance. A move to a larger plan starts now, and a move to a smaller one at the next renewal.');
-    assert.equal(lines[prices - 2], '**AI usage this month:** $2.00 of $5.00 included; then the workspace balance ($42.10)');
+    assert.equal(lines[prices - 2], '**Included AI usage:** $2.00 of $5.00 included; then the workspace balance ($42.10)');
     assert.equal(lines[prices - 1], '**Spent this month:** $6.20 (plan $5.00, model runs $1.20); its plan covered $2.00 of AI usage', 'the plans follow the usage and spending lines');
     assert.deepEqual(result.structuredContent.agent.pricing, PLAN_PRICING);
     assert.doesNotMatch(textOf(result), /Prices now|skill change moves the plan/);
@@ -1472,7 +1472,7 @@ test('get_my_agent shows the plans and where a shortened entry is read in full',
     assert.ok(lines.includes('- Daily Scan (`cs-cron-daily-scan`) on, 0 9 * * *: `Daily inbox scan`'));
 
     const { tools } = await client.listTools();
-    assert.match(tools.find(tool => tool.name === 'get_my_agent').description, /plan \(Starter, Pro or Max\) with any move set for its next renewal, the plans and their prices, its AI usage this month in USD \(what the plan includes, used and left, then the Wiro balance that pays after it, and whether it is paused and why\), what it spent this month,/);
+    assert.match(tools.find(tool => tool.name === 'get_my_agent').description, /plan \(Starter, Pro or Max\) with any move set for its next renewal, the plans and their prices, its included AI usage in USD for the plan period, renewal to renewal \(what the plan includes, used and left, then the Wiro balance that pays after it, and whether it is paused and why\), what it spent this month,/);
     assert.equal(
       tools.find(tool => tool.name === 'update_agent').inputSchema.properties.chat_model.description,
       'Model for chat turns: a slug from the model list in get_my_agent, which shows what each model costs in USD per 1M tokens. null resets to the default. The plan price stays the same.',
@@ -1967,9 +1967,13 @@ test('control_agent turns start refusals into the billing step to take', async (
 
   // A paused agent: Wiro refuses the start with code 97 and the agent's usage (agentusage), in Send's sentence.
   // Funds are added on wiro.ai, and a plan below Max can also move to a larger plan; no pack is offered.
-  const sentence = 'My Bot used the $5.00 of AI usage its plan includes this month, and your balance is under $0.50. '
-    + 'Add funds to keep it running, or it starts again when the plan renews on 1 December 2026.';
+  // The sentence names the renewal as Wiro does (UTC): the plan's period end, the agent's currentperiodend
+  // and its usage's resetsat.
   const paused = usageOf({ usedusd: 5, leftusd: 0, balanceusd: 0.2, paused: true, pausedreason: 'balance' });
+  const renewal = new Date(paused.resetsat * 1000);
+  const sentence = 'My Bot used the $5.00 of AI usage its plan includes, and your balance is under $0.50. '
+    + `Add funds to keep it running, or it starts again when the plan renews on ${renewal.getUTCDate()} `
+    + `${renewal.toLocaleString('en-US', { month: 'long', timeZone: 'UTC' })} ${renewal.getUTCFullYear()}.`;
   for (const [tier, larger] of [['starter', true], ['pro', true], ['max', false]]) {
     const noUsage = fakeClient({
       '/UserAgent/Detail': detailResponse(agentRow({ status: 0, tier })),
@@ -3897,7 +3901,7 @@ test('manage_agent_billing does not show the plan from before a paid change when
     assert.match(result.structuredContent.message, /The agent could not be read afterwards; get_my_agent shows its new status, plan and AI usage\.$/);
     const text = textOf(result);
     assert.match(text, /\*\*Agent:\*\* `My Bot` \(`ua-1`\)/);
-    assert.doesNotMatch(text, /\*\*Plan:\*\*|\*\*Status:\*\*|\*\*AI usage this month:\*\*/);
+    assert.doesNotMatch(text, /\*\*Plan:\*\*|\*\*Status:\*\*|\*\*Included AI usage:\*\*/);
     assert.match(text, /Dashboard: https:\/\/wiro\.ai\/panel\/agents\/ua-1/);
     assert.equal(fake.called('/UserAgent/UpgradeTier').length, 1);
   });
@@ -5692,7 +5696,7 @@ test('get_my_agent and list_my_agents show the AI usage, the balance after it an
     paused: false,
   });
   assert.deepEqual(plain.detail.structuredContent.agent.spend, { month: '2026-10', totalUsd: 6.2, planUsd: 5, aiUsageBalanceUsd: 0, aiUsagePlanUsd: 2, modelRunsUsd: 1.2, fundsAddedUsd: 0 });
-  assert.ok(plain.lines.includes('**AI usage this month:** $2.00 of $5.00 included; then the workspace balance ($42.10)'), textOf(plain.detail));
+  assert.ok(plain.lines.includes('**Included AI usage:** $2.00 of $5.00 included; then the workspace balance ($42.10)'), textOf(plain.detail));
   assert.ok(plain.lines.includes('**Spent this month:** $6.20 (plan $5.00, model runs $1.20); its plan covered $2.00 of AI usage'), textOf(plain.detail));
   assert.match(textOf(plain.list), /: Running \(4\), setup required; Starter; AI usage \$2\.00 of \$5\.00 included, balance \$42\.10; spent \$6\.20 this month; active, billed from the wallet, /);
   assert.deepEqual(plain.list.structuredContent.agents[0].usage, plain.detail.structuredContent.agent.usage);
@@ -5703,9 +5707,9 @@ test('get_my_agent and list_my_agents show the AI usage, the balance after it an
 
   // Used up and the balance short: the agent is paused until funds are added or the plan renews.
   const short = await read({ usage: usageOf({ usedusd: 5, leftusd: 0, frombalanceusd: 3.1, balanceusd: 0.2, paused: true, pausedreason: 'balance' }) });
-  assert.ok(short.lines.includes('**AI usage this month:** $5.00 of $5.00 included; then the workspace balance ($0.20); $3.10 paid from the balance so far. '
+  assert.ok(short.lines.includes('**Included AI usage:** $5.00 of $5.00 included; then the workspace balance ($0.20); $3.10 paid from the balance so far. '
     + 'Paused: its included usage is used up and the balance is under $0.50, so it takes no new turns until funds are added on wiro.ai or the plan renews'), textOf(short.detail));
-  assert.ok(short.lines.includes('**Status:** Running (4). It is running, but paused: it takes no new turns now (see AI usage).'), textOf(short.detail));
+  assert.ok(short.lines.includes('**Status:** Running (4). It is running, but paused: it takes no new turns now (see Included AI usage).'), textOf(short.detail));
   assert.equal(short.detail.structuredContent.agent.usage.pausedReason, 'balance');
   assert.match(textOf(short.list), /AI usage \$5\.00 of \$5\.00 included, balance \$0\.20, paused \(balance short\);/);
 
@@ -5723,7 +5727,7 @@ test('get_my_agent and list_my_agents show the AI usage, the balance after it an
 
   // A plan change inside the period moves what this period includes; each renewal includes the plan's own amount.
   const moved = await read({ usage: usageOf({ includedusd: 12.4, usedusd: 1, leftusd: 11.4, renewalusd: 30, wallet: 'team' }), spend: undefined });
-  assert.ok(moved.lines.includes('**AI usage this month:** $1.00 of $12.40 included ($30.00 from each renewal); then the workspace balance ($42.10)'), textOf(moved.detail));
+  assert.ok(moved.lines.includes('**Included AI usage:** $1.00 of $12.40 included ($30.00 from each renewal); then the workspace balance ($42.10)'), textOf(moved.detail));
   assert.equal(moved.lines.some(line => line.startsWith('**Spent this month:**')), false, 'no spending line without Wiro\'s numbers');
   assert.equal(moved.detail.structuredContent.agent.usage.wallet, 'team');
   assert.equal('spend' in moved.detail.structuredContent.agent, false);
@@ -5750,7 +5754,7 @@ test('get_my_agent shows what the agent\'s wallet can pay a plan with, and leave
   const counted = await read(usageOf({ planbalanceusd: 30.5 }));
   assert.equal(counted.usage.planBalanceUsd, 30.5);
   assert.equal(counted.usage.balanceUsd, 42.1);
-  assert.ok(counted.lines.includes('**AI usage this month:** $2.00 of $5.00 included; then the workspace balance ($42.10; $30.50 of it can pay a plan)'), textOf(counted.detail));
+  assert.ok(counted.lines.includes('**Included AI usage:** $2.00 of $5.00 included; then the workspace balance ($42.10; $30.50 of it can pay a plan)'), textOf(counted.detail));
   assert.equal('planBalanceUsd' in counted.list.structuredContent.agents[0].usage, false);
   assert.doesNotMatch(textOf(counted.list), /can pay a plan/);
 
@@ -5758,12 +5762,12 @@ test('get_my_agent shows what the agent\'s wallet can pay a plan with, and leave
   for (const planbalanceusd of [null, undefined, 'n/a']) {
     const unread = await read(usageOf({ planbalanceusd }));
     assert.equal('planBalanceUsd' in unread.usage, false, String(planbalanceusd));
-    assert.ok(unread.lines.includes('**AI usage this month:** $2.00 of $5.00 included; then the workspace balance ($42.10)'), textOf(unread.detail));
+    assert.ok(unread.lines.includes('**Included AI usage:** $2.00 of $5.00 included; then the workspace balance ($42.10)'), textOf(unread.detail));
   }
   // An empty wallet that can pay nothing says so.
   const empty = await read(usageOf({ balanceusd: 0, planbalanceusd: 0 }));
   assert.equal(empty.usage.planBalanceUsd, 0);
-  assert.ok(empty.lines.includes('**AI usage this month:** $2.00 of $5.00 included; then the workspace balance ($0.00; $0.00 of it can pay a plan)'), textOf(empty.detail));
+  assert.ok(empty.lines.includes('**Included AI usage:** $2.00 of $5.00 included; then the workspace balance ($0.00; $0.00 of it can pay a plan)'), textOf(empty.detail));
 
   const fake = fakeClient({});
   await withClient(fake, async client => {
@@ -5789,10 +5793,10 @@ test('an answer from an older Wiro release still shows the AI usage in dollars, 
   assert.equal('pausedReason' in empty, false);
 
   const text = formatAgentDetail(toAgentDetail(agentRow({ usage: undefined, spend: undefined, usedcredits: 500, remainingcredits: 0 })));
-  assert.ok(text.split('\n').includes('**AI usage this month:** $5.00 of $5.00 included. Paused: it has no AI usage left, so it takes no new turns until its plan renews'), text);
+  assert.ok(text.split('\n').includes('**Included AI usage:** $5.00 of $5.00 included. Paused: it has no AI usage left, so it takes no new turns until its plan renews'), text);
   assert.doesNotMatch(text, /workspace balance|\*\*Spent this month:\*\*|credit/i);
   const extra = formatAgentDetail(toAgentDetail(agentRow({ usage: undefined, spend: undefined, extracredits: 1000, remainingcredits: 1300 })));
-  assert.ok(extra.split('\n').includes('**AI usage this month:** $2.00 of $5.00 included; $10.00 bought earlier left'), extra);
+  assert.ok(extra.split('\n').includes('**Included AI usage:** $2.00 of $5.00 included; $10.00 bought earlier left'), extra);
 });
 
 test('manage_agent_billing answers buy_credits that the packs are retired, and quotes, sends and charges nothing', async () => {

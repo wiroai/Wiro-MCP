@@ -320,7 +320,7 @@ in AI usage each month; after that, they use your Wiro balance.
 | `list_agent_skills` | Browse the skills an agent can have, what each one needs to work and the connectors it works with |
 | `list_agent_connectors` | Browse the connectors an agent can connect (ad accounts, stores, social accounts, mailboxes, data sources), what each one needs and the tools it gives the agent; with an agent, its connections |
 | `deploy_agent` | Deploy an agent from a template or build one from skills, on the Starter, Pro or Max plan; shows the plan's price, the wallet it charges and the other plans' prices, and asks before charging |
-| `list_my_agents` | List your agents with their status, plan, AI usage this month and what they spent |
+| `list_my_agents` | List your agents with their status, plan, included AI usage and what they spent this month |
 | `get_my_agent` | Read one agent's setup, plan, AI usage in dollars and the balance after it; can wait until it is running |
 | `control_agent` | Start, stop or restart an agent |
 | `update_agent` | Change an agent's name, description, time zone, models, chat commands and setup from chat |

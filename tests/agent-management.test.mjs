@@ -1493,13 +1493,13 @@ test('get_my_agent and list_my_agents show this period\'s included AI usage apar
     const one = await call(client, 'get_my_agent', { agent_guid: GUID });
     assert.notEqual(one.isError, true, textOf(one));
     assert.deepEqual(one.structuredContent.agent.usage, { period: '2026-11', includedUsd: 25, usedUsd: 1, leftUsd: 24, renewalUsd: 33, balanceUsd: 10, wallet: 'personal', minBalanceUsd: 0.5, paused: false });
-    assert.match(textOf(one), /^\*\*AI usage this month:\*\* \$1\.00 of \$25\.00 included \(\$33\.00 from each renewal\); then the workspace balance \(\$10\.00\)$/m);
+    assert.match(textOf(one), /^\*\*Included AI usage:\*\* \$1\.00 of \$25\.00 included \(\$33\.00 from each renewal\); then the workspace balance \(\$10\.00\)$/m);
 
     // An older answer, worked out from its credit fields: the same figure twice is said once.
     const same = await call(client, 'get_my_agent', { agent_guid: 'ua-2' });
     assert.equal(same.structuredContent.agent.usage.renewalUsd, 12);
     assert.equal(same.structuredContent.agent.usage.legacy, true);
-    assert.match(textOf(same), /^\*\*AI usage this month:\*\* \$2\.00 of \$12\.00 included$/m);
+    assert.match(textOf(same), /^\*\*Included AI usage:\*\* \$2\.00 of \$12\.00 included$/m);
 
     const list = await call(client, 'list_my_agents', {});
     assert.equal(list.structuredContent.agents[0].usage.includedUsd, 25);

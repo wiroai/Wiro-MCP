@@ -30,8 +30,9 @@ export function registerListMyAgents(server: McpServer, client: WiroClient): voi
       title: 'List my deployed Wiro agents',
       description: 'List the agents deployed in the connected project\'s workspace (a team project '
         + 'lists the team\'s agents, a personal project the personal ones). Each row shows the status, '
-        + 'the plan, its AI usage this month in USD (what the plan includes and what is left, then the Wiro balance '
-        + 'that pays after it, and whether the agent is paused), what it spent this month and when it last did '
+        + 'the plan, its included AI usage in USD for the plan period, renewal to renewal (what the plan '
+        + 'includes and what is left, then the Wiro balance that pays after it, and whether the agent is '
+        + 'paused), what it spent this month and when it last did '
         + 'anything, and marks an agent waiting in setup (status 6). An agent in '
         + 'another status can still miss a required credential. get_my_agent with an agent_guid gives the '
         + 'full state, including which credentials are missing, so read it before you say that an agent\'s '

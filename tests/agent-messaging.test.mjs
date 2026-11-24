@@ -506,9 +506,13 @@ test('deployed agent refusals say who can act on a team agent without reading th
 });
 
 test('send_agent_message follows Wiro\'s refusal of an agent with no AI usage it can pay for: add funds on wiro.ai', async () => {
-  const sentence = 'My Bot used the $30.00 of AI usage its plan includes this month, and your balance is under $0.50. '
-    + 'Add funds to keep it running, or it starts again when the plan renews on Nov 30.';
-  const usage = { period: '2026-11', includedusd: 30, usedusd: 30, leftusd: 0, renewalusd: 30, frombalanceusd: 0, balanceusd: 0.2, minbalanceusd: 0.5, paused: true, pausedreason: 'balance' };
+  // Wiro names the renewal (UTC): the plan's period end, which the usage gives as resetsat.
+  const resetsat = Math.floor(Date.now() / 1000) + 7 * 86_400;
+  const renewal = new Date(resetsat * 1000);
+  const sentence = 'My Bot used the $30.00 of AI usage its plan includes, and your balance is under $0.50. '
+    + `Add funds to keep it running, or it starts again when the plan renews on ${renewal.getUTCDate()} `
+    + `${renewal.toLocaleString('en-US', { month: 'long', timeZone: 'UTC' })} ${renewal.getUTCFullYear()}.`;
+  const usage = { period: '2026-11', resetsat, includedusd: 30, usedusd: 30, leftusd: 0, renewalusd: 30, frombalanceusd: 0, balanceusd: 0.2, minbalanceusd: 0.5, paused: true, pausedreason: 'balance' };
   for (const [agentusage, team] of [
     [{ ...usage, wallet: 'personal' }, ''],
     [{ ...usage, wallet: 'team' }, ' (select the agent\'s team in the dashboard first)'],

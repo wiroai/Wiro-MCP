@@ -379,7 +379,7 @@ export function registerControlAgent(server: McpServer, client: WiroClient): voi
             type: 'text' as const,
             text: `## ${action[0].toUpperCase()}${action.slice(1)}: ${result.outcome.replace('_', ' ')}\n\n${message}\n\n`
               + `**Status:** ${describeAgentStatus(previous)} before, ${describeAgentStatus(status)} now.\n`
-              + `**AI usage this month:** ${aiUsageText(afterView.usage)}`,
+              + `**Included AI usage:** ${aiUsageText(afterView.usage)}`,
           }],
           structuredContent: {
             action,

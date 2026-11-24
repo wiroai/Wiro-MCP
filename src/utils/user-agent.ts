@@ -1169,14 +1169,14 @@ export function formatAgentSummaryLines(agent: AgentSummary, plainMember = false
   const hint = !plainMember && (agent.status === 0 || agent.status === 5) && startNeedsPlan(agent)
     ? `${agent.status === 5 ? 'The start failed or the agent stopped unexpectedly.' : 'It is not running.'} ${noPlanStartHint(agent)}`
     : agent.status === 4 && agent.usage.paused
-      ? 'It is running, but paused: it takes no new turns now (see AI usage).'
+      ? 'It is running, but paused: it takes no new turns now (see Included AI usage).'
       : agentStatusHint(agent.status, plainMember);
   const next = nextPlanText(agent);
   return [
     `**Agent:** ${agentTitleSpan(agent.title)} (\`${agent.guid}\`), ${template}, ${agent.workspace} workspace`,
     `**Status:** ${describeAgentStatus(agent.status)}. ${hint}`,
     `**Plan:** ${agent.tier ? planName(agent.tier) : 'no plan'}; ${formatSubscriptionLine(agent.subscription, plainMember)}${next ? `; ${next}` : ''}`,
-    `**AI usage this month:** ${aiUsageText(agent.usage)}`,
+    `**Included AI usage:** ${aiUsageText(agent.usage)}`,
     ...(agent.spend ? [`**Spent this month:** ${spendText(agent.spend)}`] : []),
   ];
 }

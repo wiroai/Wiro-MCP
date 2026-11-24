@@ -59,7 +59,7 @@ export function registerGetMyAgent(server: McpServer, client: WiroClient): void 
     {
       title: 'Get a deployed Wiro agent',
       description: 'Read the full state of one deployed agent: status (number and label), plan (Starter, Pro or Max) '
-        + 'with any move set for its next renewal, the plans and their prices, its AI usage this month in USD (what the plan includes, used and left, then the Wiro balance that pays after it, and whether it is paused and why), what it spent this month, what that balance can pay a plan with (planBalanceUsd: deposits, store revenue and coupons that can pay a plan; a coupon limited to models does not count), when it last did anything, time zone, setup from chat (chatSetup), skills, chat channels, model settings with the rates of the models it can switch to, '
+        + 'with any move set for its next renewal, the plans and their prices, its included AI usage in USD for the plan period, renewal to renewal (what the plan includes, used and left, then the Wiro balance that pays after it, and whether it is paused and why), what it spent this month, what that balance can pay a plan with (planBalanceUsd: deposits, store revenue and coupons that can pay a plan; a coupon limited to models does not count), when it last did anything, time zone, setup from chat (chatSetup), skills, chat channels, model settings with the rates of the models it can switch to, '
         + 'scheduled tasks and custom instructions (a long text is shortened; entry adds one entry\'s whole text), the '
         + 'state of each credential, and its connectors with their state (connected, a sign-in started, needs a new '
         + 'sign-in, failed) and the accounts chosen. Values are never returned, only whether each one is filled, '
