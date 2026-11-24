@@ -18,6 +18,7 @@ import {
   describeAgentStatus,
   readAgentDetail,
   readAgentStatus,
+  renewalMoment,
   toAgentDetail,
   type NextAction,
 } from '../utils/user-agent.js';
@@ -82,9 +83,9 @@ export function registerDeleteAgent(server: McpServer, client: WiroClient): void
             };
           } else if (subscription?.pendingdowngrade === 'cancel' || agent.subscription?.cancelAtPeriodEnd) {
             // A card plan has to end before the agent can be deleted, cancelled or not.
-            blockers.push(`The card plan is cancelled and ends after ${agent.subscription?.periodEndsAt ?? 'this period'}. The agent can be deleted once it has ended; the rest of the paid period is not refunded.`);
+            blockers.push(`The card plan is cancelled and ends after ${renewalMoment(agent.subscription) ?? 'this period'}. The agent can be deleted once it has ended; the rest of the paid period is not refunded.`);
           } else {
-            blockers.push(`The plan is paid by card through ${agent.subscription?.periodEndsAt ?? 'this period'}, then moves to the Wiro balance and renews from it.${cardPlanOnceMoreNote(agent.subscription)} Cancel it first with manage_agent_billing action cancel: it then ends with its period, and the agent can be deleted once it has ended. The rest of the paid period is not refunded.`);
+            blockers.push(`The plan is paid by card through ${renewalMoment(agent.subscription) ?? 'this period'}, then moves to the Wiro balance and renews from it.${cardPlanOnceMoreNote(agent.subscription)} Cancel it first with manage_agent_billing action cancel: it then ends with its period, and the agent can be deleted once it has ended. The rest of the paid period is not refunded.`);
             nextAction = {
               tool: 'manage_agent_billing',
               arguments: { agent_guid: guid, action: 'cancel' },

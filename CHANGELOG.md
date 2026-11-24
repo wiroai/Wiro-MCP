@@ -170,6 +170,15 @@ runs `npx @wiro-ai/wiro-mcp@latest` takes it at its next start.
   where they said about a day after it. A wallet short at renewal keeps the plan active
   while Wiro tries again for up to a day after the period end, and the playbooks say so,
   where they said the plan ends instead of renewing.
+- An active plan's renewal or end is named as Wiro shows it, never a moment gone by: the
+  plan line of `get_my_agent` and `list_my_agents`, a move set for the renewal, the
+  `manage_agent_billing` quotes (`startsAt` included), `control_agent`'s stop and
+  `delete_agent`'s card plan. They named the period end, which is gone by while Wiro tries a
+  wallet plan's renewal again. The subscription carries that moment as `renewsOrEndsAt`; an
+  answer without it names the period end, as before.
+- With nothing included (no live plan), the usage line reads AI usage instead of Included AI
+  usage, as on the agent's page. `usage.period` is described as what it is: a month tag, the
+  month the current plan period started in, not the period itself.
 - A message or a start refused because the agent's included usage is used up and the
   balance is short (code 97 with `agentusage`) keeps Wiro's answer and says where funds are
   added; `neededusd` marks a plan payment refusal instead, and no pack is offered.

@@ -284,6 +284,8 @@ export const subscriptionSchema = z.object({
   amountUsd: z.number().nullable()
     .describe('What the plan costs every 30 days. For a plan that has ended, what a new period costs: the price of its plan today.'),
   periodEndsAt: z.string().optional(),
+  renewsOrEndsAt: z.string().optional()
+    .describe('For an active plan, when it renews, or ends when atPeriodEnd is ends, as Wiro shows it: periodEndsAt, or the time of the answer once that has passed and the renewal is due (while the balance cannot pay a wallet plan\'s renewal, Wiro tries again for up to a day), never a moment gone by. Absent when Wiro does not send it.'),
   daysRemaining: z.number().nullable(),
   cancelAtPeriodEnd: z.boolean(),
   atPeriodEnd: z.enum(['renews', 'ends', 'unknown']).optional()
@@ -291,6 +293,22 @@ export const subscriptionSchema = z.object({
 });
 
 export type AgentSubscription = z.infer<typeof subscriptionSchema>;
+
+/** A moment Wiro answers as an ISO date, such as a plan's renewaldate, written as unixToIso writes one. */
+function isoMoment(value: unknown): string | undefined {
+  const ms = typeof value === 'string' ? Date.parse(value) : Number.NaN;
+  return Number.isFinite(ms) && ms > 0 ? new Date(ms).toISOString() : undefined;
+}
+
+/**
+ * When an active plan renews, or ends when it is set to end, for a sentence: the moment Wiro shows
+ * (renewsOrEndsAt), which is never gone by, else, in an answer without it, the period end. The period end itself
+ * can be gone by while the plan is active: a wallet plan whose renewal the balance cannot pay stays active while
+ * Wiro tries again for up to a day after it.
+ */
+export function renewalMoment(plan: Pick<AgentSubscription, 'renewsOrEndsAt' | 'periodEndsAt'> | null | undefined): string | undefined {
+  return plan?.renewsOrEndsAt ?? plan?.periodEndsAt;
+}
 
 /**
  * Whether a plan ends with its current period: true when it ends, false when
@@ -312,12 +330,15 @@ export function toSubscription(value: unknown, cardEnds?: unknown): AgentSubscri
   const periodEndsAt = unixToIso(value.currentperiodend);
   const status = asString(value.status) ?? 'expired';
   const ends = planEndsWithPeriod(value, cardEnds);
+  // Wiro's renewal date of an active plan: its renewal, or its end, never a moment gone by.
+  const renewsOrEndsAt = status === 'active' ? isoMoment(value.renewaldate) : undefined;
   return {
     status,
     billing: provider === 'prepaid' ? 'wallet' : 'card',
     switchingToWallet: provider !== 'prepaid' && value.nextprovider === 'prepaid',
     amountUsd: toNumber(value.amount),
     ...(periodEndsAt ? { periodEndsAt } : {}),
+    ...(renewsOrEndsAt ? { renewsOrEndsAt } : {}),
     daysRemaining: toNumber(value.daysremaining),
     // True only when the plan is known to end; atPeriodEnd also tells a plan that renews from an unknown one.
     cancelAtPeriodEnd: ends === true,
@@ -395,7 +416,7 @@ export function centsToUsd(value: number): number {
 
 export const agentUsageSchema = z.object({
   period: z.string().optional()
-    .describe('The plan period the amounts belong to, such as 2026-11.'),
+    .describe('A month tag (YYYY-MM, UTC), such as 2026-11: the month the current plan period started in, when its renewal ran. Not the period itself, which runs from one renewal to the next (resetsAt), so the amounts are not a calendar month\'s.'),
   resetsAt: z.string().optional()
     .describe('When the included AI usage starts again: the plan\'s next renewal.'),
   includedUsd: z.number()
@@ -539,6 +560,14 @@ function pausedText(usage: AgentUsage): string {
       + 'so it takes no new turns until funds are added on wiro.ai or the plan renews';
   }
   return 'it has no AI usage left, so it takes no new turns until its plan renews';
+}
+
+/**
+ * The name of the agent's AI usage line, as the agent's page titles it: Included AI usage while the plan period
+ * includes some, and AI usage when it includes none (no live plan, so the balance paid all of it).
+ */
+export function aiUsageLabel(usage: Pick<AgentUsage, 'includedUsd'>): string {
+  return usage.includedUsd > 0 ? 'Included AI usage' : 'AI usage';
 }
 
 /**
@@ -1091,15 +1120,17 @@ export function formatSubscriptionLine(subscription: AgentSubscription | null, p
     }
   } else if (subscription.periodEndsAt) {
     const atPeriodEnd = subscription.atPeriodEnd ?? (subscription.cancelAtPeriodEnd ? 'ends' : 'renews');
+    // An active plan's renewal or end as Wiro shows it, which its period end is not once a renewal is due.
+    const at = renewalMoment(subscription);
     if (subscription.status !== 'active') {
       parts.push(`period ended ${subscription.periodEndsAt}`);
     } else if (atPeriodEnd === 'ends') {
-      parts.push(`cancelled, ends after ${subscription.periodEndsAt}`);
+      parts.push(`cancelled, ends after ${at}`);
     } else if (atPeriodEnd === 'renews') {
-      parts.push(`renews after ${subscription.periodEndsAt}`);
+      parts.push(`renews after ${at}`);
     } else {
       // Whether this card plan renews is not known here.
-      parts.push(`paid through ${subscription.periodEndsAt}`);
+      parts.push(`paid through ${at}`);
     }
   }
   if (subscription.switchingToWallet) parts.push('moves to the Wiro balance at period end');
@@ -1150,7 +1181,8 @@ export function nextPlanText(agent: Pick<AgentSummary, 'tier' | 'nextPlan' | 'su
   const next = agent.nextPlan;
   const subscription = agent.subscription;
   if (!next || subscription?.status !== 'active' || subscription.atPeriodEnd === 'ends') return '';
-  const when = subscription.periodEndsAt ? `the renewal after ${subscription.periodEndsAt}` : 'the next renewal';
+  const at = renewalMoment(subscription);
+  const when = at ? `the renewal after ${at}` : 'the next renewal';
   return next === agent.tier
     ? `from ${when} it is billed at today's ${planName(next)} price`
     : `moves to ${planName(next)} from ${when}`;
@@ -1169,14 +1201,14 @@ export function formatAgentSummaryLines(agent: AgentSummary, plainMember = false
   const hint = !plainMember && (agent.status === 0 || agent.status === 5) && startNeedsPlan(agent)
     ? `${agent.status === 5 ? 'The start failed or the agent stopped unexpectedly.' : 'It is not running.'} ${noPlanStartHint(agent)}`
     : agent.status === 4 && agent.usage.paused
-      ? 'It is running, but paused: it takes no new turns now (see Included AI usage).'
+      ? `It is running, but paused: it takes no new turns now (see ${aiUsageLabel(agent.usage)}).`
       : agentStatusHint(agent.status, plainMember);
   const next = nextPlanText(agent);
   return [
     `**Agent:** ${agentTitleSpan(agent.title)} (\`${agent.guid}\`), ${template}, ${agent.workspace} workspace`,
     `**Status:** ${describeAgentStatus(agent.status)}. ${hint}`,
     `**Plan:** ${agent.tier ? planName(agent.tier) : 'no plan'}; ${formatSubscriptionLine(agent.subscription, plainMember)}${next ? `; ${next}` : ''}`,
-    `**Included AI usage:** ${aiUsageText(agent.usage)}`,
+    `**${aiUsageLabel(agent.usage)}:** ${aiUsageText(agent.usage)}`,
     ...(agent.spend ? [`**Spent this month:** ${spendText(agent.spend)}`] : []),
   ];
 }

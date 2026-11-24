@@ -38,6 +38,7 @@ import {
   planLineText,
   planName,
   readAgentDetail,
+  renewalMoment,
   roundUsd,
   sameAmount,
   shortBalanceNote,
@@ -74,7 +75,7 @@ const quoteSchema = z.object({
   change: z.enum(['upgrade', 'downgrade', 'undo_downgrade']).optional()
     .describe('change_plan: upgrade (a larger plan, now), downgrade (a smaller plan, from the next renewal) or undo_downgrade (keep the plan, and undo the move set for the next renewal).'),
   startsAt: z.string().optional()
-    .describe('change_plan to a smaller plan: when the period ends; the new plan starts with the renewal after it.'),
+    .describe('change_plan to a smaller plan: when the period ends, as Wiro shows it (never a moment gone by); the new plan starts with the renewal after it.'),
 });
 
 type Quote = z.infer<typeof quoteSchema>;
@@ -352,7 +353,9 @@ async function planFor(
   // whose period ends within 7 days after Wiro's email announcing the move renews once more by card first.
   const paidFrom: PaidFrom = agent.workspace === 'team' ? 'team_wallet' : 'personal_wallet';
   const balance = planBalanceName(agent.workspace);
-  const periodEnd = agent.subscription?.periodEndsAt ?? 'the end of the current period';
+  // When the active plan renews or ends, as Wiro shows it: its period end, or now once a renewal is due (a wallet
+  // plan whose balance cannot pay it stays active while Wiro tries again), never a moment gone by.
+  const periodEnd = renewalMoment(agent.subscription) ?? 'the end of the current period';
   // An answer with a card checkout link instead of the change, which an older Wiro gave for a card plan. No
   // checkout is opened here.
   const checkoutAnswer = (what: string) => `Wiro did not ${what}: it answered with a card checkout, which is not opened `
@@ -628,7 +631,8 @@ async function planFor(
       }
       if (!current) throw new Error('The agent\'s plan could not be read, so it cannot be changed right now. Try again later.');
       const next = asPlan(agent.nextPlan) ?? null;
-      const when = agent.subscription?.periodEndsAt ? `the renewal after ${agent.subscription.periodEndsAt}` : 'the next renewal';
+      const renewsAt = renewalMoment(agent.subscription);
+      const when = renewsAt ? `the renewal after ${renewsAt}` : 'the next renewal';
       const move = comparePlans(target, current);
 
       if (move === 0) {
@@ -665,7 +669,7 @@ async function planFor(
             // An agent on a price from before the plans keeps its plan with that plan set for its renewal, so
             // the renewal bills the plan's own price.
             if (asPlan(body.nextplan) === current) {
-              const at = unixToIso(body.startsAt ?? body.periodEnd) ?? agent.subscription?.periodEndsAt;
+              const at = unixToIso(body.startsAt ?? body.periodEnd) ?? renewsAt;
               const priceUsd = toNumber(body.newPriceUsd) ?? keep?.priceUsd;
               const terms = priceUsd !== undefined ? `, ${planTerms({ priceUsd, includedUsageUsd: keep?.includedUsageUsd ?? priceUsd })}` : '';
               return {
@@ -782,7 +786,7 @@ async function planFor(
         };
       }
       const smaller = agent.pricing?.[target];
-      const startsAt = agent.subscription?.periodEndsAt;
+      const startsAt = renewsAt;
       return {
         outcome: 'quote',
         quote: {

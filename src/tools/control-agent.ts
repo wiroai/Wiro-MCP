@@ -8,6 +8,7 @@ import {
   addFundsText,
   agentStatusLabel,
   agentStatusLabelSchema,
+  aiUsageLabel,
   aiUsageText,
   asPlan,
   agentSummarySchema,
@@ -21,6 +22,7 @@ import {
   nextStepForAgent,
   readAgentDetail,
   readAgentStatus,
+  renewalMoment,
   settledStatusAdvice,
   toAgentDetail,
   toAgentSummary,
@@ -53,7 +55,7 @@ type RestartAnswer = ApiEnvelope & { restarting?: unknown };
 /** What a stop means for the agent's plan, as the plan stood before the stop. */
 function planAfterStop(plan: AgentSubscription | null): string {
   if (plan?.status !== 'active') return 'The agent has no active plan, so no renewal starts it again.';
-  const periodEnd = plan.periodEndsAt ?? 'the current period';
+  const periodEnd = renewalMoment(plan) ?? 'the current period';
   if (plan.atPeriodEnd === 'ends') {
     return `The plan is already cancelled: it ends after ${periodEnd} and does not renew, so nothing starts the agent `
       + 'again by itself.';
@@ -379,7 +381,7 @@ export function registerControlAgent(server: McpServer, client: WiroClient): voi
             type: 'text' as const,
             text: `## ${action[0].toUpperCase()}${action.slice(1)}: ${result.outcome.replace('_', ' ')}\n\n${message}\n\n`
               + `**Status:** ${describeAgentStatus(previous)} before, ${describeAgentStatus(status)} now.\n`
-              + `**Included AI usage:** ${aiUsageText(afterView.usage)}`,
+              + `**${aiUsageLabel(afterView.usage)}:** ${aiUsageText(afterView.usage)}`,
           }],
           structuredContent: {
             action,

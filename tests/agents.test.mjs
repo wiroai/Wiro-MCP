@@ -3265,6 +3265,59 @@ test('manage_agent_billing: a cancelled wallet plan ends at its period end, with
   });
 });
 
+test('a plan whose renewal is due names the renewal Wiro shows, never its period end gone by', async () => {
+  // A wallet plan whose balance cannot pay its renewal stays active while Wiro tries again for up to a day after its
+  // period end. Wiro's renewaldate (and usage.resetsat) then reads the time of the answer, never that period end.
+  const ended = NOW - 3 * 3_600;
+  const endedIso = new Date(ended * 1000).toISOString();
+  const dueIso = new Date(NOW * 1000).toISOString();
+  const due = (overrides = {}) => subscription({ amount: 100, currentperiodend: ended, renewaldate: dueIso, daysremaining: 0, ...overrides });
+  const row = (sub, extra = {}) => agentRow({ tier: 'max', monthlypriceusd: 100, subscription: sub, usage: usageOf({ resetsat: NOW }), ...extra });
+  const noPastEnd = result => assert.equal(textOf(result).includes(endedIso), false, textOf(result));
+
+  // The plan line and the move set for the renewal.
+  await withClient(fakeClient({ '/UserAgent/Detail': detailResponse(row(due(), { nextplan: 'pro' })) }), async client => {
+    const detail = await call(client, 'get_my_agent', { agent_guid: 'ua-1' });
+    assert.ok(textOf(detail).split('\n').includes(`**Plan:** Max; active, billed from the wallet, $100.00 per 30 days, renews after ${dueIso}; moves to Pro from the renewal after ${dueIso}`), textOf(detail));
+    noPastEnd(detail);
+    assert.equal(detail.structuredContent.agent.subscription.renewsOrEndsAt, dueIso);
+    assert.equal(detail.structuredContent.agent.subscription.periodEndsAt, endedIso);
+  });
+
+  // manage_agent_billing: the cancel quote, and a move to a smaller plan and when it starts.
+  await withClient(fakeClient({ '/UserAgent/Detail': detailResponse(row(due())) }), async client => {
+    const cancel = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'cancel' });
+    assert.ok(cancel.structuredContent.message.includes(`The agent keeps its plan and the AI usage it includes until ${dueIso}; then the plan ends`), cancel.structuredContent.message);
+    const smaller = await call(client, 'manage_agent_billing', { agent_guid: 'ua-1', action: 'change_plan', plan: 'pro' });
+    assert.equal(smaller.structuredContent.quote.startsAt, dueIso);
+    assert.ok(smaller.structuredContent.message.startsWith(`Move to Pro at the next renewal: nothing is charged or refunded now. The agent keeps Max and the AI usage it includes until ${dueIso}. From the renewal after ${dueIso} the plan is Pro`), smaller.structuredContent.message);
+    for (const result of [cancel, smaller]) noPastEnd(result);
+  });
+
+  // A cancelled plan's end, when the agent is stopped; a card plan's, when it blocks a deletion.
+  const stopFake = fakeClient({
+    '/UserAgent/Detail': () => detailResponse(row(due({ pendingdowngrade: 'cancel' }), { status: stopFake.called('/UserAgent/Stop').length > 0 ? 0 : 4 })),
+    '/UserAgent/Stop': { result: true, errors: [], useragents: [] },
+  });
+  await withClient(stopFake, async client => {
+    const stopped = await call(client, 'control_agent', { agent_guid: 'ua-1', action: 'stop', wait_seconds: 10 });
+    assert.ok(stopped.structuredContent.message.includes(`The plan is already cancelled: it ends after ${dueIso} and does not renew`), stopped.structuredContent.message);
+    noPastEnd(stopped);
+  });
+  await withClient(fakeClient({ '/UserAgent/Detail': detailResponse(row(due({ provider: 'stripe', nextprovider: 'prepaid' }), { status: 0 })) }), async client => {
+    const remove = await call(client, 'delete_agent', { agent_guid: 'ua-1', confirm: true });
+    assert.ok(remove.structuredContent.blockers[0].startsWith(`The plan is paid by card through ${dueIso}, then moves to the Wiro balance`), remove.structuredContent.blockers[0]);
+    noPastEnd(remove);
+  });
+
+  // An answer without renewaldate, as from an older Wiro release, names the period end.
+  await withClient(fakeClient({ '/UserAgent/Detail': detailResponse(row(due({ renewaldate: null }))) }), async client => {
+    const detail = await call(client, 'get_my_agent', { agent_guid: 'ua-1' });
+    assert.match(textOf(detail), new RegExp(`renews after ${endedIso.replace(/[.]/g, '\\.')}`));
+    assert.equal('renewsOrEndsAt' in detail.structuredContent.agent.subscription, false);
+  });
+});
+
 test('manage_agent_billing pays a card plan\'s changes from the balance and opens no card checkout', async () => {
   const card = subscription({ provider: 'stripe' });
   let upgraded = false;
@@ -5806,6 +5859,10 @@ test('get_my_agent and list_my_agents show the AI usage, the balance after it an
   assert.match(textOf(noPlan.detail), /\. Paused: it has no active plan, so it takes no new turns until a plan is paid for: manage_agent_billing with action renew brings back an expired plan, and subscribe starts a new one\. Funds alone do not run it$/m);
   assert.doesNotMatch(textOf(noPlan.detail), /no AI usage left|until its plan renews/);
   assert.match(textOf(noPlan.list), /, paused \(no active plan\);/);
+  // Nothing is included, so the line is AI usage, as the agent's page titles it, and the paused status points to it.
+  assert.ok(noPlan.lines.some(line => line.startsWith('**AI usage:** $0.00 of $0.00 included; then the workspace balance ($42.10). Paused: it has no active plan')), textOf(noPlan.detail));
+  assert.equal(noPlan.lines.some(line => line.startsWith('**Included AI usage:**')), false, textOf(noPlan.detail));
+  assert.ok(noPlan.lines.includes('**Status:** Running (4). It is running, but paused: it takes no new turns now (see AI usage).'), textOf(noPlan.detail));
 
   // A plan change inside the period moves what this period includes; each renewal includes the plan's own amount.
   const moved = await read({ usage: usageOf({ includedusd: 12.4, usedusd: 1, leftusd: 11.4, renewalusd: 30, wallet: 'team' }), spend: undefined });
@@ -5814,6 +5871,32 @@ test('get_my_agent and list_my_agents show the AI usage, the balance after it an
   assert.equal(moved.detail.structuredContent.agent.usage.wallet, 'team');
   assert.equal('spend' in moved.detail.structuredContent.agent, false);
   assert.doesNotMatch(textOf(moved.list), /spent/);
+});
+
+test('control_agent names the usage line AI usage when nothing is included, and usage.period is a month tag', async () => {
+  const nothingIncluded = usageOf({ includedusd: 0, usedusd: 0, leftusd: 0, renewalusd: 0, paused: true, pausedreason: 'plan' });
+  for (const [usage, label] of [[nothingIncluded, 'AI usage'], [usageOf(), 'Included AI usage']]) {
+    const fake = fakeClient({
+      '/UserAgent/Detail': () => detailResponse(agentRow({ status: fake.called('/UserAgent/Stop').length > 0 ? 0 : 4, usage })),
+      '/UserAgent/Stop': { result: true, errors: [], useragents: [] },
+    });
+    await withClient(fake, async client => {
+      const stopped = await call(client, 'control_agent', { agent_guid: 'ua-1', action: 'stop', wait_seconds: 10 });
+      assert.notEqual(stopped.isError, true, textOf(stopped));
+      assert.ok(textOf(stopped).split('\n').some(line => line.startsWith(`**${label}:** $`)), textOf(stopped));
+      if (label === 'AI usage') assert.doesNotMatch(textOf(stopped), /Included AI usage/);
+    });
+  }
+
+  // The period tag is the month the period started in, never the period itself, which runs renewal to renewal.
+  await withClient(fakeClient({}), async client => {
+    const { tools } = await client.listTools();
+    for (const name of ['get_my_agent', 'list_my_agents']) {
+      const schema = JSON.stringify(tools.find(tool => tool.name === name).outputSchema);
+      assert.match(schema, /A month tag \(YYYY-MM, UTC\), such as 2026-11: the month the current plan period started in, when its renewal ran\. Not the period itself, which runs from one renewal to the next \(resetsAt\)/, name);
+      assert.doesNotMatch(schema, /The plan period the amounts belong to/, name);
+    }
+  });
 });
 
 test('get_my_agent shows what the agent\'s wallet can pay a plan with, and leaves it out when Wiro could not read it', async () => {
