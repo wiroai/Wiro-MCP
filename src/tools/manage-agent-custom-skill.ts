@@ -22,6 +22,7 @@ import {
   customSkillKindOf,
   humanizeCustomSkillKey,
   isAgentRunning,
+  liveEntryNote,
   looksLikeCron,
   normalizeCustomSkillKey,
   pausedSkillTitles,
@@ -107,7 +108,7 @@ const outputSchema = {
   restarting: z.boolean().optional()
     .describe('Whether this change restarts the agent, as Wiro answers it.'),
   live: z.boolean().optional()
-    .describe('Whether the running agent got this change with no restart, as Wiro answers it: it uses it from its next message.'),
+    .describe('Whether the running agent got this change with no restart, as Wiro answers it: a custom skill from its next message, a scheduled task from its next run.'),
   warnings: z.array(z.string()),
   message: z.string(),
   nextAction: nextActionSchema.optional(),
@@ -208,14 +209,14 @@ const UNCHANGED_UPSERT = 'Its text, schedule and on/off state are unchanged, so 
 
 /**
  * What an upsert did to the agent. Wiro answers live: true when a running agent
- * got the change with no restart, and restarting: true when the save restarts
- * it. An answer with neither (a Wiro that does not apply changes live) says less:
- * a text or description edit reaches a running agent without a restart when it
- * can, and restarting false does not say that it did, so that answer says what
- * is known and how to make sure.
+ * got the change with no restart (liveNote says what it got), and restarting:
+ * true when the save restarts it. An answer with neither (a Wiro that does not
+ * apply changes live) says less: a text or description edit reaches a running
+ * agent without a restart when it can, and restarting false does not say that
+ * it did, so that answer says what is known and how to make sure.
  */
-function upsertRestartNote(status: number | null, functional: boolean, textOnly: boolean, restarting: boolean | undefined, live: boolean): string {
-  if (live) return restartNote(status, 'change', true);
+function upsertRestartNote(status: number | null, functional: boolean, textOnly: boolean, restarting: boolean | undefined, liveNote: string | undefined): string {
+  if (liveNote) return liveNote;
   if (restarting === true) return restartNote(status, 'change');
   if (restarting === undefined) return functional ? restartNote(status, 'change') : UNCHANGED_UPSERT;
   if (!functional && !textOnly) return UNCHANGED_UPSERT;
@@ -233,19 +234,21 @@ const NOT_RESTARTED = 'The agent keeps running: Wiro did not restart it for this
 
 /**
  * What a rename, delete or revert did to the agent, from Wiro's answer: live: true when a running agent got it with no
- * restart, and restarting as Wiro says it. restarting: false on a running agent means Wiro did not restart it, and
- * restart "failed" that the restart could not be started. An answer without either goes by the agent's status before
- * the change.
+ * restart (liveNote says what it got), and restarting as Wiro says it. restarting: false on a running agent means Wiro
+ * did not restart it, and restart "failed" that the restart could not be started. An answer without either goes by the
+ * agent's status before the change.
  */
-function appliedRestart(answer: { restarting?: unknown; live?: unknown; restart?: unknown }, status: number | null, what: string) {
+function appliedRestart(answer: { restarting?: unknown; live?: unknown; restart?: unknown }, status: number | null, what: string, liveNote: string) {
   const live = answeredLive(answer);
   const notRestarted = !live && answer.restarting === false && isAgentRunning(status);
   return {
-    restart: !notRestarted
-      ? restartNote(status, what, live)
-      : answer.restart === 'failed'
-        ? `The ${what} is saved, but the agent could not restart: control_agent with action restart loads it.`
-        : NOT_RESTARTED,
+    restart: live
+      ? liveNote
+      : !notRestarted
+        ? restartNote(status, what)
+        : answer.restart === 'failed'
+          ? `The ${what} is saved, but the agent could not restart: control_agent with action restart loads it.`
+          : NOT_RESTARTED,
     ...(typeof answer.restarting === 'boolean' ? { restarting: answer.restarting } : {}),
     ...(live ? { live } : {}),
   };
@@ -379,7 +382,8 @@ async function upsert(client: WiroClient, input: Input, signal: AbortSignal) {
   const schedule = kind === 'scheduled_task' && after.interval
     ? scheduleInfo(row, after.interval, !existing && interval === undefined, after, await pausedSkillTitles(client, [after], signal))
     : undefined;
-  const restart = upsertRestartNote(agentStatusOf(row), functional, textOnly, restarting, live);
+  const restart = upsertRestartNote(agentStatusOf(row), functional, textOnly, restarting,
+    live ? liveEntryNote(kind, existing?.enabled === true, after.enabled) : undefined);
   return reply(input, key, 'saved',
     existing ? `Updated the ${kindLabel(kind)} ${key}.` : `Created the ${kindLabel(kind)} ${key}.`,
     {
@@ -436,7 +440,7 @@ async function rename(client: WiroClient, input: Input, signal: AbortSignal) {
   return reply(input, oldKey, 'renamed', `Renamed ${oldKey} to ${renamedTo}.`, {
     renamedTo,
     entry: toEntry({ ...existing, key: renamedTo, description: input.description ?? existing.description }),
-    ...appliedRestart(response, agentStatusOf(row), 'new name'),
+    ...appliedRestart(response, agentStatusOf(row), 'new name', liveEntryNote(existing.kind, existing.enabled, existing.enabled)),
   });
 }
 
@@ -483,7 +487,7 @@ async function remove(client: WiroClient, input: Input, signal: AbortSignal) {
   );
   return reply(input, key, 'deleted', `Deleted ${key} and its history.`, {
     entry: null,
-    ...appliedRestart(deleted, agentStatusOf(row), 'change'),
+    ...appliedRestart(deleted, agentStatusOf(row), 'change', liveEntryNote(existing.kind, existing.enabled, false)),
   });
 }
 
@@ -688,7 +692,8 @@ async function revert(client: WiroClient, input: Input, signal: AbortSignal) {
       entry,
       ...(outcome === 'no-op'
         ? { restart: 'Nothing changed, so the agent does not restart.' }
-        : appliedRestart(response, agentStatusOf(row), 'change')),
+        : appliedRestart(response, agentStatusOf(row), 'change',
+          liveEntryNote(kind, current?.enabled === true, outcome !== 'deleted' && entry !== null && entry.enabled))),
     });
 }
 

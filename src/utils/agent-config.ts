@@ -68,8 +68,33 @@ export function isAgentRunning(status: number | null): boolean {
   return status === 3 || status === 4;
 }
 
-/** A change Wiro applied to the running agent with no restart, as its answer says (live: true, or restart "live"). */
-export const LIVE_CHANGE_NOTE = 'The running agent uses it from its next message, with no restart.';
+/**
+ * A change Wiro applied to the running agent with no restart, as its answer says (live: true, or restart "live"). It
+ * names no direction, so it also reads right for a change that takes something away.
+ */
+export const LIVE_CHANGE_NOTE = 'The running agent has the change from its next message, with no restart.';
+
+/** A live change that gives the running agent something it uses: a connector connected, a custom skill turned on. */
+export const LIVE_ADDED_NOTE = 'The running agent uses it from its next message, with no restart.';
+
+/** A live change that takes something away: a connector disconnected, a custom skill turned off or deleted. */
+export const LIVE_REMOVED_NOTE = 'The running agent stops using it from its next message, with no restart.';
+
+/**
+ * The live sentence for a change to one custom skill or scheduled task, from whether its switch is on before and after
+ * the change (a new entry is off before it, a deleted one off after it). A scheduled task runs on its own time, not
+ * at the agent's next message.
+ */
+export function liveEntryNote(kind: CustomSkillKind, onBefore: boolean, onAfter: boolean): string {
+  if (kind === 'scheduled_task') {
+    if (onAfter) return 'The running agent has the change with no restart; it applies from the task\'s next run.';
+    return onBefore
+      ? 'The running agent has the change with no restart; the task stops running.'
+      : 'The running agent has the change with no restart.';
+  }
+  if (onAfter) return LIVE_ADDED_NOTE;
+  return onBefore ? LIVE_REMOVED_NOTE : LIVE_CHANGE_NOTE;
+}
 
 /**
  * Before a change that can reach a running agent with no restart. Wiro decides when it applies it: most go live, the
@@ -83,11 +108,10 @@ export function answeredLive(body: { live?: unknown; restart?: unknown }): boole
 }
 
 /**
- * What a change does to the agent. live: Wiro's answer says the running agent got it with no restart. Otherwise it
- * goes by the agent's status before the change.
+ * What a change does to the agent, by its status before the change. A change Wiro's answer says the running agent
+ * got with no restart takes a live sentence instead.
  */
-export function restartNote(status: number | null, what = 'change', live = false): string {
-  if (live) return LIVE_CHANGE_NOTE;
+export function restartNote(status: number | null, what = 'change'): string {
   switch (status) {
     case 3:
     case 4:

@@ -365,7 +365,8 @@ test('apply_agent_skills says when the running agent got the change with no rest
     const out = result.structuredContent;
     assert.equal(out.status, 'applied');
     assert.equal(out.live, true);
-    assert.equal(out.restart, 'The running agent uses it from its next message, with no restart.');
+    // One sentence for skills turned on, off or both: it never says the agent uses a skill it turned off.
+    assert.equal(out.restart, 'The running agent has the new skill set from its next message, with no restart.');
     assert.ok(text(result).split('\n').includes(`**Restart:** ${out.restart}`), text(result));
     assert.notEqual(out.nextAction?.tool, 'get_my_agent', 'nothing restarts, so there is nothing to wait for');
   });
@@ -378,6 +379,21 @@ test('apply_agent_skills says when the running agent got the change with no rest
     const result = await applyReceptionist(client);
     assert.equal(result.structuredContent.live, undefined);
     assert.match(result.structuredContent.restart, /^The agent restarts to load the skill change/);
+  });
+  // A skill turned off live reads the same sentence: nothing says the agent uses the skill it lost.
+  const before = detail({ skills: skillsOn('util-chat-markdown-reporting', 'util-ads-manager-common') });
+  const after = detail({ skills: skillsOn('util-chat-markdown-reporting') });
+  const turnedOff = fakeClient(skillRoutes({
+    '/Skills/List': extraSkillList,
+    '/UserAgent/Detail': (_body, calls) => structuredClone(calls.some(call => call.path === '/UserAgent/SkillsApply') ? after : before),
+    '/UserAgent/SkillsApply': appliedAnswer({ restartTriggered: false, restart: 'live', live: true }),
+  }));
+  await withClient(turnedOff, async client => {
+    const result = await client.callTool({ name: 'apply_agent_skills', arguments: { agent_guid: AGENT, skills: { 'util-ads-manager-common': false } } });
+    assert.equal(result.structuredContent.status, 'applied', text(result));
+    assert.deepEqual(result.structuredContent.changes.disable, ['util-ads-manager-common']);
+    assert.equal(result.structuredContent.live, true);
+    assert.equal(result.structuredContent.restart, 'The running agent has the new skill set from its next message, with no restart.');
   });
 });
 
@@ -2256,22 +2272,48 @@ test('manage_agent_custom_skill says from Wiro\'s answer whether a save restarts
     assert.equal(result.structuredContent.restarting, undefined);
   });
 
-  // A Wiro that applies changes live says so, for every kind of change, the approval policy's included.
-  const live = 'The running agent uses it from its next message, with no restart.';
-  for (const [name, args] of [
-    ['a new entry', { key: 'weekly-report', kind: 'scheduled_task', value: 'Summarize last week.' }],
-    ['a schedule change', { key: 'cs-cron-my-task', interval: '0 9 * * *' }],
-    ['a text edit', { key: 'cs-cron-my-task', value: 'Do it at nine.' }],
-    ['the approval policy', { key: 'cs-approval-policy', value: 'Ask before any post.', confirm: true }],
+  // A Wiro that applies changes live says so, for every kind of change, the approval policy's included. A custom
+  // skill the change turns off reads that the agent stops using it, and a scheduled task, which runs on its own
+  // time, reads from its next run.
+  const liveRow = detail({
+    customskills: [
+      ...detailRow().customskills,
+      { key: 'cs-brand-voice', description: 'Brand voice', value: 'Write warmly.', interval: null, enabled: true, requires_credentials: [], _source: 'user-created', _editable: true, _user_created: true },
+      { key: 'cs-tone-notes', description: 'Tone notes', value: 'Keep it short.', interval: null, enabled: false, requires_credentials: [], _source: 'user-created', _editable: true, _user_created: true },
+    ],
+    scheduledskills: [
+      ...detailRow().scheduledskills,
+      { key: 'cs-cron-paused-task', description: 'Paused task', value: 'Do the paused task.', interval: '0 7 * * *', enabled: false, requires_credentials: [], _source: 'user-created', _editable: true, _user_created: true },
+    ],
+  });
+  const uses = 'The running agent uses it from its next message, with no restart.';
+  const stopsUsing = 'The running agent stops using it from its next message, with no restart.';
+  const hasChange = 'The running agent has the change from its next message, with no restart.';
+  const nextRun = 'The running agent has the change with no restart; it applies from the task\'s next run.';
+  const stopsRunning = 'The running agent has the change with no restart; the task stops running.';
+  for (const [name, args, live] of [
+    ['a new entry', { key: 'weekly-report', kind: 'scheduled_task', value: 'Summarize last week.' }, nextRun],
+    ['a schedule change', { key: 'cs-cron-my-task', interval: '0 9 * * *' }, nextRun],
+    ['a text edit', { key: 'cs-cron-my-task', value: 'Do it at nine.' }, nextRun],
+    ['a task turned off', { key: 'cs-cron-my-task', enabled: false }, stopsRunning],
+    ['a task turned on', { key: 'cs-cron-paused-task', enabled: true }, nextRun],
+    ['a text edit of a task that is off', { key: 'cs-cron-paused-task', value: 'Do it at seven.' }, 'The running agent has the change with no restart.'],
+    ['the approval policy', { key: 'cs-approval-policy', value: 'Ask before any post.', confirm: true }, uses],
+    ['the approval policy turned off', { key: 'cs-approval-policy', enabled: false, confirm: true }, stopsUsing],
+    ['a new custom skill', { key: 'cs-new-rules', value: 'Answer in English.' }, uses],
+    ['a custom skill turned off', { key: 'cs-brand-voice', enabled: false }, stopsUsing],
+    ['a custom skill turned on', { key: 'cs-tone-notes', enabled: true }, uses],
+    ['a text edit of a custom skill that is off', { key: 'cs-tone-notes', value: 'Keep it very short.' }, hasChange],
   ]) {
     const fake = fakeClient({
-      '/UserAgent/Detail': detail(),
+      '/UserAgent/Detail': liveRow,
       '/UserAgent/CustomSkillUpsert': { result: true, errors: [], restarting: false, live: true },
     });
     await withClient(fake, async client => {
       const result = await client.callTool({ name: 'manage_agent_custom_skill', arguments: { action: 'upsert', agent_guid: AGENT, ...args } });
       assert.notEqual(result.isError, true, `${name}: ${text(result)}`);
       assert.equal(result.structuredContent.restart, live, name);
+      assert.ok(text(result).includes(`**Restart:** ${live}`), name);
       assert.equal(result.structuredContent.live, true, name);
       assert.equal(result.structuredContent.restarting, false, name);
     });
@@ -2288,7 +2330,10 @@ test('manage_agent_custom_skill says from Wiro\'s answer whether a save restarts
 });
 
 test('manage_agent_custom_skill rename, delete and revert say from Wiro\'s answer whether the running agent got the change live', async () => {
-  const live = 'The running agent uses it from its next message, with no restart.';
+  // The scheduled task runs on its own time: a delete stops it, a rename or a revert applies from its next run.
+  const live = action => (action === 'delete'
+    ? 'The running agent has the change with no restart; the task stops running.'
+    : 'The running agent has the change with no restart; it applies from the task\'s next run.');
   const restarts = /^The agent restarts to load the /;
   for (const [answer, expected, liveField] of [
     [{ restarting: false, live: true, restart: 'live' }, live, true],
@@ -2323,6 +2368,38 @@ test('manage_agent_custom_skill rename, delete and revert say from Wiro\'s answe
         assert.equal(out.live, liveField, args.action);
         assert.equal(out.restarting, answer.restarting, args.action);
       }
+    });
+  }
+
+  // A custom skill the agent stops using reads so: a delete, or a revert that removes it or leaves it off.
+  const skillRow = detail({
+    customskills: [
+      ...detailRow().customskills,
+      { key: 'cs-brand-voice', description: 'Brand voice', value: 'Write warmly.', interval: null, enabled: true, requires_credentials: [], _source: 'user-created', _editable: true, _user_created: true },
+    ],
+  });
+  const uses = 'The running agent uses it from its next message, with no restart.';
+  const stopsUsing = 'The running agent stops using it from its next message, with no restart.';
+  for (const [args, revert, expected] of [
+    [{ action: 'rename', key: 'cs-brand-voice', new_key: 'brand-tone' }, {}, uses],
+    [{ action: 'delete', key: 'cs-brand-voice', confirm: true }, {}, stopsUsing],
+    [{ action: 'revert', key: 'cs-brand-voice', source: 'preset', confirm: true }, { action: 'reverted', current_value: 'Write warmly.' }, uses],
+    [{ action: 'revert', key: 'cs-brand-voice', source: 'preset', confirm: true }, { action: 'reverted', current_value: 'Write warmly.', current_enabled: false }, stopsUsing],
+    [{ action: 'revert', key: 'cs-brand-voice', source: 'preset', confirm: true }, { action: 'deleted', current_value: null }, stopsUsing],
+  ]) {
+    const answer = { result: true, errors: [], restarting: false, live: true, restart: 'live' };
+    const fake = fakeClient({
+      '/UserAgent/Detail': skillRow,
+      '/UserAgent/CustomSkillRename': { ...answer, newskillkey: 'cs-brand-tone' },
+      '/UserAgent/CustomSkillDelete': answer,
+      '/UserAgent/CustomSkillRevert': { ...answer, ...revert },
+    });
+    await withClient(fake, async client => {
+      const result = await client.callTool({ name: 'manage_agent_custom_skill', arguments: { agent_guid: AGENT, ...args } });
+      const name = `${args.action} ${revert.action ?? ''} ${revert.current_enabled ?? ''}`;
+      assert.notEqual(result.isError, true, `${name}: ${text(result)}`);
+      assert.equal(result.structuredContent.restart, expected, name);
+      assert.equal(result.structuredContent.live, true, name);
     });
   }
 

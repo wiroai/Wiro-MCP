@@ -29,6 +29,9 @@ import {
 } from '../utils/user-agent.js';
 import { nextActionSchema, strictInput } from './schemas.js';
 
+// A new name Wiro applied to the running agent with no restart. Of the profile fields, only the title reaches it.
+const LIVE_NAME_NOTE = 'The running agent uses the new name from its next message, with no restart.';
+
 const COMMANDS = [
   'agent_help',
   'new_session',
@@ -182,6 +185,7 @@ export function registerUpdateAgent(server: McpServer, client: WiroClient, notes
         // An answer without the field goes by the status read before the update. A new name a running agent got live
         // restarts nothing.
         const profileRestarts = sendProfile && !profileLive && (restarting === true || (restarting === undefined && running));
+        const profileLiveNote = profile.title !== undefined ? LIVE_NAME_NOTE : LIVE_CHANGE_NOTE;
         let settingsAnswer: { restart?: unknown; live?: unknown } = {};
         if (sendSettings) {
           try {
@@ -196,7 +200,7 @@ export function registerUpdateAgent(server: McpServer, client: WiroClient, notes
             const reason = blocked ? `${errorText(error)} ${modelAccessAdvice(notes)}` : errorText(error);
             if (changed.length === 0) throw new Error(`${reason}\n\nThe settings were not saved.`);
             throw new Error(`${reason}\n\nThe ${changed.join(', ')} change was saved; the settings were not.`
-              + (profileRestarts ? ' The agent restarts to apply the saved change.' : profileLive ? ` ${LIVE_CHANGE_NOTE}` : ''));
+              + (profileRestarts ? ' The agent restarts to apply the saved change.' : profileLive ? ` ${profileLiveNote}` : ''));
           }
           changed.push(...settingNames);
         }
@@ -242,7 +246,7 @@ export function registerUpdateAgent(server: McpServer, client: WiroClient, notes
         const setupFinished = previous === 6 && agent.status !== 6;
         const message = [
           changed.length > 0 ? `Saved: ${changed.join(', ')}.` : 'Setup status refreshed.',
-          restarted ? 'The agent restarts to apply the change.' : live ? LIVE_CHANGE_NOTE : '',
+          restarted ? 'The agent restarts to apply the change.' : live ? (profileLive && !settingsLive ? profileLiveNote : LIVE_CHANGE_NOTE) : '',
           mayRestart ? 'If a setting changed, the agent restarts to apply it.' : !restarted && !live && running ? 'The agent keeps running.' : '',
           setupFinished
             ? `Setup is complete; the agent ${startNeedsPlan(agent) ? 'needs an active plan before it can start' : 'can be started'}.`

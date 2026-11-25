@@ -16,7 +16,7 @@ import {
   customSkillEntries,
   holdsSecretMask,
   isAgentRunning,
-  LIVE_CHANGE_NOTE,
+  LIVE_ADDED_NOTE,
   LIVE_OR_RESTART_NOTE,
   loadCredentialMeta,
   pausedSkillTitles,
@@ -256,7 +256,7 @@ function restartText(restart: Restart | undefined, applied: number): string {
   if (applied === 0) return 'It already held this, so the agent does not restart.';
   switch (restart) {
     case 'live':
-      return LIVE_CHANGE_NOTE;
+      return LIVE_ADDED_NOTE;
     case 'scheduled':
       return 'A running agent restarts to load it, which takes about a minute.';
     case 'failed':

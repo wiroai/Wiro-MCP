@@ -4676,7 +4676,8 @@ const KEY_RULE = 'Never send a key in a chat message: save it right away with co
 const LISTING_KEY_RULE = 'The listing offers to take a key as the reply. Never send a key in a chat message: ask the '
   + 'user for the key together with their yes, before you send that yes. Then send "yes" to apply the change and save '
   + 'the key as the very next step, with connect_agent_connector for the connector the proposal names.';
-const LIVE_NOTE = 'The running agent uses it from its next message, with no restart.';
+// A reply can apply a disconnect or a remove as well as an add, so the live note names no direction.
+const LIVE_NOTE = 'The running agent has the change from its next message, with no restart.';
 
 test('a yes that applies an add and leaves its key to give asks for connect_agent_connector now, never a chat message or a wait', async () => {
   for (const [response, restarting, live] of [

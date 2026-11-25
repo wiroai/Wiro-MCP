@@ -1122,7 +1122,7 @@ test('disconnect_agent_connector words the restart as Wiro answers it, and promi
 
   // Wiro removed the connector from the running agent with no restart.
   const live = await disconnect(connection(SERPER), 'live');
-  assert.match(live.done.message, /^Serper is disconnected\. .*The running agent no longer uses it from its next message, with no restart\. Connecting it again/);
+  assert.match(live.done.message, /^Serper is disconnected\. .*The running agent stops using it from its next message, with no restart\. Connecting it again/);
   assert.equal(live.done.restart, 'live');
   assert.doesNotMatch(live.done.message, /restarts without it|A running agent gets most changes/);
 

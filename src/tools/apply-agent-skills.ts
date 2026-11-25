@@ -94,6 +94,8 @@ type SkillsApplyBody = ApiEnvelope & {
 };
 
 const UNCHANGED_RESTART = 'Nothing changed, so the agent does not restart.';
+// A change Wiro applied to the running agent with no restart, whether it turned skills on, off or both.
+const LIVE_SKILLS_NOTE = 'The running agent has the new skill set from its next message, with no restart.';
 
 /** Wiro's own notes on an applied change, as it wrote them. */
 function warningsOf(body: SkillsApplyBody): string[] {
@@ -455,7 +457,7 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
         const restart = applied.noOp || replayed || !skillsMove
           ? UNCHANGED_RESTART
           : appliedLive
-            ? restartNote(status, 'skill change', true)
+            ? LIVE_SKILLS_NOTE
             : running && !restarts
               ? 'The agent keeps running: Wiro did not restart it for this change. control_agent with action restart loads it now.'
               : restartNote(status, 'skill change');

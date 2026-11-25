@@ -2,7 +2,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { WiroClient } from '../client.js';
 import { asString, errorResult, requireApiSuccess, type ApiEnvelope } from '../utils/api.js';
-import { customSkillEntries, LIVE_OR_RESTART_NOTE, readUserAgent } from '../utils/agent-config.js';
+import { customSkillEntries, LIVE_OR_RESTART_NOTE, LIVE_REMOVED_NOTE, readUserAgent } from '../utils/agent-config.js';
 import {
   accountsText,
   connectionOf,
@@ -77,7 +77,7 @@ function restartBefore(connection: AgentConnection): string {
 function restartAfter(connection: AgentConnection, restart: Restart | undefined): string {
   switch (restart) {
     case 'live':
-      return 'The running agent no longer uses it from its next message, with no restart.';
+      return LIVE_REMOVED_NOTE;
     case 'scheduled':
       return 'The running agent restarts without it, which takes about a minute.';
     case 'failed':

@@ -155,8 +155,18 @@ test('update_agent: a new title the running agent got live restarts nothing and 
   const output = result.structuredContent;
   assert.equal(output.restarted, false);
   assert.equal(output.live, true);
-  assert.equal(output.message, 'Saved: title. The running agent uses it from its next message, with no restart.');
+  assert.equal(output.message, 'Saved: title. The running agent uses the new name from its next message, with no restart.');
   assert.notEqual(output.nextAction?.reason, 'Wait until the agent is running again.');
+
+  // A live answer that brings no new name names the change instead.
+  const settingsLive = await updateAgent({ timezone: 'Europe/Istanbul' }, { settings: { result: true, errors: [], restart: 'live', restarting: false, live: true } });
+  assert.equal(settingsLive.result.structuredContent.live, true);
+  assert.equal(settingsLive.result.structuredContent.message, 'Saved: timezone. The running agent has the change from its next message, with no restart.');
+  const bothLive = await updateAgent({ title: 'New name', timezone: 'Europe/Istanbul' }, {
+    update: { result: true, errors: [], restarting: false, live: true, useragents: [] },
+    settings: { result: true, errors: [], restart: 'live', restarting: false, live: true },
+  });
+  assert.equal(bothLive.result.structuredContent.message, 'Saved: title, timezone. The running agent has the change from its next message, with no restart.');
 
   // A settings change Wiro answered as a restart restarts it, whatever the read back shows.
   const settings = await updateAgent({ timezone: 'Europe/Istanbul' }, { settings: { result: true, errors: [], restart: 'scheduled', restarting: true, live: false } });
@@ -175,7 +185,7 @@ test('update_agent: a new title the running agent got live restarts nothing and 
     settings: refused('Invalid timezone: must be a valid IANA identifier.'),
   });
   assert.equal(partial.result.isError, true);
-  assert.match(textOf(partial.result), /The title change was saved; the settings were not\. The running agent uses it from its next message, with no restart\./);
+  assert.match(textOf(partial.result), /The title change was saved; the settings were not\. The running agent uses the new name from its next message, with no restart\./);
 });
 
 test('update_agent: an answer without restarting goes by the status read before', async () => {
