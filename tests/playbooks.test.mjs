@@ -588,6 +588,15 @@ test('the playbooks say an agent runs on the Wiro balance after its plan\'s incl
   assert.match(agents, /takes no new turns while the balance is under \$0\.50: its AI usage shows it paused, with the reason\./);
   assert.match(billing, /\| Agent messages and scheduled tasks \| The AI usage the plan includes, then the wallet at the rates `get_my_agent` shows \| Each turn \|/);
   assert.match(billing, /- Agent plans: a plan is charged in full from the wallet when it starts or renews, never by card\./);
+  // The AI usage after the plan and the $0.50 a new turn needs count the same money as a plan payment (2026-11-24).
+  assert.match(agents, /coupon credit limited to models pays no plan\. AI usage after the included usage, and the \$0\.50 a new turn needs, count the same: coupon credit limited to models never pays an agent's AI usage\./);
+  assert.match(billing, /- An agent's AI usage after what its plan includes, and the \$0\.50 a new turn needs then, count the same: deposits, store revenue and coupon credit that is not limited to certain models\. Coupon credit limited to models never pays an agent's AI usage, so an agent can be paused for its balance while `get_account` shows more\. `get_my_agent` shows what its AI usage can draw on \(`usage\.balanceUsd`\)\./);
+  assert.match(billing, /- Agent AI usage: after the usage its plan includes, a new turn needs \$0\.50 in the wallet's deposits, store revenue and coupon credit that is not limited to certain models\./);
+  const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8').replace(/\s+/g, ' ');
+  assert.match(readme, /its deposits, store revenue and coupon credit that is not limited to certain models count toward a plan, the automatic renewal included, and toward an agent's AI usage after what its plan includes\./);
+  for (const [label, text] of [...Object.entries(PLAYBOOKS), ['README', readme]]) {
+    assert.doesNotMatch(text, /coupon credit (?:isn't|is not|doesn't|does not) count|deposits and store revenue only/i, label);
+  }
   assert.match(controls, /Its spend limit counts all its AI usage, what its plan includes as well as what the Wiro balance pays, and the model runs it starts\./);
   assert.match(controls, /AI usage an agent's plan includes counts only toward the agent's own limit/);
   assert.match(controls, /While an agent still has included AI usage left, only its own limit can pause it\./);

@@ -444,7 +444,8 @@ and messages to your own agents (which use the AI usage their plan includes, the
 your Wiro balance) cost money. Agent plans and moves to a larger plan are charged
 to your Wiro balance, never by card: its deposits, store revenue and coupon credit
 that is not limited to certain models count toward a plan, the automatic renewal
-included. Those tools first return the price (for a move inside a billing period, the
+included, and toward an agent's AI usage after what its plan includes. Those tools
+first return the price (for a move inside a billing period, the
 amount Wiro works out for the time left) and only act when called again with
 `confirm: true` and `confirm_charge_usd`, the approved amount, after you agree.
 If the price changed in between, nothing is charged and you get a new quote.

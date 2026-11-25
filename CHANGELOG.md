@@ -127,6 +127,11 @@ runs `npx @wiro-ai/wiro-mcp@latest` takes it at its next start.
   (`quote.wallet.couponCreditUsd` joins `storeRevenueUsd`), and a refusal for a short
   balance says what counts. `get_my_agent` shows what the agent's wallet can pay a plan with
   (`usage.planBalanceUsd`).
+- An agent's AI usage after what its plan includes, and the $0.50 a new turn needs then,
+  count the same money as a plan payment: coupon credit limited to certain models never pays
+  an agent's AI usage. `usage.balanceUsd` in `get_my_agent` and `list_my_agents` is what that
+  AI usage can draw on, so it can read less than `get_account` shows. The agents and billing
+  playbooks and the README say so.
 - `get_my_agent` lists the agent's connectors with their state and the accounts chosen.
 - `get_agent_activity` (logs) names who connected or disconnected a connector, or set its
   accounts (`CONNECTOR_CONNECTED`, `CONNECTOR_DISCONNECTED`, `CONNECTOR_ACCOUNTS_SET`), as
