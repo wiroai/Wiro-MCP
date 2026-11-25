@@ -144,6 +144,13 @@ runs `npx @wiro-ai/wiro-mcp@latest` takes it at its next start.
   in place of `ok` and `error`, and its line says "held for approval", "paused during Take
   Control" or "blocked by a Connector permission", where it read as a call that ran or
   failed. A message's `toolsUsed` carries the same three statuses.
+- `get_agent_activity` (logs) keeps Wiro's mark on a turn's cost that is an estimate. When
+  Wiro measures an agent's model calls itself, a `token_usage` row's cost is the turn's calls
+  priced at the agent's rates, and what was billed is in the agent's `ai-usage` ledger rows,
+  which add calls up across turns. Such an event carries `costEstimate: true` beside
+  `costUsd`, its line reads "cost $0.07 (estimate)", and a note below the rows says where
+  the billed amount is. The mark was dropped, so an assistant read the estimate as what was
+  billed. An event's line now names its cost, which only the structured result held.
 - `bind_agent_project` sets the Wiro project the agent's video and voice skills run models
   with. The agent's own model tools come from the Wiro AI Models connector (`wiro`), which
   always runs with that same project; connecting it binds its project the same way, and

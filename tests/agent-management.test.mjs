@@ -834,6 +834,82 @@ test('get_agent_activity: a held, paused or blocked tool call keeps its status a
   });
 });
 
+// When Wiro measures an agent's model calls itself, a turn's token_usage row carries tokencostestimate: true. Its
+// tokencost is then the turn's calls priced at the agent's rates, and what was billed is in the agent's ai-usage
+// ledger rows, which add calls up across turns. Read without the mark, an assistant took the estimate as the bill.
+test('get_agent_activity: an estimated turn cost keeps its mark and reads as an estimate, never as what was billed', async () => {
+  const turn = overrides => ({
+    ts: '2026-11-24T10:00:00.000Z',
+    kind: 'token_usage',
+    title: 'Token Usage',
+    model: 'openai/gpt-5.5',
+    tokens: { input: 25040, output: 300, cacheRead: 0, cacheWrite: 0, total: 25340 },
+    tokencost: 7,
+    durationMs: 4200,
+    calls: 1,
+    userUuid: 'system',
+    user: null,
+    ...overrides,
+  });
+  const result = await readLogs({
+    result: true,
+    errors: [],
+    date: '2026-11-24',
+    events: [
+      turn({ tokencostestimate: true }),
+      // A replayed usage report has the same shape and the same mark.
+      turn({ kind: 'token_usage_idempotent', tokencostestimate: true }),
+      // A fraction of a cent keeps its digits.
+      turn({ tokencost: 0.35, tokencostestimate: true }),
+      // A turn billed exactly its cost has no mark.
+      turn(),
+      // Only true marks it.
+      turn({ tokencostestimate: 'true' }),
+      // The mark is the tokencost's: a per-action charge from before token billing was what it says.
+      { ts: '2026-11-24T09:00:00.000Z', kind: 'tool', title: 'Posted', tool: 'instagram', ok: true, cost: { credits: 3 }, tokencostestimate: true },
+    ],
+  });
+  const { events } = result.structuredContent.logs;
+  assert.deepEqual(events.map(event => [event.costUsd, event.costEstimate]), [
+    [0.07, true],
+    [0.07, true],
+    [0.0035, true],
+    [0.07, undefined],
+    [0.07, undefined],
+    [0.03, undefined],
+  ]);
+  for (const event of events) assert.equal('tokencostestimate' in event, false, JSON.stringify(event));
+
+  const text = textOf(result);
+  const [block, after] = text.split('```text\n')[1].split('\n```');
+  assert.deepEqual(block.split('\n'), [
+    '2026-11-24T10:00:00.000Z token_usage: Token Usage, cost $0.07 (estimate)',
+    '2026-11-24T10:00:00.000Z token_usage_idempotent: Token Usage, cost $0.07 (estimate)',
+    '2026-11-24T10:00:00.000Z token_usage: Token Usage, cost $0.0035 (estimate)',
+    '2026-11-24T10:00:00.000Z token_usage: Token Usage, cost $0.07',
+    '2026-11-24T10:00:00.000Z token_usage: Token Usage, cost $0.07',
+    '2026-11-24T09:00:00.000Z tool: Posted, cost $0.03',
+  ]);
+  // Once, in the server's own words outside the agent's content: what an estimate is and where the bill is.
+  assert.equal(after, '\n\nA cost marked estimate is the turn\'s model calls priced at the agent\'s rates, not what was billed. '
+    + 'What was billed is in the agent\'s ai-usage rows (get_agent_activity with kind usage and entries ai-usage), '
+    + 'which add calls up across turns, so they need not match one turn.');
+  assertNothingLeaks(result);
+
+  // A day with no estimate says nothing of one.
+  const billed = await readLogs({ result: true, errors: [], events: [turn()] });
+  assert.equal(billed.structuredContent.logs.events[0].costEstimate, undefined);
+  assert.doesNotMatch(textOf(billed), /estimate/);
+
+  await withClient(fakeClient({}), async client => {
+    const tool = (await client.listTools()).tools.find(item => item.name === 'get_agent_activity');
+    const fields = tool.outputSchema.properties.logs.properties.events.items.properties;
+    assert.equal(fields.costEstimate.type, 'boolean');
+    assert.match(fields.costEstimate.description, /^true when costUsd is an estimate: the turn's model calls priced at the agent's rates, not what was billed\./);
+    assert.match(fields.costUsd.description, /costEstimate/);
+  });
+});
+
 test('get_agent_activity: the log header says when the answer stopped before the day did', async () => {
   const day = (count, totalLines) => ({
     result: true,

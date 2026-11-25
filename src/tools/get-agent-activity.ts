@@ -17,6 +17,7 @@ import { oneLine, quotedBlock } from '../utils/quoted-text.js';
 import {
   centsToUsd,
   formatCount,
+  formatRateUsd,
   formatUsd,
   nextStepForAgent,
   readAgentDetail,
@@ -144,7 +145,12 @@ const logEventSchema = z.object({
   model: z.string().optional(),
   tokens: z.record(z.string(), z.number()).optional(),
   costUsd: z.number().optional()
-    .describe('What the event cost, in USD.'),
+    .describe('What the event cost, in USD. An estimate, not what was billed, when costEstimate is true.'),
+  costEstimate: z.boolean().optional()
+    .describe('true when costUsd is an estimate: the turn\'s model calls priced at the agent\'s rates, not what was '
+      + 'billed. Wiro marks it so when it measures the agent\'s model calls itself. What was billed is in the agent\'s '
+      + 'ai-usage rows (kind usage), which add calls up across turns, carry what is left under a cent to the next row '
+      + 'and can count calls the turn\'s row does not. Absent when costUsd is what was billed.'),
   trigger: z.string().optional(),
 });
 
@@ -179,6 +185,11 @@ const RUNTIME_UNAVAILABLE_NOTES = {
   no_answer: 'The agent\'s own log days could not be read just now, so this list may be missing days.',
 } as const;
 const READ_AGAIN_LATER = 'Read this list again later.';
+
+// Said once below the rows when one of them carries an estimated cost.
+const ESTIMATED_COST_NOTE = 'A cost marked estimate is the turn\'s model calls priced at the agent\'s rates, not what was billed. '
+  + 'What was billed is in the agent\'s ai-usage rows (get_agent_activity with kind usage and entries ai-usage), '
+  + 'which add calls up across turns, so they need not match one turn.';
 
 function tokenCounts(row: Record<string, unknown>): z.infer<typeof tokenCountsSchema> {
   const fields: Array<[keyof z.infer<typeof tokenCountsSchema>, unknown]> = [
@@ -405,15 +416,27 @@ function toLogEvent(event: Record<string, unknown>): z.infer<typeof logEventSche
   if (processed !== null) out.processedMs = processed;
   const tokens = numericRecord(event.tokens);
   if (tokens) out.tokens = tokens;
-  // A cost in a log line counts hundredths of a dollar.
-  const cost = isPlainObject(event.cost) ? toNumber(event.cost.credits) : toNumber(event.tokencost);
-  if (cost !== null) out.costUsd = centsToUsd(cost);
+  // A cost in a log line counts hundredths of a dollar: a per-action charge from before token billing, or a turn's
+  // tokencost.
+  if (isPlainObject(event.cost)) {
+    const credits = toNumber(event.cost.credits);
+    if (credits !== null) out.costUsd = centsToUsd(credits);
+  } else {
+    const tokenCost = toNumber(event.tokencost);
+    if (tokenCost !== null) {
+      out.costUsd = centsToUsd(tokenCost);
+      // Wiro marks a turn's tokencost an estimate when it measures the agent's model calls itself: the calls priced at
+      // the agent's rates, while the ledger's ai-usage rows hold what was billed.
+      if (event.tokencostestimate === true) out.costEstimate = true;
+    }
+  }
   return out;
 }
 
 /**
  * One event as a line of the data block. A held, paused or blocked call says so, unless its title already does, as
- * the held call's own row titled "Waiting for approval" or a blocked call's "Blocked in chat".
+ * the held call's own row titled "Waiting for approval" or a blocked call's "Blocked in chat". An event with a cost
+ * names it, and an estimated one says so: "cost $0.07 (estimate)".
  */
 function logEventLine(event: z.infer<typeof logEventSchema>): string {
   const title = event.title ?? '';
@@ -423,9 +446,10 @@ function logEventLine(event: z.infer<typeof logEventSchema>): string {
     : event.cancelled
       ? (/\bcancel/i.test(title) ? '' : ' (cancelled)')
       : event.ok === false ? ' (failed)' : '';
+  const cost = event.costUsd !== undefined ? `, cost ${formatRateUsd(event.costUsd)}${event.costEstimate ? ' (estimate)' : ''}` : '';
   const who = event.actor ? `, by ${event.actor}` : '';
   const named = event.fields && event.fields.some(field => !title.includes(field)) ? `. Fields: ${event.fields.join(', ')}` : '';
-  return oneLine(`${event.time ?? ''} ${event.kind ?? 'event'}: ${title}${status}${who}${event.summary ? `. ${event.summary}` : ''}${named}`);
+  return oneLine(`${event.time ?? ''} ${event.kind ?? 'event'}: ${title}${status}${cost}${who}${event.summary ? `. ${event.summary}` : ''}${named}`);
 }
 
 function isNotRunning(error: unknown): boolean {
@@ -673,6 +697,7 @@ export function registerGetAgentActivity(server: McpServer, client: WiroClient):
         } else {
           text.push(...quotedBlock(LOG_EVENTS_LABEL, events.map(logEventLine).join('\n')));
         }
+        if (events.some(event => event.costEstimate)) text.push('', ESTIMATED_COST_NOTE);
         if (cut) {
           text.push('', lines < MAX_LOG_EVENTS
             ? `More rows of this day: call get_agent_activity again with lines ${Math.min(totalLines, MAX_LOG_EVENTS)}.`
