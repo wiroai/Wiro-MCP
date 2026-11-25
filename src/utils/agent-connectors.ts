@@ -101,6 +101,8 @@ export const connectorSchema = z.object({
   websiteUrl: z.string().optional(),
   ways: z.array(z.enum(CONNECT_WAYS))
     .describe('How it connects: key (values typed on its Connect card), sign_in (a link the user opens in their own browser), project (a Wiro project) or none.'),
+  wiroApp: z.boolean().optional()
+    .describe('The service also signs in with Wiro\'s own app, with nothing to type, but only on the agent\'s Connectors tab in the Wiro web app. A sign-in through this server uses the user\'s own app: its keys go in values.'),
   fields: z.array(connectorFieldSchema),
   accountPickers: z.array(connectorPickerSchema)
     .describe('The account choices to make once it is connected, with set_agent_connector_accounts.'),
@@ -183,6 +185,8 @@ function toField(raw: Row, authType: string): ConnectorField | null {
     ...(pattern ? { pattern } : {}),
     ...(maxLength !== null && maxLength > 0 ? { maxLength: Math.trunc(maxLength) } : {}),
     ...(raw.serveronly === true ? { appKey: true } : {}),
+    // A vendor's own MCP server that also takes the user's own app (HubSpot) marks that app's keys mode oauth as
+    // well, but it connects one way only, so they belong to its sign-in and carry no mode.
     ...(authType === 'provider-oauth' && (mode === 'oauth' || mode === 'key') ? { mode: mode === 'oauth' ? 'sign_in' as const : 'key' as const } : {}),
     ...(raw.source === 'wiro_project' ? { project: true } : {}),
   };
@@ -255,6 +259,9 @@ export function toCatalogConnector(row: Row): CatalogConnector {
     ...(iconUrl ? { iconUrl } : {}),
     ...(websiteUrl ? { websiteUrl } : {}),
     ways: waysOf(authType, fields, stringList(row.modes)),
+    // Wiro's own app signs in only from Wiro's own product, never on a connect made with an API key, so through this
+    // server the sign-in of such a connector always takes the user's own app's keys.
+    ...(row.wiroapp === true ? { wiroApp: true } : {}),
     fields,
     accountPickers: pickers,
     scopes: stringList(row.scopes),

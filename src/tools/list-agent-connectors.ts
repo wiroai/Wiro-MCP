@@ -179,7 +179,11 @@ function formatDetail(connector: CatalogConnector, connection: AgentConnection |
     if (signsIn(connector)) {
       lines.push(connector.fields.some(field => field.appKey)
         ? 'The sign-in uses the user\'s own app at the service: its keys go in values with the connect call, and its consent page shows that app.'
-        : 'The sign-in takes these values with the connect call.', '');
+        : 'The sign-in takes these values with the connect call.');
+      if (connector.wiroApp) {
+        lines.push('It also signs in with Wiro\'s own app, with nothing to type, but only on the agent\'s Connectors tab in the Wiro web app: a sign-in through this server always uses the user\'s own app.');
+      }
+      lines.push('');
     }
     for (const field of typed) lines.push(...fieldLines(field, hybrid));
   } else if (connector.ways.includes('sign_in')) {

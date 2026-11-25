@@ -151,6 +151,9 @@ runs `npx @wiro-ai/wiro-mcp@latest` takes it at its next start.
   that a sign-in with the user's own app needs the redirect URI from its setup steps added to
   that app before its keys go in `values`. `list_agent_skills` gives `video_generation` as its
   capability example: `image_generation` is no longer a capability.
+- `list_agent_connectors` shows `wiroApp` on a connector that also signs in with Wiro's own
+  app, which only the agent's Connectors tab in the Wiro web app uses; a sign-in through this
+  server always takes the user's own app's keys.
 - Plans are read from Wiro's plan list (`includedUsageUsd`, else the plan's price) and said
   as "Pro $30 a month, includes $30 of AI usage" in the catalog, the deploy quote and
   `get_my_agent`.

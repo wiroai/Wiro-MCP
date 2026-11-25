@@ -90,6 +90,66 @@ const WIRO = {
   docs: null,
 };
 
+// A vendor's own MCP server whose sign-in also takes the user's own app there: HubSpot's MCP connector, which the user
+// creates in their HubSpot developer account. Wiro's own app signs in too (wiroapp), but only from Wiro's web app, so
+// a connect through this server always takes the user's app's keys. Wiro fills {callbackurl} in the help.
+const CALLBACK_URL = 'https://api.wiro.ai/v1/AgentConnector/OAuthCallback';
+const HUBSPOT = {
+  slug: 'hubspot',
+  title: 'HubSpot',
+  description: 'Contacts, companies, deals, tickets and notes in HubSpot CRM, with segments, campaigns and marketing email drafts.',
+  category: 'crm',
+  websiteurl: 'https://www.hubspot.com',
+  authtype: 'oauth',
+  transport: 'streamable-http',
+  credentialfields: [
+    {
+      name: 'clientid',
+      label: 'Client ID',
+      description: '1. Sign in to your developer account at [developers.hubspot.com](https://developers.hubspot.com)\n'
+        + '2. Go to **Development** → **MCP Connectors** and click **Create MCP connector**\n'
+        + '3. Give it a name: HubSpot shows it on its consent screen\n'
+        + `4. Add this **Redirect URL**:\n\`${CALLBACK_URL}\`\n`
+        + '5. Save, then copy the connector\'s **Client ID** here and its **Client Secret** below',
+      required: true,
+      secret: false,
+      format: 'text',
+      maxlength: 200,
+      serveronly: true,
+      mode: 'oauth',
+    },
+    { name: 'clientsecret', label: 'Client Secret', description: '', required: true, secret: true, format: 'password', serveronly: true, mode: 'oauth' },
+  ],
+  accountpickers: [],
+  scopes: [],
+  modes: [],
+  wiroapp: true,
+  tools: [{ name: 'search_crm_objects', title: 'Search CRM objects', description: 'Search contacts, companies, deals and tickets.', readonly: true, destructive: false }],
+  docs: null,
+  runs: 'vendor',
+  hosts: { api: ['mcp.hubspot.com'], site: false, uploads: [] },
+};
+
+// A vendor's own OAuth that Wiro's own app also signs in to from Wiro's web app, as for X.
+const TWITTER = {
+  slug: 'twitter',
+  title: 'X',
+  description: 'Post to X.',
+  category: 'social',
+  authtype: 'provider-oauth',
+  transport: 'local',
+  credentialfields: [
+    { name: 'clientid', label: 'Client ID', description: 'From your X app. Allow {callbackurl} as a callback URI.', required: true, secret: false, format: 'text', serveronly: true, mode: 'oauth' },
+    { name: 'clientsecret', label: 'Client Secret', description: '', required: true, secret: true, format: 'password', serveronly: true, mode: 'oauth' },
+  ],
+  accountpickers: [],
+  scopes: ['tweet.write'],
+  modes: ['oauth'],
+  wiroapp: true,
+  tools: [],
+  docs: null,
+};
+
 const CATALOG = [SERPER, FACEBOOK, TIKTOK_ADS, WIRO];
 
 function connection(row, overrides = {}) {
@@ -140,6 +200,14 @@ function catalogDetail(body) {
   return row
     ? { result: true, errors: [], agentconnectors: [structuredClone(row)] }
     : { result: false, errors: [{ code: 0, message: 'Connector not found.' }] };
+}
+
+// Detail for these rows too, which the catalog list above leaves out.
+function detailWith(...rows) {
+  return (body) => {
+    const row = rows.find(item => item.slug === body.slug);
+    return row ? { result: true, errors: [], agentconnectors: [structuredClone(row)] } : catalogDetail(body);
+  };
 }
 
 const TELEGRAM_CREDENTIAL = {
@@ -232,6 +300,35 @@ test('a catalog row reads as how it connects, its fields, account choices, tools
   assert.equal(toAgentConnection(connection(SERPER, { status: 'gone' })), null);
 });
 
+test('a connector that Wiro\'s own app also signs in to reads wiroApp, on a vendor\'s own MCP server and on its OAuth alike', () => {
+  const hubspot = toCatalogConnector(HUBSPOT);
+  assert.deepEqual(hubspot.ways, ['sign_in']);
+  assert.equal(hubspot.wiroApp, true);
+  // The keys of the user's own app at HubSpot sign in only, and with one way in they carry no mode.
+  assert.deepEqual(hubspot.fields.map(field => [field.name, field.required, field.secret, field.appKey, field.mode]), [
+    ['clientid', true, false, true, undefined],
+    ['clientsecret', true, true, true, undefined],
+  ]);
+  assert.ok(hubspot.fields[0].description.includes(`\`${CALLBACK_URL}\``), hubspot.fields[0].description);
+
+  const x = toCatalogConnector(TWITTER);
+  assert.equal(x.wiroApp, true);
+  assert.deepEqual(x.ways, ['sign_in']);
+  assert.deepEqual(x.fields.map(field => field.mode), ['sign_in', 'sign_in']);
+  for (const row of [FACEBOOK, TIKTOK_ADS, SERPER, WIRO, { ...HUBSPOT, wiroapp: false }]) {
+    assert.equal('wiroApp' in toCatalogConnector(row), false, row.slug);
+  }
+
+  // A HubSpot connection says which app it signed in with; one that has not signed in again since HubSpot moved to
+  // its own MCP server names none.
+  const wiro = toAgentConnection(connection(HUBSPOT, { authmode: 'wiro' }));
+  assert.deepEqual([wiro.way, wiro.ownApp, wiro.savedFields], ['sign_in', false, []]);
+  const own = toAgentConnection(connection(HUBSPOT, { authmode: 'own', savedvariables: ['clientid', 'clientsecret'] }));
+  assert.deepEqual([own.way, own.ownApp, own.savedFields], ['sign_in', true, ['clientid', 'clientsecret']]);
+  const moved = toAgentConnection(connection(HUBSPOT, { status: 'reauth', authmode: null }));
+  assert.deepEqual([moved.way, 'ownApp' in moved], ['sign_in', false]);
+});
+
 // ---------------------------------------------------------------------------
 // list_agent_connectors
 // ---------------------------------------------------------------------------
@@ -319,6 +416,43 @@ test('list_agent_connectors with name shows the Connect card, where each value c
       arguments: { agent_guid: AGENT, connector: 'facebook-pages' },
       reason: 'List the Facebook Pages to choose from; none is chosen yet.',
     });
+    // Wiro's own app does not sign in to it.
+    assert.doesNotMatch(out, /Wiro's own app/);
+    assert.equal('wiroApp' in result.structuredContent.connector, false);
+  });
+});
+
+test('list_agent_connectors says where Wiro\'s own app signs in, and that a sign-in through this server takes the user\'s own app', async () => {
+  const WIRO_APP_LINE = 'It also signs in with Wiro\'s own app, with nothing to type, but only on the agent\'s Connectors tab in the Wiro web app: '
+    + 'a sign-in through this server always uses the user\'s own app.';
+  const fake = fakeClient(routes({
+    '/AgentConnector/Detail': detailWith(HUBSPOT, TWITTER),
+    '/UserAgent/ConnectorList': { result: true, errors: [], useragentconnectors: [connection(HUBSPOT, { authmode: 'wiro' })] },
+  }));
+  await withClient(fake, async client => {
+    const result = await call(client, 'list_agent_connectors', { name: 'hubspot', agent_guid: AGENT });
+    assert.notEqual(result.isError, true, text(result));
+    const out = text(result);
+    assert.match(out, /\*\*Connects with:\*\* a sign-in the user approves in their own browser\n/);
+    assert.ok(out.includes([
+      '### What the user provides',
+      '',
+      'The sign-in uses the user\'s own app at the service: its keys go in values with the connect call, and its consent page shows that app.',
+      WIRO_APP_LINE,
+      '',
+      '- **Client ID** (`clientid`, required, a key of the user\'s own app, used only to sign in)',
+      '  1. Sign in to your developer account at [developers.hubspot.com](https://developers.hubspot.com)',
+    ].join('\n')), out);
+    assert.ok(out.includes(`  4. Add this **Redirect URL**:\n  \`${CALLBACK_URL}\`\n`), out);
+    assert.ok(out.includes('- **Client Secret** (`clientsecret`, required, secret, a key of the user\'s own app, used only to sign in)'), out);
+    assert.equal(result.structuredContent.connector.wiroApp, true);
+    // Signed in with Wiro's own app on the web: connected, with no account choices left to make.
+    assert.equal(result.structuredContent.connections[0].ownApp, false);
+    assert.equal(result.structuredContent.nextAction, undefined);
+
+    const x = await call(client, 'list_agent_connectors', { name: 'twitter' });
+    assert.ok(text(x).includes(WIRO_APP_LINE), text(x));
+    assert.equal(x.structuredContent.connector.wiroApp, true);
   });
 });
 
@@ -494,6 +628,7 @@ test('connect_agent_connector signs in with the user\'s own app keys, or connect
     assert.equal(keys.structuredContent.mode, 'sign_in');
     assert.deepEqual(keys.structuredContent.missing, ['appid', 'appsecret']);
     assert.match(keys.structuredContent.message, /The sign-in uses the user's own app at the service, so its keys come with the connect call\./);
+    assert.doesNotMatch(keys.structuredContent.message, /Wiro's own app/);
     // The redirect URI the app allows is in the field's own help.
     assert.deepEqual(keys.structuredContent.fields.map(field => field.name), ['appid', 'appsecret']);
 
@@ -514,6 +649,67 @@ test('connect_agent_connector signs in with the user\'s own app keys, or connect
     });
     assert.equal(JSON.stringify(token).includes('EAAG-system-user-token'), false);
   });
+});
+
+// Through this server HubSpot always signs in with the user's own app at HubSpot, an MCP connector they create in their
+// developer account: Wiro's own app signs in only from Wiro's web app, never on a connect made with an API key. The
+// keys go in values, and the connect sends no mode: HubSpot connects one way only.
+test('connect_agent_connector signs HubSpot in with the user\'s own app\'s keys, and says where Wiro\'s own app signs in instead', async () => {
+  const AUTHORIZE = 'https://mcp.hubspot.com/oauth/authorize/user?response_type=code&client_id=own-co&state=abc';
+  const WIRO_APP = ' Without an app of their own, the user can instead sign in with Wiro\'s own app, with nothing to type, on the agent\'s '
+    + 'Connectors tab in the Wiro web app.';
+  const fake = fakeClient(routes({
+    '/AgentConnector/Detail': detailWith(HUBSPOT, TWITTER),
+    '/UserAgent/ConnectorConnect': { result: true, errors: [], status: 'pending', authorizeUrl: AUTHORIZE },
+  }));
+  await withClient(fake, async client => {
+    const keys = await call(client, 'connect_agent_connector', { agent_guid: AGENT, connector: 'hubspot' });
+    assert.notEqual(keys.isError, true, text(keys));
+    const needed = keys.structuredContent;
+    assert.equal(needed.state, 'setup_needed');
+    assert.equal(needed.mode, undefined);
+    assert.deepEqual(needed.missing, ['clientid', 'clientsecret']);
+    assert.equal(needed.message, 'HubSpot needs Client ID, Client Secret first. The sign-in uses the user\'s own app at the service, so its keys '
+      + `come with the connect call.${WIRO_APP} Ask the user for them, then call connect_agent_connector again with them in values. `
+      + 'Never put them in a message to an agent. Nothing was sent.');
+    assert.deepEqual(needed.nextAction.arguments, { action: 'connect', agent_guid: AGENT, connector: 'hubspot' });
+    assert.match(text(keys), /- \*\*Client ID\*\* \(`clientid`, a key of the user's own app\)\n  1\. Sign in to your developer account/);
+
+    // The same for a vendor's own OAuth that Wiro's own app also signs in to.
+    const x = await call(client, 'connect_agent_connector', { agent_guid: AGENT, connector: 'twitter' });
+    assert.equal(x.structuredContent.state, 'setup_needed');
+    assert.ok(x.structuredContent.message.includes(WIRO_APP), x.structuredContent.message);
+    assert.equal(fake.paths().includes('/UserAgent/ConnectorConnect'), false);
+
+    const mode = await call(client, 'connect_agent_connector', { agent_guid: AGENT, connector: 'hubspot', mode: 'sign_in', values: { clientid: 'own-co', clientsecret: CLIENT_SECRET } });
+    assert.equal(text(mode), '## Error\n\nHubSpot connects only with a sign-in the user approves in their own browser, so it takes no mode. Leave mode out.');
+
+    const signIn = await call(client, 'connect_agent_connector', { agent_guid: AGENT, connector: 'hubspot', values: { clientid: 'own-co', clientsecret: CLIENT_SECRET } });
+    assert.notEqual(signIn.isError, true, text(signIn));
+    assert.equal(signIn.structuredContent.state, 'authorize_in_browser');
+    assert.equal(signIn.structuredContent.authorizeUrl, AUTHORIZE);
+    assert.match(signIn.structuredContent.message, /Its consent page shows the user's own app\./);
+    assert.deepEqual(fake.called('/UserAgent/ConnectorConnect').map(sent => sent.body), [
+      { useragentguid: AGENT, slug: 'hubspot', values: { clientid: 'own-co', clientsecret: CLIENT_SECRET } },
+    ]);
+    assert.equal(JSON.stringify(signIn).includes(CLIENT_SECRET), false);
+  });
+
+  // The keys a connection made with the user's own app saved take a new sign-in to the link at once; a connection made
+  // with Wiro's own app holds none, so they are asked for first.
+  for (const [authmode, saved, state] of [['own', ['clientid', 'clientsecret'], 'authorize_in_browser'], ['wiro', [], 'setup_needed']]) {
+    const held = fakeClient(routes({
+      '/AgentConnector/Detail': detailWith(HUBSPOT),
+      '/UserAgent/ConnectorList': { result: true, errors: [], useragentconnectors: [connection(HUBSPOT, { status: 'reauth', lasterror: 'invalid_grant', authmode, savedvariables: saved })] },
+      '/UserAgent/ConnectorConnect': { result: true, errors: [], status: 'pending', authorizeUrl: AUTHORIZE },
+    }));
+    await withClient(held, async client => {
+      const result = await call(client, 'connect_agent_connector', { agent_guid: AGENT, connector: 'hubspot' });
+      assert.equal(result.structuredContent.state, state, text(result));
+      assert.deepEqual(held.called('/UserAgent/ConnectorConnect').map(sent => sent.body), state === 'authorize_in_browser' ? [{ useragentguid: AGENT, slug: 'hubspot' }] : []);
+      if (state === 'setup_needed') assert.ok(result.structuredContent.message.includes(WIRO_APP), result.structuredContent.message);
+    });
+  }
 });
 
 // The wiro connector always runs with the agent's own Wiro project, so Wiro binds the project a connect names to the
