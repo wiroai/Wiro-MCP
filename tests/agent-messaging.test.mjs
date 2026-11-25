@@ -2306,6 +2306,47 @@ test('a sessions_spawn that failed is not a hand-off', async () => {
   });
 });
 
+// A call the connector gate held for approval reads held, and one refused while a person had Take Control reads
+// paused: the timeline passes both as written.
+test('a held or paused tool call keeps its status in toolsUsed, and the schema says what each one means', async () => {
+  const fake = fakeClient({
+    '/UserAgent/Message/Detail': {
+      result: true,
+      errors: [],
+      data: messageRow({
+        guid: 'msg-h',
+        sessionkey: 'default',
+        status: 'agent_end',
+        response: 'The post waits for your approval, and the browser for you to hand back control.',
+        timeline: [
+          { type: 'tool', toollabel: 'wordpress__create_post', toolstatus: 'held', callindex: 0, contentindex: 0 },
+          { type: 'tool', toollabel: 'browser', toolstatus: 'paused', callindex: 1, contentindex: 0 },
+          { type: 'tool', toollabel: 'web_search', toolstatus: 'completed', callindex: 2, contentindex: 0 },
+        ],
+      }),
+    },
+  });
+  await withClient(fake, async client => {
+    const result = await client.callTool({
+      name: 'get_agent_message',
+      arguments: { agent: 'agent-guid-1', message_id: 'msg-h', session: 'default' },
+    });
+    assert.notEqual(result.isError, true, textOf(result));
+    assert.deepEqual(result.structuredContent.message.toolsUsed, [
+      { name: 'wordpress__create_post', status: 'held' },
+      { name: 'browser', status: 'paused' },
+      { name: 'web_search', status: 'completed' },
+    ]);
+    assert.equal(result.structuredContent.background, undefined);
+
+    const { tools } = await client.listTools();
+    for (const name of ['send_agent_message', 'get_agent_message']) {
+      const status = tools.find(tool => tool.name === name).outputSchema.properties.message.properties.toolsUsed.items.properties.status;
+      assert.match(status.description, /requested while it runs, then completed or error, or held \(a Connector action waiting for a person's approval\) or paused \(refused while a person had Take Control of the agent's screen\)\. A held or paused call did not run\./, name);
+    }
+  });
+});
+
 test('waiting for the first run of a hand-off polls a small page, slowly', async () => {
   const now = Math.floor(Date.now() / 1000);
   const readAt = [];
