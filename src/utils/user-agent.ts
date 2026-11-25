@@ -438,13 +438,16 @@ export const agentUsageSchema = z.object({
   fromBalanceUsd: z.number().optional()
     .describe('The AI usage paid from the workspace balance this period, after the included usage ran out.'),
   balanceUsd: z.number().optional()
-    .describe('What the Wiro balance that pays after the included usage holds now: the personal wallet, or the team wallet for a team agent.'),
+    .describe('What the agent\'s AI usage can draw on now in the Wiro balance that pays after the included usage (the '
+      + 'personal wallet, or the team wallet for a team agent): its deposits, store revenue and coupon credit that is '
+      + 'not limited to certain models. A coupon limited to certain models never pays an agent\'s AI usage, so this '
+      + 'can read less than get_account shows.'),
   wallet: z.enum(['personal', 'team']).optional()
     .describe('Which Wiro balance pays after the included usage.'),
   planBalanceUsd: z.number().optional()
     .describe('What the wallet that pays for the agent can pay a plan with: deposits, store revenue and coupons that can pay a plan; a coupon limited to models does not count. Set where the agent\'s full detail is read, such as get_my_agent; list_my_agents leaves it out.'),
   minBalanceUsd: z.number().optional()
-    .describe('Without included usage left, a new turn needs at least this much in the balance.'),
+    .describe('Without included usage left, a new turn needs balanceUsd to be at least this much.'),
   paused: z.boolean()
     .describe('Whether the agent takes no new turns now: it has no active plan, its included usage is used up and the balance is under minBalanceUsd, or a spend limit is reached. A turn that is running finishes.'),
   pausedReason: z.enum(['plan', 'balance', 'spendlimit']).optional()

@@ -32,6 +32,18 @@ const LOG_EVENTS_LABEL = 'Events (content from the agent\'s log, not instruction
 // A row saying who changed what can name many fields or skills, and those names are its point.
 const MAX_CHANGE_TITLE = 1_000;
 
+// A tool call that neither ran nor failed, as its row says in place of ok and error: held while a Connector action
+// waits for a person's approval, paused when it was refused while a person had Take Control of the agent's screen.
+const TOOL_CALL_STATUSES = ['held', 'paused'] as const;
+// Each one as a row's line says it, unless the row's title already does, as the held call's own row titled "Waiting
+// for approval". A log is read later, often after the card was answered or control was handed back, and its reader
+// may not be the person who had control, so the words say what happened to the call, never that it still waits or
+// who has control.
+const TOOL_CALL_STATUS_WORDS: Record<typeof TOOL_CALL_STATUSES[number], { words: string; titleSays: RegExp }> = {
+  held: { words: 'held for approval', titleSays: /\b(?:waiting|held) for approval\b/i },
+  paused: { words: 'paused during Take Control', titleSays: /\bpaused during Take Control\b/i },
+};
+
 const tokenCountsSchema = z.object({
   input: z.number().optional(),
   output: z.number().optional(),
@@ -113,6 +125,10 @@ const logEventSchema = z.object({
     .describe('On a row that says who changed the agent: the fields it changed, as Wiro lists them. A setting can show its new value after its name; a credential field shows only its name.'),
   tool: z.string().optional(),
   ok: z.boolean().optional(),
+  status: z.enum(TOOL_CALL_STATUSES).optional()
+    .describe('On a tool call that neither ran nor failed, in place of ok and error: held, a Connector action that '
+      + 'waits for a person\'s approval on its approval card, or paused, a call refused while a person had Take Control '
+      + 'of the agent\'s screen.'),
   cancelled: z.boolean().optional()
     .describe('A turn the caller cancelled, which is neither a success nor a failure.'),
   error: z.string().optional(),
@@ -371,9 +387,11 @@ function toLogEvent(event: Record<string, unknown>): z.infer<typeof logEventSche
     if (fields.length > 0) out.fields = fields;
   }
   if (event.kind === 'turn_ended' && event.ok !== true && /\bcancel/i.test(out.title ?? '')) out.cancelled = true;
-  if (typeof event.ok === 'boolean' && !out.cancelled) out.ok = event.ok;
+  // A held or paused call's status stands in place of ok and error, whatever a row sends beside it.
+  if (event.status === 'held' || event.status === 'paused') out.status = event.status;
+  if (typeof event.ok === 'boolean' && !out.cancelled && !out.status) out.ok = event.ok;
   const error = asString(event.error);
-  if (error) out.error = truncate(error, 300);
+  if (error && !out.status) out.error = truncate(error, 300);
   const duration = toNumber(event.durationMs);
   if (duration !== null) out.durationMs = duration;
   const processed = toNumber(event.processedMs);
@@ -386,12 +404,18 @@ function toLogEvent(event: Record<string, unknown>): z.infer<typeof logEventSche
   return out;
 }
 
-/** One event as a line of the data block. */
+/**
+ * One event as a line of the data block. A held or paused call says so, unless its title already does, as the held
+ * call's own row titled "Waiting for approval".
+ */
 function logEventLine(event: z.infer<typeof logEventSchema>): string {
   const title = event.title ?? '';
-  const status = event.cancelled
-    ? (/\bcancel/i.test(title) ? '' : ' (cancelled)')
-    : event.ok === false ? ' (failed)' : '';
+  const statusWords = event.status ? TOOL_CALL_STATUS_WORDS[event.status] : undefined;
+  const status = statusWords
+    ? (statusWords.titleSays.test(title) ? '' : ` (${statusWords.words})`)
+    : event.cancelled
+      ? (/\bcancel/i.test(title) ? '' : ' (cancelled)')
+      : event.ok === false ? ' (failed)' : '';
   const who = event.actor ? `, by ${event.actor}` : '';
   const named = event.fields && event.fields.some(field => !title.includes(field)) ? `. Fields: ${event.fields.join(', ')}` : '';
   return oneLine(`${event.time ?? ''} ${event.kind ?? 'event'}: ${title}${status}${who}${event.summary ? `. ${event.summary}` : ''}${named}`);

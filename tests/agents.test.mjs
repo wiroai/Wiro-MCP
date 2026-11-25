@@ -6124,6 +6124,20 @@ test('get_my_agent shows what the agent\'s wallet can pay a plan with, and leave
   });
 });
 
+// An agent's AI usage after its plan, and the $0.50 a new turn needs then, count deposits, store revenue and coupon
+// credit that is not limited to certain models, the same money as a plan payment (2026-11-24).
+test('the usage schema says what the agent\'s AI usage can draw on, and that the $0.50 a new turn needs counts the same', async () => {
+  await withClient(fakeClient({}), async client => {
+    const { tools } = await client.listTools();
+    for (const name of ['get_my_agent', 'list_my_agents']) {
+      const schema = JSON.stringify(tools.find(tool => tool.name === name).outputSchema);
+      assert.match(schema, /What the agent's AI usage can draw on now in the Wiro balance that pays after the included usage \(the personal wallet, or the team wallet for a team agent\): its deposits, store revenue and coupon credit that is not limited to certain models\. A coupon limited to certain models never pays an agent's AI usage, so this can read less than get_account shows\./, name);
+      assert.match(schema, /Without included usage left, a new turn needs balanceUsd to be at least this much\./, name);
+      assert.doesNotMatch(schema, /What the Wiro balance that pays after the included usage holds now/, name);
+    }
+  });
+});
+
 test('an answer from an older Wiro release still shows the AI usage in dollars, from its credit fields', async () => {
   const usageFrom = overrides => toAgentDetail(agentRow({ usage: undefined, spend: undefined, ...overrides })).usage;
   // Hundredths of a dollar: $2.00 of the plan's $5.00 used.

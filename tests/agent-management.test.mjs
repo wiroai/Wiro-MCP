@@ -776,6 +776,59 @@ test('get_agent_activity: a turn the caller cancelled shows as cancelled and nev
   assert.equal(lines[3], '2026-11-01T09:00:00.000Z turn_ended: Agent turn ended');
 });
 
+// A call the connector gate held for approval, or one refused while a person had Take Control, neither ran nor
+// failed: its row carries status held or paused in place of ok and error.
+test('get_agent_activity: a held or paused tool call keeps its status and reads as held or paused, never as done or failed', async () => {
+  const row = overrides => ({ ts: '2026-11-24T09:00:00.000Z', kind: 'tool_completed', tool: 'wordpress__create_post', title: 'wordpress__create_post', summary: {}, durationMs: 40, userUuid: 'member-uuid', ...overrides });
+  const result = await readLogs({
+    result: true,
+    errors: [],
+    events: [
+      // The held call's own row, titled by the gate.
+      row({ kind: 'tool_blocked', title: 'Waiting for approval', summary: { connector: 'wordpress' }, durationMs: undefined, status: 'held' }),
+      // The Tool Search dispatch whose tool the gate held.
+      row({ status: 'held' }),
+      // A browser call refused while a person had control.
+      row({ tool: 'browser', title: 'Browser', status: 'paused' }),
+      // The status stands in place of an ok and an error sent beside it.
+      row({ status: 'paused', ok: false, error: 'The operation could not be completed.' }),
+      // Any other status is none of the two, and the row reads as before.
+      row({ status: 'error', ok: false, error: 'The operation could not be completed.' }),
+      row({ status: 'Held', ok: true }),
+    ],
+  });
+  const { events } = result.structuredContent.logs;
+  assert.deepEqual(events.map(event => event.status), ['held', 'held', 'paused', 'paused', undefined, undefined]);
+  for (const event of events.slice(0, 4)) {
+    assert.equal('ok' in event, false, JSON.stringify(event));
+    assert.equal('error' in event, false, JSON.stringify(event));
+  }
+  assert.deepEqual(events[0], { time: '2026-11-24T09:00:00.000Z', kind: 'tool_blocked', title: 'Waiting for approval', tool: 'wordpress__create_post', status: 'held' });
+  assert.equal(events[4].ok, false);
+  assert.equal(events[4].error, 'The operation could not be completed.');
+  assert.equal(events[5].ok, true);
+
+  // A log is read later, often after the card was answered or control was handed back, and maybe not by the person
+  // who had control: the words say what happened to the call, never that it still waits or who has control.
+  const lines = textOf(result).split('```text\n')[1].split('\n```')[0].split('\n');
+  assert.deepEqual(lines, [
+    '2026-11-24T09:00:00.000Z tool_blocked: Waiting for approval',
+    '2026-11-24T09:00:00.000Z tool_completed: wordpress__create_post (held for approval)',
+    '2026-11-24T09:00:00.000Z tool_completed: Browser (paused during Take Control)',
+    '2026-11-24T09:00:00.000Z tool_completed: wordpress__create_post (paused during Take Control)',
+    '2026-11-24T09:00:00.000Z tool_completed: wordpress__create_post (failed)',
+    '2026-11-24T09:00:00.000Z tool_completed: wordpress__create_post',
+  ]);
+  assertNothingLeaks(result);
+
+  await withClient(fakeClient({}), async client => {
+    const tool = (await client.listTools()).tools.find(item => item.name === 'get_agent_activity');
+    const status = tool.outputSchema.properties.logs.properties.events.items.properties.status;
+    assert.deepEqual(status.enum, ['held', 'paused']);
+    assert.match(status.description, /in place of ok and error: held, a Connector action that waits for a person's approval on its approval card, or paused, a call refused while a person had Take Control of the agent's screen\./);
+  });
+});
+
 test('get_agent_activity: the log header says when the answer stopped before the day did', async () => {
   const day = (count, totalLines) => ({
     result: true,
