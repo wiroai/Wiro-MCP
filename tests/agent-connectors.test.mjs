@@ -3,6 +3,7 @@ import test from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createMcpServer } from '../dist/server.js';
+import { PLAYBOOKS } from '../dist/playbooks.js';
 import { toAgentConnection, toCatalogConnector } from '../dist/utils/agent-connectors.js';
 
 const AGENT = 'ua-connectors';
@@ -710,6 +711,16 @@ test('connect_agent_connector signs HubSpot in with the user\'s own app\'s keys,
       if (state === 'setup_needed') assert.ok(result.structuredContent.message.includes(WIRO_APP), result.structuredContent.message);
     });
   }
+});
+
+test('the agents playbook says which sign-ins Wiro\'s own app also makes, and its HubSpot example takes the user\'s own MCP connector', () => {
+  const { agents } = PLAYBOOKS;
+  assert.ok(agents.includes('Some, such as HubSpot, Mailchimp and X, also sign in with Wiro\'s own app with nothing to type, but only on the '
+    + 'agent\'s Connectors tab in the Wiro web app: through this server their sign-in takes the user\'s own app\'s keys.'));
+  assert.ok(agents.includes('`connect_agent_connector` with the keys of the user\'s own HubSpot MCP connector in `values` (its Client ID field\'s '
+    + 'steps say how to create one), give the user the link'));
+  assert.ok(agents.includes('A user without an app of their own signs in with Wiro\'s HubSpot app on the agent\'s Connectors tab in the Wiro web '
+    + 'app instead.'));
 });
 
 // The wiro connector always runs with the agent's own Wiro project, so Wiro binds the project a connect names to the
