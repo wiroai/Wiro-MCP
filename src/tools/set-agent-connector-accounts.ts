@@ -65,7 +65,7 @@ function savedRestartText(restart: 'live' | 'scheduled' | 'none' | 'failed' | un
     case 'live':
       return ' The running agent uses them from its next message, with no restart.';
     case 'scheduled':
-      return ' The running agent restarts to load them, which takes about a minute.';
+      return ' The running agent restarts to load them, which takes a minute or two.';
     case 'failed':
       return ' The running agent could not be restarted: control_agent with action restart loads them.';
     default:

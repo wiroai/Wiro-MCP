@@ -728,7 +728,7 @@ export async function collectTurn(options: CollectTurnOptions): Promise<AgentTur
       const leftToConnect = setupNextNote(result.message.setupNext ?? []);
       if (leftToConnect) notes.push(leftToConnect);
       if (result.setupResult?.restarting) {
-        notes.push('The agent restarts to load the change, which takes about a minute. Wiro still answers a reply to '
+        notes.push('The agent restarts to load the change, which takes a minute or two. Wiro still answers a reply to '
           + 'its setup proposals, such as "yes 2", during the restart; send any other message once the agent is '
           + 'running again.');
       } else if (result.setupResult?.live) {

@@ -397,7 +397,7 @@ test('bind_agent_project shows a first bind and never calls the route', async ()
       wallet: 'The wallet of the team `Acme Team` (`Acme Org`).',
       warnings: [],
       notes: [
-        'The agent restarts to load the project, which takes about a minute. Follow it with get_my_agent.',
+        'The agent restarts to load the project, which takes a minute or two. Follow it with get_my_agent.',
         '1 other project can be chosen; list_projects shows it.',
       ],
       nextAction: {
@@ -940,7 +940,7 @@ test('bind_agent_project reports each answer of the route', async () => {
       label: 'restart scheduled',
       answer: bound({ id: '102', name: 'Named By Route' }),
       state: 'bound',
-      note: 'The agent restarts with the project, which takes about a minute.',
+      note: 'The agent restarts with the project, which takes a minute or two.',
       next: { tool: 'get_my_agent', arguments: { agent_guid: AGENT, wait_seconds: 45 } },
     },
     {

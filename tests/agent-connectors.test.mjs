@@ -368,7 +368,7 @@ test('connect_agent_connector lists what is missing and sends nothing, then conn
     assert.equal(out.applied, 1);
     assert.equal(out.restart, 'scheduled');
     assert.deepEqual(out.connection.savedFields, ['apikey']);
-    assert.match(out.message, /^Serper is connected\. A running agent restarts to load it, which takes about a minute\. Scheduled tasks that need it run once it is loaded: Weekly Search \(`cs-cron-weekly-search`\)\. Every run uses the agent's AI usage \(its plan first, then the workspace balance\)\.$/);
+    assert.match(out.message, /^Serper is connected\. A running agent restarts to load it, which takes a minute or two\. Scheduled tasks that need it run once it is loaded: Weekly Search \(`cs-cron-weekly-search`\)\. Every run uses the agent's AI usage \(its plan first, then the workspace balance\)\.$/);
     assert.equal(out.nextAction, undefined);
     assert.equal(JSON.stringify(result).includes(KEY), false);
   });
@@ -394,7 +394,7 @@ test('connect_agent_connector and set_agent_connector_accounts say when the runn
     const { tools } = await client.listTools();
     for (const name of ['connect_agent_connector', 'disconnect_agent_connector', 'set_agent_connector_accounts']) {
       const description = tools.find(tool => tool.name === name).description;
-      assert.match(description, /A running agent gets most changes without a restart; a few restart it, which takes about a minute\./, name);
+      assert.match(description, /A running agent gets most changes without a restart; a few restart it, which takes a minute or two\./, name);
       assert.doesNotMatch(description, /a running agent restarts (to load a new connection|when)/i, name);
     }
   });
@@ -483,7 +483,7 @@ test('connect_agent_connector starts a sign-in that the user opens, and status w
     const done = await call(client, 'connect_agent_connector', { action: 'status', agent_guid: AGENT, connector: 'tiktok-ads', since_connected_at: '' });
     assert.equal(done.structuredContent.state, 'connected');
     // The sign-in's answer went to the user's browser, so whether it reached the agent live is not known here.
-    assert.match(done.structuredContent.message, /^TikTok Ads is connected \(since .+\)\. A running agent gets most changes without a restart; a few restart it, which takes about a minute\. Choose the Advertisers it may act on with set_agent_connector_accounts\.$/);
+    assert.match(done.structuredContent.message, /^TikTok Ads is connected \(since .+\)\. A running agent gets most changes without a restart; a few restart it, which takes a minute or two\. Choose the Advertisers it may act on with set_agent_connector_accounts\.$/);
   });
 });
 
@@ -827,7 +827,7 @@ test('set_agent_connector_accounts lists the accounts a connection reaches, then
     const saved = await call(client, 'set_agent_connector_accounts', { agent_guid: AGENT, connector: 'facebook-pages', accounts: { pages: ['123'] } });
     assert.notEqual(saved.isError, true, text(saved));
     assert.deepEqual(fake.called('/UserAgent/ConnectorSetAccounts')[0].body, { useragentguid: AGENT, slug: 'facebook-pages', accounts: { pages: ['123'] } });
-    assert.equal(saved.structuredContent.message, 'Saved the Facebook Pages accounts (Facebook Pages: 1 chosen). The agent acts only on these. The running agent restarts to load them, which takes about a minute.');
+    assert.equal(saved.structuredContent.message, 'Saved the Facebook Pages accounts (Facebook Pages: 1 chosen). The agent acts only on these. The running agent restarts to load them, which takes a minute or two.');
 
     const unknown = await call(client, 'set_agent_connector_accounts', { agent_guid: AGENT, connector: 'facebook-pages', accounts: { groups: ['1'] } });
     assert.equal(text(unknown), '## Error\n\nFacebook Pages has no account choice "groups". Its choices: "pages" (Facebook Pages). Nothing was saved.');
@@ -897,7 +897,7 @@ test('a remote connector shows its account choices, asks for them once its sign-
     assert.deepEqual(listed.structuredContent.nextAction.arguments, { agent_guid: AGENT, connector: 'tiktok-ads', accounts: { advertisers: ['7001', '7002'] } });
     const saved = await call(client, 'set_agent_connector_accounts', { agent_guid: AGENT, connector: 'tiktok-ads', accounts: { advertisers: ['7002'] } });
     assert.deepEqual(fake.called('/UserAgent/ConnectorSetAccounts')[0].body, { useragentguid: AGENT, slug: 'tiktok-ads', accounts: { advertisers: ['7002'] } });
-    assert.equal(saved.structuredContent.message, 'Saved the TikTok Ads accounts (Advertisers: 1 chosen). The agent acts only on these. The running agent restarts to load them, which takes about a minute.');
+    assert.equal(saved.structuredContent.message, 'Saved the TikTok Ads accounts (Advertisers: 1 chosen). The agent acts only on these. The running agent restarts to load them, which takes a minute or two.');
   });
 
   // The vendor refused the connection's sign-in while Wiro listed its accounts: connect it again, never "ask the
@@ -1070,7 +1070,7 @@ test('disconnect_agent_connector says what goes and what stops, and disconnects 
     const preview = await call(client, 'disconnect_agent_connector', { agent_guid: AGENT, connector: 'serper' });
     assert.notEqual(preview.isError, true, text(preview));
     assert.equal(preview.structuredContent.disconnected, false);
-    assert.equal(preview.structuredContent.willClear, 'The Serper connection is removed: its saved values and its account choices. The agent loses the Serper tools, and these scheduled tasks stop running until it is connected again: Weekly Search (`cs-cron-weekly-search`). A running agent gets most changes without a restart; a few restart it, which takes about a minute. Connecting it again needs connect_agent_connector and the values again.');
+    assert.equal(preview.structuredContent.willClear, 'The Serper connection is removed: its saved values and its account choices. The agent loses the Serper tools, and these scheduled tasks stop running until it is connected again: Weekly Search (`cs-cron-weekly-search`). A running agent gets most changes without a restart; a few restart it, which takes a minute or two. Connecting it again needs connect_agent_connector and the values again.');
     assert.deepEqual(preview.structuredContent.nextAction.arguments, { agent_guid: AGENT, connector: 'serper', confirm: true });
     assert.equal(fake.paths().includes('/UserAgent/ConnectorDisconnect'), false);
 
@@ -1116,7 +1116,7 @@ test('disconnect_agent_connector words the restart as Wiro answers it, and promi
   };
 
   const scheduled = await disconnect(connection(SERPER), 'scheduled');
-  assert.match(scheduled.done.message, /^Serper is disconnected\. .*The running agent restarts without it, which takes about a minute\. Connecting it again/);
+  assert.match(scheduled.done.message, /^Serper is disconnected\. .*The running agent restarts without it, which takes a minute or two\. Connecting it again/);
   assert.doesNotMatch(scheduled.done.message, /A running agent gets most changes/);
   assert.equal(scheduled.done.willClear, scheduled.done.message.replace(/^Serper is disconnected\. /, ''));
 
@@ -1145,7 +1145,7 @@ test('disconnect_agent_connector says the agent keeps its Wiro project when the 
   const fake = fakeClient(routes({ '/UserAgent/ConnectorList': { result: true, errors: [], useragentconnectors: [connection(WIRO, { wiroprojectid: '111' })] } }));
   await withClient(fake, async client => {
     const preview = await call(client, 'disconnect_agent_connector', { agent_guid: AGENT, connector: 'wiro' });
-    assert.equal(preview.structuredContent.willClear, 'The Wiro connection is removed. The agent keeps its Wiro project, which its video and voice skills use. The agent loses the Wiro tools. A running agent gets most changes without a restart; a few restart it, which takes about a minute. Connecting it again needs connect_agent_connector with a Wiro project.');
+    assert.equal(preview.structuredContent.willClear, 'The Wiro connection is removed. The agent keeps its Wiro project, which its video and voice skills use. The agent loses the Wiro tools. A running agent gets most changes without a restart; a few restart it, which takes a minute or two. Connecting it again needs connect_agent_connector with a Wiro project.');
     assert.doesNotMatch(preview.structuredContent.willClear, /saved values|the values again/);
   });
 });
@@ -1161,7 +1161,7 @@ test('disconnect_agent_connector words a wiro connection on an agent with no pro
   await withClient(fake, async client => {
     const preview = await call(client, 'disconnect_agent_connector', { agent_guid: AGENT, connector: 'wiro' });
     assert.notEqual(preview.isError, true, text(preview));
-    assert.equal(preview.structuredContent.willClear, 'The Wiro connection is removed. The agent has no Wiro project now, so the connector gives it nothing. A running agent gets most changes without a restart; a few restart it, which takes about a minute. Connecting it again needs connect_agent_connector with a Wiro project.');
+    assert.equal(preview.structuredContent.willClear, 'The Wiro connection is removed. The agent has no Wiro project now, so the connector gives it nothing. A running agent gets most changes without a restart; a few restart it, which takes a minute or two. Connecting it again needs connect_agent_connector with a Wiro project.');
     assert.doesNotMatch(preview.structuredContent.willClear, /saved values|the values again|loses the Wiro tools/);
     assert.equal(preview.structuredContent.connection.way, 'project');
     assert.deepEqual(fake.called('/AgentConnector/Detail').map(item => item.body), [{ slug: 'wiro' }]);
@@ -1178,7 +1178,7 @@ test('disconnect_agent_connector words a wiro connection on an agent with no pro
   }));
   await withClient(tasks, async client => {
     const preview = await call(client, 'disconnect_agent_connector', { agent_guid: AGENT, connector: 'wiro' });
-    assert.match(preview.structuredContent.willClear, /so the connector gives it nothing\. These scheduled tasks stop running until it is connected again: Weekly Images \(`cs-cron-weekly-images`\)\. A running agent gets most changes without a restart; a few restart it, which takes about a minute\./);
+    assert.match(preview.structuredContent.willClear, /so the connector gives it nothing\. These scheduled tasks stop running until it is connected again: Weekly Images \(`cs-cron-weekly-images`\)\. A running agent gets most changes without a restart; a few restart it, which takes a minute or two\./);
   });
 
   // A key connector with saved values needs no catalog read.

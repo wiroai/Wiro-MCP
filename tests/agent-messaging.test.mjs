@@ -3461,7 +3461,7 @@ test('send_agent_message shows a reply Wiro answered itself as finished, without
       agenttoken: null,
       status: 'agent_end',
       content: 'yes',
-      response: '✅ Applied: Create the scheduled task Weekly digest.\nYour agent is restarting to load the change. Continue in about a minute.',
+      response: '✅ Applied: Create the scheduled task Weekly digest.\nYour agent is restarting to load the change. Continue in a minute or two.',
       setupresult: { applied: ['aaaaaaaaaaa1'], dismissed: [], failed: [], restarting: true },
     },
   });
@@ -3481,7 +3481,7 @@ test('send_agent_message shows a reply Wiro answered itself as finished, without
       assert.deepEqual(output.setupResult, { applied: ['aaaaaaaaaaa1'], dismissed: [], failed: [], restarting: true, live: false });
       assert.ok(output.notes.some(note => /Wiro answered this message itself/.test(note)));
       // Wiro still answers a reply to the other proposals while the agent restarts; other messages wait.
-      assert.ok(output.notes.includes('The agent restarts to load the change, which takes about a minute. Wiro still '
+      assert.ok(output.notes.includes('The agent restarts to load the change, which takes a minute or two. Wiro still '
         + 'answers a reply to its setup proposals, such as "yes 2", during the restart; send any other message once '
         + 'the agent is running again.'), output.notes.join('|'));
       assert.equal(output.notes.some(note => /not recorded yet/.test(note)), false, 'a handled reply has no cost to wait for');
@@ -3747,7 +3747,7 @@ test('a disconnect is listed and then applied by a second yes, with no key', asy
   const listing = 'The agent proposes this setup change. Nothing is applied yet.\n\n'
     + 'Card 1: Disconnect Serper (its saved key is removed).\n\n'
     + 'Reply "yes" to apply exactly this change, or "no" to turn it down.';
-  const applied = '✅ Applied: Serper disconnected.\nYour agent is restarting to load the change. Continue in about a minute.';
+  const applied = '✅ Applied: Serper disconnected.\nYour agent is restarting to load the change. Continue in a minute or two.';
   const fake = fakeClient({
     '/UserAgent/Message/Send': (_body, count) => (count === 1
       ? { ...LISTING_SEND, response: listing }
@@ -4631,7 +4631,7 @@ test('an add is listed and then applied by a second yes, with Wiro\'s own lines 
     + 'Card 1: Add WordPress Post (connector).\nAlso turns on: Image Resize, Media Library.\n'
     + 'Scheduled tasks that run again: Weekly Post.\nStill to connect: WordPress.\n\n'
     + 'Reply "yes" to apply exactly this change, or "no" to turn it down.';
-  const applied = '✅ Applied: WordPress Post added\nYour agent is restarting to load the change. Continue in about a minute.';
+  const applied = '✅ Applied: WordPress Post added\nYour agent is restarting to load the change. Continue in a minute or two.';
   const fake = fakeClient({
     '/UserAgent/Message/Send': (_body, count) => (count === 1
       ? { ...LISTING_SEND, response: listing }
@@ -4813,7 +4813,7 @@ test('a title that holds a key phrase is not read as Wiro asking for a key, in a
       '/UserAgent/Message/Send': {
         ...LISTING_SEND,
         messageguid: 'msg-yes',
-        response: `✅ Applied: Scheduled task ${title} created.\nYour agent is restarting to load the change. Continue in about a minute.`,
+        response: `✅ Applied: Scheduled task ${title} created.\nYour agent is restarting to load the change. Continue in a minute or two.`,
         setupresult: { applied: ['aaaaaaaaaaa1'], dismissed: [], failed: [], restarting: true },
       },
     });
@@ -4838,7 +4838,7 @@ test('an answer that counts several connect cards still waiting for their keys a
       ...LISTING_SEND,
       messageguid: 'msg-yes',
       response: '✅ Applied: WordPress Post added.\n2 connector cards still need their keys: add each key on its card.\n'
-        + 'Your agent is restarting to load the change. Continue in about a minute.',
+        + 'Your agent is restarting to load the change. Continue in a minute or two.',
       setupresult: { applied: ['zzzzzzzzzz31'], dismissed: [], failed: [], restarting: true },
     },
   });
@@ -4856,7 +4856,7 @@ test('an answer that counts several connect cards still waiting for their keys a
 
 test('a send refused while the agent restarts says it comes back by itself, not to start it', async () => {
   const cases = [
-    ['Agent is restarting. Please wait a moment and try again.', /^## Error\n\nYour agent is restarting and starts again by itself, in about a minute\. Wait until get_my_agent shows it running, then send the message again\.$/],
+    ['Agent is restarting. Please wait a moment and try again.', /^## Error\n\nYour agent is restarting and starts again by itself, in a minute or two\. Wait until get_my_agent shows it running, then send the message again\.$/],
     ['Agent is stopping. Please wait a moment and try again.', /Your agent is stopping\. Wait a moment, check get_my_agent, and start it again with control_agent if you still need it\./],
   ];
   for (const [message, expected] of cases) {

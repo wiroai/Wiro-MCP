@@ -258,7 +258,7 @@ function restartText(restart: Restart | undefined, applied: number): string {
     case 'live':
       return LIVE_ADDED_NOTE;
     case 'scheduled':
-      return 'A running agent restarts to load it, which takes about a minute.';
+      return 'A running agent restarts to load it, which takes a minute or two.';
     case 'failed':
       return 'It is saved, but the running agent could not be restarted: control_agent with action restart loads it.';
     default:

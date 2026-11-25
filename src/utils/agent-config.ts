@@ -100,7 +100,7 @@ export function liveEntryNote(kind: CustomSkillKind, onBefore: boolean, onAfter:
  * Before a change that can reach a running agent with no restart. Wiro decides when it applies it: most go live, the
  * few that need a restart (or a live change that cannot finish) restart the agent.
  */
-export const LIVE_OR_RESTART_NOTE = 'A running agent gets most changes without a restart; a few restart it, which takes about a minute.';
+export const LIVE_OR_RESTART_NOTE = 'A running agent gets most changes without a restart; a few restart it, which takes a minute or two.';
 
 /** Whether Wiro's answer says a running agent got the change with no restart. */
 export function answeredLive(body: { live?: unknown; restart?: unknown }): boolean {
@@ -115,7 +115,7 @@ export function restartNote(status: number | null, what = 'change'): string {
   switch (status) {
     case 3:
     case 4:
-      return `The agent restarts to load the ${what}, which takes about a minute. Follow it with get_my_agent.`;
+      return `The agent restarts to load the ${what}, which takes a minute or two. Follow it with get_my_agent.`;
     case 1:
       return `The agent is already stopping or restarting; it loads the ${what} when it starts again.`;
     case 2:
@@ -138,7 +138,7 @@ export function keyList(keys: string[]): string {
 function afterWriteNote(status: number | null): string {
   switch (status) {
     case 1:
-      return 'The agent restarts to load the new values, which takes about a minute.';
+      return 'The agent restarts to load the new values, which takes a minute or two.';
     case 2:
     case 3:
       return 'The agent is starting and loads the new values.';

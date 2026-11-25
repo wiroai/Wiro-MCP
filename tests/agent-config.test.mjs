@@ -412,7 +412,7 @@ test('apply_agent_skills takes no confirm and no tier, and points a plan change 
     assert.deepEqual(Object.keys(tool.inputSchema.properties).sort(), ['add_dependencies', 'agent_guid', 'idempotency_key', 'skills']);
     assert.match(tool.description, /Every plan includes every skill, so a skill change costs nothing: the plan keeps its price and the AI usage it includes, and no active plan is needed\./);
     assert.match(tool.description, /The change is applied on the first call, so tell the user what turns on or off and get their yes first\./);
-    assert.match(tool.description, /A running agent gets most changes without a restart; a few restart it, which takes about a minute\./);
+    assert.match(tool.description, /A running agent gets most changes without a restart; a few restart it, which takes a minute or two\./);
     assert.match(tool.description, /To change the plan, use manage_agent_billing \(change_plan\)\./);
     assert.doesNotMatch(tool.description, /quote|prorat|wallet at once|Starter to Pro/i);
   });
@@ -673,7 +673,7 @@ test('apply_agent_skills checks the live agent when Wiro answers with an error o
     const result = await applyReceptionist(client);
     assert.equal(result.isError, true);
     assert.match(text(result), /^The change could not be confirmed \(socket hang up\)\. Check get_my_agent to see whether the skills match the request before trying again;/m);
-    assert.equal(result.structuredContent.restart, 'A running agent gets most changes without a restart; a few restart it, which takes about a minute.');
+    assert.equal(result.structuredContent.restart, 'A running agent gets most changes without a restart; a few restart it, which takes a minute or two.');
   });
 
   // A success answer while the agent does not show the change.
@@ -1056,7 +1056,7 @@ test('set_agent_credentials names the credentials the setup still waits for afte
     '/UserAgent/Detail': detail({ credentials: { 'twilio-voice': twilio, wiro: wiro(false) }, communicationChannels: [], scheduledskills: [], ...overrides }),
   });
   // A save that changes a value sets a running agent stopping, to start again, before Wiro answers.
-  const restartNote = 'The agent restarts to load the new values, which takes about a minute.';
+  const restartNote = 'The agent restarts to load the new values, which takes a minute or two.';
   const keptNote = 'The agent kept running: a save that matches what is stored does not restart it. If it should load new values now, control_agent with action restart does it.';
   const missingNote = 'Setup is not finished: still missing Wiro AI Models. Connect it with bind_agent_project, then check with get_my_agent.';
 
@@ -2214,7 +2214,7 @@ test('set_agent_credentials counts a field the template fills as set', async () 
 });
 
 test('manage_agent_custom_skill says from Wiro\'s answer whether a save restarts the agent', async () => {
-  const restarts = /^The agent restarts to load the change, which takes about a minute\./;
+  const restarts = /^The agent restarts to load the change, which takes a minute or two\./;
   const saved = 'The new text is saved, and the agent was not restarted. A running agent usually takes a text or description edit without a restart; if its replies still follow the old text, control_agent with action restart loads the new one.';
   const notRestarted = 'The change is saved, but the agent was not restarted, so a running agent keeps its old settings until it restarts. control_agent with action restart loads them, and get_my_agent shows its status.';
   const descriptionSaved = 'The new description is saved, and the agent was not restarted. A running agent usually takes a description edit without a restart; control_agent with action restart loads it for certain.';
@@ -2322,7 +2322,7 @@ test('manage_agent_custom_skill says from Wiro\'s answer whether a save restarts
   await withClient(fakeClient({}), async client => {
     const { tools } = await client.listTools();
     const description = tools.find(tool => tool.name === 'manage_agent_custom_skill').description;
-    assert.match(description, /A running agent gets most changes without a restart; a few restart it, which takes about a minute\. The result says which happened\./);
+    assert.match(description, /A running agent gets most changes without a restart; a few restart it, which takes a minute or two\. The result says which happened\./);
     assert.doesNotMatch(description, /A running agent restarts for a new entry/);
   });
   const line = PLAYBOOKS.agents.split('\n').find(item => item.startsWith('- Most changes reach a running agent live'));

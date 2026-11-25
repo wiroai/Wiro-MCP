@@ -321,7 +321,7 @@ const DEPLOYED_STATUS_HELP: Record<number, string> = {
 
 // Status 1 is also an agent that stops only to start again, to load a change (a setup change, a key, a skill).
 // Wiro then says it is restarting, and it needs no start.
-const RESTARTING_HELP = 'Your agent is restarting and starts again by itself, in about a minute. '
+const RESTARTING_HELP = 'Your agent is restarting and starts again by itself, in a minute or two. '
   + 'Wait until get_my_agent shows it running, then send the message again.';
 const RESTARTING_PATTERN = /\brestarting\b/i;
 

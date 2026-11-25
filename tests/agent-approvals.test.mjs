@@ -605,7 +605,7 @@ test('set_agent_connector_permissions shows what changes for the agent and saves
     assert.match(text, /- Create and send \(group\): Chat Allow\. Its actions' own settings in this column are cleared\./);
     assert.match(text, /- Chat: Ask to Allow for 2 actions \(Create a post, Create a page\)\./);
     assert.match(text, /- Blocked in Chat and Autopilot, so the agent stops seeing them: Delete a post\./);
-    assert.match(text, /\*\*Restart:\*\* A running agent gets most changes without a restart; a few restart it, which takes about a minute\./);
+    assert.match(text, /\*\*Restart:\*\* A running agent gets most changes without a restart; a few restart it, which takes a minute or two\./);
     assert.match(text, /\*\*Note:\*\* Allow lets those actions run without anyone approving them\./);
 
     // A confirm without the summary's id, or with another one, saves nothing.
@@ -627,7 +627,7 @@ test('set_agent_connector_permissions shows what changes for the agent and saves
     });
     assert.equal(saved.structuredContent.outcome, 'saved');
     assert.equal(saved.structuredContent.restart, 'scheduled');
-    assert.equal(saved.structuredContent.message, 'Saved the WordPress permissions. The running agent restarts to use them, which takes about a minute.');
+    assert.equal(saved.structuredContent.message, 'Saved the WordPress permissions. The running agent restarts to use them, which takes a minute or two.');
     assert.equal(saved.structuredContent.permissions.categories.length, 3);
     assertNoSecrets(saved);
   });
@@ -646,7 +646,7 @@ test('set_agent_connector_permissions says from Wiro\'s answer whether the runni
     await withClient(fake, async (client) => {
       const summary = await call(client, 'set_agent_connector_permissions', { agent_guid: AGENT, connector: 'wordpress', tools: { create_page: { chat: 'allow' } } });
       // Even Ask to Allow is not promised to skip a restart: a live change that cannot finish restarts the agent.
-      assert.match(textOf(summary), /A running agent gets most changes without a restart; a few restart it, which takes about a minute\./);
+      assert.match(textOf(summary), /A running agent gets most changes without a restart; a few restart it, which takes a minute or two\./);
       const saved = await call(client, 'set_agent_connector_permissions', summary.structuredContent.nextAction.arguments);
       assert.equal(saved.structuredContent.message, `Saved the WordPress permissions. ${expected}`);
       assert.equal(saved.structuredContent.restart, restart);

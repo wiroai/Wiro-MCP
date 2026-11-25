@@ -327,7 +327,7 @@ async function previewResult(client: WiroClient, agentGuid: string, plan: BindPl
 function restartSentence(restart: RestartState | undefined, hadProject: boolean): string {
   switch (restart) {
     case 'scheduled':
-      return 'The agent restarts with the project, which takes about a minute.';
+      return 'The agent restarts with the project, which takes a minute or two.';
     case 'none':
       return 'The agent is not running and uses the project when it next starts.';
     case 'failed':

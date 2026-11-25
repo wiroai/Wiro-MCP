@@ -79,7 +79,7 @@ function restartAfter(connection: AgentConnection, restart: Restart | undefined)
     case 'live':
       return LIVE_REMOVED_NOTE;
     case 'scheduled':
-      return 'The running agent restarts without it, which takes about a minute.';
+      return 'The running agent restarts without it, which takes a minute or two.';
     case 'failed':
       return 'The running agent could not be restarted, so it keeps the connector until it restarts: control_agent with action restart does that.';
     case 'none':

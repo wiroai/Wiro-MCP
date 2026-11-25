@@ -331,7 +331,7 @@ test('update_agent: a partial save says whether the saved part restarts the agen
 test('update_agent and the playbook say which changes reach a running agent live and which restart it', async () => {
   const description = await toolDescription('update_agent');
   assert.doesNotMatch(description, /A running or starting agent restarts to apply the change/);
-  assert.match(description, /a setting that changes restarts it to apply the change, which takes about a minute; a new name reaches a running agent from its next message, with no restart/);
+  assert.match(description, /a setting that changes restarts it to apply the change, which takes a minute or two; a new name reaches a running agent from its next message, with no restart/);
   // The runtime knows setup from chat only as on or off, so a move between "all" and "webchat" restarts nothing.
   assert.match(description, /a new description, cover or categories, a setting it already has, or chat_setup moved between "all" and "webchat" leaves it running/);
 
@@ -341,7 +341,7 @@ test('update_agent and the playbook say which changes reach a running agent live
   assert.match(line, /`apply_agent_skills` turning a skill on or off \(except `util-voice-receptionist`, `util-twilio-channel`, `util-web-channel` and `util-newsletter-compose`\)/);
   assert.match(line, /a new title with `update_agent`, and the same changes approved in the agent's chat\./);
   // Connecting the wiro connector with another project binds that project, as bind_agent_project does.
-  assert.match(line, /These still restart it, which takes about a minute: `update_agent` with a setting that changes \(time zone, session sharing, models, commands, setup from chat turned on or off\), `set_agent_credentials` when it changes what is saved, `bind_agent_project` when the project changes, `connect_agent_connector` for Wiro AI Models \(`wiro`\) with another project, and turning one of those four skills on or off\./);
+  assert.match(line, /These still restart it, which takes a minute or two: `update_agent` with a setting that changes \(time zone, session sharing, models, commands, setup from chat turned on or off\), `set_agent_credentials` when it changes what is saved, `bind_agent_project` when the project changes, `connect_agent_connector` for Wiro AI Models \(`wiro`\) with another project, and turning one of those four skills on or off\./);
   // A sign-in that is started and not approved yet changes nothing on the agent.
   assert.match(line, /These leave it running: a new description, cover or categories with `update_agent`, setup from chat moved between "all" and "webchat", a new plan, plan changes and renewals, a sign-in that is started and not yet approved, and a save that changes nothing\./);
   assert.match(line, /A live change that cannot be applied restarts the agent instead; the result says which happened\./);
@@ -349,7 +349,20 @@ test('update_agent and the playbook say which changes reach a running agent live
   assert.match(line, /A change saved while the agent is stopping or queued for a restart loads with that restart, and one saved while it is starting reaches it once it runs: live, or with one more restart for a change that needs it\./);
   assert.doesNotMatch(PLAYBOOKS.agents, /Some changes restart a running agent|usually reaches a running agent without a restart|restarts the agent a second time/);
   assert.doesNotMatch(PLAYBOOKS.agents, /Many changes restart|credit packs and upgrades\./);
-  assert.match(PLAYBOOKS.agents, /\| 1 \| Stopping, or restarting \| Wait\. A restart starts it again by itself, in about a minute\. \|/);
+  assert.match(PLAYBOOKS.agents, /\| 1 \| Stopping, or restarting \| Wait\. A restart starts it again by itself, in a minute or two\. \|/);
+});
+
+test('every restart a tool or a playbook times takes a minute or two', async () => {
+  let tools;
+  await withClient(fakeClient({}), async client => {
+    tools = (await client.listTools()).tools;
+  });
+  // A Model Access rule and a turn's cost still follow within about a minute: only a sentence about a restart counts.
+  for (const text of [...tools.map(tool => JSON.stringify(tool)), ...Object.values(PLAYBOOKS)]) {
+    const timed = text.split(/(?<=[.;|])\s/).filter(sentence => /restart/i.test(sentence) && /about a minute/.test(sentence));
+    assert.deepEqual(timed, []);
+  }
+  assert.match(PLAYBOOKS.agents, /a few restart it, which takes a minute or two\./);
 });
 
 // ---------------------------------------------------------------------------

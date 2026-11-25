@@ -166,7 +166,7 @@ function savedRestartText(restart: 'live' | 'scheduled' | 'none' | 'failed' | un
     case 'live':
       return 'They apply to the agent\'s next action, with no restart.';
     case 'scheduled':
-      return 'The running agent restarts to use them, which takes about a minute.';
+      return 'The running agent restarts to use them, which takes a minute or two.';
     case 'failed':
       return 'The agent could not restart, so the change applies at its next start: control_agent with action restart loads it now.';
     default:
