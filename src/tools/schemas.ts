@@ -112,7 +112,9 @@ export const taskReferenceSchema = z.object({
   id: z.string().optional(),
   token: z.string().optional(),
   model: z.string().optional(),
-  status: z.string().optional(),
+  status: z.string().optional()
+    .describe('The task\'s status code, such as task_postprocess_end, for programs. Tell a person where the task is '
+      + 'in words, as state and the Status line say it, never this code.'),
   exitCode: z.string().optional(),
   durationSeconds: z.number().nullable().optional(),
   costUsd: z.number().nullable().optional()

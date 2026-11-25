@@ -7,6 +7,7 @@ import {
   formatTaskCost,
   TASK_ID_NOT_NUMERIC,
   TASK_NOT_FOUND,
+  taskStatusText,
 } from '../utils/format.js';
 import {
   getTaskState,
@@ -85,7 +86,7 @@ export function registerGetTaskPrice(server: McpServer, client: WiroClient): voi
         if (task.modelslugowner && task.modelslugproject) {
           lines.push(`**Model:** \`${task.modelslugowner}/${task.modelslugproject}\``);
         }
-        lines.push(`**Status:** ${task.status}`);
+        lines.push(`**Status:** ${taskStatusText(task)}`);
 
         const state = getTaskState(task);
         // Shows the charge Wiro reports for the task.

@@ -238,6 +238,12 @@ runs `npx @wiro-ai/wiro-mcp@latest` takes it at its next start.
   `list_studio_results` still lists them with their prompts, and only it reads Studio's older
   runs, which Studio ran on its own account. `list_tasks` also says that a deployed agent
   calling it through its Wiro AI Models connector sees only its own tasks.
+- A task's status reads in words, such as `Completed`, `Failed` or `Running: producing
+  output`, in place of its status code (`task_postprocess_end`, `task_output`), in
+  `get_task`, `wait_for_task`, `run_model`, `list_tasks`, `get_task_price`, their progress
+  messages and a workflow step's details in `wait_for_workflow_run`. An assistant passed the
+  code on to the person, who could not read it. The structured result keeps the code as
+  `task.status`, beside `state`.
 - Controls know nine surfaces: `studio`, `workflow-agent` and `workflow` join the six.
   Messages to Studio and the Workflow Agent, the models Studio runs for a person and workflow
   runs with their steps count on them, whichever way they come in, so a limit or a rule on

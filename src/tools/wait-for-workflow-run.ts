@@ -2,6 +2,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { WiroClient } from '../client.js';
 import { asString, errorResult, requireApiSuccess, truncate, type ApiEnvelope } from '../utils/api.js';
+import { taskStatusText } from '../utils/format.js';
 import { createMediaContent } from '../utils/media.js';
 import {
   DEFAULT_WAIT_SECONDS,
@@ -187,7 +188,7 @@ function formatStepDebug(debug: Record<string, unknown>): string {
     return lines.join('\n');
   }
   if (typeof debug.model === 'string') lines.push(`**Model:** \`${debug.model}\``);
-  if (typeof debug.taskStatus === 'string') lines.push(`**Task status:** ${debug.taskStatus}`);
+  if (typeof debug.taskStatus === 'string') lines.push(`**Task status:** ${taskStatusText({ status: debug.taskStatus })}`);
   const block = (language: string, value: string): string[] => {
     let fence = '```';
     while (value.includes(fence)) fence += '`';

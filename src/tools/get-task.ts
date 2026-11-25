@@ -13,6 +13,7 @@ import {
   formatTaskResult,
   TASK_ID_NOT_NUMERIC,
   TASK_NOT_FOUND,
+  taskStatusText,
 } from '../utils/format.js';
 import {
   createTaskContent,
@@ -86,7 +87,7 @@ export function registerGetTask(server: McpServer, client: WiroClient): void {
                     params: {
                       progressToken,
                       progress: context.elapsedMs / 1000,
-                      message: `Task status: ${task.status}`,
+                      message: `Task status: ${taskStatusText(task)}`,
                     },
                   });
                 } catch {

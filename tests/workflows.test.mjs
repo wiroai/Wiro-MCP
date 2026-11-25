@@ -1365,6 +1365,9 @@ test('wait_for_workflow_run prints the inputs a failed step received and hides s
     const text = result.content.map(block => block.text ?? '').join('\n');
     assert.match(text, /Step `node-a1`/);
     assert.match(text, /owner\/video-model/);
+    // The step's task status in words; with no exit code beside it, a finished task reads Finished.
+    assert.match(text, /\*\*Task status:\*\* Finished\n/);
+    assert.doesNotMatch(text, /task_postprocess_end/);
     assert.match(text, /https:\/\/cdn1\.wiro\.ai\/a\.png/);
     assert.equal(JSON.stringify(result).includes('sk-live-hidden'), false);
     assert.equal(result.structuredContent.debug.parameters.apiKey, '[hidden]');

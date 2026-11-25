@@ -34,6 +34,45 @@ function usdAmount(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+// Each task status in words. A status code such as task_postprocess_end is for
+// programs (the structured result keeps it as task.status): an answer that
+// quoted it told a person nothing, so the text says where the task is. The
+// first word is the status, and what follows a colon is what happens now.
+const TASK_STATUS_TEXT: Readonly<Record<string, string>> = {
+  task_queue: 'Queued: waiting for a worker',
+  task_accept: 'Starting: a worker took it',
+  task_preprocess_start: 'Starting: preparing its inputs',
+  task_preprocess_end: 'Starting: its inputs are ready',
+  task_assign: 'Starting: loading the model',
+  task_start: 'Running',
+  task_output: 'Running: producing output',
+  // Stored while a task waits to be run again after an error before it ran.
+  task_error: 'Waiting to run again: an error stopped it before it ran',
+  task_output_full: 'Finishing',
+  task_error_full: 'Finishing',
+  task_end: 'Finishing: the model is done, and its outputs come next',
+  task_postprocess_start: 'Finishing: preparing its outputs',
+  task_cancel: 'Cancelled',
+  task_kill: 'Cancelled',
+  task_killed: 'Cancelled',
+};
+
+/**
+ * A task's status as a person reads it, such as "Completed" or "Running:
+ * producing output", never its status code. A finished task reads Completed or
+ * Failed by its exit code (Finished when the code is not known yet), and a
+ * status this list does not know reads In progress, as getTaskState counts it.
+ */
+export function taskStatusText(task: { status?: string | null; pexit?: string | null }): string {
+  const status = typeof task.status === 'string' ? task.status : '';
+  if (status === 'task_postprocess_end') {
+    if (task.pexit === '0') return 'Completed';
+    return task.pexit ? 'Failed' : 'Finished';
+  }
+  if (!status) return 'Unknown';
+  return Object.prototype.hasOwnProperty.call(TASK_STATUS_TEXT, status) ? TASK_STATUS_TEXT[status] : 'In progress';
+}
+
 /**
  * A successful task that Wiro has not billed yet. It reads as finished a moment
  * before its charge is recorded, so only the list price is known.
@@ -107,7 +146,7 @@ export function formatTaskResult(task: Task): string {
   );
   lines.push(`## Task Result`);
   lines.push('');
-  lines.push(`**Status:** ${task.status}`);
+  lines.push(`**Status:** ${taskStatusText(task)}`);
   lines.push(`**Task ID:** ${task.id}`);
   if (task.socketaccesstoken) lines.push(`**Task Token:** ${task.socketaccesstoken}`);
   if (task.modelslugowner && task.modelslugproject) {
@@ -296,7 +335,7 @@ export function formatTaskPending(params: {
   const lines = ['## Task Still Running', ''];
   if (params.taskid) lines.push(`**Task ID:** ${params.taskid}`);
   if (params.tasktoken) lines.push(`**Task Token:** ${params.tasktoken}`);
-  if (params.status) lines.push(`**Last Status:** ${params.status}`);
+  if (params.status) lines.push(`**Last Status:** ${taskStatusText({ status: params.status })}`);
   if (params.timeoutSeconds) {
     lines.push(`**Waited:** ${params.timeoutSeconds}s`);
   }
@@ -332,7 +371,7 @@ export function formatTaskList(
       : 'unknown model';
     lines.push(`### Task ${task.id}`);
     lines.push(`- **Model:** \`${model}\``);
-    lines.push(`- **Status:** ${task.status}`);
+    lines.push(`- **Status:** ${taskStatusText(task)}`);
     if (task.starttime) lines.push(`- **Started:** ${task.starttime}`);
     if (task.elapsedseconds) lines.push(`- **Duration:** ${task.elapsedseconds}s`);
     const cost = formatTaskCost(task);

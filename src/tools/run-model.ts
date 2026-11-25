@@ -23,6 +23,7 @@ import {
   formatTaskPending,
   formatTaskResult,
   formatTaskSubmitted,
+  taskStatusText,
 } from '../utils/format.js';
 import { MAX_WAIT_SECONDS, type ToolCallContext } from '../utils/poll.js';
 import {
@@ -246,7 +247,7 @@ async function followTask(
             params: {
               progressToken,
               progress: (Date.now() - startedAt) / 1000,
-              message: `Task status: ${task.status}`,
+              message: `Task status: ${taskStatusText(task)}`,
             },
           });
         } catch {

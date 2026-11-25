@@ -7,6 +7,7 @@ import {
   formatTaskList,
   formatTaskPending,
   formatTaskResult,
+  taskStatusText,
 } from '../dist/utils/format.js';
 import {
   createTaskContent,
@@ -37,6 +38,67 @@ test('formatTaskResult renders image outputs directly in chat', () => {
   assert.match(text, /\*\*Result:\*\* Success/);
   assert.match(text, /!\[result\.png\]\(https:\/\/cdn\.example\/result\.png\)/);
   assert.match(text, /\[Open image\]\(https:\/\/cdn\.example\/result\.png\)/);
+});
+
+// A status code told the person nothing: Studio answered "Status: task_postprocess_end" and an agent "status:
+// task_output". Every status line says where the task is in words; the code stays in the structured result.
+test('task status lines say where the task is in words, never its status code', () => {
+  const task = overrides => ({
+    id: '123',
+    socketaccesstoken: 'task-token',
+    parameters: {},
+    status: 'task_output',
+    pexit: '',
+    debugoutput: '',
+    starttime: '',
+    endtime: '',
+    elapsedseconds: '',
+    totalcost: '',
+    outputs: [],
+    ...overrides,
+  });
+  const words = {
+    task_queue: 'Queued: waiting for a worker',
+    task_accept: 'Starting: a worker took it',
+    task_preprocess_start: 'Starting: preparing its inputs',
+    task_preprocess_end: 'Starting: its inputs are ready',
+    task_assign: 'Starting: loading the model',
+    task_start: 'Running',
+    task_output: 'Running: producing output',
+    task_error: 'Waiting to run again: an error stopped it before it ran',
+    task_output_full: 'Finishing',
+    task_error_full: 'Finishing',
+    task_end: 'Finishing: the model is done, and its outputs come next',
+    task_postprocess_start: 'Finishing: preparing its outputs',
+    task_cancel: 'Cancelled',
+    task_kill: 'Cancelled',
+    task_killed: 'Cancelled',
+  };
+  for (const [status, text] of Object.entries(words)) assert.equal(taskStatusText({ status }), text, status);
+  // A finished task reads by its exit code; one whose code is not known yet reads Finished.
+  assert.equal(taskStatusText({ status: 'task_postprocess_end', pexit: '0' }), 'Completed');
+  assert.equal(taskStatusText({ status: 'task_postprocess_end', pexit: '1' }), 'Failed');
+  assert.equal(taskStatusText({ status: 'task_postprocess_end', pexit: '' }), 'Finished');
+  // A status this list does not know is still in progress, as its state says; none at all is unknown.
+  assert.equal(taskStatusText({ status: 'task_new_step' }), 'In progress');
+  assert.equal(taskStatusText({ status: 'constructor' }), 'In progress');
+  assert.equal(taskStatusText({ status: '' }), 'Unknown');
+  assert.equal(taskStatusText({}), 'Unknown');
+
+  const done = formatTaskResult(task({ status: 'task_postprocess_end', pexit: '0' }));
+  assert.match(done, /\*\*Status:\*\* Completed\n/);
+  assert.match(done, /\*\*Result:\*\* Success/);
+  const running = formatTaskResult(task());
+  assert.match(running, /\*\*Status:\*\* Running: producing output\n/);
+  const pending = formatTaskPending({ taskid: '123', status: 'task_queue', timeoutSeconds: 10 });
+  assert.match(pending, /\*\*Last Status:\*\* Queued: waiting for a worker\n/);
+  const list = formatTaskList([
+    task({ status: 'task_cancel' }),
+    task({ id: '124', status: 'task_postprocess_end', pexit: '1' }),
+  ], 2);
+  assert.match(list, /### Task 123\n[^#]*- \*\*Status:\*\* Cancelled\n/);
+  assert.match(list, /### Task 124\n[^#]*- \*\*Status:\*\* Failed\n/);
+  for (const text of [done, running, pending, list]) assert.doesNotMatch(text, /task_[a-z_]+/, text);
 });
 
 test('completed media asks the assistant to present resource links to the user', () => {

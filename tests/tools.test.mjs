@@ -156,6 +156,50 @@ test('get_task supports a short bounded wait without losing the identifier', asy
   });
 });
 
+// What get_task, get_task_price and list_tasks say about a task's status is words, so an assistant passes on words;
+// the structured result keeps Wiro's status code for programs.
+test('the task tools say a task\'s status in words and keep its code only in the structured result', async () => {
+  const fake = {
+    getTask: async () => completedDetail(),
+    listTasks: async () => runningDetail(),
+    waitForTask: async (_reference, _timeout, options) => {
+      await options?.onPoll?.(runningDetail().tasklist[0], { elapsedMs: 1000 });
+      throw new TaskWaitTimeoutError(5000, runningDetail());
+    },
+  };
+  await withClient(fake, async client => {
+    const done = await client.callTool({ name: 'get_task', arguments: { taskid: '123' } });
+    assert.match(done.content[0].text, /\*\*Status:\*\* Completed\n/);
+    assert.equal(done.structuredContent.task.status, 'task_postprocess_end');
+    assert.equal(done.structuredContent.state, 'completed');
+
+    const price = await client.callTool({ name: 'get_task_price', arguments: { taskid: '123' } });
+    assert.match(price.content[0].text, /\*\*Status:\*\* Completed\n/);
+
+    const history = await client.callTool({ name: 'list_tasks', arguments: {} });
+    assert.match(history.content[0].text, /- \*\*Status:\*\* Running\n/);
+    assert.equal(history.structuredContent.tasks[0].task.status, 'task_start');
+
+    const progress = [];
+    const waited = await client.callTool(
+      { name: 'get_task', arguments: { taskid: '123', wait_seconds: 5 } },
+      undefined,
+      { onprogress: update => progress.push(update.message) },
+    );
+    assert.match(waited.content[0].text, /\*\*Last Status:\*\* Running\n/);
+    assert.deepEqual(progress, ['Task status: Running']);
+
+    for (const result of [done, price, history, waited]) {
+      for (const block of result.content.filter(item => item.type === 'text')) {
+        assert.doesNotMatch(block.text, /task_(?:queue|accept|preprocess|assign|start|output|error|end|postprocess|cancel|kill)/, block.text);
+      }
+    }
+    const { tools } = await client.listTools();
+    const status = tools.find(tool => tool.name === 'get_task').outputSchema.properties.task.properties.status;
+    assert.match(status.description, /status code, such as task_postprocess_end, for programs\. Tell a person where the task is in words/);
+  });
+});
+
 test('get_task returns a function-call continuation in run_model params', async () => {
   const detail = completedDetail();
   detail.tasklist[0].parameters = { session_id: 'weather-session' };
