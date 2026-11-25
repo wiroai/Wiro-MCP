@@ -26,7 +26,7 @@ runs `npx @wiro-ai/wiro-mcp@latest` takes it at its next start.
 | `disconnect_agent_connector` | Shows what a disconnect removes and which scheduled tasks stop (a task keeps running while another connector it can use is connected), then removes the connection with `confirm: true` and asks the service to revoke a sign-in where it supports that. |
 | `answer_agent_approval` | Answers an approval card: a Connector action whose permission is Ask, which the agent did not run. `allow` runs this call once, `always` also lets the action run without asking from now on in the columns that ask for it (agent admins only; a Block stays blocked, and an action the connector has not listed yet is allowed only this once), and `decline` turns this call down. Without `confirm` it shows the card, its exact request and what the answer does; with `confirm: true` it answers, and an approval returns the new turn the agent goes on in, which `get_agent_message` reads. Wiro's refusals (`approval_expired`, `approval_done`, `approval_blocked`, `approval_in_channel`, 96, 97) come back with what to do. |
 | `get_agent_connector_permissions` | Shows what an agent may do with a connector without asking: the three groups (Read-only, Create and send, Change and delete) and every action, each Allow, Ask or Block in Chat and in Autopilot, with its defaults and whether it has a setting of its own, what an action the connector has not listed yet does, and the approval cards a scheduled task, a channel chat or the agent's own work asked for that still wait. Agent admins only. |
-| `set_agent_connector_permissions` | Sets a group or one action in Chat and Autopilot, or resets them. Without `confirm` it shows what changes for the agent, which actions it stops seeing, and whether a running agent restarts (any change other than Ask to Allow); a confirm with the summary's `summary_id` saves exactly that change. When an action the connector has not listed yet loses its own setting and Wiro may have a default of its own for it, the summary names both values it can read (`to`, `or`). |
+| `set_agent_connector_permissions` | Sets a group or one action in Chat and Autopilot, or resets them. Without `confirm` it shows what changes for the agent and which actions it stops seeing; a confirm with the summary's `summary_id` saves exactly that change. When an action the connector has not listed yet loses its own setting and Wiro may have a default of its own for it, the summary names both values it can read (`to`, `or`). |
 
 ### Breaking changes
 
@@ -80,6 +80,19 @@ runs `npx @wiro-ai/wiro-mcp@latest` takes it at its next start.
 
 ### Changes
 
+- Most changes reach a running agent live, from its next message, with no restart: a
+  connector connected, disconnected or given new values, its accounts and permissions, a
+  Skill turned on or off (except `util-voice-receptionist`, `util-twilio-channel`,
+  `util-web-channel` and `util-newsletter-compose`), every custom skill and scheduled task
+  change, `cs-approval-policy` included, and a new title. A setting that changes (time
+  zone, session sharing, models, commands, setup from chat turned on or off), credentials
+  and a new Wiro project still restart it. The `restart` answer of
+  `connect_agent_connector`, `disconnect_agent_connector`, `set_agent_connector_accounts`
+  and `set_agent_connector_permissions` can read `live`; `manage_agent_custom_skill`,
+  `apply_agent_skills` and `update_agent` carry `live: true` for such a change, and the
+  `setupResult` of a reply Wiro applied carries `live`. Before a change, the tools and the
+  agents playbook say that a running agent gets most changes without a restart, and the
+  answer says which happened.
 - Connector actions can wait for approval. By default Create and send and Change and delete
   ask in chat and run in scheduled tasks. `send_agent_message`,
   `get_agent_message` and `get_agent_conversation` list a message's approval cards under

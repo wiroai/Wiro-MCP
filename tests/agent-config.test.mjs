@@ -2283,8 +2283,8 @@ test('manage_agent_custom_skill says from Wiro\'s answer whether a save restarts
     assert.match(description, /A running agent gets most changes without a restart; a few restart it, which takes about a minute\. The result says which happened\./);
     assert.doesNotMatch(description, /A running agent restarts for a new entry/);
   });
-  const line = PLAYBOOKS.agents.split('\n').find(item => item.startsWith('- Some changes restart'));
-  assert.match(line, /with `manage_agent_custom_skill` a new entry, a schedule change, turning one on or off, a rename, a delete or a revert/);
+  const line = PLAYBOOKS.agents.split('\n').find(item => item.startsWith('- Most changes reach a running agent live'));
+  assert.match(line, /every `manage_agent_custom_skill` change \(a new entry, its text, description, schedule or on\/off state, a rename, a delete or a revert, `cs-approval-policy` included\)/);
 });
 
 test('manage_agent_custom_skill rename, delete and revert say from Wiro\'s answer whether the running agent got the change live', async () => {

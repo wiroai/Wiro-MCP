@@ -330,7 +330,7 @@ in AI usage each month; after that, they use your Wiro balance.
 | `set_agent_connector_accounts` | Choose the accounts a connected connector may act on, such as its ad accounts, pages or channels, or the advertisers a TikTok Ads sign-in reaches |
 | `disconnect_agent_connector` | Disconnect a connector from an agent, after your confirmation |
 | `get_agent_connector_permissions` | Read what an agent may do with a connector without asking: each group of actions (Read-only, Create and send, Change and delete) and each action in Chat and Autopilot, and the approvals still waiting |
-| `set_agent_connector_permissions` | Change a connector's permissions for a group or one action; shows what changes for the agent and whether it restarts, then asks for your confirmation |
+| `set_agent_connector_permissions` | Change a connector's permissions for a group or one action; shows what changes for the agent, then asks for your confirmation |
 | `list_projects` | List the projects of the connected project's workspace, to pick one for an agent; no keys are shown |
 | `bind_agent_project` | Set the Wiro project an agent's video and voice skills run models with, with no key in the chat; shows the project first, then asks for your confirmation. The agent's model tools come from the Wiro AI Models connector (`wiro`), which runs with this same project and is connected with `connect_agent_connector` |
 | `manage_agent_custom_skill` | Add, edit, schedule, restore or remove an agent's own instructions and scheduled tasks; turning off its approval policy or changing its rules needs your confirmation. A scheduled task that comes with the agent's template keeps the template's text: its schedule and on/off switch can change |
@@ -461,7 +461,7 @@ and new value of each step input that changes. Changing a spend limit or a Model
 Access rule also waits for `confirm: true`: you see the old and new values and
 what was spent this period first. Answering an agent's approval card and changing
 a connector's permissions wait for `confirm: true` too: you see the exact request, or
-what changes for the agent and whether it restarts, first. No tool adds
+what changes for the agent, first. No tool adds
 funds or takes a card payment: funds are added in the Wiro dashboard, and a
 charge your balance cannot cover says how much to add, with nothing charged. The connected project
 decides the workspace: a personal project uses your personal wallet, a team

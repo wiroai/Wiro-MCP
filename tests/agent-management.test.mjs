@@ -318,23 +318,25 @@ test('update_agent: a partial save says whether the saved part restarts the agen
   assert.match(textOf(stays.result), /The description change was saved; the settings were not\.$/);
 });
 
-test('update_agent and the playbook say which changes restart a running agent', async () => {
+test('update_agent and the playbook say which changes reach a running agent live and which restart it', async () => {
   const description = await toolDescription('update_agent');
   assert.doesNotMatch(description, /A running or starting agent restarts to apply the change/);
   assert.match(description, /a setting that changes restarts it to apply the change, which takes about a minute; a new name reaches a running agent from its next message, with no restart/);
   // The runtime knows setup from chat only as on or off, so a move between "all" and "webchat" restarts nothing.
   assert.match(description, /a new description, cover or categories, a setting it already has, or chat_setup moved between "all" and "webchat" leaves it running/);
 
-  const line = PLAYBOOKS.agents.split('\n').find(item => item.startsWith('- Some changes restart'));
-  assert.match(line, /`update_agent` with a new title or a setting that changes \(time zone, session sharing, models, commands, setup from chat turned on or off\)/);
-  // A sign-in that is started and not approved yet changes nothing on the agent; the connection restarts it once.
+  const line = PLAYBOOKS.agents.split('\n').find(item => item.startsWith('- Most changes reach a running agent live'));
+  assert.match(line, /^- Most changes reach a running agent live, from its next message, with no restart: a connector connected, disconnected or given new values, a change of a connector's accounts or permissions,/);
+  // The four Skills the agent's start reads from its environment restart it.
+  assert.match(line, /`apply_agent_skills` turning a skill on or off \(except `util-voice-receptionist`, `util-twilio-channel`, `util-web-channel` and `util-newsletter-compose`\)/);
+  assert.match(line, /a new title with `update_agent`, and the same changes approved in the agent's chat\./);
+  assert.match(line, /These still restart it, which takes about a minute: `update_agent` with a setting that changes \(time zone, session sharing, models, commands, setup from chat turned on or off\), `set_agent_credentials` when it changes what is saved, `bind_agent_project` when the project changes, and turning one of those four skills on or off\./);
+  // A sign-in that is started and not approved yet changes nothing on the agent.
   assert.match(line, /These leave it running: a new description, cover or categories with `update_agent`, setup from chat moved between "all" and "webchat", a new plan, plan changes and renewals, a sign-in that is started and not yet approved, and a save that changes nothing\./);
-  assert.match(line, /a connector connected, disconnected or given new values, a change of a connector's accounts/);
-  assert.match(line, /`apply_agent_skills` when a skill turns on or off/);
-  assert.match(line, /and the same changes approved in the agent's chat\./);
-  assert.match(line, /A text or description edit of a custom skill or scheduled task usually reaches a running agent without a restart, though an edit of `cs-approval-policy` restarts it; the result says which happened\./);
-  // A change saved while a restart has not started the agent yet rides on it.
-  assert.match(line, /A change saved while the agent is still stopping or queued for a restart loads with that restart; saved once it is starting again, it restarts the agent a second time\./);
+  assert.match(line, /A live change that cannot be applied restarts the agent instead; the result says which happened\./);
+  // A change saved while a restart has not started the agent yet rides on it; one saved while it starts waits for it to run.
+  assert.match(line, /A change saved while the agent is stopping or queued for a restart loads with that restart, and one saved while it is starting reaches it once it runs: live, or with one more restart for a change that needs it\./);
+  assert.doesNotMatch(PLAYBOOKS.agents, /Some changes restart a running agent|usually reaches a running agent without a restart|restarts the agent a second time/);
   assert.doesNotMatch(PLAYBOOKS.agents, /Many changes restart|credit packs and upgrades\./);
   assert.match(PLAYBOOKS.agents, /\| 1 \| Stopping, or restarting \| Wait\. A restart starts it again by itself, in about a minute\. \|/);
 });
