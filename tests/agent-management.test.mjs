@@ -330,7 +330,8 @@ test('update_agent and the playbook say which changes reach a running agent live
   // The four Skills the agent's start reads from its environment restart it.
   assert.match(line, /`apply_agent_skills` turning a skill on or off \(except `util-voice-receptionist`, `util-twilio-channel`, `util-web-channel` and `util-newsletter-compose`\)/);
   assert.match(line, /a new title with `update_agent`, and the same changes approved in the agent's chat\./);
-  assert.match(line, /These still restart it, which takes about a minute: `update_agent` with a setting that changes \(time zone, session sharing, models, commands, setup from chat turned on or off\), `set_agent_credentials` when it changes what is saved, `bind_agent_project` when the project changes, and turning one of those four skills on or off\./);
+  // Connecting the wiro connector with another project binds that project, as bind_agent_project does.
+  assert.match(line, /These still restart it, which takes about a minute: `update_agent` with a setting that changes \(time zone, session sharing, models, commands, setup from chat turned on or off\), `set_agent_credentials` when it changes what is saved, `bind_agent_project` when the project changes, `connect_agent_connector` for Wiro AI Models \(`wiro`\) with another project, and turning one of those four skills on or off\./);
   // A sign-in that is started and not approved yet changes nothing on the agent.
   assert.match(line, /These leave it running: a new description, cover or categories with `update_agent`, setup from chat moved between "all" and "webchat", a new plan, plan changes and renewals, a sign-in that is started and not yet approved, and a save that changes nothing\./);
   assert.match(line, /A live change that cannot be applied restarts the agent instead; the result says which happened\./);
