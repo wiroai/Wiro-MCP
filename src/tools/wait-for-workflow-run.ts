@@ -188,7 +188,7 @@ function formatStepDebug(debug: Record<string, unknown>): string {
     return lines.join('\n');
   }
   if (typeof debug.model === 'string') lines.push(`**Model:** \`${debug.model}\``);
-  if (typeof debug.taskStatus === 'string') lines.push(`**Task status:** ${taskStatusText({ status: debug.taskStatus })}`);
+  if (typeof debug.taskStatusText === 'string') lines.push(`**Task status:** ${debug.taskStatusText}`);
   const block = (language: string, value: string): string[] => {
     let fence = '```';
     while (value.includes(fence)) fence += '`';
@@ -233,10 +233,12 @@ async function readStepDebug(
     ? shortenStepInput(detail.parameters) as Record<string, unknown>
     : undefined;
   const debugoutput = asString(detail.debugoutput);
+  const taskStatus = asString(detail.taskStatus);
   return {
     nodeId,
     available: true,
-    ...(asString(detail.taskStatus) ? { taskStatus: asString(detail.taskStatus) } : {}),
+    // The code for programs, and beside it the words an assistant tells a person.
+    ...(taskStatus ? { taskStatus, taskStatusText: taskStatusText({ status: taskStatus }) } : {}),
     ...(asString(detail.modelslugowner) && asString(detail.modelslugproject)
       ? { model: `${asString(detail.modelslugowner)}/${asString(detail.modelslugproject)}` }
       : {}),

@@ -44,7 +44,7 @@ import {
   type StructuredTaskResult,
   type TaskContentBlock,
 } from '../utils/structured.js';
-import { strictInput, taskResultOutputSchema } from './schemas.js';
+import { strictInput, TASK_STATUS_WORDS, taskResultOutputSchema } from './schemas.js';
 
 /** How long run_model waits, and when an identical call continues an earlier run. */
 export interface RunModelTiming extends RunReuseTiming {
@@ -333,7 +333,7 @@ export function registerRunModel(
         + 'tool-call turn instead returns a `run_model` continuation template; '
         + 'execute its calls, fill its `toolOutputs`, and invoke it once. '
         + 'When the task completes, present every returned media resource in the '
-        + 'user-facing response instead of reporting only task metadata.',
+        + `user-facing response instead of reporting only task metadata. ${TASK_STATUS_WORDS}`,
       inputSchema: strictInput({
         model: z.string().describe('Model slug in "owner/model" format, e.g. "google/veo3-1", "google/nano-banana-pro"'),
         params: z.record(z.string(), z.unknown()).describe('Model-specific parameters as key-value pairs. Use get_model_schema to discover available parameters. Pass json and json-array parameters as structured JSON values in this same object. File parameters take public URLs, no upload needed: one URL for fileinput, an array of URLs for combinefileinput, and for multifileinput the URLs comma-separated in its matching ...UrlMultiple field. A parameter you leave out gets the default get_model_schema shows for it. A run fills nothing for the ones it marks as samples (file fields, ids that contain "input", the prompt and the LLM chat fields), picks a random seed, and refuses a required parameter that is missing. To continue a chat, send the same session_id with the next prompt, without previousTaskToken. A turn that ended with tool calls is continued with previousTaskToken, toolOutputs rows (call_id and output) and the same session_id, as its nextAction shows.'),

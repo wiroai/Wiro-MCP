@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { WiroClient } from '../client.js';
 import { formatTaskList } from '../utils/format.js';
 import { toStructuredTaskResult } from '../utils/structured.js';
-import { strictInput, taskListOutputSchema } from './schemas.js';
+import { strictInput, TASK_STATUS_WORDS, taskListOutputSchema } from './schemas.js';
 
 export function registerListTasks(server: McpServer, client: WiroClient): void {
   server.registerTool(
@@ -18,7 +18,7 @@ export function registerListTasks(server: McpServer, client: WiroClient): void {
         + 'runs, which it ran on its own account, are only in list_studio_results. Steps of workflow runs are '
         + 'not listed: list_workflow_runs has those. Called by a deployed agent through its Wiro AI Models '
         + 'connector, it lists only that agent\'s own tasks, and get_task, cancel_task and kill_task answer any '
-        + 'other task as not found.',
+        + `other task as not found. ${TASK_STATUS_WORDS}`,
       inputSchema: strictInput({
         start: z.number().int().min(0).default(0)
           .describe('Pagination offset (default 0).'),

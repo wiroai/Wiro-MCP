@@ -13,7 +13,7 @@ import {
   getTaskState,
   toStructuredTaskResult,
 } from '../utils/structured.js';
-import { strictInput, taskPriceOutputSchema } from './schemas.js';
+import { strictInput, TASK_STATUS_WORDS, taskPriceOutputSchema } from './schemas.js';
 
 export function registerGetTaskPrice(server: McpServer, client: WiroClient): void {
   server.registerTool(
@@ -26,7 +26,7 @@ export function registerGetTaskPrice(server: McpServer, client: WiroClient): voi
         + 'while running can still be charged once its work ends. A finished task\'s result already '
         + 'shows its cost, so use this for a task whose result you do not have, or whose result '
         + 'shows only the list price. If the task is active, follow the returned `wait_for_task` '
-        + 'next action.',
+        + `next action. ${TASK_STATUS_WORDS}`,
       inputSchema: strictInput({
         tasktoken: z.string().optional().describe('The task token returned from run_model.'),
         taskid: z.string().optional().describe('The task ID (alternative to tasktoken).'),

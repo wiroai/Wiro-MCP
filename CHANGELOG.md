@@ -243,7 +243,9 @@ runs `npx @wiro-ai/wiro-mcp@latest` takes it at its next start.
   `get_task`, `wait_for_task`, `run_model`, `list_tasks`, `get_task_price`, their progress
   messages and a workflow step's details in `wait_for_workflow_run`. An assistant passed the
   code on to the person, who could not read it. The structured result keeps the code as
-  `task.status`, beside `state`.
+  `task.status` and has the words beside it as `task.statusText` (a workflow step's details
+  as `taskStatusText`), since some clients show the model the structured result before the
+  text. The task tools' descriptions say to tell a person the words, never the code.
 - Controls know nine surfaces: `studio`, `workflow-agent` and `workflow` join the six.
   Messages to Studio and the Workflow Agent, the models Studio runs for a person and workflow
   runs with their steps count on them, whichever way they come in, so a limit or a rule on

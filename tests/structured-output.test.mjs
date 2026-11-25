@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { formatTaskResult } from '../dist/utils/format.js';
-import { toStructuredTaskResult } from '../dist/utils/structured.js';
+import { toPendingTaskResult, toStructuredTaskResult } from '../dist/utils/structured.js';
 
 function taskWithContent(content, overrides = {}) {
   return {
@@ -284,4 +284,26 @@ test('tasks without typed segments keep normal debug output compatibility', () =
 
   assert.equal(result.response, 'Normal non-tool model response.');
   assert.deepEqual(result.outputs, []);
+});
+
+// task.status is Wiro's status code, for programs. An assistant that reads the structured result before the text
+// quoted it to a person, so the same status in words, as the Status line says it, sits beside it as statusText.
+test('a task reference carries its status in words beside the code, and neither without a status', () => {
+  const failed = toStructuredTaskResult(taskWithContent(undefined, { outputs: [], pexit: '1' }));
+  assert.equal(failed.task.status, 'task_postprocess_end');
+  assert.equal(failed.task.statusText, 'Failed');
+  assert.match(formatTaskResult(taskWithContent(undefined, { outputs: [], pexit: '1' })), /\*\*Status:\*\* Failed\n/);
+
+  const queued = toPendingTaskResult({ taskid: '7', status: 'task_queue' });
+  assert.equal(queued.task.status, 'task_queue');
+  assert.equal(queued.task.statusText, 'Queued: waiting for a worker');
+  const followed = toPendingTaskResult({ task: taskWithContent(undefined, { outputs: [], status: 'task_assign', pexit: '' }) });
+  assert.equal(followed.task.statusText, 'Starting: loading the model');
+
+  const submitted = toPendingTaskResult({ taskid: '7', tasktoken: 'task-token' });
+  assert.equal(Object.hasOwn(submitted.task, 'status'), false);
+  assert.equal(Object.hasOwn(submitted.task, 'statusText'), false);
+  const blank = toStructuredTaskResult(taskWithContent(undefined, { outputs: [], status: '' }));
+  assert.equal(Object.hasOwn(blank.task, 'status'), false);
+  assert.equal(Object.hasOwn(blank.task, 'statusText'), false);
 });

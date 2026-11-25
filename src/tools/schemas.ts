@@ -108,13 +108,24 @@ export const nextActionSchema = z.object({
   reason: z.string(),
 });
 
+/**
+ * The task tools' descriptions end with this. Some clients show the model a
+ * result's structured content before its text, and a model's function tools
+ * carry a description but no output schema, so the description is where it
+ * learns which of the two statuses to pass on.
+ */
+export const TASK_STATUS_WORDS = 'Tell a person a task\'s status as its Status line or `task.statusText` says it, '
+  + 'never the `task.status` code.';
+
 export const taskReferenceSchema = z.object({
   id: z.string().optional(),
   token: z.string().optional(),
   model: z.string().optional(),
   status: z.string().optional()
-    .describe('The task\'s status code, such as task_postprocess_end, for programs. Tell a person where the task is '
-      + 'in words, as state and the Status line say it, never this code.'),
+    .describe('The task\'s status code, such as task_postprocess_end, for programs. Tell a person statusText, never this code.'),
+  statusText: z.string().optional()
+    .describe('The task\'s status in words, such as Completed, Failed or Running: producing output, as the Status line '
+      + 'says it. This is what to tell a person.'),
   exitCode: z.string().optional(),
   durationSeconds: z.number().nullable().optional(),
   costUsd: z.number().nullable().optional()

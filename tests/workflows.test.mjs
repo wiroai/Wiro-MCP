@@ -1368,6 +1368,9 @@ test('wait_for_workflow_run prints the inputs a failed step received and hides s
     // The step's task status in words; with no exit code beside it, a finished task reads Finished.
     assert.match(text, /\*\*Task status:\*\* Finished\n/);
     assert.doesNotMatch(text, /task_postprocess_end/);
+    // The structured details keep the code for programs, with the words beside it for an assistant that reads them first.
+    assert.equal(result.structuredContent.debug.taskStatus, 'task_postprocess_end');
+    assert.equal(result.structuredContent.debug.taskStatusText, 'Finished');
     assert.match(text, /https:\/\/cdn1\.wiro\.ai\/a\.png/);
     assert.equal(JSON.stringify(result).includes('sk-live-hidden'), false);
     assert.equal(result.structuredContent.debug.parameters.apiKey, '[hidden]');

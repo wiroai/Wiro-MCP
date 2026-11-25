@@ -16,6 +16,7 @@ import {
   parameterRange,
   pricingNotes,
   shownParameterGroups,
+  taskStatusText,
   toParameterOption,
 } from './format.js';
 import {
@@ -59,7 +60,10 @@ export interface StructuredTaskReference {
   id?: string;
   token?: string;
   model?: string;
+  /** Wiro's status code, such as task_postprocess_end, for programs. */
   status?: string;
+  /** The same status in words, as the text's Status line says it: what an assistant tells a person. */
+  statusText?: string;
   exitCode?: string;
   durationSeconds?: number | null;
   costUsd?: number | null;
@@ -129,13 +133,18 @@ export function toTaskReference(
     ? undefined
     : parseNullableNumber(String(task.chargedcost));
 
+  const status = asOptionalString(task?.status);
+
   return compact({
     id: asOptionalString(task?.id || fallback.taskid),
     token: asOptionalString(
       task?.socketaccesstoken || fallback.tasktoken,
     ),
     model,
-    status: asOptionalString(task?.status),
+    status,
+    // Some clients show the model this result before the text, so the words
+    // sit beside the code: an assistant passed the code on to the person.
+    statusText: task && status ? taskStatusText(task) : undefined,
     exitCode: asOptionalString(task?.pexit || undefined),
     durationSeconds,
     costUsd,
@@ -203,6 +212,7 @@ export function toPendingTaskResult(params: {
       token: params.tasktoken,
       model: params.model,
       status: params.status,
+      statusText: params.status ? taskStatusText({ status: params.status }) : undefined,
     });
 
   return {

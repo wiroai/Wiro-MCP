@@ -540,8 +540,11 @@ workflow's title, description and input list are shown as data too, in every
 result, since an agent or another person can have written them.
 
 Task responses use the stable states `submitted`, `running`, `completed`,
-`failed`, and `cancelled`. When more work is required, the response includes an
-executable `nextAction`:
+`failed`, and `cancelled`. A task's `status` is Wiro's status code, for
+programs, and `statusText` is the same status in words, such as `Completed`,
+`Failed` or `Running: producing output`, as the text's Status line says it: an
+assistant tells a person the words. When more work is required, the response
+includes an executable `nextAction`:
 
 ```json
 {
@@ -549,7 +552,8 @@ executable `nextAction`:
   "task": {
     "id": "123",
     "token": "task-token",
-    "status": "task_start"
+    "status": "task_start",
+    "statusText": "Running"
   },
   "outputs": [],
   "nextAction": {

@@ -20,7 +20,7 @@ import {
   toPendingTaskResult,
   toStructuredTaskResult,
 } from '../utils/structured.js';
-import { strictInput, taskResultOutputSchema } from './schemas.js';
+import { strictInput, TASK_STATUS_WORDS, taskResultOutputSchema } from './schemas.js';
 
 export function registerGetTask(server: McpServer, client: WiroClient): void {
   server.registerTool(
@@ -35,7 +35,7 @@ export function registerGetTask(server: McpServer, client: WiroClient): void {
         + 'template whose ordinary `params` contain `previousTaskToken`, `toolOutputs` '
         + 'and the turn\'s `session_id` when it had one. When the task is complete, present every returned '
         + 'media resource in the user-facing response instead of reporting only '
-        + 'task metadata.',
+        + `task metadata. ${TASK_STATUS_WORDS}`,
       inputSchema: strictInput({
         tasktoken: z.string().optional().describe('The task token returned from run_model.'),
         taskid: z.string().optional().describe('The task ID (alternative to tasktoken).'),

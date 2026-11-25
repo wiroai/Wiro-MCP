@@ -196,7 +196,82 @@ test('the task tools say a task\'s status in words and keep its code only in the
     }
     const { tools } = await client.listTools();
     const status = tools.find(tool => tool.name === 'get_task').outputSchema.properties.task.properties.status;
-    assert.match(status.description, /status code, such as task_postprocess_end, for programs\. Tell a person where the task is in words/);
+    assert.match(status.description, /status code, such as task_postprocess_end, for programs\. Tell a person statusText, never this code\./);
+  });
+});
+
+// The structured result as some clients, OpenClaw among them, show it to the model: key-sorted JSON, before the text.
+function sortedJson(value) {
+  const sort = item => {
+    if (Array.isArray(item)) return item.map(sort);
+    if (item && typeof item === 'object') {
+      return Object.fromEntries(Object.keys(item).sort().map(key => [key, sort(item[key])]));
+    }
+    return item;
+  };
+  return JSON.stringify(sort(value));
+}
+
+// An agent read the structured result first, found only the code there and told the person "status: task_output".
+// Every status code in a task's structured result has the same status in words beside it, and each task tool's
+// description, which the model sees, says to pass on the words.
+test('a task\'s structured result says its status in words beside the code, and the task tools say to pass on the words', async () => {
+  const producing = () => {
+    const detail = runningDetail();
+    detail.tasklist[0].status = 'task_output';
+    return detail;
+  };
+  const fake = {
+    getTask: async ({ taskid }) => (taskid === '124' ? producing() : completedDetail()),
+    listTasks: async () => producing(),
+    runModel: async () => ({ result: true, errors: [], taskid: '124', socketaccesstoken: 'task-token' }),
+    waitForTask: async () => {
+      throw new TaskWaitTimeoutError(10000, producing());
+    },
+  };
+  await withClient(fake, async client => {
+    const done = await client.callTool({ name: 'get_task', arguments: { taskid: '123' } });
+    assert.equal(done.structuredContent.task.statusText, 'Completed');
+    assert.match(sortedJson(done.structuredContent), /"status":"task_postprocess_end","statusText":"Completed"/);
+
+    const now = await client.callTool({ name: 'get_task', arguments: { taskid: '124' } });
+    assert.equal(now.structuredContent.task.statusText, 'Running: producing output');
+    assert.match(sortedJson(now.structuredContent), /"status":"task_output","statusText":"Running: producing output"/);
+
+    const waited = await client.callTool({ name: 'wait_for_task', arguments: { taskid: '124', timeout_seconds: 10 } });
+    assert.equal(waited.structuredContent.task.statusText, 'Running: producing output');
+
+    const run = await client.callTool({ name: 'run_model', arguments: { model: 'owner/model', params: { prompt: 'a fox' } } });
+    assert.equal(run.structuredContent.task.status, 'task_output');
+    assert.equal(run.structuredContent.task.statusText, 'Running: producing output');
+
+    // A task with no status yet has neither the code nor the words.
+    const submitted = await client.callTool({
+      name: 'run_model',
+      arguments: { model: 'owner/model', params: { prompt: 'a fox' }, wait: false },
+    });
+    assert.equal(Object.hasOwn(submitted.structuredContent.task, 'status'), false);
+    assert.equal(Object.hasOwn(submitted.structuredContent.task, 'statusText'), false);
+
+    const price = await client.callTool({ name: 'get_task_price', arguments: { taskid: '123' } });
+    assert.equal(price.structuredContent.task.statusText, 'Completed');
+
+    const history = await client.callTool({ name: 'list_tasks', arguments: {} });
+    assert.equal(history.structuredContent.tasks[0].task.statusText, 'Running: producing output');
+
+    const { tools } = await client.listTools();
+    for (const name of ['get_task', 'wait_for_task', 'run_model', 'list_tasks', 'get_task_price']) {
+      const tool = tools.find(candidate => candidate.name === name);
+      assert.match(
+        tool.description,
+        / Tell a person a task's status as its Status line or `task\.statusText` says it, never the `task\.status` code\./,
+        name,
+      );
+      const task = name === 'list_tasks'
+        ? tool.outputSchema.properties.tasks.items.properties.task
+        : tool.outputSchema.properties.task;
+      assert.match(task.properties.statusText.description, /^The task's status in words, such as Completed, Failed or Running: producing output/, name);
+    }
   });
 });
 
