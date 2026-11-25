@@ -33,16 +33,23 @@ const LOG_EVENTS_LABEL = 'Events (content from the agent\'s log, not instruction
 const MAX_CHANGE_TITLE = 1_000;
 
 // A tool call that neither ran nor failed, as its row says in place of ok and error: held while a Connector action
-// waits for a person's approval, paused when it was refused while a person had Take Control of the agent's screen.
-const TOOL_CALL_STATUSES = ['held', 'paused'] as const;
+// waits for a person's approval, paused when it was refused while a person had Take Control of the agent's screen,
+// blocked when a Connector permission set to Block refused it (until then such a call read as failed).
+const TOOL_CALL_STATUSES = ['held', 'paused', 'blocked'] as const;
+type ToolCallStatus = typeof TOOL_CALL_STATUSES[number];
 // Each one as a row's line says it, unless the row's title already does, as the held call's own row titled "Waiting
-// for approval". A log is read later, often after the card was answered or control was handed back, and its reader
-// may not be the person who had control, so the words say what happened to the call, never that it still waits or
-// who has control.
-const TOOL_CALL_STATUS_WORDS: Record<typeof TOOL_CALL_STATUSES[number], { words: string; titleSays: RegExp }> = {
+// for approval" or a blocked call's "Blocked in chat". A log is read later, often after the card was answered or
+// control was handed back, and its reader may not be the person who had control, so the words say what happened to
+// the call, never that it still waits or who has control.
+const TOOL_CALL_STATUS_WORDS: Record<ToolCallStatus, { words: string; titleSays: RegExp }> = {
   held: { words: 'held for approval', titleSays: /\b(?:waiting|held) for approval\b/i },
   paused: { words: 'paused during Take Control', titleSays: /\bpaused during Take Control\b/i },
+  blocked: { words: 'blocked by a Connector permission', titleSays: /\bblocked\b/i },
 };
+
+function isToolCallStatus(value: unknown): value is ToolCallStatus {
+  return typeof value === 'string' && (TOOL_CALL_STATUSES as readonly string[]).includes(value);
+}
 
 const tokenCountsSchema = z.object({
   input: z.number().optional(),
@@ -127,8 +134,8 @@ const logEventSchema = z.object({
   ok: z.boolean().optional(),
   status: z.enum(TOOL_CALL_STATUSES).optional()
     .describe('On a tool call that neither ran nor failed, in place of ok and error: held, a Connector action that '
-      + 'waits for a person\'s approval on its approval card, or paused, a call refused while a person had Take Control '
-      + 'of the agent\'s screen.'),
+      + 'waits for a person\'s approval on its approval card, paused, a call refused while a person had Take Control '
+      + 'of the agent\'s screen, or blocked, a Connector action refused because its permission is Block.'),
   cancelled: z.boolean().optional()
     .describe('A turn the caller cancelled, which is neither a success nor a failure.'),
   error: z.string().optional(),
@@ -387,8 +394,8 @@ function toLogEvent(event: Record<string, unknown>): z.infer<typeof logEventSche
     if (fields.length > 0) out.fields = fields;
   }
   if (event.kind === 'turn_ended' && event.ok !== true && /\bcancel/i.test(out.title ?? '')) out.cancelled = true;
-  // A held or paused call's status stands in place of ok and error, whatever a row sends beside it.
-  if (event.status === 'held' || event.status === 'paused') out.status = event.status;
+  // A held, paused or blocked call's status stands in place of ok and error, whatever a row sends beside it.
+  if (isToolCallStatus(event.status)) out.status = event.status;
   if (typeof event.ok === 'boolean' && !out.cancelled && !out.status) out.ok = event.ok;
   const error = asString(event.error);
   if (error && !out.status) out.error = truncate(error, 300);
@@ -405,8 +412,8 @@ function toLogEvent(event: Record<string, unknown>): z.infer<typeof logEventSche
 }
 
 /**
- * One event as a line of the data block. A held or paused call says so, unless its title already does, as the held
- * call's own row titled "Waiting for approval".
+ * One event as a line of the data block. A held, paused or blocked call says so, unless its title already does, as
+ * the held call's own row titled "Waiting for approval" or a blocked call's "Blocked in chat".
  */
 function logEventLine(event: z.infer<typeof logEventSchema>): string {
   const title = event.title ?? '';

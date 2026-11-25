@@ -2306,9 +2306,9 @@ test('a sessions_spawn that failed is not a hand-off', async () => {
   });
 });
 
-// A call the connector gate held for approval reads held, and one refused while a person had Take Control reads
-// paused: the timeline passes both as written.
-test('a held or paused tool call keeps its status in toolsUsed, and the schema says what each one means', async () => {
+// A call the connector gate held for approval reads held, one refused while a person had Take Control reads paused,
+// and one a Block permission refused reads blocked: the timeline passes each as written.
+test('a held, paused or blocked tool call keeps its status in toolsUsed, and the schema says what each one means', async () => {
   const fake = fakeClient({
     '/UserAgent/Message/Detail': {
       result: true,
@@ -2322,6 +2322,7 @@ test('a held or paused tool call keeps its status in toolsUsed, and the schema s
           { type: 'tool', toollabel: 'wordpress__create_post', toolstatus: 'held', callindex: 0, contentindex: 0 },
           { type: 'tool', toollabel: 'browser', toolstatus: 'paused', callindex: 1, contentindex: 0 },
           { type: 'tool', toollabel: 'web_search', toolstatus: 'completed', callindex: 2, contentindex: 0 },
+          { type: 'tool', toollabel: 'wordpress__delete_post', toolstatus: 'blocked', callindex: 3, contentindex: 0 },
         ],
       }),
     },
@@ -2336,13 +2337,14 @@ test('a held or paused tool call keeps its status in toolsUsed, and the schema s
       { name: 'wordpress__create_post', status: 'held' },
       { name: 'browser', status: 'paused' },
       { name: 'web_search', status: 'completed' },
+      { name: 'wordpress__delete_post', status: 'blocked' },
     ]);
     assert.equal(result.structuredContent.background, undefined);
 
     const { tools } = await client.listTools();
     for (const name of ['send_agent_message', 'get_agent_message']) {
       const status = tools.find(tool => tool.name === name).outputSchema.properties.message.properties.toolsUsed.items.properties.status;
-      assert.match(status.description, /requested while it runs, then completed or error, or held \(a Connector action waiting for a person's approval\) or paused \(refused while a person had Take Control of the agent's screen\)\. A held or paused call did not run\./, name);
+      assert.match(status.description, /requested while it runs, then completed or error, or held \(a Connector action waiting for a person's approval\), paused \(refused while a person had Take Control of the agent's screen\) or blocked \(a Connector action refused because its permission is Block\)\. A held, paused or blocked call did not run, and none of them failed\./, name);
     }
   });
 });

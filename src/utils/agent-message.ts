@@ -61,8 +61,9 @@ export const agentMessageSchema = z.object({
     name: z.string(),
     status: z.string().optional()
       .describe('The call\'s status as the agent reported it: requested while it runs, then completed or error, or held '
-        + '(a Connector action waiting for a person\'s approval) or paused (refused while a person had Take Control of '
-        + 'the agent\'s screen). A held or paused call did not run.'),
+        + '(a Connector action waiting for a person\'s approval), paused (refused while a person had Take Control of '
+        + 'the agent\'s screen) or blocked (a Connector action refused because its permission is Block). A held, paused '
+        + 'or blocked call did not run, and none of them failed.'),
   })),
   setupChanges: z.array(setupChangeSchema).optional()
     .describe('Setup changes the agent proposed in this reply. Nothing changes until the user approves one.'),

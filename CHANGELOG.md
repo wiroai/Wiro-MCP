@@ -138,11 +138,12 @@ runs `npx @wiro-ai/wiro-mcp@latest` takes it at its next start.
   it names who changed the agent. `CONNECTOR_REAUTH`, a connector that has to be connected
   again, is Wiro's own row and names no one.
 - A tool call that neither ran nor failed reads so: a Connector action that waits for a
-  person's approval is `held`, and a call refused while a person has Take Control of the
-  agent's screen is `paused`. `get_agent_activity` (logs) keeps such a row's `status`, which
-  stands in place of `ok` and `error`, and its line says "held for approval" or "paused
-  during Take Control", where it read as a call that ran. A message's `toolsUsed` carries
-  the same two statuses.
+  person's approval is `held`, a call refused while a person has Take Control of the
+  agent's screen is `paused`, and a Connector action refused because its permission is
+  Block is `blocked`. `get_agent_activity` (logs) keeps such a row's `status`, which stands
+  in place of `ok` and `error`, and its line says "held for approval", "paused during Take
+  Control" or "blocked by a Connector permission", where it read as a call that ran or
+  failed. A message's `toolsUsed` carries the same three statuses.
 - `bind_agent_project` sets the Wiro project the agent's video and voice skills run models
   with. The agent's own model tools come from the Wiro AI Models connector (`wiro`), which
   always runs with that same project; connecting it binds its project the same way, and
