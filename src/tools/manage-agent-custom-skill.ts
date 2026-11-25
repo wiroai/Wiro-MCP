@@ -229,14 +229,23 @@ function upsertRestartNote(status: number | null, functional: boolean, textOnly:
     : 'The change is saved, but the agent was not restarted, so a running agent keeps its old settings until it restarts. control_agent with action restart loads them, and get_my_agent shows its status.';
 }
 
+const NOT_RESTARTED = 'The agent keeps running: Wiro did not restart it for this change.';
+
 /**
  * What a rename, delete or revert did to the agent, from Wiro's answer: live: true when a running agent got it with no
- * restart, and restarting as Wiro says it. An answer without live goes by the agent's status before the change.
+ * restart, and restarting as Wiro says it. restarting: false on a running agent means Wiro did not restart it, and
+ * restart "failed" that the restart could not be started. An answer without either goes by the agent's status before
+ * the change.
  */
 function appliedRestart(answer: { restarting?: unknown; live?: unknown; restart?: unknown }, status: number | null, what: string) {
   const live = answeredLive(answer);
+  const notRestarted = !live && answer.restarting === false && isAgentRunning(status);
   return {
-    restart: restartNote(status, what, live),
+    restart: !notRestarted
+      ? restartNote(status, what, live)
+      : answer.restart === 'failed'
+        ? `The ${what} is saved, but the agent could not restart: control_agent with action restart loads it.`
+        : NOT_RESTARTED,
     ...(typeof answer.restarting === 'boolean' ? { restarting: answer.restarting } : {}),
     ...(live ? { live } : {}),
   };

@@ -2295,6 +2295,11 @@ test('manage_agent_custom_skill rename, delete and revert say from Wiro\'s answe
     [{ restarting: true, live: false, restart: 'scheduled' }, restarts, undefined],
     // A Wiro that does not answer live goes by the agent's status, as before.
     [{}, restarts, undefined],
+    // A running agent Wiro did not restart: the restart write failed, or there was nothing to load.
+    [{ restarting: false, live: false, restart: 'failed' }, action => `The ${action === 'rename' ? 'new name' : 'change'} is saved, but the agent could not restart: control_agent with action restart loads it.`, undefined],
+    [{ restarting: false, live: false, restart: 'none' }, 'The agent keeps running: Wiro did not restart it for this change.', undefined],
+    // CustomSkillDelete answers no restart string.
+    [{ restarting: false, live: false }, 'The agent keeps running: Wiro did not restart it for this change.', undefined],
   ]) {
     const fake = fakeClient({
       '/UserAgent/Detail': detail(),
@@ -2312,13 +2317,25 @@ test('manage_agent_custom_skill rename, delete and revert say from Wiro\'s answe
         const result = await client.callTool({ name: 'manage_agent_custom_skill', arguments: args });
         assert.notEqual(result.isError, true, `${args.action}: ${text(result)}`);
         const out = result.structuredContent;
-        if (typeof expected === 'string') assert.equal(out.restart, expected, args.action);
-        else assert.match(out.restart, expected, args.action);
+        const want = typeof expected === 'function' ? expected(args.action) : expected;
+        if (typeof want === 'string') assert.equal(out.restart, want, args.action);
+        else assert.match(out.restart, want, args.action);
         assert.equal(out.live, liveField, args.action);
         assert.equal(out.restarting, answer.restarting, args.action);
       }
     });
   }
+
+  // An agent that was not running loads the change at its next start, whatever restarting says.
+  const stopped = fakeClient({
+    '/UserAgent/Detail': detail({ status: 0 }),
+    '/UserAgent/CustomSkillDelete': { result: true, errors: [], restarting: false, live: false },
+  });
+  await withClient(stopped, async client => {
+    const result = await client.callTool({ name: 'manage_agent_custom_skill', arguments: { action: 'delete', agent_guid: AGENT, key: 'cs-cron-my-task', confirm: true } });
+    assert.notEqual(result.isError, true, text(result));
+    assert.equal(result.structuredContent.restart, 'The agent is stopped, so the change takes effect the next time it starts.');
+  });
 });
 
 test('set_agent_credentials does not count a list row that holds only a select as filled', async () => {
