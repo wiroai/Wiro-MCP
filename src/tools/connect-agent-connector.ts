@@ -406,6 +406,7 @@ async function connect(
     return result('connect', context, 'setup_needed',
       `${connector.title} needs ${missing.map(field => field.label).join(', ')} first.`
         + `${appKeys ? ' The sign-in uses the user\'s own app at the service, so its keys come with the connect call.' : ''}`
+        + `${appKeys && connector.wiroApp ? ' Without an app of their own, the user can instead sign in with Wiro\'s own app, with nothing to type, on the agent\'s Connectors tab in the Wiro web app.' : ''}`
         + ' Ask the user for them, then call connect_agent_connector again with them in values. Never put them in a message to an agent. Nothing was sent.',
       {
         ...(mode ? { mode } : {}),
