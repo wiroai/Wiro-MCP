@@ -35,10 +35,13 @@ const MAX_CHANGE_TITLE = 1_000;
 // A tool call that neither ran nor failed, as its row says in place of ok and error: held while a Connector action
 // waits for a person's approval, paused when it was refused while a person had Take Control of the agent's screen.
 const TOOL_CALL_STATUSES = ['held', 'paused'] as const;
-// Each one as a row's line says it, in the words the agent's Logs page uses.
-const TOOL_CALL_STATUS_WORDS: Record<typeof TOOL_CALL_STATUSES[number], string> = {
-  held: 'waiting for approval',
-  paused: 'paused while you have control',
+// Each one as a row's line says it, unless the row's title already does, as the held call's own row titled "Waiting
+// for approval". A log is read later, often after the card was answered or control was handed back, and its reader
+// may not be the person who had control, so the words say what happened to the call, never that it still waits or
+// who has control.
+const TOOL_CALL_STATUS_WORDS: Record<typeof TOOL_CALL_STATUSES[number], { words: string; titleSays: RegExp }> = {
+  held: { words: 'held for approval', titleSays: /\b(?:waiting|held) for approval\b/i },
+  paused: { words: 'paused during Take Control', titleSays: /\bpaused during Take Control\b/i },
 };
 
 const tokenCountsSchema = z.object({
@@ -407,9 +410,9 @@ function toLogEvent(event: Record<string, unknown>): z.infer<typeof logEventSche
  */
 function logEventLine(event: z.infer<typeof logEventSchema>): string {
   const title = event.title ?? '';
-  const words = event.status ? TOOL_CALL_STATUS_WORDS[event.status] : '';
-  const status = words
-    ? (title.toLowerCase().includes(words) ? '' : ` (${words})`)
+  const statusWords = event.status ? TOOL_CALL_STATUS_WORDS[event.status] : undefined;
+  const status = statusWords
+    ? (statusWords.titleSays.test(title) ? '' : ` (${statusWords.words})`)
     : event.cancelled
       ? (/\bcancel/i.test(title) ? '' : ' (cancelled)')
       : event.ok === false ? ' (failed)' : '';

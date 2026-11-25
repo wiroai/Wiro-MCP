@@ -754,7 +754,7 @@ test('get_agent_activity: a turn the caller cancelled shows as cancelled and nev
 
 // A call the connector gate held for approval, or one refused while a person had Take Control, neither ran nor
 // failed: its row carries status held or paused in place of ok and error.
-test('get_agent_activity: a held or paused tool call keeps its status and reads as waiting, never as done or failed', async () => {
+test('get_agent_activity: a held or paused tool call keeps its status and reads as held or paused, never as done or failed', async () => {
   const row = overrides => ({ ts: '2026-11-24T09:00:00.000Z', kind: 'tool_completed', tool: 'wordpress__create_post', title: 'wordpress__create_post', summary: {}, durationMs: 40, userUuid: 'member-uuid', ...overrides });
   const result = await readLogs({
     result: true,
@@ -784,12 +784,14 @@ test('get_agent_activity: a held or paused tool call keeps its status and reads 
   assert.equal(events[4].error, 'The operation could not be completed.');
   assert.equal(events[5].ok, true);
 
+  // A log is read later, often after the card was answered or control was handed back, and maybe not by the person
+  // who had control: the words say what happened to the call, never that it still waits or who has control.
   const lines = textOf(result).split('```text\n')[1].split('\n```')[0].split('\n');
   assert.deepEqual(lines, [
     '2026-11-24T09:00:00.000Z tool_blocked: Waiting for approval',
-    '2026-11-24T09:00:00.000Z tool_completed: wordpress__create_post (waiting for approval)',
-    '2026-11-24T09:00:00.000Z tool_completed: Browser (paused while you have control)',
-    '2026-11-24T09:00:00.000Z tool_completed: wordpress__create_post (paused while you have control)',
+    '2026-11-24T09:00:00.000Z tool_completed: wordpress__create_post (held for approval)',
+    '2026-11-24T09:00:00.000Z tool_completed: Browser (paused during Take Control)',
+    '2026-11-24T09:00:00.000Z tool_completed: wordpress__create_post (paused during Take Control)',
     '2026-11-24T09:00:00.000Z tool_completed: wordpress__create_post (failed)',
     '2026-11-24T09:00:00.000Z tool_completed: wordpress__create_post',
   ]);

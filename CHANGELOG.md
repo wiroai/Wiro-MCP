@@ -140,9 +140,9 @@ runs `npx @wiro-ai/wiro-mcp@latest` takes it at its next start.
 - A tool call that neither ran nor failed reads so: a Connector action that waits for a
   person's approval is `held`, and a call refused while a person has Take Control of the
   agent's screen is `paused`. `get_agent_activity` (logs) keeps such a row's `status`, which
-  stands in place of `ok` and `error`, and its line says "waiting for approval" or "paused
-  while you have control", where it read as a call that ran. A message's `toolsUsed`
-  carries the same two statuses.
+  stands in place of `ok` and `error`, and its line says "held for approval" or "paused
+  during Take Control", where it read as a call that ran. A message's `toolsUsed` carries
+  the same two statuses.
 - `bind_agent_project` sets the Wiro project the agent's video and voice skills run models
   with. The agent's own model tools come from the Wiro AI Models connector (`wiro`), which
   always runs with that same project; connecting it binds its project the same way, and
