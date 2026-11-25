@@ -2,7 +2,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { WiroClient } from '../client.js';
 import { asString, errorResult, requireApiSuccess, type ApiEnvelope } from '../utils/api.js';
-import { customSkillEntries, readUserAgent } from '../utils/agent-config.js';
+import { customSkillEntries, LIVE_OR_RESTART_NOTE, readUserAgent } from '../utils/agent-config.js';
 import {
   accountsText,
   connectionOf,
@@ -26,7 +26,8 @@ const outputSchema = {
   connection: connectionSchema.optional().describe('The connection as it was before this call.'),
   revoked: z.boolean().optional()
     .describe('After a disconnect: whether the service confirmed it revoked the access. False when it does not support that or did not answer.'),
-  restart: z.enum(['scheduled', 'none', 'failed']).optional(),
+  restart: z.enum(['live', 'scheduled', 'none', 'failed']).optional()
+    .describe('After a disconnect: live (the running agent dropped the connector with no restart), scheduled (it restarts without it), none (nothing to load, or the agent is not running) or failed.'),
   willClear: z.string(),
   message: z.string(),
   nextAction: nextActionSchema.optional(),
@@ -34,7 +35,7 @@ const outputSchema = {
 
 type DisconnectBody = ApiEnvelope & { removed?: unknown; revoked?: unknown; restart?: unknown };
 
-type Restart = 'scheduled' | 'none' | 'failed';
+type Restart = 'live' | 'scheduled' | 'none' | 'failed';
 
 /**
  * What a disconnect removes and what goes with it. The agent loses tools and scheduled tasks only from a connection
@@ -67,14 +68,16 @@ function describeClear(title: string, connection: AgentConnection, tasks: string
     + `Connecting it again needs connect_agent_connector${again}.`;
 }
 
-/** Before the disconnect: a connection that is connected now restarts a running agent; any other loads nothing. */
+/** Before the disconnect: a connection that is connected now reaches a running agent; any other loads nothing. */
 function restartBefore(connection: AgentConnection): string {
-  return connection.status === 'connected' ? 'A running agent restarts.' : '';
+  return connection.status === 'connected' ? LIVE_OR_RESTART_NOTE : '';
 }
 
 /** After the disconnect, as Wiro answered it. */
 function restartAfter(connection: AgentConnection, restart: Restart | undefined): string {
   switch (restart) {
+    case 'live':
+      return 'The running agent no longer uses it from its next message, with no restart.';
     case 'scheduled':
       return 'The running agent restarts without it, which takes about a minute.';
     case 'failed':
@@ -120,10 +123,9 @@ export function registerDisconnectAgentConnector(server: McpServer, client: Wiro
       description: 'Disconnect a Connector from a deployed agent. Call it without confirm first: it shows the '
         + 'connection and what goes with it, and changes nothing. After the user agrees, call again with confirm: '
         + 'true. Its saved values, sign-in and account choices are removed, the service is asked to revoke a '
-        + 'sign-in\'s access where it supports that, the agent loses the connector\'s tools, scheduled tasks that can '
-        + 'use no other connected connector stop running, and a running agent restarts when the connector was '
-        + 'connected. It cannot be undone: connecting again needs '
-        + 'connect_agent_connector with a new sign-in or the values. The wiro connector saves no values: disconnecting it '
+        + 'sign-in\'s access where it supports that, the agent loses the connector\'s tools, and scheduled tasks that '
+        + `can use no other connected connector stop running. ${LIVE_OR_RESTART_NOTE} It cannot be undone: connecting `
+        + 'again needs connect_agent_connector with a new sign-in or the values. The wiro connector saves no values: disconnecting it '
         + 'leaves the agent its Wiro project, and connecting it again takes a Wiro project. Chat channels such as Telegram '
         + 'are turned off by clearing their fields with set_agent_credentials instead.',
       inputSchema: strictInput({
@@ -191,7 +193,7 @@ export function registerDisconnectAgentConnector(server: McpServer, client: Wiro
         const removed = body.removed !== false;
         const revoked = body.revoked === true;
         const restartValue = asString(body.restart);
-        const restart = restartValue === 'scheduled' || restartValue === 'none' || restartValue === 'failed' ? restartValue : undefined;
+        const restart = restartValue === 'live' || restartValue === 'scheduled' || restartValue === 'none' || restartValue === 'failed' ? restartValue : undefined;
         const cleared = describeClear(title, connection, tasks, restartAfter(connection, restart));
         const message = removed
           ? `${title} is disconnected. ${cleared}${connection.way === 'sign_in' ? ` ${revoked ? 'The service confirmed it revoked the access.' : 'The service did not confirm a revoke: the user can remove the access in its own settings too.'}` : ''}`

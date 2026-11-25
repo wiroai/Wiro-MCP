@@ -16,6 +16,8 @@ import {
   customSkillEntries,
   holdsSecretMask,
   isAgentRunning,
+  LIVE_CHANGE_NOTE,
+  LIVE_OR_RESTART_NOTE,
   loadCredentialMeta,
   pausedSkillTitles,
   readUserAgent,
@@ -103,8 +105,8 @@ const outputSchema = {
   connection: connectionSchema.optional(),
   applied: z.number().int().nonnegative().optional()
     .describe('1 when the saved connection changed, 0 when it already held this.'),
-  restart: z.enum(['scheduled', 'none', 'failed']).optional()
-    .describe('scheduled: a running agent restarts to load the connector. none: nothing to load, or the agent is not running. failed: it is saved, but a running agent needs control_agent restart.'),
+  restart: z.enum(['live', 'scheduled', 'none', 'failed']).optional()
+    .describe('live: the running agent got the connector with no restart. scheduled: a running agent restarts to load the connector. none: nothing to load, or the agent is not running. failed: it is saved, but a running agent needs control_agent restart.'),
   message: z.string(),
   nextAction: nextActionSchema.optional(),
 };
@@ -243,14 +245,18 @@ async function agentAfterConnect(
   }
 }
 
-function restartOf(value: unknown): 'scheduled' | 'none' | 'failed' | undefined {
+type Restart = 'live' | 'scheduled' | 'none' | 'failed';
+
+function restartOf(value: unknown): Restart | undefined {
   const restart = asString(value);
-  return restart === 'scheduled' || restart === 'none' || restart === 'failed' ? restart : undefined;
+  return restart === 'live' || restart === 'scheduled' || restart === 'none' || restart === 'failed' ? restart : undefined;
 }
 
-function restartText(restart: 'scheduled' | 'none' | 'failed' | undefined, applied: number): string {
+function restartText(restart: Restart | undefined, applied: number): string {
   if (applied === 0) return 'It already held this, so the agent does not restart.';
   switch (restart) {
+    case 'live':
+      return LIVE_CHANGE_NOTE;
     case 'scheduled':
       return 'A running agent restarts to load it, which takes about a minute.';
     case 'failed':
@@ -620,7 +626,8 @@ async function status(
       const { tasks, running } = await agentAfterConnect(context, polled.value);
       return result('status', context, state, [
         `${connector.title} is connected${connection?.connectedAt ? ` (since ${connection.connectedAt})` : ''}.`,
-        running ? 'The running agent restarts to load it, which takes about a minute.' : '',
+        // The sign-in's own answer went to the browser, so whether it reached the agent live is not known here.
+        running ? LIVE_OR_RESTART_NOTE : '',
         tasks.length > 0 ? `Scheduled tasks that need it run once it is loaded: ${tasks.join(', ')}.` : '',
         unpicked.length > 0 ? `Choose the ${unpicked.map(picker => picker.label).join(' and ')} it may act on with set_agent_connector_accounts.` : '',
       ].filter(Boolean).join(' '), {
@@ -686,8 +693,8 @@ export function registerConnectAgentConnector(server: McpServer, client: WiroCli
         + 'A call with required values missing sends nothing and lists what to ask for, with where each value comes '
         + 'from. action status: whether the sign-in finished (wait_seconds waits for the user). Connecting a connector '
         + 'that is connected now replaces that connection, and a connector that runs with a Wiro project always shows '
-        + 'its project first: both take confirm: true after the user agreed. A running agent restarts to load a new '
-        + 'connection. Where a connector has account choices, such as the advertisers a TikTok Ads sign-in reaches, '
+        + `its project first: both take confirm: true after the user agreed. ${LIVE_OR_RESTART_NOTE} `
+        + 'Where a connector has account choices, such as the advertisers a TikTok Ads sign-in reaches, '
         + 'set_agent_connector_accounts lists and saves the accounts it may act on once it is connected; accounts '
         + 'saves ids the user already knows with this call. disconnect_agent_connector removes a connection. The person '
         + 'who deployed the agent or a team admin of its team can connect. Keys go only in values, never in a message '

@@ -49,6 +49,7 @@ import {
   type SetupNeedMode,
   type SetupResult,
 } from './agent-setup.js';
+import { LIVE_CHANGE_NOTE } from './agent-config.js';
 import { connectionOf, connectorLabel, listConnections, type AgentConnection } from './agent-connectors.js';
 import {
   approvalReplySchema,
@@ -155,7 +156,8 @@ export const agentTurnOutputSchema = {
   workflowList: workflowListResultSchema.optional(),
   setupResult: setupResultSchema.optional()
     .describe('Set when Wiro handled this message itself as the user\'s answer to a setup change the agent proposed: '
-      + 'the ids of the proposals it applied, dismissed or could not apply, and whether the agent restarts.'),
+      + 'the ids of the proposals it applied, dismissed or could not apply, whether the running agent got them with no '
+      + 'restart (live), and whether the agent restarts.'),
   approvalReply: approvalReplySchema.optional()
     .describe('Set when Wiro handled this message itself as the user\'s reply to an approval card (only yes, always or '
       + 'no): the cards it answered and the turn an approval started, or the cards it listed with their numbers. '
@@ -729,6 +731,8 @@ export async function collectTurn(options: CollectTurnOptions): Promise<AgentTur
         notes.push('The agent restarts to load the change, which takes about a minute. Wiro still answers a reply to '
           + 'its setup proposals, such as "yes 2", during the restart; send any other message once the agent is '
           + 'running again.');
+      } else if (result.setupResult?.live) {
+        notes.push(LIVE_CHANGE_NOTE);
       }
     }
 
@@ -952,25 +956,24 @@ function approvalReplyNextAction(target: AgentTarget, result: AgentTurnResult): 
  * connection and is approved with a reply like the other changes. An add and a
  * remove are approved with a reply too; for an add that needs a connector
  * connected with a key, the user gives that key together with their yes, so it
- * is saved as the very next step once the add is applied and the restart the
- * add started loads the key too. Wiro answers such replies whatever the agent's
- * status, restarts included. A connector that connects with a sign-in or a Wiro
- * project is never connected by a reply: its first step is
- * connect_agent_connector, whether its card waits on the agent's reply, at any
- * age, or Wiro's answer to a reply leaves it to connect. One that reads
- * connected already (`connected`, read once by collectTurn) needs no step.
+ * is saved as the very next step once the add is applied. Wiro answers such
+ * replies whatever the agent's status, restarts included. A connector that
+ * connects with a sign-in or a Wiro project is never connected by a reply: its
+ * first step is connect_agent_connector, whether its card waits on the agent's
+ * reply, at any age, or Wiro's answer to a reply leaves it to connect. One that
+ * reads connected already (`connected`, read once by collectTurn) needs no step.
  */
 function setupNextAction(target: AgentTarget, result: AgentTurnResult, connected: ReadonlySet<string>): NextAction | undefined {
   const guid = target.agentGuid;
   if (target.kind !== 'deployed' || !guid || result.message.state !== 'completed') return undefined;
   const keyAsked = result.message.kind === 'setup_result' && asksKeyAsReply(result.message.reply);
   // A connector Wiro's answer leaves to connect that only connect_agent_connector connects. It needs no wait for a
-  // restart: the connect takes effect whenever it is made.
+  // restart: the connect reaches the agent whenever it is made.
   const outside = outsideConnects(result.message).find(item => item.fromAnswer && !connected.has(item.connector));
   const outsideStep = outside ? connectStep(guid, outside.connector, outside.mode) : undefined;
   if (result.setupResult?.restarting) {
-    // The key Wiro asks for next is saved now (the note says how), so it loads with this restart: waiting for the
-    // agent first would restart it a second time.
+    // The key Wiro asks for next is saved now (the note says how): the agent gets it with this restart, or as soon
+    // as it runs.
     if (keyAsked) return undefined;
     if (outsideStep) return outsideStep;
     return {
@@ -1000,13 +1003,12 @@ function setupNextAction(target: AgentTarget, result: AgentTurnResult, connected
   const changes = result.message.setupChanges ?? [];
   const open = changes.filter(change => isApprovableByReply(change));
   if (open.some(change => change.kind !== 'connect')) {
-    // An add that needs a connector's key: the key comes with the user's yes and is saved once the add is applied,
-    // while the agent is still stopping or queued for its restart, which lasts only seconds.
+    // An add that needs a connector's key: the key comes with the user's yes and is saved as soon as the add is
+    // applied.
     const addWithKey = open.some(change => change.kind === 'add' && change.needs?.some(need => need.mode === 'key'));
     const key = addWithKey
       ? ' For a key, use connect_agent_connector instead of a chat message: ask the user for it together with their yes, '
-        + 'and save it as soon as the change that needs its connector is applied, with no wait in between, so one '
-        + 'restart loads both.'
+        + 'and save it as soon as the change that needs its connector is applied.'
       // A sign-in or project card takes no key.
       : open.some(change => change.kind === 'connect' && !connectsWithoutReply(connectCardMode(change, changes)))
         ? ' For a key, use connect_agent_connector instead of a chat message.'

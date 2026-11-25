@@ -63,12 +63,31 @@ export function agentStatusLabel(status: number | null): string {
   return status !== null && AGENT_STATUS_LABELS[status] ? AGENT_STATUS_LABELS[status] : 'unknown';
 }
 
-/** Configuration writes restart an agent only while it is starting or running. */
+/** Whether the agent is starting or running: a configuration write acts on it at once only then. */
 export function isAgentRunning(status: number | null): boolean {
   return status === 3 || status === 4;
 }
 
-export function restartNote(status: number | null, what = 'change'): string {
+/** A change Wiro applied to the running agent with no restart, as its answer says (live: true, or restart "live"). */
+export const LIVE_CHANGE_NOTE = 'The running agent uses it from its next message, with no restart.';
+
+/**
+ * Before a change that can reach a running agent with no restart. Wiro decides when it applies it: most go live, the
+ * few that need a restart (or a live change that cannot finish) restart the agent.
+ */
+export const LIVE_OR_RESTART_NOTE = 'A running agent gets most changes without a restart; a few restart it, which takes about a minute.';
+
+/** Whether Wiro's answer says a running agent got the change with no restart. */
+export function answeredLive(body: { live?: unknown; restart?: unknown }): boolean {
+  return body.live === true || body.restart === 'live';
+}
+
+/**
+ * What a change does to the agent. live: Wiro's answer says the running agent got it with no restart. Otherwise it
+ * goes by the agent's status before the change.
+ */
+export function restartNote(status: number | null, what = 'change', live = false): string {
+  if (live) return LIVE_CHANGE_NOTE;
   switch (status) {
     case 3:
     case 4:
@@ -380,7 +399,7 @@ export interface SkillDiff {
   alreadySet: string[];
 }
 
-/** Only real changes are sent, since a skill change restarts a running agent. */
+/** Only real changes are sent, since a skill change reaches a running agent, live or with a restart. */
 export function diffSkills(requested: Record<string, boolean>, enabledNow: Iterable<string>): SkillDiff {
   const current = new Set(enabledNow);
   const diff: SkillDiff = { changes: {}, enable: [], disable: [], alreadySet: [] };

@@ -647,7 +647,7 @@ test('tool annotations follow the MCP meaning of each hint', async () => {
       const { destructiveHint, idempotentHint } = tools.find(tool => tool.name === name).annotations;
       return [destructiveHint, idempotentHint];
     };
-    // These charge the wallet, stop an agent, replace a connection or restart an agent.
+    // These charge the wallet, stop an agent, replace a connection or change what a running agent does.
     assert.deepEqual(hints('apply_agent_skills'), [true, true]);
     assert.deepEqual(hints('control_agent'), [true, false]);
     assert.deepEqual(hints('connect_agent_connector'), [true, false]);
@@ -663,8 +663,8 @@ test('tool annotations follow the MCP meaning of each hint', async () => {
     // A change can lift or lower a cap or a rule; asking for the same values again changes nothing.
     assert.deepEqual(hints('manage_spend_limit'), [true, true]);
     assert.deepEqual(hints('manage_model_access'), [true, true]);
-    // An approval lets an action run on an outside service, and a permission change restarts the agent; an answered
-    // card is not answered again, and the same permissions set again change nothing.
+    // An approval lets an action run on an outside service, and a permission change reaches the running agent; an
+    // answered card is not answered again, and the same permissions set again change nothing.
     assert.deepEqual(hints('answer_agent_approval'), [true, true]);
     assert.deepEqual(hints('set_agent_connector_permissions'), [true, true]);
     for (const name of ['get_controls', 'check_model_access', 'get_agent_connector_permissions']) {

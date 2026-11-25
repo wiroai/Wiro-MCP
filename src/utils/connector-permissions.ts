@@ -379,9 +379,9 @@ export interface CellMove {
   or?: PermissionValue;
 }
 
-/** Whether an outcome of a move needs a restart: anything but Ask turned into Allow does, and no change does not. */
-function restartsFor(from: PermissionValue, to: PermissionValue): boolean {
-  return to !== from && !(from === 'ask' && to === 'allow');
+/** Whether an outcome of a move turns Ask into Allow or leaves the value as it is. */
+function asksToAllow(from: PermissionValue, to: PermissionValue): boolean {
+  return to === from || (from === 'ask' && to === 'allow');
 }
 
 export interface PermissionPlan {
@@ -389,8 +389,11 @@ export interface PermissionPlan {
   moves: CellMove[];
   /** Whether what is saved changes at all. */
   stored: boolean;
-  /** Whether saving restarts a running agent: anything but Ask turned into Allow does. */
-  restarts: boolean;
+  /**
+   * Whether every move turns Ask into Allow, which the agent picks up the next time it asks. It words Wiro's answer
+   * when nothing was applied to a running agent; it does not say whether a save restarts one: Wiro decides that.
+   */
+  askToAllowOnly: boolean;
   /** Actions that become blocked in both columns, so the agent stops seeing them, and ones it sees again. */
   hides: string[];
   shows: string[];
@@ -430,8 +433,8 @@ export function planChanges(view: PermissionView, changes: PermissionChanges): P
   return {
     moves,
     stored: stableJson(before) !== stableJson(after),
-    // A move restarts unless each of its outcomes turns Ask into Allow or leaves the value as it is.
-    restarts: moves.some(move => restartsFor(move.from, move.to) || (move.or !== undefined && restartsFor(move.from, move.or))),
+    // Each outcome of each move turns Ask into Allow or leaves the value as it is.
+    askToAllowOnly: moves.every(move => asksToAllow(move.from, move.to) && (move.or === undefined || asksToAllow(move.from, move.or))),
     hides,
     shows,
   };

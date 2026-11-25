@@ -21,6 +21,7 @@ import {
   toAgentConnections,
   type CatalogConnector,
 } from '../utils/agent-connectors.js';
+import { LIVE_OR_RESTART_NOTE } from '../utils/agent-config.js';
 import { jsonSpan, quotedSpan } from '../utils/quoted-text.js';
 import { nextActionSchema, strictInput } from './schemas.js';
 
@@ -48,7 +49,8 @@ const outputSchema = {
     .describe('set: the accounts saved for each account choice, by id.'),
   applied: z.number().int().nonnegative().optional()
     .describe('set: 1 when the choice changed, 0 when it was already this.'),
-  restart: z.enum(['scheduled', 'none', 'failed']).optional(),
+  restart: z.enum(['live', 'scheduled', 'none', 'failed']).optional()
+    .describe('set: live (the running agent got the accounts with no restart), scheduled (it restarts to load them), none (nothing to load, or the agent is not running) or failed.'),
   connection: connectionSchema.optional(),
   message: z.string(),
   nextAction: nextActionSchema.optional(),
@@ -56,6 +58,20 @@ const outputSchema = {
 
 type PickersBody = ApiEnvelope & { pickers?: unknown };
 type SetBody = ApiEnvelope & { accounts?: unknown; applied?: unknown; restart?: unknown; useragentconnectors?: unknown };
+
+/** What Wiro's answer to a save says about the running agent, as a sentence that follows another, or empty. */
+function savedRestartText(restart: 'live' | 'scheduled' | 'none' | 'failed' | undefined): string {
+  switch (restart) {
+    case 'live':
+      return ' The running agent uses them from its next message, with no restart.';
+    case 'scheduled':
+      return ' The running agent restarts to load them, which takes about a minute.';
+    case 'failed':
+      return ' The running agent could not be restarted: control_agent with action restart loads them.';
+    default:
+      return '';
+  }
+}
 
 // Wiro's answer when the service refused the connection's sign-in while listing its accounts, or the connection
 // already needs a new sign-in: it expired or was revoked. Wiro words it for the agent's chat, which asks its operator;
@@ -178,7 +194,7 @@ export function registerSetAgentConnectorAccounts(server: McpServer, client: Wir
         + 'names them, and the ones chosen, and changes nothing. Then call it with accounts, {choice key: [ids]}, to '
         + 'save the ones the user picked: only ids from that list are taken, a single choice takes one id, and a choice '
         + 'left out keeps what it had. The agent then acts only on the chosen accounts. Saving acts on the first call, '
-        + 'so get the user\'s yes first; a running agent restarts when the choice changes. list_agent_connectors shows '
+        + `so get the user's yes first. ${LIVE_OR_RESTART_NOTE} list_agent_connectors shows `
         + 'which connectors have account choices. The person who deployed the agent or a team admin of its team can '
         + 'choose.',
       inputSchema: strictInput({
@@ -250,7 +266,7 @@ export function registerSetAgentConnectorAccounts(server: McpServer, client: Wir
         const saved = toAccounts(body.accounts);
         const applied = toInteger(body.applied, 1);
         const restartValue = asString(body.restart);
-        const restart = restartValue === 'scheduled' || restartValue === 'none' || restartValue === 'failed' ? restartValue : undefined;
+        const restart = restartValue === 'live' || restartValue === 'scheduled' || restartValue === 'none' || restartValue === 'failed' ? restartValue : undefined;
         const connection = toAgentConnections(body.useragentconnectors)[0];
         const chosen = connector.accountPickers
           .filter(picker => saved[picker.key])
@@ -258,7 +274,7 @@ export function registerSetAgentConnectorAccounts(server: McpServer, client: Wir
           .join(', ');
         const message = applied === 0
           ? `The ${connector.title} accounts were already this (${chosen}), so nothing changed and the agent does not restart.`
-          : `Saved the ${connector.title} accounts (${chosen}). The agent acts only on these.${restart === 'scheduled' ? ' The running agent restarts to load them, which takes about a minute.' : restart === 'failed' ? ' The running agent could not be restarted: control_agent with action restart loads them.' : ''}`;
+          : `Saved the ${connector.title} accounts (${chosen}). The agent acts only on these.${savedRestartText(restart)}`;
         return {
           content: [{ type: 'text' as const, text: `## ${connector.title}: accounts ${applied === 0 ? 'unchanged' : 'saved'}\n\n${message}` }],
           structuredContent: {

@@ -655,8 +655,7 @@ test('the playbooks name the three plans and say skills do not change the price'
 
 // Wiro answers a reply to an agent's setup proposals itself, at any status. A key is never typed in the chat:
 // the user gives it together with their yes to the add that needs it, and it is saved as the very next step
-// once the add is applied, so the add's restart loads it too. Studio and the Workflow Agent are shared, so they
-// take no setup changes.
+// once the add is applied. Studio and the Workflow Agent are shared, so they take no setup changes.
 test('the playbooks and send_agent_message say how setup replies, keys and the house agents work', async () => {
   const { agents, studio } = PLAYBOOKS;
   assert.match(agents, /The agent never applies its own proposal and never sees a key: nothing changes until the user approves it\./);
@@ -694,7 +693,7 @@ test('the playbooks and send_agent_message say how setup replies, keys and the h
     assert.match(send, /Studio and the Workflow Agent never do\./);
     assert.match(send, /Wiro answers it without an agent turn, whatever the agent's status, also while it restarts\./);
     assert.match(send, /Their "no" turns the proposals down\./);
-    assert.match(send, /A key is saved with connect_agent_connector, never sent in a message, even when the agent or Wiro asks for it as a reply\. For an add that needs a connector's key, ask the user for that key together with their yes, and save it as soon as the add is applied, with no wait in between, so the restart the add started loads it too\./);
+    assert.match(send, /A key is saved with connect_agent_connector, never sent in a message, even when the agent or Wiro asks for it as a reply\. For an add that needs a connector's key, ask the user for that key together with their yes, and save it as soon as the add is applied\./);
     assert.match(send, /\(setupChanges: connect or disconnect a Connector, add or remove a Skill, a scheduled task, a custom skill or its time zone\)/);
     // Wiro proposes no chat channel and no connector as a Skill, and the tools that show proposals say so.
     const message = tools.find(tool => tool.name === 'get_agent_message').description;

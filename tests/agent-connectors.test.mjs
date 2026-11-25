@@ -374,6 +374,32 @@ test('connect_agent_connector lists what is missing and sends nothing, then conn
   });
 });
 
+test('connect_agent_connector and set_agent_connector_accounts say when the running agent got the change with no restart', async () => {
+  const fake = fakeClient(routes({
+    '/UserAgent/ConnectorConnect': { result: true, errors: [], status: 'connected', applied: 1, restart: 'live', useragentconnectors: [connection(SERPER, { savedvariables: ['apikey'] })] },
+    '/UserAgent/ConnectorSetAccounts': body => ({ result: true, errors: [], accounts: body.accounts, applied: 1, restart: 'live', useragentconnectors: [connection(FACEBOOK, { accounts: body.accounts })] }),
+  }));
+  await withClient(fake, async client => {
+    const connected = await call(client, 'connect_agent_connector', { agent_guid: AGENT, connector: 'serper', values: { apikey: KEY } });
+    assert.notEqual(connected.isError, true, text(connected));
+    assert.equal(connected.structuredContent.restart, 'live');
+    assert.match(connected.structuredContent.message, /^Serper is connected\. The running agent uses it from its next message, with no restart\. /);
+
+    const saved = await call(client, 'set_agent_connector_accounts', { agent_guid: AGENT, connector: 'facebook-pages', accounts: { pages: ['123'] } });
+    assert.notEqual(saved.isError, true, text(saved));
+    assert.equal(saved.structuredContent.restart, 'live');
+    assert.equal(saved.structuredContent.message, 'Saved the Facebook Pages accounts (Facebook Pages: 1 chosen). The agent acts only on these. The running agent uses them from its next message, with no restart.');
+  });
+  await withClient(fakeClient(routes()), async client => {
+    const { tools } = await client.listTools();
+    for (const name of ['connect_agent_connector', 'disconnect_agent_connector', 'set_agent_connector_accounts']) {
+      const description = tools.find(tool => tool.name === name).description;
+      assert.match(description, /A running agent gets most changes without a restart; a few restart it, which takes about a minute\./, name);
+      assert.doesNotMatch(description, /a running agent restarts (to load a new connection|when)/i, name);
+    }
+  });
+});
+
 test('connect_agent_connector refuses unknown values, a masked secret, a mode or a project the connector does not take', async () => {
   const fake = fakeClient(routes());
   await withClient(fake, async client => {
@@ -456,7 +482,8 @@ test('connect_agent_connector starts a sign-in that the user opens, and status w
 
     const done = await call(client, 'connect_agent_connector', { action: 'status', agent_guid: AGENT, connector: 'tiktok-ads', since_connected_at: '' });
     assert.equal(done.structuredContent.state, 'connected');
-    assert.match(done.structuredContent.message, /^TikTok Ads is connected \(since .+\)\. The running agent restarts to load it, which takes about a minute\. Choose the Advertisers it may act on with set_agent_connector_accounts\.$/);
+    // The sign-in's answer went to the user's browser, so whether it reached the agent live is not known here.
+    assert.match(done.structuredContent.message, /^TikTok Ads is connected \(since .+\)\. A running agent gets most changes without a restart; a few restart it, which takes about a minute\. Choose the Advertisers it may act on with set_agent_connector_accounts\.$/);
   });
 });
 
@@ -1043,7 +1070,7 @@ test('disconnect_agent_connector says what goes and what stops, and disconnects 
     const preview = await call(client, 'disconnect_agent_connector', { agent_guid: AGENT, connector: 'serper' });
     assert.notEqual(preview.isError, true, text(preview));
     assert.equal(preview.structuredContent.disconnected, false);
-    assert.equal(preview.structuredContent.willClear, 'The Serper connection is removed: its saved values and its account choices. The agent loses the Serper tools, and these scheduled tasks stop running until it is connected again: Weekly Search (`cs-cron-weekly-search`). A running agent restarts. Connecting it again needs connect_agent_connector and the values again.');
+    assert.equal(preview.structuredContent.willClear, 'The Serper connection is removed: its saved values and its account choices. The agent loses the Serper tools, and these scheduled tasks stop running until it is connected again: Weekly Search (`cs-cron-weekly-search`). A running agent gets most changes without a restart; a few restart it, which takes about a minute. Connecting it again needs connect_agent_connector and the values again.');
     assert.deepEqual(preview.structuredContent.nextAction.arguments, { agent_guid: AGENT, connector: 'serper', confirm: true });
     assert.equal(fake.paths().includes('/UserAgent/ConnectorDisconnect'), false);
 
@@ -1090,8 +1117,14 @@ test('disconnect_agent_connector words the restart as Wiro answers it, and promi
 
   const scheduled = await disconnect(connection(SERPER), 'scheduled');
   assert.match(scheduled.done.message, /^Serper is disconnected\. .*The running agent restarts without it, which takes about a minute\. Connecting it again/);
-  assert.doesNotMatch(scheduled.done.message, /A running agent restarts\./);
+  assert.doesNotMatch(scheduled.done.message, /A running agent gets most changes/);
   assert.equal(scheduled.done.willClear, scheduled.done.message.replace(/^Serper is disconnected\. /, ''));
+
+  // Wiro removed the connector from the running agent with no restart.
+  const live = await disconnect(connection(SERPER), 'live');
+  assert.match(live.done.message, /^Serper is disconnected\. .*The running agent no longer uses it from its next message, with no restart\. Connecting it again/);
+  assert.equal(live.done.restart, 'live');
+  assert.doesNotMatch(live.done.message, /restarts without it|A running agent gets most changes/);
 
   const stopped = await disconnect(connection(SERPER), 'none');
   assert.match(stopped.done.message, /The agent is not running, so nothing restarts; it starts without the connector\./);
@@ -1104,7 +1137,7 @@ test('disconnect_agent_connector words the restart as Wiro answers it, and promi
   const expired = await disconnect(connection(TIKTOK_ADS, { status: 'reauth' }), 'none');
   assert.equal(expired.preview.willClear, 'The TikTok Ads connection is removed: its saved values, its sign-in and its account choices. The service is asked to revoke the access where it supports that. Connecting it again needs connect_agent_connector and a new sign-in.');
   assert.match(expired.done.message, /It was not connected, so the agent does not restart\./);
-  for (const out of [expired.preview, expired.done]) assert.doesNotMatch(out.message, /A running agent restarts|restarts without it|loses the TikTok Ads tools/);
+  for (const out of [expired.preview, expired.done]) assert.doesNotMatch(out.message, /A running agent (gets|restarts)|restarts without it|loses the TikTok Ads tools/);
 });
 
 // The wiro connector saves no values of its own: it runs with the agent's Wiro project, which a disconnect leaves bound.
@@ -1112,7 +1145,7 @@ test('disconnect_agent_connector says the agent keeps its Wiro project when the 
   const fake = fakeClient(routes({ '/UserAgent/ConnectorList': { result: true, errors: [], useragentconnectors: [connection(WIRO, { wiroprojectid: '111' })] } }));
   await withClient(fake, async client => {
     const preview = await call(client, 'disconnect_agent_connector', { agent_guid: AGENT, connector: 'wiro' });
-    assert.equal(preview.structuredContent.willClear, 'The Wiro connection is removed. The agent keeps its Wiro project, which its video and voice skills use. The agent loses the Wiro tools. A running agent restarts. Connecting it again needs connect_agent_connector with a Wiro project.');
+    assert.equal(preview.structuredContent.willClear, 'The Wiro connection is removed. The agent keeps its Wiro project, which its video and voice skills use. The agent loses the Wiro tools. A running agent gets most changes without a restart; a few restart it, which takes about a minute. Connecting it again needs connect_agent_connector with a Wiro project.');
     assert.doesNotMatch(preview.structuredContent.willClear, /saved values|the values again/);
   });
 });
@@ -1128,7 +1161,7 @@ test('disconnect_agent_connector words a wiro connection on an agent with no pro
   await withClient(fake, async client => {
     const preview = await call(client, 'disconnect_agent_connector', { agent_guid: AGENT, connector: 'wiro' });
     assert.notEqual(preview.isError, true, text(preview));
-    assert.equal(preview.structuredContent.willClear, 'The Wiro connection is removed. The agent has no Wiro project now, so the connector gives it nothing. A running agent restarts. Connecting it again needs connect_agent_connector with a Wiro project.');
+    assert.equal(preview.structuredContent.willClear, 'The Wiro connection is removed. The agent has no Wiro project now, so the connector gives it nothing. A running agent gets most changes without a restart; a few restart it, which takes about a minute. Connecting it again needs connect_agent_connector with a Wiro project.');
     assert.doesNotMatch(preview.structuredContent.willClear, /saved values|the values again|loses the Wiro tools/);
     assert.equal(preview.structuredContent.connection.way, 'project');
     assert.deepEqual(fake.called('/AgentConnector/Detail').map(item => item.body), [{ slug: 'wiro' }]);
@@ -1145,7 +1178,7 @@ test('disconnect_agent_connector words a wiro connection on an agent with no pro
   }));
   await withClient(tasks, async client => {
     const preview = await call(client, 'disconnect_agent_connector', { agent_guid: AGENT, connector: 'wiro' });
-    assert.match(preview.structuredContent.willClear, /so the connector gives it nothing\. These scheduled tasks stop running until it is connected again: Weekly Images \(`cs-cron-weekly-images`\)\. A running agent restarts\./);
+    assert.match(preview.structuredContent.willClear, /so the connector gives it nothing\. These scheduled tasks stop running until it is connected again: Weekly Images \(`cs-cron-weekly-images`\)\. A running agent gets most changes without a restart; a few restart it, which takes about a minute\./);
   });
 
   // A key connector with saved values needs no catalog read.

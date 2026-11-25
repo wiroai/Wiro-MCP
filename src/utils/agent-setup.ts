@@ -41,9 +41,8 @@ import {
 // whose connector takes a key comes with that connector's connect card on the
 // same reply. From here the user gives that key together with their yes, before
 // the yes that applies the add is sent, and it is saved with
-// connect_agent_connector as the very next step: the agent stays stopping or
-// queued for the restart the add started only for seconds, and a key saved then
-// loads with that same restart. One that connects with a sign-in or a Wiro
+// connect_agent_connector as the very next step, so the agent gets the
+// connector as soon as it has the add. One that connects with a sign-in or a Wiro
 // project comes with its connect card too, but a reply never connects it:
 // connect_agent_connector returns its sign-in link or binds its project, or the
 // user connects it on the agent page, once the add is applied. Wiro's answer to
@@ -177,6 +176,7 @@ export const setupResultSchema = z.object({
   dismissed: z.array(z.string()),
   failed: z.array(z.object({ id: z.string(), error: z.string().optional() })),
   restarting: z.boolean(),
+  live: z.boolean().describe('true when the running agent got the applied changes with no restart.'),
 });
 
 export type SetupResult = z.infer<typeof setupResultSchema>;
@@ -338,6 +338,7 @@ export function toSetupResult(value: unknown): SetupResult | undefined {
     dismissed: ids(value.dismissed),
     failed,
     restarting: value.restarting === true,
+    live: value.live === true,
   };
 }
 
@@ -383,14 +384,13 @@ export function asksKeyAsReply(answer: string | undefined): boolean {
 
 /** What to do when Wiro's answer asks for a key as the next reply, said the same way by the note and the Next line. */
 export const SETUP_KEY_RULE = 'Never send a key in a chat message: save it right away with connect_agent_connector, '
-  + 'for the connector the agent\'s proposal names. Saved while the agent is still stopping or queued for its restart, '
-  + 'the key loads with that same restart; saved once the agent is starting again, it restarts the agent a second time.';
+  + 'for the connector the agent\'s proposal names.';
 
 /** The same for a listing that offers to take the key in place of the yes. */
 export const SETUP_LISTING_KEY_RULE = 'The listing offers to take a key as the reply. Never send a key in a chat '
   + 'message: ask the user for the key together with their yes, before you send that yes. Then send "yes" to apply '
   + 'the change and save the key as the very next step, with connect_agent_connector for the connector the proposal '
-  + 'names, so it loads with the same restart; a key saved later restarts the agent again.';
+  + 'names.';
 
 /** Whether a pending proposal can still be approved with a typed reply. */
 export function isApprovableByReply(change: SetupChange, nowMs = Date.now()): boolean {
@@ -459,7 +459,7 @@ function showsBeforeAndAfter(change: SetupChange): boolean {
 // How each connector an add needs is connected once the add is applied.
 const NEED_HOW: Record<SetupNeedMode, string> = {
   key: 'its key. Ask the user for it together with their yes to this change, and save it with connect_agent_connector '
-    + 'as soon as this change is applied (one restart then loads both), never in a chat message',
+    + 'as soon as this change is applied, never in a chat message',
   signin: 'a sign-in: connect_agent_connector returns the link for the user to open in their own browser, or the user '
     + 'signs in on the agent page. Keys of the user\'s own app go in with that call, never in a chat message',
   project: 'a Wiro project: connect_agent_connector binds it to the agent (the project of this connection, or one from '
@@ -576,7 +576,7 @@ function connectCardLine(change: SetupChange, pending: readonly SetupChange[], c
     return mode === 'key'
       ? `- Connects what proposed change ${paired.number} needs. Ask the user for the key together with their yes to `
         + `change ${paired.number}. Once change ${paired.number} is applied, save the key with connect_agent_connector at once, `
-        + 'never in a chat message: one restart then loads both.'
+        + 'never in a chat message.'
       : `- Connects what proposed change ${paired.number} needs, once it is applied: ${NEED_HOW[mode]}. A reply does not connect it.`;
   }
   const applied = appliedPairedAdd(change, changes);

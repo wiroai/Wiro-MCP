@@ -3478,7 +3478,7 @@ test('send_agent_message shows a reply Wiro answered itself as finished, without
       assert.equal(output.message.kind, 'setup_result');
       assert.equal(output.message.state, 'completed');
       assert.match(output.message.reply, /Applied: Create the scheduled task Weekly digest/);
-      assert.deepEqual(output.setupResult, { applied: ['aaaaaaaaaaa1'], dismissed: [], failed: [], restarting: true });
+      assert.deepEqual(output.setupResult, { applied: ['aaaaaaaaaaa1'], dismissed: [], failed: [], restarting: true, live: false });
       assert.ok(output.notes.some(note => /Wiro answered this message itself/.test(note)));
       // Wiro still answers a reply to the other proposals while the agent restarts; other messages wait.
       assert.ok(output.notes.includes('The agent restarts to load the change, which takes about a minute. Wiro still '
@@ -3606,7 +3606,7 @@ test('send_agent_message shows Wiro\'s listing for a first yes and asks for the 
     assert.equal(output.message.kind, 'setup_result');
     assert.equal(output.message.listedSetupChanges, 1);
     assert.equal(output.message.reply, LISTING_ONE);
-    assert.deepEqual(output.setupResult, { applied: [], dismissed: [], failed: [], restarting: false });
+    assert.deepEqual(output.setupResult, { applied: [], dismissed: [], failed: [], restarting: false, live: false });
     assert.ok(output.notes.some(note => /^Nothing is applied yet\. A "yes" sent with an API key, such as from this server, first gets Wiro's own listing of the exact change/.test(note)));
     assert.equal(output.notes.some(note => /^Nothing was applied\./.test(note)), false);
     assert.deepEqual(output.nextAction, {
@@ -3778,7 +3778,7 @@ test('a disconnect is listed and then applied by a second yes, with no key', asy
 
     const second = await send();
     assert.notEqual(second.isError, true, textOf(second));
-    assert.deepEqual(second.structuredContent.setupResult, { applied: ['iiiiiiiiii09'], dismissed: [], failed: [], restarting: true });
+    assert.deepEqual(second.structuredContent.setupResult, { applied: ['iiiiiiiiii09'], dismissed: [], failed: [], restarting: true, live: false });
     assert.match(second.structuredContent.message.reply, /^✅ Applied: Serper disconnected\./);
     assert.equal(second.structuredContent.nextAction.tool, 'get_my_agent');
   });
@@ -4039,21 +4039,22 @@ test('get_agent_message shows an add with what it also turns on, the tasks that 
     '- Also turns on: `util-image-resize`, `util-media-library`',
     '- Scheduled tasks that run again: `cs-cron-weekly-post`',
     '- Still to connect once it is on:',
-    '  - `WordPress` (`wordpress`): its key. Ask the user for it together with their yes to this change, and save it with connect_agent_connector as soon as this change is applied (one restart then loads both), never in a chat message',
+    '  - `WordPress` (`wordpress`): its key. Ask the user for it together with their yes to this change, and save it with connect_agent_connector as soon as this change is applied, never in a chat message',
     '  - `Instagram` (`instagram`): a sign-in: connect_agent_connector returns the link for the user to open in their own browser, or the user signs in on the agent page. Keys of the user\'s own app go in with that call, never in a chat message',
     '- Note from the agent: `You asked to publish posts`',
     '- Proposed at: ',
   ].join('\n')), text);
   // The connect card Wiro pairs with the add: its key comes with the user's yes and is saved once the add is applied,
   // never typed in the chat.
-  assert.match(text, /#### Proposed change 2: Connect `wordpress`\n\n- Connects what proposed change 1 needs\. Ask the user for the key together with their yes to change 1\. Once change 1 is applied, save the key with connect_agent_connector at once, never in a chat message: one restart then loads both\.\n/);
+  assert.match(text, /#### Proposed change 2: Connect `wordpress`\n\n- Connects what proposed change 1 needs\. Ask the user for the key together with their yes to change 1\. Once change 1 is applied, save the key with connect_agent_connector at once, never in a chat message\.\n/);
+  assert.doesNotMatch(text, /one restart then loads both/);
   assert.doesNotMatch(text, /The user provides its values or signs in/);
-  // Approved with a reply like the other changes. The restart the add starts leaves only seconds to save the key
-  // with it, so the key is asked for together with the yes, not after it.
+  // Approved with a reply like the other changes. The key is asked for together with the yes, so it is saved as soon
+  // as the add is applied.
   assert.equal(nextAction.tool, 'send_agent_message');
   assert.deepEqual(nextAction.arguments, YES_STEP);
   assert.match(nextAction.reason, /^The agent proposes a setup change\. Show it to the user and ask; never send yes on your own\./);
-  const addKey = / For a key, use connect_agent_connector instead of a chat message: ask the user for it together with their yes, and save it as soon as the change that needs its connector is applied, with no wait in between, so one restart loads both\. /;
+  const addKey = / For a key, use connect_agent_connector instead of a chat message: ask the user for it together with their yes, and save it as soon as the change that needs its connector is applied\. /;
   assert.match(nextAction.reason, addKey);
 
   // An add whose connector takes a key says so even without its connect card; one without a key does not.
@@ -4659,7 +4660,7 @@ test('an add is listed and then applied by a second yes, with Wiro\'s own lines 
 
     const second = await send();
     assert.notEqual(second.isError, true, textOf(second));
-    assert.deepEqual(second.structuredContent.setupResult, { applied: ['zzzzzzzzzz31'], dismissed: [], failed: [], restarting: true });
+    assert.deepEqual(second.structuredContent.setupResult, { applied: ['zzzzzzzzzz31'], dismissed: [], failed: [], restarting: true, live: false });
     assert.match(second.structuredContent.message.reply, /^✅ Applied: WordPress Post added/);
     assert.equal(second.structuredContent.nextAction.tool, 'get_my_agent');
   });
@@ -4667,30 +4668,32 @@ test('an add is listed and then applied by a second yes, with Wiro\'s own lines 
 
 // Wiro words its answer to a setup reply for a person typing in the chat, who may paste a key as the reply.
 // From here the user gives the key together with their yes, and it goes in with connect_agent_connector as the very
-// next step once the add is applied, so the restart the add started loads it too. A proposal never names a chat
-// channel, so no key it asks for goes to set_agent_credentials.
+// next step once the add is applied: the agent gets it live, or with the restart the add started. A proposal never
+// names a chat channel, so no key it asks for goes to set_agent_credentials.
 
 const KEY_RULE = 'Never send a key in a chat message: save it right away with connect_agent_connector, for the '
-  + 'connector the agent\'s proposal names. Saved while the agent is still stopping or queued for its restart, the key '
-  + 'loads with that same restart; saved once the agent is starting again, it restarts the agent a second time.';
+  + 'connector the agent\'s proposal names.';
 const LISTING_KEY_RULE = 'The listing offers to take a key as the reply. Never send a key in a chat message: ask the '
   + 'user for the key together with their yes, before you send that yes. Then send "yes" to apply the change and save '
-  + 'the key as the very next step, with connect_agent_connector for the connector the proposal names, so it loads with '
-  + 'the same restart; a key saved later restarts the agent again.';
+  + 'the key as the very next step, with connect_agent_connector for the connector the proposal names.';
+const LIVE_NOTE = 'The running agent uses it from its next message, with no restart.';
 
 test('a yes that applies an add and leaves its key to give asks for connect_agent_connector now, never a chat message or a wait', async () => {
-  for (const [response, restarting] of [
+  for (const [response, restarting, live] of [
     ['✅ Applied: WordPress Post added.\nYour agent is restarting to load the change.\n'
-      + 'Next: paste your WordPress key as your reply. Send it now and it loads with this same restart.', true],
+      + 'Next: paste your WordPress key as your reply. Send it now and it loads with this same restart.', true, false],
+    // The running agent got the add with no restart: the key is saved the same way, and reaches it live too.
+    ['✅ Applied: WordPress Post added.\nYour agent uses the change from its next message.\n'
+      + 'Next: paste your WordPress key as your reply.', false, true],
     // A stopped agent loads the key at its next start: the same step, with no restart to catch.
-    ['✅ Applied: WordPress Post added.\nNext: paste your WordPress key as your reply.', false],
+    ['✅ Applied: WordPress Post added.\nNext: paste your WordPress key as your reply.', false, false],
   ]) {
     const fake = fakeClient({
       '/UserAgent/Message/Send': {
         ...LISTING_SEND,
         messageguid: 'msg-yes',
         response,
-        setupresult: { applied: ['zzzzzzzzzz31'], dismissed: [], failed: [], restarting },
+        setupresult: { applied: ['zzzzzzzzzz31'], dismissed: [], failed: [], restarting, live },
       },
     });
     await withClient(fake, async client => {
@@ -4703,7 +4706,9 @@ test('a yes that applies an add and leaves its key to give asks for connect_agen
       assert.equal(output.message.kind, 'setup_result');
       assert.ok(output.notes.includes(`Wiro's answer asks for a key as the next reply. ${KEY_RULE}`), output.notes.join('|'));
       assert.equal(output.notes.some(note => /^The agent restarts to load the change/.test(note)), restarting);
-      // Waiting for the restart before the key is saved would restart the agent a second time.
+      assert.equal(output.notes.includes(LIVE_NOTE), live);
+      assert.equal(output.setupResult.live, live);
+      // The key is saved now, with no wait for the agent first.
       assert.equal(output.nextAction, undefined);
       assert.doesNotMatch(textOf(result), /\*\*Next:\*\* `/);
     });

@@ -597,14 +597,15 @@ test('set_agent_connector_permissions shows what changes for the agent and saves
       { action: 'Create a page', name: 'create_page', column: 'chat', from: 'ask', to: 'allow' },
       { action: 'Delete a post', name: 'delete_post', column: 'chat', from: 'ask', to: 'block' },
     ]);
-    assert.equal(output.restarts, true);
+    // The summary predicts no restart: Wiro decides at the save whether a running agent gets the change live.
+    assert.equal(output.restarts, undefined);
     assert.deepEqual(output.hides, ['Delete a post']);
     assert.equal(fake.callsTo('/UserAgent/ConnectorSetPermissions').length, 0);
     const text = textOf(summary);
     assert.match(text, /- Create and send \(group\): Chat Allow\. Its actions' own settings in this column are cleared\./);
     assert.match(text, /- Chat: Ask to Allow for 2 actions \(Create a post, Create a page\)\./);
     assert.match(text, /- Blocked in Chat and Autopilot, so the agent stops seeing them: Delete a post\./);
-    assert.match(text, /\*\*Restart:\*\* Saving restarts a running agent/);
+    assert.match(text, /\*\*Restart:\*\* A running agent gets most changes without a restart; a few restart it, which takes about a minute\./);
     assert.match(text, /\*\*Note:\*\* Allow lets those actions run without anyone approving them\./);
 
     // A confirm without the summary's id, or with another one, saves nothing.
@@ -632,8 +633,9 @@ test('set_agent_connector_permissions shows what changes for the agent and saves
   });
 });
 
-test('set_agent_connector_permissions needs no restart for Ask to Allow, and says what Wiro did', async () => {
+test('set_agent_connector_permissions says from Wiro\'s answer whether the running agent got the change live', async () => {
   for (const [restart, expected] of [
+    ['live', 'They apply to the agent\'s next action, with no restart.'],
     ['none', 'No restart was needed: every change turns Ask into Allow, which the agent picks up the next time it asks.'],
     ['failed', 'The agent could not restart, so the change applies at its next start: control_agent with action restart loads it now.'],
   ]) {
@@ -643,10 +645,11 @@ test('set_agent_connector_permissions needs no restart for Ask to Allow, and say
     });
     await withClient(fake, async (client) => {
       const summary = await call(client, 'set_agent_connector_permissions', { agent_guid: AGENT, connector: 'wordpress', tools: { create_page: { chat: 'allow' } } });
-      assert.equal(summary.structuredContent.restarts, false);
-      assert.match(textOf(summary), /Saving needs no restart: every change turns Ask into Allow/);
+      // Even Ask to Allow is not promised to skip a restart: a live change that cannot finish restarts the agent.
+      assert.match(textOf(summary), /A running agent gets most changes without a restart; a few restart it, which takes about a minute\./);
       const saved = await call(client, 'set_agent_connector_permissions', summary.structuredContent.nextAction.arguments);
       assert.equal(saved.structuredContent.message, `Saved the WordPress permissions. ${expected}`);
+      assert.equal(saved.structuredContent.restart, restart);
     });
   }
   const unchanged = fakeClient({
@@ -707,18 +710,18 @@ test('a change is worked out the way Wiro applies it', () => {
     ['create_post', 'autopilot', 'allow', 'block'],
     ['create_page', 'autopilot', 'ask', 'block'],
   ]);
-  assert.equal(group.restarts, true);
+  assert.equal(group.askToAllowOnly, false);
   // Actions not listed at all follow Change and delete.
   const unlisted = planChanges(toPermissionView(VIEW), { categories: { change: { chat: 'allow' } } });
   assert.deepEqual(unlisted.moves.map(move => [move.action, move.column, move.from, move.to]), [
     ['Delete a post', 'chat', 'ask', 'allow'],
     [null, 'chat', 'ask', 'allow'],
   ]);
-  assert.equal(unlisted.restarts, false, 'Ask to Allow alone needs no restart');
+  assert.equal(unlisted.askToAllowOnly, true, 'every change turns Ask into Allow');
   const removed = planChanges(view, { tools: { new_tool: { chat: null } } });
   assert.deepEqual(removed.moves.map(move => [move.name, move.column, move.from, move.to]), [['new_tool', 'chat', 'allow', 'ask']]);
   assert.deepEqual(removed.hides, []);
-  assert.equal(removed.restarts, true);
+  assert.equal(removed.askToAllowOnly, false);
   const tightened = planChanges(view, { tools: { get_post: { chat: 'block', autopilot: 'block' } } });
   assert.deepEqual(tightened.hides, ['Get a post']);
   assert.equal(planChanges(view, { tools: { get_post: { chat: null } } }).stored, false);
@@ -750,7 +753,7 @@ test('an action not listed yet whose own setting goes reads Wiro\'s default for 
   const allowed = withChange('allow', [unlistedTool('new_tool', 'block', 'ask')]);
   const ambiguous = planChanges(toPermissionView(allowed), { tools: { new_tool: { chat: null } } });
   assert.deepEqual(ambiguous.moves, [{ action: 'new_tool', name: 'new_tool', column: 'chat', from: 'block', to: 'allow', or: 'ask' }]);
-  assert.equal(ambiguous.restarts, true, 'Block to Allow or Ask restarts either way');
+  assert.equal(ambiguous.askToAllowOnly, false, 'Block to Allow or Ask is not Ask to Allow either way');
   // It is blocked in both columns now, and neither outcome blocks it in Chat.
   assert.deepEqual([ambiguous.hides, ambiguous.shows], [[], ['new_tool']]);
   assert.deepEqual(moveLines(ambiguous.moves), [
@@ -766,7 +769,7 @@ test('an action not listed yet whose own setting goes reads Wiro\'s default for 
   const blocking = withChange('block', [unlistedTool('new_tool', 'allow', 'ask'), unlistedTool('old_tool', 'ask', 'allow')]);
   const certain = planChanges(toPermissionView(blocking), { tools: { old_tool: { chat: null } } });
   assert.deepEqual(certain.moves, [{ action: 'old_tool', name: 'old_tool', column: 'chat', from: 'ask', to: 'allow' }]);
-  assert.equal(certain.restarts, false);
+  assert.equal(certain.askToAllowOnly, true);
 
   // An action counts as hidden only when both outcomes hide it: here only Change and delete's Block would.
   const either = planChanges(toPermissionView(blocking), { tools: { new_tool: { chat: null } } });
@@ -1217,7 +1220,7 @@ test('a yes with a setup card and an approval card waiting gets one listing of b
     setupresult: { applied: [], dismissed: [], failed: [], restarting: false },
   }), 'yes', { '/UserAgent/Message/Detail': () => { throw new Error('no read'); } });
   assert.notEqual(result.isError, true, textOf(result));
-  assert.deepEqual(output.setupResult, { applied: [], dismissed: [], failed: [], restarting: false });
+  assert.deepEqual(output.setupResult, { applied: [], dismissed: [], failed: [], restarting: false, live: false });
   assert.deepEqual(output.nextAction.arguments, { agent: AGENT, session: 'default', message: 'yes 2' });
   assert.ok(output.notes.includes(APPROVAL_LISTING_NOTE));
   assert.equal(output.notes.some(note => /^Nothing was applied\./.test(note)), false);

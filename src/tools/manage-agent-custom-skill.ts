@@ -13,7 +13,9 @@ import {
 import {
   APPROVAL_POLICY_KEY,
   DEFAULT_CRON_INTERVAL,
+  LIVE_OR_RESTART_NOTE,
   agentStatusOf,
+  answeredLive,
   connectionNeededText,
   customSkillEntries,
   customSkillErrorMessage,
@@ -103,7 +105,9 @@ const outputSchema = {
   })).optional(),
   restart: z.string().optional(),
   restarting: z.boolean().optional()
-    .describe('upsert: whether this save restarts the agent, as Wiro answers it. false also covers a text edit that reaches a running agent without a restart.'),
+    .describe('Whether this change restarts the agent, as Wiro answers it.'),
+  live: z.boolean().optional()
+    .describe('Whether the running agent got this change with no restart, as Wiro answers it: it uses it from its next message.'),
   warnings: z.array(z.string()),
   message: z.string(),
   nextAction: nextActionSchema.optional(),
@@ -203,12 +207,15 @@ function reply(
 const UNCHANGED_UPSERT = 'Its text, schedule and on/off state are unchanged, so the agent does not restart.';
 
 /**
- * What an upsert did to the agent. Wiro answers restarting: true when the save
- * restarts a running agent. A text or description edit reaches a running agent
- * without one when it can, and restarting false does not say that it did, so
- * that answer says what is known and how to make sure.
+ * What an upsert did to the agent. Wiro answers live: true when a running agent
+ * got the change with no restart, and restarting: true when the save restarts
+ * it. An answer with neither (a Wiro that does not apply changes live) says less:
+ * a text or description edit reaches a running agent without a restart when it
+ * can, and restarting false does not say that it did, so that answer says what
+ * is known and how to make sure.
  */
-function upsertRestartNote(status: number | null, functional: boolean, textOnly: boolean, restarting: boolean | undefined): string {
+function upsertRestartNote(status: number | null, functional: boolean, textOnly: boolean, restarting: boolean | undefined, live: boolean): string {
+  if (live) return restartNote(status, 'change', true);
   if (restarting === true) return restartNote(status, 'change');
   if (restarting === undefined) return functional ? restartNote(status, 'change') : UNCHANGED_UPSERT;
   if (!functional && !textOnly) return UNCHANGED_UPSERT;
@@ -220,6 +227,19 @@ function upsertRestartNote(status: number | null, functional: boolean, textOnly:
   return textOnly
     ? 'The new text is saved, and the agent was not restarted. A running agent usually takes a text or description edit without a restart; if its replies still follow the old text, control_agent with action restart loads the new one.'
     : 'The change is saved, but the agent was not restarted, so a running agent keeps its old settings until it restarts. control_agent with action restart loads them, and get_my_agent shows its status.';
+}
+
+/**
+ * What a rename, delete or revert did to the agent, from Wiro's answer: live: true when a running agent got it with no
+ * restart, and restarting as Wiro says it. An answer without live goes by the agent's status before the change.
+ */
+function appliedRestart(answer: { restarting?: unknown; live?: unknown; restart?: unknown }, status: number | null, what: string) {
+  const live = answeredLive(answer);
+  return {
+    restart: restartNote(status, what, live),
+    ...(typeof answer.restarting === 'boolean' ? { restarting: answer.restarting } : {}),
+    ...(live ? { live } : {}),
+  };
 }
 
 function scheduleInfo(row: Row, interval: string, isDefault: boolean, entry: CustomSkillEntry, titles: ReadonlyMap<string, string>) {
@@ -280,8 +300,8 @@ async function upsert(client: WiroClient, input: Input, signal: AbortSignal) {
   if (key === APPROVAL_POLICY_KEY && existing?.enabled === true && !input.confirm && (turnsPolicyOff || changesPolicyText)) {
     return reply(input, key, 'confirm_needed',
       turnsPolicyOff
-        ? `Turning off ${key} removes the agent's approval gate: it can then post, send or change things on outside services by itself, such as from a scheduled task, without waiting for the user's yes. A running agent restarts to load this, and enabled: true turns the policy on again. Nothing has changed yet.`
-        : `The new text below replaces the rules of ${key}. Its mode line and per-action rules decide what the agent may post, send or change on outside services by itself, such as from a scheduled task, without waiting for the user's yes: with mode auto, or a rule that says no approval is needed, nothing waits. A running agent restarts to load this, and action revert restores an earlier version. Nothing has changed yet.`,
+        ? `Turning off ${key} removes the agent's approval gate: it can then post, send or change things on outside services by itself, such as from a scheduled task, without waiting for the user's yes. ${LIVE_OR_RESTART_NOTE} Setting enabled: true turns the policy on again. Nothing has changed yet.`
+        : `The new text below replaces the rules of ${key}. Its mode line and per-action rules decide what the agent may post, send or change on outside services by itself, such as from a scheduled task, without waiting for the user's yes: with mode auto, or a rule that says no approval is needed, nothing waits. ${LIVE_OR_RESTART_NOTE} Action revert restores an earlier version. Nothing has changed yet.`,
       {
         entry: toEntry(existing),
         nextAction: {
@@ -311,17 +331,18 @@ async function upsert(client: WiroClient, input: Input, signal: AbortSignal) {
   if (input.enabled !== undefined) body.enabled = input.enabled;
   if (input.description !== undefined) body.description = input.description;
   const saved = requireApiSuccess(
-    await client.post<ApiEnvelope & { restarting?: unknown }>('/UserAgent/CustomSkillUpsert', body, signal),
+    await client.post<ApiEnvelope & { restarting?: unknown; live?: unknown }>('/UserAgent/CustomSkillUpsert', body, signal),
     `Could not save ${key}.`,
   );
   const restarting = typeof saved.restarting === 'boolean' ? saved.restarting : undefined;
+  const live = answeredLive(saved);
 
   const functional = !existing
     || (input.value !== undefined && input.value !== existing.value)
     || (interval !== undefined && interval !== (existing.interval ?? ''))
     || (input.enabled !== undefined && input.enabled !== existing.enabled);
   // Only the text or the description moves. The approval policy's text also turns its gate on or off at the
-  // agent's start, so that edit restarts it.
+  // agent's start, so a Wiro that does not apply changes live restarts the agent for that edit.
   const textOnly = existing !== null && key !== APPROVAL_POLICY_KEY
     && (interval === undefined || interval === (existing.interval ?? ''))
     && (input.enabled === undefined || input.enabled === existing.enabled)
@@ -349,7 +370,7 @@ async function upsert(client: WiroClient, input: Input, signal: AbortSignal) {
   const schedule = kind === 'scheduled_task' && after.interval
     ? scheduleInfo(row, after.interval, !existing && interval === undefined, after, await pausedSkillTitles(client, [after], signal))
     : undefined;
-  const restart = upsertRestartNote(agentStatusOf(row), functional, textOnly, restarting);
+  const restart = upsertRestartNote(agentStatusOf(row), functional, textOnly, restarting, live);
   return reply(input, key, 'saved',
     existing ? `Updated the ${kindLabel(kind)} ${key}.` : `Created the ${kindLabel(kind)} ${key}.`,
     {
@@ -358,6 +379,7 @@ async function upsert(client: WiroClient, input: Input, signal: AbortSignal) {
       ...(schedule ? { schedule } : {}),
       restart,
       ...(restarting !== undefined ? { restarting } : {}),
+      ...(live ? { live } : {}),
       warnings,
     },
     schedule ? ['', `**Schedule:** ${schedule.note}`] : []);
@@ -393,7 +415,7 @@ async function rename(client: WiroClient, input: Input, signal: AbortSignal) {
   if (entries.some(entry => entry.key === newKey)) return errorResult(new Error(`${newKey} already exists on this agent.`));
 
   const response = requireApiSuccess(
-    await client.post<ApiEnvelope & { newskillkey?: unknown }>('/UserAgent/CustomSkillRename', {
+    await client.post<ApiEnvelope & { newskillkey?: unknown; restarting?: unknown; live?: unknown; restart?: unknown }>('/UserAgent/CustomSkillRename', {
       useragentguid: input.agent_guid,
       oldskillkey: oldKey,
       newskillkey: newKey,
@@ -405,7 +427,7 @@ async function rename(client: WiroClient, input: Input, signal: AbortSignal) {
   return reply(input, oldKey, 'renamed', `Renamed ${oldKey} to ${renamedTo}.`, {
     renamedTo,
     entry: toEntry({ ...existing, key: renamedTo, description: input.description ?? existing.description }),
-    restart: restartNote(agentStatusOf(row), 'new name'),
+    ...appliedRestart(response, agentStatusOf(row), 'new name'),
   });
 }
 
@@ -443,8 +465,8 @@ async function remove(client: WiroClient, input: Input, signal: AbortSignal) {
         },
       });
   }
-  requireApiSuccess(
-    await client.post<ApiEnvelope>('/UserAgent/CustomSkillDelete', {
+  const deleted = requireApiSuccess(
+    await client.post<ApiEnvelope & { restarting?: unknown; live?: unknown }>('/UserAgent/CustomSkillDelete', {
       useragentguid: input.agent_guid,
       skillkey: key,
     }, signal),
@@ -452,7 +474,7 @@ async function remove(client: WiroClient, input: Input, signal: AbortSignal) {
   );
   return reply(input, key, 'deleted', `Deleted ${key} and its history.`, {
     entry: null,
-    restart: restartNote(agentStatusOf(row), 'change'),
+    ...appliedRestart(deleted, agentStatusOf(row), 'change'),
   });
 }
 
@@ -610,7 +632,7 @@ async function revert(client: WiroClient, input: Input, signal: AbortSignal) {
   }
 
   const response = requireApiSuccess(
-    await client.post<ApiEnvelope & Row>('/UserAgent/CustomSkillRevert', {
+    await client.post<ApiEnvelope & Row & { restarting?: unknown; live?: unknown; restart?: unknown }>('/UserAgent/CustomSkillRevert', {
       useragentguid: input.agent_guid,
       skillkey: key,
       source: input.source,
@@ -655,9 +677,9 @@ async function revert(client: WiroClient, input: Input, signal: AbortSignal) {
     {
       revertResult: outcome,
       entry,
-      restart: outcome === 'no-op'
-        ? 'Nothing changed, so the agent does not restart.'
-        : restartNote(agentStatusOf(row), 'change'),
+      ...(outcome === 'no-op'
+        ? { restart: 'Nothing changed, so the agent does not restart.' }
+        : appliedRestart(response, agentStatusOf(row), 'change')),
     });
 }
 
@@ -685,10 +707,8 @@ export function registerManageAgentCustomSkill(server: McpServer, client: WiroCl
         + 'agent\'s template runs the template\'s text, so its text cannot be changed (get_my_agent and this tool mark '
         + 'it editable: false); its schedule and on/off state can. Turning off cs-approval-policy '
         + 'or changing its text also needs confirm: true: off, or a text that allows it, lets the agent act '
-        + 'on outside services by itself without waiting for the user\'s yes. A running agent restarts for a '
-        + 'new entry, a schedule change, turning one on or off, a rename, a delete or a revert; a text or '
-        + 'description edit usually reaches it without a restart, and the result says which happened. get_my_agent lists the '
-        + 'current entries. Registry skills are switched with apply_agent_skills, and Connectors connected with '
+        + `on outside services by itself without waiting for the user's yes. ${LIVE_OR_RESTART_NOTE} The result says `
+        + 'which happened. get_my_agent lists the current entries. Registry skills are switched with apply_agent_skills, and Connectors connected with '
         + 'connect_agent_connector. On a team agent '
         + 'this needs a team admin or the person who deployed it; other team members read each entry in full '
         + 'with get_my_agent (entry). The agents playbook (get_playbook) covers custom skills and schedules.',

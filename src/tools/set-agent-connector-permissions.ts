@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { WiroClient } from '../client.js';
 import { asString, errorResult, isPlainObject, requireApiSuccess, toInteger, type ApiEnvelope } from '../utils/api.js';
 import { CONNECTOR_SLUG } from '../utils/agent-connectors.js';
+import { LIVE_OR_RESTART_NOTE } from '../utils/agent-config.js';
 import {
   PERMISSION_COLUMNS,
   PERMISSION_DEFAULTS_TEXT,
@@ -51,13 +52,11 @@ const outputSchema = {
     or: permissionValueSchema.optional()
       .describe('Set for an action the connector has not listed yet whose own setting goes, when Wiro may have a default of its own for it: the value is to without one and or with one, and the save\'s answer says which.'),
   })).describe('Every value the agent works with that the change moves, by action and column.'),
-  restarts: z.boolean().optional()
-    .describe('summary: whether saving restarts a running agent. Any change other than Ask to Allow does.'),
   hides: z.array(z.string()).optional().describe('Actions the change blocks in both columns, so the agent stops seeing them.'),
   shows: z.array(z.string()).optional().describe('Actions blocked in both columns now that the agent sees again after the change.'),
   applied: z.number().int().nonnegative().optional().describe('saved: 1 when Wiro changed the permissions, 0 when they were already this.'),
-  restart: z.enum(['scheduled', 'none', 'failed']).optional()
-    .describe('saved: scheduled (the running agent restarts to use them), none, or failed (they apply at its next start).'),
+  restart: z.enum(['live', 'scheduled', 'none', 'failed']).optional()
+    .describe('saved: live (they apply to the running agent\'s next action, with no restart), scheduled (the running agent restarts to use them), none, or failed (they apply at its next start).'),
   permissions: z.object(permissionsViewSchema).optional().describe('saved: the permissions as they are now.'),
   message: z.string(),
   nextAction: nextActionSchema.optional(),
@@ -88,12 +87,10 @@ function unknownActionError(read: ConnectorPermissions, names: string[]): Error 
     + `${read.connector.title}'s actions. get_agent_connector_permissions lists them by name. Nothing was saved.`);
 }
 
-/** The restart line of a summary. */
+/** The restart line of a summary. Wiro decides at the save whether a running agent gets the change live. */
 function restartText(plan: PermissionPlan): string {
   if (plan.moves.length === 0) return 'Nothing the agent may do changes, so it does not restart.';
-  return plan.restarts
-    ? 'Saving restarts a running agent, which takes about a minute: any change other than Ask to Allow reaches it only with a restart.'
-    : 'Saving needs no restart: every change turns Ask into Allow, which the agent picks up the next time it asks.';
+  return LIVE_OR_RESTART_NOTE;
 }
 
 /** A warning when the change lets actions run with no one approving them. */
@@ -155,7 +152,6 @@ function summaryResult(input: Input, read: ConnectorPermissions, changes: Permis
       title: read.connector.title,
       outcome: 'summary' as const,
       changes: plan.moves.map(move => ({ ...move })),
-      restarts: plan.restarts,
       ...(plan.hides.length > 0 ? { hides: plan.hides } : {}),
       ...(plan.shows.length > 0 ? { shows: plan.shows } : {}),
       message,
@@ -165,16 +161,18 @@ function summaryResult(input: Input, read: ConnectorPermissions, changes: Permis
 }
 
 /** What Wiro's answer to a save says about the restart, in words. */
-function savedRestartText(restart: 'scheduled' | 'none' | 'failed' | undefined, plan: PermissionPlan): string {
+function savedRestartText(restart: 'live' | 'scheduled' | 'none' | 'failed' | undefined, plan: PermissionPlan): string {
   switch (restart) {
+    case 'live':
+      return 'They apply to the agent\'s next action, with no restart.';
     case 'scheduled':
       return 'The running agent restarts to use them, which takes about a minute.';
     case 'failed':
       return 'The agent could not restart, so the change applies at its next start: control_agent with action restart loads it now.';
     default:
-      return plan.restarts
-        ? 'Nothing restarted: the agent loads them the next time it starts, or when the connector connects.'
-        : 'No restart was needed: every change turns Ask into Allow, which the agent picks up the next time it asks.';
+      return plan.askToAllowOnly
+        ? 'No restart was needed: every change turns Ask into Allow, which the agent picks up the next time it asks.'
+        : 'Nothing restarted: the agent loads them the next time it starts, or when the connector connects.';
   }
 }
 
@@ -189,7 +187,7 @@ async function save(client: WiroClient, input: Input, read: ConnectorPermissions
   );
   const applied = toInteger(body.applied, 1);
   const restartValue = asString(body.restart);
-  const restart = restartValue === 'scheduled' || restartValue === 'none' || restartValue === 'failed' ? restartValue : undefined;
+  const restart = restartValue === 'live' || restartValue === 'scheduled' || restartValue === 'none' || restartValue === 'failed' ? restartValue : undefined;
   const after = isPlainObject(body.permissions) ? { connector: read.connector, view: toPermissionView(body.permissions) } : undefined;
   const message = applied === 0
     ? `The ${read.connector.title} permissions were already this, so nothing changed and the agent does not restart.`
@@ -227,9 +225,9 @@ export function registerSetAgentConnectorPermissions(server: McpServer, client: 
         + `or block. ${PERMISSIONS_EXPLAINED} null removes a setting: a group's column goes back to its default, an `
         + 'action\'s to its group\'s. Setting a group\'s column also clears that column from its actions\' own settings. '
         + `reset: true first puts every group and action back to the defaults. ${PERMISSION_DEFAULTS_TEXT} Call it `
-        + 'without confirm first: it shows what changes for the agent and whether a running agent restarts (any change '
-        + 'other than Ask to Allow does), and saves nothing. After the user agrees, repeat the call as its nextAction '
-        + 'shows, with confirm: true and summary_id; a confirm saves only the change its summary showed. Only the '
+        + 'without confirm first: it shows what changes for the agent, and saves nothing. After the user agrees, repeat '
+        + 'the call as its nextAction shows, with confirm: true and summary_id; a confirm saves only the change its '
+        + `summary showed. ${LIVE_OR_RESTART_NOTE} Only the `
         + 'person who deployed the agent or a team admin of its team can change them. Always allow on an approval card '
         + '(answer_agent_approval) also sets an action to Allow.',
       inputSchema: strictInput({

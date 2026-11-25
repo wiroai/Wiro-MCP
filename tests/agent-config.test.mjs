@@ -354,6 +354,33 @@ test('apply_agent_skills applies on the first call, adds dependencies, costs not
   });
 });
 
+test('apply_agent_skills says when the running agent got the change with no restart, and waits for nothing', async () => {
+  const fake = fakeClient(skillRoutes({
+    '/UserAgent/Detail': detailAfterApply(),
+    '/UserAgent/SkillsApply': appliedAnswer({ restartTriggered: false, restart: 'live', live: true }),
+  }));
+  await withClient(fake, async client => {
+    const result = await applyReceptionist(client);
+    assert.notEqual(result.isError, true, text(result));
+    const out = result.structuredContent;
+    assert.equal(out.status, 'applied');
+    assert.equal(out.live, true);
+    assert.equal(out.restart, 'The running agent uses it from its next message, with no restart.');
+    assert.ok(text(result).split('\n').includes(`**Restart:** ${out.restart}`), text(result));
+    assert.notEqual(out.nextAction?.tool, 'get_my_agent', 'nothing restarts, so there is nothing to wait for');
+  });
+  // A restart answer is not called live.
+  const restarted = fakeClient(skillRoutes({
+    '/UserAgent/Detail': detailAfterApply(),
+    '/UserAgent/SkillsApply': appliedAnswer({ restartTriggered: true, restart: 'scheduled', live: false }),
+  }));
+  await withClient(restarted, async client => {
+    const result = await applyReceptionist(client);
+    assert.equal(result.structuredContent.live, undefined);
+    assert.match(result.structuredContent.restart, /^The agent restarts to load the skill change/);
+  });
+});
+
 test('apply_agent_skills takes no confirm and no tier, and points a plan change to manage_agent_billing', async () => {
   const fake = fakeClient(skillRoutes());
   await withClient(fake, async client => {
@@ -369,7 +396,7 @@ test('apply_agent_skills takes no confirm and no tier, and points a plan change 
     assert.deepEqual(Object.keys(tool.inputSchema.properties).sort(), ['add_dependencies', 'agent_guid', 'idempotency_key', 'skills']);
     assert.match(tool.description, /Every plan includes every skill, so a skill change costs nothing: the plan keeps its price and the AI usage it includes, and no active plan is needed\./);
     assert.match(tool.description, /The change is applied on the first call, so tell the user what turns on or off and get their yes first\./);
-    assert.match(tool.description, /A running agent restarts once when a skill turns on or off\./);
+    assert.match(tool.description, /A running agent gets most changes without a restart; a few restart it, which takes about a minute\./);
     assert.match(tool.description, /To change the plan, use manage_agent_billing \(change_plan\)\./);
     assert.doesNotMatch(tool.description, /quote|prorat|wallet at once|Starter to Pro/i);
   });
@@ -630,7 +657,7 @@ test('apply_agent_skills checks the live agent when Wiro answers with an error o
     const result = await applyReceptionist(client);
     assert.equal(result.isError, true);
     assert.match(text(result), /^The change could not be confirmed \(socket hang up\)\. Check get_my_agent to see whether the skills match the request before trying again;/m);
-    assert.equal(result.structuredContent.restart, 'The agent restarts if the change was saved.');
+    assert.equal(result.structuredContent.restart, 'A running agent gets most changes without a restart; a few restart it, which takes about a minute.');
   });
 
   // A success answer while the agent does not show the change.
@@ -2229,14 +2256,69 @@ test('manage_agent_custom_skill says from Wiro\'s answer whether a save restarts
     assert.equal(result.structuredContent.restarting, undefined);
   });
 
+  // A Wiro that applies changes live says so, for every kind of change, the approval policy's included.
+  const live = 'The running agent uses it from its next message, with no restart.';
+  for (const [name, args] of [
+    ['a new entry', { key: 'weekly-report', kind: 'scheduled_task', value: 'Summarize last week.' }],
+    ['a schedule change', { key: 'cs-cron-my-task', interval: '0 9 * * *' }],
+    ['a text edit', { key: 'cs-cron-my-task', value: 'Do it at nine.' }],
+    ['the approval policy', { key: 'cs-approval-policy', value: 'Ask before any post.', confirm: true }],
+  ]) {
+    const fake = fakeClient({
+      '/UserAgent/Detail': detail(),
+      '/UserAgent/CustomSkillUpsert': { result: true, errors: [], restarting: false, live: true },
+    });
+    await withClient(fake, async client => {
+      const result = await client.callTool({ name: 'manage_agent_custom_skill', arguments: { action: 'upsert', agent_guid: AGENT, ...args } });
+      assert.notEqual(result.isError, true, `${name}: ${text(result)}`);
+      assert.equal(result.structuredContent.restart, live, name);
+      assert.equal(result.structuredContent.live, true, name);
+      assert.equal(result.structuredContent.restarting, false, name);
+    });
+  }
+
   await withClient(fakeClient({}), async client => {
     const { tools } = await client.listTools();
     const description = tools.find(tool => tool.name === 'manage_agent_custom_skill').description;
-    assert.match(description, /A running agent restarts for a new entry, a schedule change, turning one on or off, a rename, a delete or a revert; a text or description edit usually reaches it without a restart, and the result says which happened\./);
-    assert.doesNotMatch(description, /restarts when the text, schedule or on\/off state changes/);
+    assert.match(description, /A running agent gets most changes without a restart; a few restart it, which takes about a minute\. The result says which happened\./);
+    assert.doesNotMatch(description, /A running agent restarts for a new entry/);
   });
   const line = PLAYBOOKS.agents.split('\n').find(item => item.startsWith('- Some changes restart'));
   assert.match(line, /with `manage_agent_custom_skill` a new entry, a schedule change, turning one on or off, a rename, a delete or a revert/);
+});
+
+test('manage_agent_custom_skill rename, delete and revert say from Wiro\'s answer whether the running agent got the change live', async () => {
+  const live = 'The running agent uses it from its next message, with no restart.';
+  const restarts = /^The agent restarts to load the /;
+  for (const [answer, expected, liveField] of [
+    [{ restarting: false, live: true, restart: 'live' }, live, true],
+    [{ restarting: true, live: false, restart: 'scheduled' }, restarts, undefined],
+    // A Wiro that does not answer live goes by the agent's status, as before.
+    [{}, restarts, undefined],
+  ]) {
+    const fake = fakeClient({
+      '/UserAgent/Detail': detail(),
+      '/UserAgent/CustomSkillRename': { result: true, errors: [], newskillkey: 'cs-cron-renamed-task', ...answer },
+      '/UserAgent/CustomSkillDelete': { result: true, errors: [], ...answer },
+      '/UserAgent/CustomSkillRevert': { result: true, errors: [], action: 'reverted', current_value: 'Do my task.', ...answer },
+    });
+    await withClient(fake, async client => {
+      const calls = [
+        { action: 'rename', agent_guid: AGENT, key: 'cs-cron-my-task', new_key: 'renamed-task' },
+        { action: 'delete', agent_guid: AGENT, key: 'cs-cron-my-task', confirm: true },
+        { action: 'revert', agent_guid: AGENT, key: 'cs-cron-my-task', source: 'preset', confirm: true },
+      ];
+      for (const args of calls) {
+        const result = await client.callTool({ name: 'manage_agent_custom_skill', arguments: args });
+        assert.notEqual(result.isError, true, `${args.action}: ${text(result)}`);
+        const out = result.structuredContent;
+        if (typeof expected === 'string') assert.equal(out.restart, expected, args.action);
+        else assert.match(out.restart, expected, args.action);
+        assert.equal(out.live, liveField, args.action);
+        assert.equal(out.restarting, answer.restarting, args.action);
+      }
+    });
+  }
 });
 
 test('set_agent_credentials does not count a list row that holds only a select as filled', async () => {

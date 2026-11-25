@@ -11,6 +11,7 @@ import {
 import {
   agentStatusLabel,
   agentStatusOf,
+  answeredLive,
   checkSkillSet,
   credentialLabel,
   credentialTitles,
@@ -20,6 +21,7 @@ import {
   diffSkills,
   enabledSkillNames,
   isAgentRunning,
+  LIVE_OR_RESTART_NOTE,
   loadSkillRegistry,
   newSkillChangeKey,
   parseSkillChangeKey,
@@ -69,6 +71,8 @@ const outputSchema = {
     .describe('After an applied change: the Connectors the skills it turned on work with that the agent has not connected. None connects by itself: connect_agent_connector connects each one.'),
   agentStatus: z.string(),
   restart: z.string(),
+  live: z.boolean().optional()
+    .describe('After an applied change: true when the running agent got it with no restart, as Wiro answers it.'),
   error: z.object({
     code: z.number().nullable(),
     message: z.string(),
@@ -84,6 +88,8 @@ type SkillsApplyBody = ApiEnvelope & {
   noOp?: boolean;
   pricing?: Record<string, unknown>;
   restartTriggered?: unknown;
+  restart?: unknown;
+  live?: unknown;
   warnings?: unknown;
 };
 
@@ -189,8 +195,7 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
         + 'needed. The change is applied on the first call, so tell the user what turns on or off and get '
         + 'their yes first. The tool checks the names and turns on the skills they depend on '
         + '(add_dependencies); the result lists them, the credentials the new skills still need, the Connectors they '
-        + 'work with that the agent has not connected, and the scheduled tasks the change paused. A running agent '
-        + 'restarts once when a skill turns on or off. '
+        + `work with that the agent has not connected, and the scheduled tasks the change paused. ${LIVE_OR_RESTART_NOTE} `
         + `A skill's work uses ${AGENT_AI_USAGE}, and model runs it starts are billed to the wallet of the `
         + 'workspace that owns the Wiro project connected to the agent. Newly enabled skills may still need '
         + 'credentials (set_agent_credentials, bind_agent_project for a Wiro project) and do '
@@ -261,7 +266,7 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
         };
         const credentialsNeeded = credentialsNeededFor(diff.enable, registry, row);
         const serviceTitles = await credentialTitles(client, credentialsNeeded.flatMap(entry => entry.credentials), extra.signal);
-        // A running agent restarts only for a skill that turns on or off.
+        // Only a skill that turns on or off reaches a running agent, live or with a restart.
         const skillsMove = Object.keys(diff.changes).length > 0;
         const base = {
           agentGuid: agent_guid,
@@ -374,6 +379,8 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
           const { holds, live } = await readAfterChange(client, agent_guid, plan.requested, extra.signal);
           if (holds === true) {
             const paused = newlyPaused(row, live);
+            // The answer did not arrive, so whether a running agent got the change live or restarts is not known.
+            const unknownRestart = running ? LIVE_OR_RESTART_NOTE : restartNote(status, 'skill change');
             const note = `The agent's skills now match the request, so the change is in place. Do not repeat it. ${FREE_NOTE}`;
             return {
               content: [{ type: 'text' as const, text: [
@@ -383,7 +390,7 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
                 listLine('Turned on', changes.enable, titles),
                 listLine('Turned off', changes.disable, titles),
                 note,
-                `**Restart:** ${restartNote(status, 'skill change')}`,
+                `**Restart:** ${unknownRestart}`,
                 await pausedLine(client, paused, extra.signal),
               ].filter((line): line is string => line !== null).join('\n') }],
               structuredContent: {
@@ -391,7 +398,7 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
                 status: 'applied' as const,
                 idempotencyKey: key,
                 note,
-                restart: restartNote(status, 'skill change'),
+                restart: unknownRestart,
                 ...(paused.length > 0 ? { pausedTasks: paused.map(entry => entry.key) } : {}),
               },
             };
@@ -407,7 +414,7 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
               status: 'refused' as const,
               idempotencyKey: key,
               note,
-              restart: unverified ? 'The agent restarts if the change was saved.' : UNCHANGED_RESTART,
+              restart: unverified ? LIVE_OR_RESTART_NOTE : UNCHANGED_RESTART,
               error: { code: null, message },
             },
             isError: true,
@@ -441,13 +448,17 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
         // An empty request that comes back as a real change is the saved result of the earlier call with this
         // key, not a new change.
         const replayed = sentEmpty && !applied.noOp;
-        // Wiro says whether this change restarts a running agent; an answer without it goes by the skills that move.
-        const restarts = typeof applied.restartTriggered === 'boolean' ? applied.restartTriggered : skillsMove;
+        // Wiro says whether this change reached a running agent live or restarts it; an answer without either goes by
+        // the skills that move.
+        const appliedLive = !applied.noOp && !replayed && skillsMove && answeredLive(applied);
+        const restarts = typeof applied.restartTriggered === 'boolean' ? applied.restartTriggered : skillsMove && !appliedLive;
         const restart = applied.noOp || replayed || !skillsMove
           ? UNCHANGED_RESTART
-          : running && !restarts
-            ? 'The agent keeps running: Wiro did not restart it for this change. control_agent with action restart loads it now.'
-            : restartNote(status, 'skill change');
+          : appliedLive
+            ? restartNote(status, 'skill change', true)
+            : running && !restarts
+              ? 'The agent keeps running: Wiro did not restart it for this change. control_agent with action restart loads it now.'
+              : restartNote(status, 'skill change');
         const note = replayed
           ? `This change was already applied by an earlier call with this idempotency_key. ${FREE_NOTE}`
           : FREE_NOTE;
@@ -515,6 +526,7 @@ export function registerApplyAgentSkills(server: McpServer, client: WiroClient):
             note,
             ...(enabledSkills ? { enabledSkills } : {}),
             restart,
+            ...(appliedLive ? { live: true } : {}),
             ...(paused.length > 0 ? { pausedTasks: paused.map(entry => entry.key) } : {}),
             ...(toConnect && toConnect.length > 0 ? { connectorsToConnect: toConnect } : {}),
             ...(nextAction ? { nextAction } : {}),

@@ -149,6 +149,35 @@ test('update_agent: a new title restarts a running agent, and the wait follows i
   assert.match(output.nextAction.reason, /running again/);
 });
 
+test('update_agent: a new title the running agent got live restarts nothing and waits for nothing', async () => {
+  const { result } = await updateAgent({ title: 'New name' }, { update: { result: true, errors: [], restarting: false, live: true, useragents: [] } });
+  assert.notEqual(result.isError, true, textOf(result));
+  const output = result.structuredContent;
+  assert.equal(output.restarted, false);
+  assert.equal(output.live, true);
+  assert.equal(output.message, 'Saved: title. The running agent uses it from its next message, with no restart.');
+  assert.notEqual(output.nextAction?.reason, 'Wait until the agent is running again.');
+
+  // A settings change Wiro answered as a restart restarts it, whatever the read back shows.
+  const settings = await updateAgent({ timezone: 'Europe/Istanbul' }, { settings: { result: true, errors: [], restart: 'scheduled', restarting: true, live: false } });
+  assert.equal(settings.result.structuredContent.restarted, true);
+  assert.equal(settings.result.structuredContent.live, undefined);
+  assert.match(settings.result.structuredContent.message, /The agent restarts to apply the change\./);
+  // A settings change Wiro answered as nothing to load keeps it running, also without the read back.
+  const none = await updateAgent({ timezone: 'Europe/Istanbul' }, { settings: { result: true, errors: [], restart: 'none', restarting: false, live: false }, afterRead: refused('Read failed') });
+  assert.equal(none.result.structuredContent.restarted, false);
+  assert.doesNotMatch(none.result.structuredContent.message, /If a setting changed/);
+  assert.match(none.result.structuredContent.message, /The agent keeps running\./);
+
+  // A partial save names the live part.
+  const partial = await updateAgent({ title: 'New', timezone: 'Mars/Base' }, {
+    update: { result: true, errors: [], restarting: false, live: true, useragents: [] },
+    settings: refused('Invalid timezone: must be a valid IANA identifier.'),
+  });
+  assert.equal(partial.result.isError, true);
+  assert.match(textOf(partial.result), /The title change was saved; the settings were not\. The running agent uses it from its next message, with no restart\./);
+});
+
 test('update_agent: an answer without restarting goes by the status read before', async () => {
   const running = await updateAgent({ description: 'New text' }, { update: { result: true, errors: [], useragents: [] } });
   assert.equal(running.result.structuredContent.restarted, true);
@@ -292,7 +321,7 @@ test('update_agent: a partial save says whether the saved part restarts the agen
 test('update_agent and the playbook say which changes restart a running agent', async () => {
   const description = await toolDescription('update_agent');
   assert.doesNotMatch(description, /A running or starting agent restarts to apply the change/);
-  assert.match(description, /a new name or a setting that changes restarts it/);
+  assert.match(description, /a setting that changes restarts it to apply the change, which takes about a minute; a new name reaches a running agent from its next message, with no restart/);
   // The runtime knows setup from chat only as on or off, so a move between "all" and "webchat" restarts nothing.
   assert.match(description, /a new description, cover or categories, a setting it already has, or chat_setup moved between "all" and "webchat" leaves it running/);
 
