@@ -3,7 +3,7 @@
 Notable changes to `@wiro-ai/wiro-mcp`. Releases before 2.0.0 are described on the
 [GitHub Releases](https://github.com/wiroai/Wiro-MCP/releases) page.
 
-## 2.0.0 (unreleased)
+## 2.0.0 (2026-11-25)
 
 An agent's outside services are now **Connectors**: one catalog of services an agent can
 connect, such as ad accounts, stores, social accounts, mailboxes and data sources. A
