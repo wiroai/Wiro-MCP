@@ -760,7 +760,7 @@ test('get_model_schema leaves out a hidden parameter, such as a file input\'s fo
       {
         title: '',
         items: [
-          { id: 'inputImage', type: 'combinefileinput', label: 'Image', defaultvalue: 'wiro-text-removal.jpeg', maxinputlenght: 1 },
+          { id: 'inputImage', type: 'combinefileinput', label: 'Image', defaultvalue: 'wiro-text-removal.jpeg', maxinputlength: 1 },
           { id: 'inputImageUrl', type: 'text', label: 'Image URL', hidden: true },
           { id: 'outputFormat', type: 'select', label: 'Output Format', defaultvalue: 'jpeg', options: [{ value: 'jpeg', text: 'jpeg' }, { value: 'png', text: 'png' }] },
         ],

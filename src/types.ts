@@ -176,6 +176,12 @@ export interface ToolParameterItem {
    */
   hidden?: boolean | string;
   jsonschema?: Record<string, unknown> | string | null;
+  /**
+   * A file field's limit: the most files a run takes in it (null or left out:
+   * any number). A select option with an `<id>Count` key, such as
+   * `inputImageCount: 2` on an effect, raises it while that option is chosen.
+   */
+  maxinputlength?: number | string | null;
 }
 
 export interface ToolParameterGroup {

@@ -125,7 +125,8 @@ export function registerGetModelSchema(
       inputSchema: strictInput({
         model: z.string().describe('Model slug in "owner/model" format, e.g. "google/veo3-1", "black-forest-labs/flux-2-pro", or a workflow utility such as "workflow-utilities/output-filter".'),
       }),
-      outputSchema: modelDetailOutputSchema,
+      // Loose at every level (schemas.ts): a client that listed this version takes the next one's new keys.
+      outputSchema: z.object(modelDetailOutputSchema).loose(),
       annotations: {
         readOnlyHint: true,
         destructiveHint: false,
