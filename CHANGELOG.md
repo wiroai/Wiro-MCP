@@ -6,10 +6,10 @@ Notable changes to `@wiro-ai/wiro-mcp`. Releases before 2.0.0 are described on t
 ## 2.2.0 (unreleased)
 
 How many files a file field takes. `get_model_schema` now gives each file field's limit: `maxFiles` in its
-structured output and "At most 3 files. A run with more is refused." in its text. When a choice in another field lets
-the field take more, such as an effect that takes a second image, `maxFilesByOption` lists that choice as
-`{ parameter, value, maxFiles }`, and the text says "(2 files when `effectType` is `product-360`)". A field with no
-limit gets neither.
+structured output and "At most 3 files. More is refused." in its text. When a choice in another field lets a run take
+more, such as an effect that takes a second image, `maxFilesByOption` lists that choice as
+`{ parameter, value, maxFiles }`, and the text says "a run takes 2 files when `effectType` is `product-360`". The raise
+is for a run only: a workflow step takes `maxFiles` whatever the choice. A field with no limit gets neither.
 
 The limit is the field's `maxinputlength`. The Wiro API serves the field under that name from the release that
 renames it; the name was misspelled before. Until that release this version shows no limit, as 2.1.0 does.

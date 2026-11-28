@@ -515,8 +515,8 @@ function positiveWhole(value: unknown): number | undefined {
 
 /**
  * How many files a file field takes: maxFiles, its own limit, and maxFilesByOption, the choices of
- * another field that let it take more. `items` are all of the model's fields. A field with no limit
- * takes any number and gets neither.
+ * another field that let a run (run_model) take more; a workflow step takes maxFiles whatever the
+ * choice. `items` are all of the model's fields. A field with no limit takes any number and gets neither.
  */
 export function fileLimit(item: ToolParameterItem, items: ToolParameterItem[]): FileLimit {
   if (!FILE_LIMIT_TYPES.has(String(item.type))) return {};
@@ -541,7 +541,10 @@ function fileLimitText(limit: FileLimit): string | null {
   if (limit.maxFiles === undefined) return null;
   const files = (count: number) => `${count} ${count === 1 ? 'file' : 'files'}`;
   const raised = (limit.maxFilesByOption ?? []).map(raise => `${files(raise.maxFiles)} when \`${raise.parameter}\` is \`${raise.value}\``);
-  return `  At most ${files(limit.maxFiles)}${raised.length > 0 ? ` (${raised.join(', ')})` : ''}. A run with more is refused.`;
+  // Wiro raises the limit for a choice in a run only: a workflow step takes maxFiles whatever the choice.
+  return raised.length > 0
+    ? `  At most ${files(limit.maxFiles)}; a run takes ${raised.join(', ')}. A workflow step takes ${files(limit.maxFiles)} whatever the choice. More is refused.`
+    : `  At most ${files(limit.maxFiles)}. More is refused.`;
 }
 
 /** All of a model's fields, the hidden ones too: an option of any of them can raise a file field's limit. */

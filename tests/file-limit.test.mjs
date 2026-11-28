@@ -39,8 +39,8 @@ test('a file field with a limit gets maxFiles, and the text says it', () => {
   assert.equal(items(detail).some(item => 'maxFilesByOption' in item), false);
 
   const text = formatModelSchema(kling);
-  assert.match(text, /- \*\*`productImages`\*\* \(combinefileinput\)\n {2}Product Images\n {2}Pass an array of URLs directly: [^\n]+\n {2}At most 3 files\. A run with more is refused\./);
-  assert.match(text, /At most 1 file\. A run with more is refused\./);
+  assert.match(text, /- \*\*`productImages`\*\* \(combinefileinput\)\n {2}Product Images\n {2}Pass an array of URLs directly: [^\n]+\n {2}At most 3 files\. More is refused\./);
+  assert.match(text, /At most 1 file\. More is refused\./);
   assert.doesNotThrow(() => z.object(modelDetailOutputSchema).parse(detail));
 });
 
@@ -63,7 +63,8 @@ test('an option that lets the field take more files is listed with it', () => {
   const field = items(detail).find(item => item.id === 'inputImage');
   assert.equal(field.maxFiles, 1);
   assert.deepEqual(field.maxFilesByOption, [{ parameter: 'effectType', value: 'product-360', maxFiles: 2 }]);
-  assert.match(formatModelSchema(studio), /At most 1 file \(2 files when `effectType` is `product-360`\)\. A run with more is refused\./);
+  // A workflow step takes the field's own limit whatever the choice (Wiro's Workflow/Prepare): the raise is for a run.
+  assert.match(formatModelSchema(studio), /At most 1 file; a run takes 2 files when `effectType` is `product-360`\. A workflow step takes 1 file whatever the choice\. More is refused\./);
   assert.doesNotThrow(() => z.object(modelDetailOutputSchema).parse(detail));
 });
 
