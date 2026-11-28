@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
@@ -45,10 +46,31 @@ async function callSchema(detail, options) {
 function assertModelOutputUnchanged(result, detail) {
   assert.notEqual(result.isError, true);
   assert.equal(result.content[0].text, formatModelSchema(detail));
-  assert.deepEqual(result.structuredContent, toStructuredModelDetail(detail));
+  assert.equal(JSON.stringify(result.structuredContent), JSON.stringify(toStructuredModelDetail(detail)));
   assert.equal('priceList' in result.structuredContent.model, false);
   assert.doesNotMatch(JSON.stringify(result.structuredContent), /priceMethod/);
 }
+
+// What 2.2.0 (be463ac) gave for these inputs, made by running its get_model_schema on them.
+const GOLDEN = JSON.parse(readFileSync(new URL('./fixtures/get-model-schema-2.2.0.json', import.meta.url), 'utf8'));
+
+test('the text and the structured output are byte for byte what 2.2.0 gave; only _meta is new', async () => {
+  const withRows = new Set([
+    'per-run rows with a discount (Veo 3.1)',
+    'per-input-video-second rows with maxSeconds (Kandinsky VSR)',
+    'per-output-megapixel rows with notes and extra amounts',
+    'per-run rows in the workflows-only tool group',
+  ]);
+  assert.equal(GOLDEN.cases.length, 6);
+  for (const { name, detail, options, content, structuredContent } of GOLDEN.cases) {
+    const result = await callSchema(detail, options);
+    assert.notEqual(result.isError, true, name);
+    assert.equal(JSON.stringify(result.content), JSON.stringify(content), name);
+    assert.equal(JSON.stringify(result.structuredContent), JSON.stringify(structuredContent), name);
+    if (withRows.has(name)) assert.deepEqual(Object.keys(result._meta), [PRICE_LIST_META_KEY], name);
+    else assert.equal(result._meta, undefined, name);
+  }
+});
 
 // google/veo3-1 on prod, 2026-11-28.
 const VEO_ROWS = [

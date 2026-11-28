@@ -1,0 +1,803 @@
+{
+  "madeBy": "get_model_schema of @wiro-ai/wiro-mcp 2.2.0 (be463ac) on these inputs",
+  "cases": [
+    {
+      "name": "per-run rows with a discount (Veo 3.1)",
+      "detail": {
+        "cleanslugowner": "google",
+        "cleanslugproject": "veo3-1",
+        "title": "Veo 3.1",
+        "categories": [
+          "tool"
+        ],
+        "parameters": [
+          {
+            "title": "",
+            "items": [
+              {
+                "id": "prompt",
+                "type": "textarea",
+                "label": "Prompt"
+              },
+              {
+                "id": "resolution",
+                "type": "select",
+                "label": "resolution",
+                "required": false,
+                "options": [
+                  {
+                    "text": "720p",
+                    "value": "720p"
+                  },
+                  {
+                    "text": "1080p",
+                    "value": "1080p"
+                  },
+                  {
+                    "text": "4k",
+                    "value": "4k"
+                  }
+                ]
+              },
+              {
+                "id": "durationSeconds",
+                "type": "select",
+                "label": "durationSeconds",
+                "required": true,
+                "options": [
+                  {
+                    "text": "4",
+                    "value": "4"
+                  },
+                  {
+                    "text": "6",
+                    "value": "6"
+                  },
+                  {
+                    "text": "8",
+                    "value": "8"
+                  }
+                ],
+                "defaultvalue": "4"
+              }
+            ]
+          }
+        ],
+        "dynamicprice": [
+          {
+            "inputs": {
+              "durationSeconds": "4",
+              "resolution": "720p"
+            },
+            "price": 1.6,
+            "priceMethod": "per-run"
+          },
+          {
+            "inputs": {
+              "durationSeconds": "6",
+              "resolution": "720p"
+            },
+            "price": 2.4,
+            "priceMethod": "per-run"
+          },
+          {
+            "inputs": {
+              "durationSeconds": "8",
+              "resolution": "720p"
+            },
+            "price": 3.2,
+            "priceMethod": "per-run"
+          },
+          {
+            "inputs": {
+              "durationSeconds": "4",
+              "resolution": "1080p"
+            },
+            "price": 1.6,
+            "priceMethod": "per-run"
+          },
+          {
+            "inputs": {
+              "durationSeconds": "6",
+              "resolution": "1080p"
+            },
+            "price": 2.4,
+            "priceMethod": "per-run"
+          },
+          {
+            "inputs": {
+              "durationSeconds": "8",
+              "resolution": "1080p"
+            },
+            "price": 3.2,
+            "priceMethod": "per-run"
+          },
+          {
+            "inputs": {
+              "durationSeconds": "4",
+              "resolution": "4k"
+            },
+            "price": 2.4,
+            "priceMethod": "per-run"
+          },
+          {
+            "inputs": {
+              "durationSeconds": "6",
+              "resolution": "4k"
+            },
+            "price": 3.6,
+            "priceMethod": "per-run"
+          },
+          {
+            "inputs": {
+              "durationSeconds": "8",
+              "resolution": "4k"
+            },
+            "price": 4.8,
+            "priceMethod": "per-run"
+          }
+        ],
+        "approximatelycost": 0,
+        "cps": 0,
+        "discount": 20
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "## Veo 3.1\n**Model:** `google/veo3-1`\n\n### Pricing (per run)\n| durationSeconds | resolution | Price |\n| --- | --- | --- |\n| 4 | 720p | $1.6 |\n| 6 | 720p | $2.4 |\n| 8 | 720p | $3.2 |\n| 4 | 1080p | $1.6 |\n| 6 | 1080p | $2.4 |\n| 8 | 1080p | $3.2 |\n| 4 | 4k | $2.4 |\n| 6 | 4k | $3.6 |\n| 8 | 4k | $4.8 |\n\n**Your discount:** 20% off the part of a charge paid from deposits. Charges use coupon credit and store revenue first, at the list price.\n\n### Parameters\n\n- **`prompt`** (textarea)\n  Prompt\n- **`resolution`** (select)\n  resolution\n  Options: `720p`, `1080p`, `4k`\n- **`durationSeconds`** (select) **(required)** (sample: `4`, used only by a workflow step that leaves it out)\n  durationSeconds\n  Options: `4`, `6`, `8`\n\n### Usage\n\nUse `run_model` with this model:\n```json\n{ \"model\": \"google/veo3-1\", \"params\": { ... } }\n```"
+        }
+      ],
+      "structuredContent": {
+        "model": {
+          "slug": "google/veo3-1",
+          "title": "Veo 3.1",
+          "categories": [],
+          "pricing": "$1.6 to $4.8 / per run",
+          "estimatedCostUsd": null,
+          "discountPercent": 20,
+          "parameters": [
+            {
+              "title": "",
+              "items": [
+                {
+                  "id": "prompt",
+                  "type": "textarea",
+                  "label": "Prompt",
+                  "required": false,
+                  "options": [],
+                  "advanced": false
+                },
+                {
+                  "id": "resolution",
+                  "type": "select",
+                  "label": "resolution",
+                  "required": false,
+                  "options": [
+                    {
+                      "label": "720p",
+                      "value": "720p"
+                    },
+                    {
+                      "label": "1080p",
+                      "value": "1080p"
+                    },
+                    {
+                      "label": "4k",
+                      "value": "4k"
+                    }
+                  ],
+                  "advanced": false
+                },
+                {
+                  "id": "durationSeconds",
+                  "type": "select",
+                  "label": "durationSeconds",
+                  "sample": "4",
+                  "required": true,
+                  "options": [
+                    {
+                      "label": "4",
+                      "value": "4"
+                    },
+                    {
+                      "label": "6",
+                      "value": "6"
+                    },
+                    {
+                      "label": "8",
+                      "value": "8"
+                    }
+                  ],
+                  "advanced": false
+                }
+              ]
+            }
+          ]
+        },
+        "nextAction": {
+          "tool": "run_model",
+          "arguments": {
+            "model": "google/veo3-1",
+            "params": {}
+          },
+          "reason": "When the user asked for a run, fill the required model parameters, then submit one generation. A price question needs no run."
+        }
+      }
+    },
+    {
+      "name": "per-input-video-second rows with maxSeconds (Kandinsky VSR)",
+      "detail": {
+        "cleanslugowner": "kandinskylab",
+        "cleanslugproject": "kandinsky-6-0-vsr-2-0",
+        "title": "kandinskylab/kandinsky-6-0-vsr-2-0",
+        "categories": [
+          "tool"
+        ],
+        "parameters": [
+          {
+            "title": "",
+            "items": [
+              {
+                "id": "inputVideo",
+                "type": "combinefileinput",
+                "label": "Input Video",
+                "required": true,
+                "maxinputlength": 1
+              },
+              {
+                "id": "resolution",
+                "type": "select",
+                "label": "resolution",
+                "required": true,
+                "options": [
+                  {
+                    "text": "720p",
+                    "value": "720p"
+                  },
+                  {
+                    "text": "1080p",
+                    "value": "1080p"
+                  },
+                  {
+                    "text": "2160p",
+                    "value": "2160p"
+                  }
+                ],
+                "defaultvalue": "1080p"
+              }
+            ]
+          }
+        ],
+        "dynamicprice": "[{\"inputs\":{\"resolution\":\"720p\"},\"price\":0.015,\"priceMethod\":\"per-input-video-second\",\"maxSeconds\":60},{\"inputs\":{\"resolution\":\"1080p\"},\"price\":0.025,\"priceMethod\":\"per-input-video-second\",\"maxSeconds\":60},{\"inputs\":{\"resolution\":\"2160p\"},\"price\":0.1,\"priceMethod\":\"per-input-video-second\",\"maxSeconds\":\"20\"}]",
+        "approximatelycost": 0,
+        "cps": 0
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "## kandinskylab/kandinsky-6-0-vsr-2-0\n**Model:** `kandinskylab/kandinsky-6-0-vsr-2-0`\n\n### Pricing (per second of input video)\n| resolution | Price |\n| --- | --- |\n| 720p | $0.015, each input at most 60 seconds |\n| 1080p | $0.025, each input at most 60 seconds |\n| 2160p | $0.1, each input at most 20 seconds |\n\nEvery video input counts for its length: `inputVideo`, `inputVideoUrl` and each file of `inputVideoMultiple` and `inputVideoUrlMultiple`.\n\n### Parameters\n\n- **`inputVideo`** (combinefileinput) **(required)**\n  Input Video\n  Pass an array of URLs directly: `inputVideo: [\"https://...\", \"https://...\"]`. No upload needed.\n  At most 1 file. A run with more is refused.\n- **`resolution`** (select) **(required)** (sample: `1080p`, used only by a workflow step that leaves it out)\n  resolution\n  Options: `720p`, `1080p`, `2160p`\n\n### Usage\n\nUse `run_model` with this model:\n```json\n{ \"model\": \"kandinskylab/kandinsky-6-0-vsr-2-0\", \"params\": { ... } }\n```"
+        }
+      ],
+      "structuredContent": {
+        "model": {
+          "slug": "kandinskylab/kandinsky-6-0-vsr-2-0",
+          "title": "kandinskylab/kandinsky-6-0-vsr-2-0",
+          "categories": [],
+          "pricing": "$0.015 to $0.1 / per second of input video. Every video input counts for its length: `inputVideo`, `inputVideoUrl` and each file of `inputVideoMultiple` and `inputVideoUrlMultiple`. Each input counts at most 20 or 60 seconds, depending on the settings.",
+          "estimatedCostUsd": null,
+          "parameters": [
+            {
+              "title": "",
+              "items": [
+                {
+                  "id": "inputVideo",
+                  "type": "combinefileinput",
+                  "label": "Input Video",
+                  "required": true,
+                  "options": [],
+                  "maxFiles": 1,
+                  "advanced": false
+                },
+                {
+                  "id": "resolution",
+                  "type": "select",
+                  "label": "resolution",
+                  "sample": "1080p",
+                  "required": true,
+                  "options": [
+                    {
+                      "label": "720p",
+                      "value": "720p"
+                    },
+                    {
+                      "label": "1080p",
+                      "value": "1080p"
+                    },
+                    {
+                      "label": "2160p",
+                      "value": "2160p"
+                    }
+                  ],
+                  "advanced": false
+                }
+              ]
+            }
+          ]
+        },
+        "nextAction": {
+          "tool": "run_model",
+          "arguments": {
+            "model": "kandinskylab/kandinsky-6-0-vsr-2-0",
+            "params": {}
+          },
+          "reason": "When the user asked for a run, fill the required model parameters, then submit one generation. A price question needs no run."
+        }
+      }
+    },
+    {
+      "name": "per-output-megapixel rows with notes and extra amounts",
+      "detail": {
+        "cleanslugowner": "acme",
+        "cleanslugproject": "image",
+        "title": "acme/image",
+        "categories": [
+          "tool"
+        ],
+        "parameters": [
+          {
+            "title": "",
+            "items": [
+              {
+                "id": "inputImage",
+                "type": "combinefileinput",
+                "label": "Images",
+                "maxinputlength": 4
+              }
+            ]
+          }
+        ],
+        "dynamicprice": [
+          {
+            "inputs": {
+              "inputImage": "QUANTITY:0"
+            },
+            "price": 0.03,
+            "priceMethod": "per-output-megapixel",
+            "priceExtra": 0.01,
+            "priceInput": null,
+            "note": "  First block,\n then  each one. "
+          },
+          {
+            "inputs": {
+              "inputImage": "QUANTITY:1"
+            },
+            "price": 0.03,
+            "priceMethod": "per-output-megapixel",
+            "priceExtra": "0.01",
+            "priceInput": 0.005
+          }
+        ],
+        "approximatelycost": 0,
+        "cps": 0
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "## acme/image\n**Model:** `acme/image`\n\n### Pricing (per output megapixel)\nPixels are counted in blocks of 1024 x 1024 (1,048,576 pixels), and part of a block counts as a whole one: 1000 x 1050 is 2 blocks. Only the first output image is measured.\n- No `inputImage`: $0.03 for the first block of the output image, plus $0.01 for each further block. Note: First block, then each one.\n- With `inputImage`: $0.03 for the first block of the output image, plus $0.01 for each further block, plus $0.005 per block of each input image, at most 4 blocks ($0.02) per image.\n- Example: a 1440 x 1440 output with no input image is 2 blocks, so $0.04.\n\n### Parameters\n\n- **`inputImage`** (combinefileinput)\n  Images\n  Pass an array of URLs directly: `inputImage: [\"https://...\", \"https://...\"]`. No upload needed.\n  At most 4 files. A run with more is refused.\n\n### Usage\n\nUse `run_model` with this model:\n```json\n{ \"model\": \"acme/image\", \"params\": { ... } }\n```"
+        }
+      ],
+      "structuredContent": {
+        "model": {
+          "slug": "acme/image",
+          "title": "acme/image",
+          "categories": [],
+          "pricing": "$0.03 per run for an output image up to 1024 x 1024 pixels, plus $0.01 per further 1024 x 1024 block, plus $0.005 per 1024 x 1024 block of each input image (at most 4 blocks per image). Pixels are counted in blocks of 1024 x 1024 (1,048,576 pixels), and part of a block counts as a whole one: 1000 x 1050 is 2 blocks. Only the first output image is measured.",
+          "estimatedCostUsd": null,
+          "pricingNotes": [
+            "First block, then each one."
+          ],
+          "parameters": [
+            {
+              "title": "",
+              "items": [
+                {
+                  "id": "inputImage",
+                  "type": "combinefileinput",
+                  "label": "Images",
+                  "required": false,
+                  "options": [],
+                  "maxFiles": 4,
+                  "advanced": false
+                }
+              ]
+            }
+          ]
+        },
+        "nextAction": {
+          "tool": "run_model",
+          "arguments": {
+            "model": "acme/image",
+            "params": {}
+          },
+          "reason": "When the user asked for a run, fill the required model parameters, then submit one generation. A price question needs no run."
+        }
+      }
+    },
+    {
+      "name": "no price rows",
+      "detail": {
+        "cleanslugowner": "acme",
+        "cleanslugproject": "run-time",
+        "title": "acme/run-time",
+        "categories": [
+          "tool"
+        ],
+        "parameters": [
+          {
+            "title": "",
+            "items": []
+          }
+        ],
+        "dynamicprice": null,
+        "approximatelycost": 0,
+        "cps": 0.0005
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "## acme/run-time\n**Model:** `acme/run-time`\n\n### Pricing\n- **Rate:** $0.0005 per second of run time\n\n### Parameters\n\n\n### Usage\n\nUse `run_model` with this model:\n```json\n{ \"model\": \"acme/run-time\", \"params\": { ... } }\n```"
+        }
+      ],
+      "structuredContent": {
+        "model": {
+          "slug": "acme/run-time",
+          "title": "acme/run-time",
+          "categories": [],
+          "pricing": "$0.0005 per second of run time",
+          "estimatedCostUsd": null,
+          "parameters": [
+            {
+              "title": "",
+              "items": []
+            }
+          ]
+        },
+        "nextAction": {
+          "tool": "run_model",
+          "arguments": {
+            "model": "acme/run-time",
+            "params": {}
+          },
+          "reason": "When the user asked for a run, fill the required model parameters, then submit one generation. A price question needs no run."
+        }
+      }
+    },
+    {
+      "name": "an unreadable price list",
+      "detail": {
+        "cleanslugowner": "acme",
+        "cleanslugproject": "broken",
+        "title": "acme/broken",
+        "categories": [
+          "tool"
+        ],
+        "parameters": [
+          {
+            "title": "",
+            "items": [
+              {
+                "id": "resolution",
+                "type": "select",
+                "label": "resolution",
+                "required": false,
+                "options": [
+                  {
+                    "text": "720p",
+                    "value": "720p"
+                  },
+                  {
+                    "text": "4k",
+                    "value": "4k"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "dynamicprice": [
+          {
+            "inputs": {
+              "resolution": "720p"
+            },
+            "price": 1,
+            "priceMethod": "per-run"
+          },
+          {
+            "inputs": {
+              "resolution": "4k"
+            },
+            "price": "1.6",
+            "priceMethod": "per-run"
+          }
+        ],
+        "approximatelycost": 0,
+        "cps": 0
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "## acme/broken\n**Model:** `acme/broken`\n\n### Parameters\n\n- **`resolution`** (select)\n  resolution\n  Options: `720p`, `4k`\n\n### Usage\n\nUse `run_model` with this model:\n```json\n{ \"model\": \"acme/broken\", \"params\": { ... } }\n```"
+        }
+      ],
+      "structuredContent": {
+        "model": {
+          "slug": "acme/broken",
+          "title": "acme/broken",
+          "categories": [],
+          "estimatedCostUsd": null,
+          "parameters": [
+            {
+              "title": "",
+              "items": [
+                {
+                  "id": "resolution",
+                  "type": "select",
+                  "label": "resolution",
+                  "required": false,
+                  "options": [
+                    {
+                      "label": "720p",
+                      "value": "720p"
+                    },
+                    {
+                      "label": "4k",
+                      "value": "4k"
+                    }
+                  ],
+                  "advanced": false
+                }
+              ]
+            }
+          ]
+        },
+        "nextAction": {
+          "tool": "run_model",
+          "arguments": {
+            "model": "acme/broken",
+            "params": {}
+          },
+          "reason": "When the user asked for a run, fill the required model parameters, then submit one generation. A price question needs no run."
+        }
+      }
+    },
+    {
+      "name": "per-run rows in the workflows-only tool group",
+      "detail": {
+        "cleanslugowner": "google",
+        "cleanslugproject": "veo3-1",
+        "title": "Veo 3.1",
+        "categories": [
+          "tool"
+        ],
+        "parameters": [
+          {
+            "title": "",
+            "items": [
+              {
+                "id": "prompt",
+                "type": "textarea",
+                "label": "Prompt"
+              },
+              {
+                "id": "resolution",
+                "type": "select",
+                "label": "resolution",
+                "required": false,
+                "options": [
+                  {
+                    "text": "720p",
+                    "value": "720p"
+                  },
+                  {
+                    "text": "1080p",
+                    "value": "1080p"
+                  },
+                  {
+                    "text": "4k",
+                    "value": "4k"
+                  }
+                ]
+              },
+              {
+                "id": "durationSeconds",
+                "type": "select",
+                "label": "durationSeconds",
+                "required": true,
+                "options": [
+                  {
+                    "text": "4",
+                    "value": "4"
+                  },
+                  {
+                    "text": "6",
+                    "value": "6"
+                  },
+                  {
+                    "text": "8",
+                    "value": "8"
+                  }
+                ],
+                "defaultvalue": "4"
+              }
+            ]
+          }
+        ],
+        "dynamicprice": [
+          {
+            "inputs": {
+              "durationSeconds": "4",
+              "resolution": "720p"
+            },
+            "price": 1.6,
+            "priceMethod": "per-run"
+          },
+          {
+            "inputs": {
+              "durationSeconds": "6",
+              "resolution": "720p"
+            },
+            "price": 2.4,
+            "priceMethod": "per-run"
+          },
+          {
+            "inputs": {
+              "durationSeconds": "8",
+              "resolution": "720p"
+            },
+            "price": 3.2,
+            "priceMethod": "per-run"
+          },
+          {
+            "inputs": {
+              "durationSeconds": "4",
+              "resolution": "1080p"
+            },
+            "price": 1.6,
+            "priceMethod": "per-run"
+          },
+          {
+            "inputs": {
+              "durationSeconds": "6",
+              "resolution": "1080p"
+            },
+            "price": 2.4,
+            "priceMethod": "per-run"
+          },
+          {
+            "inputs": {
+              "durationSeconds": "8",
+              "resolution": "1080p"
+            },
+            "price": 3.2,
+            "priceMethod": "per-run"
+          },
+          {
+            "inputs": {
+              "durationSeconds": "4",
+              "resolution": "4k"
+            },
+            "price": 2.4,
+            "priceMethod": "per-run"
+          },
+          {
+            "inputs": {
+              "durationSeconds": "6",
+              "resolution": "4k"
+            },
+            "price": 3.6,
+            "priceMethod": "per-run"
+          },
+          {
+            "inputs": {
+              "durationSeconds": "8",
+              "resolution": "4k"
+            },
+            "price": 4.8,
+            "priceMethod": "per-run"
+          }
+        ],
+        "approximatelycost": 0,
+        "cps": 0,
+        "discount": 20
+      },
+      "options": {
+        "toolsets": [
+          "workflows"
+        ]
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "## Veo 3.1\n**Model:** `google/veo3-1`\n\n### Pricing (per run)\n| durationSeconds | resolution | Price |\n| --- | --- | --- |\n| 4 | 720p | $1.6 |\n| 6 | 720p | $2.4 |\n| 8 | 720p | $3.2 |\n| 4 | 1080p | $1.6 |\n| 6 | 1080p | $2.4 |\n| 8 | 1080p | $3.2 |\n| 4 | 4k | $2.4 |\n| 6 | 4k | $3.6 |\n| 8 | 4k | $4.8 |\n\n**Your discount:** 20% off the part of a charge paid from deposits. Charges use coupon credit and store revenue first, at the list price.\n\n### Parameters\n\n- **`prompt`** (textarea)\n  Prompt\n- **`resolution`** (select)\n  resolution\n  Options: `720p`, `1080p`, `4k`\n- **`durationSeconds`** (select) **(required)** (sample: `4`, used only by a workflow step that leaves it out)\n  durationSeconds\n  Options: `4`, `6`, `8`\n\n\n### Usage\n\nUse this model as a workflow step: `\"type\": \"run\"`, `\"tool\": \"google/veo3-1\"`, and the parameter ids above as the keys of `input`. `get_playbook` with the topic \"workflow-graph\" shows the full format."
+        }
+      ],
+      "structuredContent": {
+        "model": {
+          "slug": "google/veo3-1",
+          "title": "Veo 3.1",
+          "categories": [],
+          "pricing": "$1.6 to $4.8 / per run",
+          "estimatedCostUsd": null,
+          "discountPercent": 20,
+          "parameters": [
+            {
+              "title": "",
+              "items": [
+                {
+                  "id": "prompt",
+                  "type": "textarea",
+                  "label": "Prompt",
+                  "required": false,
+                  "options": [],
+                  "advanced": false
+                },
+                {
+                  "id": "resolution",
+                  "type": "select",
+                  "label": "resolution",
+                  "required": false,
+                  "options": [
+                    {
+                      "label": "720p",
+                      "value": "720p"
+                    },
+                    {
+                      "label": "1080p",
+                      "value": "1080p"
+                    },
+                    {
+                      "label": "4k",
+                      "value": "4k"
+                    }
+                  ],
+                  "advanced": false
+                },
+                {
+                  "id": "durationSeconds",
+                  "type": "select",
+                  "label": "durationSeconds",
+                  "sample": "4",
+                  "required": true,
+                  "options": [
+                    {
+                      "label": "4",
+                      "value": "4"
+                    },
+                    {
+                      "label": "6",
+                      "value": "6"
+                    },
+                    {
+                      "label": "8",
+                      "value": "8"
+                    }
+                  ],
+                  "advanced": false
+                }
+              ]
+            }
+          ]
+        },
+        "nextAction": {
+          "tool": "get_playbook",
+          "arguments": {
+            "topics": [
+              "workflow-graph"
+            ]
+          },
+          "reason": "Use this model as a workflow step; the playbook shows the step format. Running a model on its own needs the models tool group, which is not loaded."
+        }
+      }
+    }
+  ]
+}
