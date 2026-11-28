@@ -304,8 +304,8 @@ function schemaPricing(model) {
 const NANO_NOTE = 'Pricing is token-based: input $0.2 per 1M tokens, output $1.25 per 1M tokens. Image inputs are billed as input tokens. If web search is enabled, each search call costs an additional $0.01. Final cost depends on your prompt, attached images, and response length.';
 
 test('a price set when the run ends shows the rates from its note instead of $0', () => {
-  const model = catalogModel('openai/gpt-5-4-nano', [{ inputs: {}, price: 0, priceMethod: 'cp-readoutput', note: NANO_NOTE }]);
-  const pricing = `Set by the run when it ends: ${NANO_NOTE}`;
+  const model = catalogModel('openai/gpt-5-4-nano', [{ inputs: {}, price: 0, priceMethod: 'reported-price', note: NANO_NOTE }]);
+  const pricing = `Set when the run ends: ${NANO_NOTE}`;
 
   assert.equal(formatPricing(model), pricing);
   assert.equal(searchPricingLine(model), `- **Pricing:** ${pricing}`);
@@ -319,15 +319,15 @@ test('a price set when the run ends shows the rates from its note instead of $0'
   assert.deepEqual(toStructuredModelDetail(model).model.pricingNotes, [NANO_NOTE]);
 
   // The note is shown on one line, without the spaces around it.
-  const spaced = catalogModel('openai/gpt-5-4-nano', [{ inputs: {}, price: 0, priceMethod: 'cp-readoutput', note: `\n  ${NANO_NOTE.replace('tokens. Image', 'tokens.\n\n   Image')}  ` }]);
+  const spaced = catalogModel('openai/gpt-5-4-nano', [{ inputs: {}, price: 0, priceMethod: 'reported-price', note: `\n  ${NANO_NOTE.replace('tokens. Image', 'tokens.\n\n   Image')}  ` }]);
   assert.equal(formatPricing(spaced), pricing);
 });
 
 test('a price set when the run ends without a note says the finished task shows the cost', () => {
   for (const note of [undefined, '', '  \n ']) {
-    const row = { inputs: {}, price: 0, priceMethod: 'cp-readoutput', ...(note === undefined ? {} : { note }) };
+    const row = { inputs: {}, price: 0, priceMethod: 'reported-price', ...(note === undefined ? {} : { note }) };
     const model = catalogModel('openai/gpt-5-4-nano', JSON.stringify([row]));
-    const pricing = 'Set by the run when it ends. The finished task shows the cost.';
+    const pricing = 'Set when the run ends. The finished task shows the cost.';
 
     assert.equal(formatPricing(model), pricing);
     assert.equal(schemaPricing(model), `### Pricing\n${pricing}`);
@@ -339,7 +339,7 @@ test('a price set when the run ends without a note says the finished task shows 
 
 test('a live model is priced by the rates in its note, never as $0 per turn', () => {
   const note = "Voice session $0.05 per minute, billed per second. When the voice model delegates, the backend model's tokens are billed separately at the selected backend model's rate. Each web search costs an additional $0.01.";
-  const model = catalogModel('openai/gpt-live-1', [{ inputs: {}, price: 0, priceMethod: 'cp-realtimeturn', note }]);
+  const model = catalogModel('openai/gpt-live-1', [{ inputs: {}, price: 0, priceMethod: 'per-realtime-turn', note }]);
   const pricing = `Billed turn by turn during the live session. Rates: ${note}`;
 
   assert.equal(formatPricing(model), pricing);
@@ -348,20 +348,20 @@ test('a live model is priced by the rates in its note, never as $0 per turn', ()
   assert.equal(toStructuredModel(model).pricing, pricing);
   assert.equal(toStructuredModelDetail(model).model.pricing, pricing);
   assert.equal(toStructuredModel(model).estimatedCostUsd, null);
-  assert.doesNotMatch(`${formatModelList([model])}\n${formatModelSchema(model)}`, /\$0 \/|per turn\b/);
+  assert.doesNotMatch(`${formatModelList([model])}\n${formatModelSchema(model)}`, /\$0 \/|per (conversation )?turn\b/);
 
   // Without a note, a live model still has no $0 price.
-  const bare = catalogModel('openai/gpt-live-1', JSON.stringify([{ inputs: {}, price: 0, priceMethod: 'cp-realtimeturn' }]));
+  const bare = catalogModel('openai/gpt-live-1', JSON.stringify([{ inputs: {}, price: 0, priceMethod: 'per-realtime-turn' }]));
   assert.equal(formatPricing(bare), 'Billed turn by turn during the live session. No fixed price per run.');
   assert.equal(schemaPricing(bare), '### Pricing\nBilled turn by turn during the live session. No fixed price per run.');
 });
 
 const PIXEL_RULES = 'Pixels are counted in blocks of 1024 x 1024 (1,048,576 pixels), and part of a block counts as a whole one: 1000 x 1050 is 2 blocks. Only the first output image is measured.';
 
-test('a model priced by image size shows its extra block and input image prices', () => {
+test('a model priced per output megapixel shows its extra block and input image prices', () => {
   const model = catalogModel('black-forest-labs/flux-2-max', [
-    { inputs: { inputImage: 'QUANTITY:0' }, price: 0.07, priceMethod: 'cp-pixel', priceExtra: 0.03, priceInput: 0 },
-    { inputs: { inputImage: 'QUANTITY:1' }, price: 0.07, priceMethod: 'cp-pixel', priceExtra: 0.03, priceInput: 0.03 },
+    { inputs: { inputImage: 'QUANTITY:0' }, price: 0.07, priceMethod: 'per-output-megapixel', priceExtra: 0.03, priceInput: 0 },
+    { inputs: { inputImage: 'QUANTITY:1' }, price: 0.07, priceMethod: 'per-output-megapixel', priceExtra: 0.03, priceInput: 0.03 },
   ]);
   const pricing = '$0.07 per run for an output image up to 1024 x 1024 pixels, plus $0.03 per further 1024 x 1024 block, '
     + 'plus $0.03 per 1024 x 1024 block of each input image (at most 4 blocks per image)';
@@ -371,27 +371,27 @@ test('a model priced by image size shows its extra block and input image prices'
   assert.equal(toStructuredModel(model).pricing, pricing);
   assert.equal(toStructuredModelDetail(model).model.pricing, `${pricing}. ${PIXEL_RULES}`);
   assert.equal(schemaPricing(model), [
-    '### Pricing (by image size)',
+    '### Pricing (per output megapixel)',
     PIXEL_RULES,
     '- No `inputImage`: $0.07 for the first block of the output image, plus $0.03 for each further block.',
     '- With `inputImage`: $0.07 for the first block of the output image, plus $0.03 for each further block, plus $0.03 per block of each input image, at most 4 blocks ($0.12) per image.',
     '- Example: a 1440 x 1440 output with no input image is 2 blocks, so $0.1.',
   ].join('\n'));
-  assert.doesNotMatch(`${formatModelList([model])}\n${formatModelSchema(model)}`, /per pixel|megapixel|qty:/);
+  assert.doesNotMatch(`${formatModelList([model])}\n${formatModelSchema(model)}`, /per pixel\b|qty:/);
   assert.equal(toStructuredModel(model).estimatedCostUsd, null);
   assert.equal(toStructuredModelDetail(model).model.estimatedCostUsd, null);
 });
 
-test('a row priced by image size without extra prices shows only the first block', () => {
+test('a row priced per output megapixel without extra prices shows only the first block', () => {
   for (const extras of [{}, { priceExtra: 0, priceInput: 0 }]) {
-    const model = catalogModel('black-forest-labs/flux-2-max', [{ inputs: {}, price: 0.07, priceMethod: 'cp-pixel', ...extras }]);
+    const model = catalogModel('black-forest-labs/flux-2-max', [{ inputs: {}, price: 0.07, priceMethod: 'per-output-megapixel', ...extras }]);
     const pricing = '$0.07 per run for an output image up to 1024 x 1024 pixels';
 
     assert.equal(formatPricing(model), pricing);
     assert.equal(toStructuredModel(model).pricing, pricing);
     assert.equal(toStructuredModelDetail(model).model.pricing, `${pricing}. ${PIXEL_RULES}`);
     assert.equal(schemaPricing(model), [
-      '### Pricing (by image size)',
+      '### Pricing (per output megapixel)',
       PIXEL_RULES,
       '- Every run: $0.07 for the first block of the output image.',
       '- Example: a 1440 x 1440 output with no input image is 2 blocks, so $0.07.',
@@ -399,15 +399,15 @@ test('a row priced by image size without extra prices shows only the first block
   }
 });
 
-test('per-request prices keep their range and table', () => {
+test('per-run prices keep their range and table', () => {
   const model = catalogModel('blackforestlabs/flux-3', [
-    { inputs: { resolution: 'hd', duration: '5' }, price: 0.85, priceMethod: 'cpr' },
-    { inputs: { resolution: 'fhd', duration: '20' }, price: 5.8, priceMethod: 'cpr' },
+    { inputs: { resolution: 'hd', duration: '5' }, price: 0.85, priceMethod: 'per-run' },
+    { inputs: { resolution: 'fhd', duration: '20' }, price: 5.8, priceMethod: 'per-run' },
   ]);
 
-  assert.equal(formatPricing(model), '$0.85 to $5.8 / per request');
+  assert.equal(formatPricing(model), '$0.85 to $5.8 / per run');
   assert.equal(schemaPricing(model), [
-    '### Pricing (per request)',
+    '### Pricing (per run)',
     '| resolution | duration | Price |',
     '| --- | --- | --- |',
     '| hd | 5 | $0.85 |',
@@ -418,13 +418,13 @@ test('per-request prices keep their range and table', () => {
 
 test('a price table shows row values that are numbers', () => {
   const model = catalogModel('ace-step/text-to-song-ace-step1-5', [
-    { inputs: { duration: 10 }, price: 0.005, priceMethod: 'cpr' },
-    { inputs: { duration: 30 }, price: 0.015, priceMethod: 'cpr' },
+    { inputs: { duration: 10 }, price: 0.005, priceMethod: 'per-run' },
+    { inputs: { duration: 30 }, price: 0.015, priceMethod: 'per-run' },
   ]);
 
-  assert.equal(formatPricing(model), '$0.005 to $0.015 / per request');
+  assert.equal(formatPricing(model), '$0.005 to $0.015 / per run');
   assert.equal(schemaPricing(model), [
-    '### Pricing (per request)',
+    '### Pricing (per run)',
     '| duration | Price |',
     '| --- | --- |',
     '| 10 | $0.005 |',
@@ -444,22 +444,22 @@ test('estimatedCostUsd is a run estimate only when there is one above 0', () => 
   assert.equal('estimatedCostUsd' in toStructuredModel(unsent), false);
 });
 
-// One test per price method. Rows the run bills by their own price print as in
-// 1.4.0; their notes are added.
-test('per-request, per-output and per-video-second prices print as before, with the notes of their rows', () => {
-  const nano = catalogModel('google/nano-banana-pro', '[{"inputs":{"resolution":"1K"},"price":0.14,"priceMethod":"cpo"},{"inputs":{"resolution":"2K"},"price":0.14,"priceMethod":"cpo"},{"inputs":{"resolution":"4K"},"price":0.24,"priceMethod":"cpo"}]');
-  assert.equal(searchPricingLine(nano), '- **Pricing:** $0.14 to $0.24 / per output');
-  assert.equal(schemaPricing(nano), '### Pricing (per output)\n| resolution | Price |\n| --- | --- |\n| 1K | $0.14 |\n| 2K | $0.14 |\n| 4K | $0.24 |');
+// One test per price method. Rows the run bills by their own price print it with
+// its unit; their notes are added.
+test('per-run, per-output-file and per-output-video-second prices print with their unit and the notes of their rows', () => {
+  const nano = catalogModel('google/nano-banana-pro', '[{"inputs":{"resolution":"1K"},"price":0.14,"priceMethod":"per-output-file"},{"inputs":{"resolution":"2K"},"price":0.14,"priceMethod":"per-output-file"},{"inputs":{"resolution":"4K"},"price":0.24,"priceMethod":"per-output-file"}]');
+  assert.equal(searchPricingLine(nano), '- **Pricing:** $0.14 to $0.24 / per output file');
+  assert.equal(schemaPricing(nano), '### Pricing (per output file)\n| resolution | Price |\n| --- | --- |\n| 1K | $0.14 |\n| 2K | $0.14 |\n| 4K | $0.24 |');
 
-  const avatar = catalogModel('pruna/p-video-avatar', '[{"inputs":{"resolution":"720p"},"price":0.025,"priceMethod":"cp-outputVideoLength"},{"inputs":{"resolution":"1080p"},"price":0.045,"priceMethod":"cp-outputVideoLength"}]');
-  assert.equal(searchPricingLine(avatar), '- **Pricing:** $0.025 to $0.045 / per video second');
-  assert.equal(schemaPricing(avatar), '### Pricing (per video second)\n| resolution | Price |\n| --- | --- |\n| 720p | $0.025 |\n| 1080p | $0.045 |');
+  const avatar = catalogModel('pruna/p-video-avatar', '[{"inputs":{"resolution":"720p"},"price":0.025,"priceMethod":"per-output-video-second"},{"inputs":{"resolution":"1080p"},"price":0.045,"priceMethod":"per-output-video-second"}]');
+  assert.equal(searchPricingLine(avatar), '- **Pricing:** $0.025 to $0.045 / per second of output video');
+  assert.equal(schemaPricing(avatar), '### Pricing (per second of output video)\n| resolution | Price |\n| --- | --- |\n| 720p | $0.025 |\n| 1080p | $0.045 |');
 
   // Notes that differ by row get a column, as the model's page shows them.
-  const mesh = catalogModel('tencent/hunyuan3d-2-1', '[{"inputs":{"generate_texture":"true"},"price":0.9,"priceMethod":"cpr","note":"$0.9 for textured mesh"},{"inputs":{"generate_texture":"false"},"price":0.3,"priceMethod":"cpr","note":"$0.30 for untextured white mesh."}]');
-  assert.equal(searchPricingLine(mesh), '- **Pricing:** $0.3 to $0.9 / per request');
+  const mesh = catalogModel('tencent/hunyuan3d-2-1', '[{"inputs":{"generate_texture":"true"},"price":0.9,"priceMethod":"per-run","note":"$0.9 for textured mesh"},{"inputs":{"generate_texture":"false"},"price":0.3,"priceMethod":"per-run","note":"$0.30 for untextured white mesh."}]');
+  assert.equal(searchPricingLine(mesh), '- **Pricing:** $0.3 to $0.9 / per run');
   assert.equal(schemaPricing(mesh), [
-    '### Pricing (per request)',
+    '### Pricing (per run)',
     '| generate_texture | Price | Note |',
     '| --- | --- | --- |',
     '| true | $0.9 | $0.9 for textured mesh |',
@@ -467,29 +467,29 @@ test('per-request, per-output and per-video-second prices print as before, with 
   ].join('\n'));
   assert.deepEqual(toStructuredModelDetail(mesh).model.pricingNotes, ['$0.9 for textured mesh', '$0.30 for untextured white mesh.']);
 
-  // A $0 request price is the charge, and its note follows it.
-  const free = catalogModel('xiaomimimo/mimo-2-5-tts', '[{"inputs":{},"price":0,"priceMethod":"cpr","note":"Xiaomi currently offers this model for free. Price might change"}]');
-  assert.equal(searchPricingLine(free), '- **Pricing:** $0 / per request');
-  assert.equal(schemaPricing(free), '### Pricing (per request)\n$0 / per request\nNote: Xiaomi currently offers this model for free. Price might change');
-  assert.equal(toStructuredModel(free).pricing, '$0 / per request');
+  // A $0 price per run is the charge, and its note follows it.
+  const free = catalogModel('xiaomimimo/mimo-2-5-tts', '[{"inputs":{},"price":0,"priceMethod":"per-run","note":"Xiaomi currently offers this model for free. Price might change"}]');
+  assert.equal(searchPricingLine(free), '- **Pricing:** $0 / per run');
+  assert.equal(schemaPricing(free), '### Pricing (per run)\n$0 / per run\nNote: Xiaomi currently offers this model for free. Price might change');
+  assert.equal(toStructuredModel(free).pricing, '$0 / per run');
 
   // A note shared by every row is shown once, after the table.
   const shared = catalogModel('acme/video', [
-    { inputs: { resolution: '720p' }, price: 0.1, priceMethod: 'cpr', note: 'Same | note.' },
-    { inputs: { resolution: '1080p' }, price: 0.2, priceMethod: 'cpr', note: 'Same | note.' },
+    { inputs: { resolution: '720p' }, price: 0.1, priceMethod: 'per-run', note: 'Same | note.' },
+    { inputs: { resolution: '1080p' }, price: 0.2, priceMethod: 'per-run', note: 'Same | note.' },
   ]);
-  assert.equal(schemaPricing(shared), '### Pricing (per request)\n| resolution | Price |\n| --- | --- |\n| 720p | $0.1 |\n| 1080p | $0.2 |\n\nNote: Same | note.');
+  assert.equal(schemaPricing(shared), '### Pricing (per run)\n| resolution | Price |\n| --- | --- |\n| 720p | $0.1 |\n| 1080p | $0.2 |\n\nNote: Same | note.');
   assert.equal('pricingNotes' in toStructuredModelDetail(nano).model, false);
 });
 
 test('a price per second of run time says so', () => {
-  const model = catalogModel('acme/upscaler', [{ inputs: {}, price: 0.0006, priceMethod: 'cps' }]);
+  const model = catalogModel('acme/upscaler', [{ inputs: {}, price: 0.0006, priceMethod: 'per-run-second' }]);
   assert.equal(formatPricing(model), '$0.0006 / per second of run time');
   assert.equal(schemaPricing(model), '### Pricing (per second of run time)\n$0.0006 / per second of run time');
 });
 
 test('a price per token says input and output tokens count together, with its note', () => {
-  const model = catalogModel('google/gemini-2-5-tts', '[{"inputs":{},"price":0.00001,"priceMethod":"cpt","note":"Final costs are determined after the task is finished. Cost per token is $0.00001"}]');
+  const model = catalogModel('google/gemini-2-5-tts', '[{"inputs":{},"price":0.00001,"priceMethod":"per-total-token","note":"Final costs are determined after the task is finished. Cost per token is $0.00001"}]');
   const rule = 'Input and output tokens count together, and generated audio counts as output tokens, so the total is known only when the run ends.';
 
   assert.equal(searchPricingLine(model), '- **Pricing:** $0.00001 / per input and output token');
@@ -504,24 +504,108 @@ test('a price per token says input and output tokens count together, with its no
 
 test('a price per prompt character counts the whole prompt value', () => {
   const rule = 'Every character of the `prompt` value counts, including the brackets, keys and quotes of a JSON prompt.';
-  const dialogue = catalogModel('elevenlabs/eleven-v4-dialogue', '[{"inputs":{},"price":0.00008,"priceMethod":"cp-promptlength"}]');
+  const dialogue = catalogModel('elevenlabs/eleven-v4-dialogue', '[{"inputs":{},"price":0.00008,"priceMethod":"per-input-character"}]');
   assert.equal(formatPricing(dialogue), '$0.00008 / per prompt character');
   assert.equal(schemaPricing(dialogue), `### Pricing (per prompt character)\n$0.00008 / per prompt character\n${rule}`);
 
   // After a table, a blank line keeps the rule out of it.
-  const speech = catalogModel('elevenlabs/text-to-speech', '[{"inputs":{"model":"eleven_flash_v2_5"},"price":0.00005,"priceMethod":"cp-promptlength"},{"inputs":{"model":"eleven_flash_v2"},"price":0.00005,"priceMethod":"cp-promptlength"},{"inputs":{"model":"eleven_multilingual_v2"},"price":0.0001,"priceMethod":"cp-promptlength"},{"inputs":{"model":"eleven_v3"},"price":0.0001,"priceMethod":"cp-promptlength"}]');
+  const speech = catalogModel('elevenlabs/text-to-speech', '[{"inputs":{"model":"eleven_flash_v2_5"},"price":0.00005,"priceMethod":"per-input-character"},{"inputs":{"model":"eleven_flash_v2"},"price":0.00005,"priceMethod":"per-input-character"},{"inputs":{"model":"eleven_multilingual_v2"},"price":0.0001,"priceMethod":"per-input-character"},{"inputs":{"model":"eleven_v3"},"price":0.0001,"priceMethod":"per-input-character"}]');
   assert.equal(formatPricing(speech), '$0.00005 to $0.0001 / per prompt character');
   assert.match(schemaPricing(speech), new RegExp(`\\| eleven_v3 \\| \\$0\\.0001 \\|\\n\\n${rule.replace(/[.`]/g, '\\$&')}$`));
 });
 
-test('a price per second of audio names the inputAudio field it measures', () => {
-  const music = catalogModel('wiro/video-background-music-v2', '[{"inputs":{},"price":0.008,"priceMethod":"cp-audiosecondslength"}]');
-  assert.equal(searchPricingLine(music), '- **Pricing:** $0.008 / per second of audio in inputAudio');
-  assert.equal(schemaPricing(music), '### Pricing (per second of audio in inputAudio)\n$0.008 / per second of audio in inputAudio');
+const AUDIO_INPUTS = 'Every audio input counts for its length: `inputAudio`, `inputAudioUrl` and each file of `inputAudioUrlMultiple`.';
+const VIDEO_INPUTS = 'Every video input counts for its length: `inputVideo`, `inputVideoUrl` and each file of `inputVideoMultiple` and `inputVideoUrlMultiple`.';
+
+test('a price per second of input audio names the inputs it measures', () => {
+  const music = catalogModel('wiro/video-background-music-v2', '[{"inputs":{},"price":0.008,"priceMethod":"per-input-audio-second"}]');
+  assert.equal(searchPricingLine(music), '- **Pricing:** $0.008 / per second of input audio');
+  assert.equal(schemaPricing(music), `### Pricing (per second of input audio)\n$0.008 / per second of input audio\n${AUDIO_INPUTS}`);
+  assert.equal(toStructuredModelDetail(music).model.pricing, `$0.008 / per second of input audio. ${AUDIO_INPUTS}`);
+
+  // A cap counts each input at most that long.
+  const capped = catalogModel('acme/transcribe', [{ inputs: {}, price: 0.0005, priceMethod: 'per-input-audio-second', maxSeconds: 600 }]);
+  assert.equal(schemaPricing(capped), `### Pricing (per second of input audio)\n$0.0005 / per second of input audio\n${AUDIO_INPUTS}\nEach input counts at most 600 seconds.`);
 });
 
-test('a price by image size gives each row its own extra and input rates', () => {
-  const model = catalogModel('black-forest-labs/flux-2-klein-9b', '[{"inputs":{"inputImage":"QUANTITY:0"},"price":0.015,"priceMethod":"cp-pixel","priceExtra":0.015,"priceInput":0},{"inputs":{"inputImage":"QUANTITY:1"},"price":0.015,"priceMethod":"cp-pixel","priceExtra":0.002,"priceInput":0.002}]');
+test('a price per second of input video names the inputs it measures and the cap on each one', () => {
+  const vsr = catalogModel('kandinskylab/kandinsky-6-0-vsr-2-0', '[{"inputs":{"resolution":"720p"},"price":0.015,"priceMethod":"per-input-video-second","maxSeconds":60},{"inputs":{"resolution":"1080p"},"price":0.025,"priceMethod":"per-input-video-second","maxSeconds":60}]');
+  assert.equal(searchPricingLine(vsr), '- **Pricing:** $0.015 to $0.025 / per second of input video');
+  assert.equal(schemaPricing(vsr), [
+    '### Pricing (per second of input video)',
+    '| resolution | Price |',
+    '| --- | --- |',
+    '| 720p | $0.015 |',
+    '| 1080p | $0.025 |',
+    '',
+    VIDEO_INPUTS,
+    'Each input counts at most 60 seconds.',
+  ].join('\n'));
+  assert.equal(toStructuredModelDetail(vsr).model.pricing, `$0.015 to $0.025 / per second of input video. ${VIDEO_INPUTS} Each input counts at most 60 seconds.`);
+  assert.equal(toStructuredModel(vsr).estimatedCostUsd, null);
+
+  // Caps that differ go with their rows.
+  const split = catalogModel('acme/vsr', [
+    { inputs: { resolution: '1080p' }, price: 0.025, priceMethod: 'per-input-video-second', maxSeconds: 60 },
+    { inputs: { resolution: '2160p' }, price: 0.05, priceMethod: 'per-input-video-second', maxSeconds: 20 },
+  ]);
+  assert.match(schemaPricing(split), /\| 1080p \| \$0\.025, each input at most 60 seconds \|\n\| 2160p \| \$0\.05, each input at most 20 seconds \|\n\n/);
+  assert.doesNotMatch(schemaPricing(split), /^Each input counts/m);
+  assert.equal(toStructuredModelDetail(split).model.pricing, `$0.025 to $0.05 / per second of input video. ${VIDEO_INPUTS} Each input counts at most 20 or 60 seconds, depending on the settings.`);
+
+  // A row without a cap counts the whole input.
+  const some = catalogModel('acme/vsr', [
+    { inputs: { resolution: '1080p' }, price: 0.025, priceMethod: 'per-input-video-second' },
+    { inputs: { resolution: '2160p' }, price: 0.05, priceMethod: 'per-input-video-second', maxSeconds: 20 },
+  ]);
+  assert.match(schemaPricing(some), /\| 1080p \| \$0\.025 \|\n\| 2160p \| \$0\.05, each input at most 20 seconds \|/);
+  assert.match(toStructuredModelDetail(some).model.pricing, / With some settings each input counts at most 20 seconds\.$/);
+
+  // Without a cap nothing is said about one; a cap on another method means nothing.
+  for (const rows of [
+    [{ inputs: {}, price: 0.015, priceMethod: 'per-input-video-second' }],
+    [{ inputs: {}, price: 0.015, priceMethod: 'per-input-video-second', maxSeconds: 0 }],
+    [{ inputs: {}, price: 0.015, priceMethod: 'per-output-video-second', maxSeconds: 60 }],
+  ]) {
+    assert.doesNotMatch(`${formatModelList([catalogModel('acme/video', rows)])}\n${formatModelSchema(catalogModel('acme/video', rows))}`, /at most/);
+  }
+});
+
+test('every price method shows its plain words after the price, never its id', () => {
+  const words = {
+    'per-run': 'per run',
+    'per-run-second': 'per second of run time',
+    'per-output-file': 'per output file',
+    'per-total-token': 'per input and output token',
+    'per-input-character': 'per prompt character',
+    'per-input-audio-second': 'per second of input audio',
+    'per-input-video-second': 'per second of input video',
+    'per-output-video-second': 'per second of output video',
+  };
+  for (const [method, label] of Object.entries(words)) {
+    const model = catalogModel('acme/model', [{ inputs: {}, price: 0.5, priceMethod: method }]);
+    assert.equal(formatPricing(model), `$0.5 / ${label}`, method);
+    assert.equal(schemaPricing(model).split('\n').slice(0, 2).join('\n'), `### Pricing (${label})\n$0.5 / ${label}`, method);
+    assert.ok(!`${formatModelList([model])}\n${formatModelSchema(model)}`.includes(method), method);
+  }
+  // The other three are described in full: by blocks of output, by the run's own report, by the live session's rates.
+  for (const [method, text] of [['per-output-megapixel', /^\$0\.5 per run for an output image up to 1024 x 1024 pixels$/], ['reported-price', /^Set when the run ends \(listed estimate \$0\.5\)\./], ['per-realtime-turn', /^Billed turn by turn during the live session\./]]) {
+    const model = catalogModel('acme/model', [{ inputs: {}, price: 0.5, priceMethod: method }]);
+    assert.match(formatPricing(model), text, method);
+    assert.ok(!`${formatModelList([model])}\n${formatModelSchema(model)}`.includes(method), method);
+  }
+});
+
+test('the ids price rows carried before are unknown: no fixed price, never the id', () => {
+  for (const old of ['cpr', 'cps', 'cpo', 'cpt', 'cp-pixel', 'cp-promptlength', 'cp-audiosecondslength', 'cp-outputVideoLength', 'cp-realtimeturn', 'cp-readoutput', 'cp', 'cp-request', 'cp-image', 'cp-frame', 'cp-byte']) {
+    const model = catalogModel('acme/model', [{ inputs: {}, price: 0.5, priceMethod: old, note: 'A note.' }]);
+    assert.equal(formatPricing(model), 'No fixed price: the charge follows the time the run takes and is set when it ends', old);
+    assert.ok(!`${formatModelList([model])}\n${formatModelSchema(model)}`.includes(old), old);
+  }
+});
+
+test('a price per output megapixel gives each row its own extra and input rates', () => {
+  const model = catalogModel('black-forest-labs/flux-2-klein-9b', '[{"inputs":{"inputImage":"QUANTITY:0"},"price":0.015,"priceMethod":"per-output-megapixel","priceExtra":0.015,"priceInput":0},{"inputs":{"inputImage":"QUANTITY:1"},"price":0.015,"priceMethod":"per-output-megapixel","priceExtra":0.002,"priceInput":0.002}]');
   assert.equal(formatPricing(model), '$0.015 per run for an output image up to 1024 x 1024 pixels, plus $0.002 to $0.015 per further 1024 x 1024 block, plus $0.002 per 1024 x 1024 block of each input image (at most 4 blocks per image)');
   const schema = schemaPricing(model);
   assert.match(schema, /- No `inputImage`: \$0\.015 for the first block of the output image, plus \$0\.015 for each further block\./);
@@ -530,24 +614,24 @@ test('a price by image size gives each row its own extra and input rates', () =>
 
   // Counts past the first: each row covers the counts up to the next one.
   const counted = catalogModel('acme/edit', [
-    { inputs: { inputImage: 'QUANTITY:0' }, price: 0.01, priceMethod: 'cp-pixel' },
-    { inputs: { inputImage: 'QUANTITY:1' }, price: 0.02, priceMethod: 'cp-pixel' },
-    { inputs: { inputImage: 'QUANTITY:3' }, price: 0.03, priceMethod: 'cp-pixel' },
+    { inputs: { inputImage: 'QUANTITY:0' }, price: 0.01, priceMethod: 'per-output-megapixel' },
+    { inputs: { inputImage: 'QUANTITY:1' }, price: 0.02, priceMethod: 'per-output-megapixel' },
+    { inputs: { inputImage: 'QUANTITY:3' }, price: 0.03, priceMethod: 'per-output-megapixel' },
   ]);
   assert.match(schemaPricing(counted), /- 1 to 2 `inputImage` files: \$0\.02 for the first block of the output image\.\n- 3 or more `inputImage` files: \$0\.03/);
 });
 
 test('a price set when the run ends keeps a listed estimate and notes without token rates', () => {
-  const omni = catalogModel('google/gemini-omni-flash-r2v', '[{"inputs":{},"price":1.1,"priceMethod":"cp-readoutput","note":"Approximate. Final price is metered from actual token usage (input images/video + generated video length) when the task completes."}]');
-  const pricing = 'Set by the run when it ends (listed estimate $1.1): Approximate. Final price is metered from actual token usage (input images/video + generated video length) when the task completes.';
+  const omni = catalogModel('google/gemini-omni-flash-r2v', '[{"inputs":{},"price":1.1,"priceMethod":"reported-price","note":"Approximate. Final price is metered from actual token usage (input images/video + generated video length) when the task completes."}]');
+  const pricing = 'Set when the run ends (listed estimate $1.1): Approximate. Final price is metered from actual token usage (input images/video + generated video length) when the task completes.';
   assert.equal(searchPricingLine(omni), `- **Pricing:** ${pricing}`);
   assert.equal(schemaPricing(omni), `### Pricing\n${pricing}`);
   assert.equal(toStructuredModel(omni).estimatedCostUsd, 1.1);
   assert.equal(toStructuredModelDetail(omni).model.estimatedCostUsd, 1.1);
 
   // A note with per-second rates, not per-1M token rates, is the price as written.
-  const video = catalogModel('pruna/p-video', '[{"inputs":{},"price":0,"priceMethod":"cp-readoutput","note":"The price is calculated per second of output video based on resolution and draft mode: 720p costs $0.02/s (or $0.005/s with draft on), and 1080p costs $0.04/s (or $0.01/s with draft on)."}]');
-  assert.equal(formatPricing(video), 'Set by the run when it ends: The price is calculated per second of output video based on resolution and draft mode: 720p costs $0.02/s (or $0.005/s with draft on), and 1080p costs $0.04/s (or $0.01/s with draft on).');
+  const video = catalogModel('pruna/p-video', '[{"inputs":{},"price":0,"priceMethod":"reported-price","note":"The price is calculated per second of output video based on resolution and draft mode: 720p costs $0.02/s (or $0.005/s with draft on), and 1080p costs $0.04/s (or $0.01/s with draft on)."}]');
+  assert.equal(formatPricing(video), 'Set when the run ends: The price is calculated per second of output video based on resolution and draft mode: 720p costs $0.02/s (or $0.005/s with draft on), and 1080p costs $0.04/s (or $0.01/s with draft on).');
   assert.equal(toStructuredModel(video).estimatedCostUsd, null);
 });
 
@@ -566,10 +650,10 @@ test('rows of an unknown price method show no fixed price, never the method or t
   }
 
   const mixed = catalogModel('acme/mixed', [
-    { inputs: { r: 'a' }, price: 0.1, priceMethod: 'cpr' },
+    { inputs: { r: 'a' }, price: 0.1, priceMethod: 'per-run' },
     { inputs: { r: 'b' }, price: 0.2, priceMethod: 'cp' },
   ]);
-  assert.equal(formatPricing(mixed), '$0.1 / per request, other settings have no fixed price');
+  assert.equal(formatPricing(mixed), '$0.1 / per run, other settings have no fixed price');
   assert.match(schemaPricing(mixed), /\| a \| \$0\.1 \|\n\| b \| No fixed price, charged for run time \|/);
 });
 
@@ -580,43 +664,43 @@ function detailModel(slug, dynamicprice, items) {
 
 test('get_model_schema shows no fixed price when no run can match the price rows', () => {
   // Rows keyed to a setting the model does not have.
-  const keyed = detailModel('acme/image','[{"inputs":{"size":"1K"},"price":0.05,"priceMethod":"cpo"},{"inputs":{"size":"2K"},"price":0.085,"priceMethod":"cpo"}]',
+  const keyed = detailModel('acme/image','[{"inputs":{"size":"1K"},"price":0.05,"priceMethod":"per-output-file"},{"inputs":{"size":"2K"},"price":0.085,"priceMethod":"per-output-file"}]',
     [{ id: 'resolution', type: 'select', label: 'Resolution', required: true, defaultvalue: '1K', optionsLoad: '', options: [{ value: '1K', text: '1K' }, { value: '2K', text: '2K' }] }]);
   // Rows keyed to values the setting does not offer.
-  const valued = detailModel('acme/talking-video','[{"inputs":{"resolution":"480P"},"price":0.045,"priceMethod":"cpr"},{"inputs":{"resolution":"580P"},"price":0.07,"priceMethod":"cpr"},{"inputs":{"resolution":"720P"},"price":0.095,"priceMethod":"cpr"}]',
+  const valued = detailModel('acme/talking-video','[{"inputs":{"resolution":"480P"},"price":0.045,"priceMethod":"per-run"},{"inputs":{"resolution":"580P"},"price":0.07,"priceMethod":"per-run"},{"inputs":{"resolution":"720P"},"price":0.095,"priceMethod":"per-run"}]',
     [{ id: 'resolution', type: 'select', label: 'resolution', defaultvalue: '832*480', optionsLoad: '', options: [{ value: '832*480', text: '480P (16:9)' }, { value: '1280*720', text: '720P (16:9)' }] }]);
   for (const model of [keyed, valued]) {
     assert.equal(schemaPricing(model), `### Pricing\n${NO_FIXED}.`);
     assert.equal(toStructuredModelDetail(model).model.pricing, NO_FIXED);
   }
   // Search rows carry no settings, so they keep the price list.
-  assert.equal(formatPricing(keyed), '$0.05 to $0.085 / per output');
-  assert.equal(toStructuredModel(keyed).pricing, '$0.05 to $0.085 / per output');
+  assert.equal(formatPricing(keyed), '$0.05 to $0.085 / per output file');
+  assert.equal(toStructuredModel(keyed).pricing, '$0.05 to $0.085 / per output file');
 });
 
 test('get_model_schema names the offered values that no price row covers', () => {
-  const model = detailModel('acme/song', '[{"inputs":{"duration":10},"price":0.005,"priceMethod":"cpr"},{"inputs":{"duration":30},"price":0.015,"priceMethod":"cpr"},{"inputs":{"duration":60},"price":0.03,"priceMethod":"cpr"},{"inputs":{"duration":90},"price":0.045,"priceMethod":"cpr"},{"inputs":{"duration":120},"price":0.06,"priceMethod":"cpr"},{"inputs":{"duration":180},"price":0.09,"priceMethod":"cpr"}]',
+  const model = detailModel('acme/song', '[{"inputs":{"duration":10},"price":0.005,"priceMethod":"per-run"},{"inputs":{"duration":30},"price":0.015,"priceMethod":"per-run"},{"inputs":{"duration":60},"price":0.03,"priceMethod":"per-run"},{"inputs":{"duration":90},"price":0.045,"priceMethod":"per-run"},{"inputs":{"duration":120},"price":0.06,"priceMethod":"per-run"},{"inputs":{"duration":180},"price":0.09,"priceMethod":"per-run"}]',
     [{ id: 'duration', type: 'select', label: 'Duration', defaultvalue: '60', optionsLoad: '', options: ['10', '30', '60', '90', '120', '180', '240'].map(value => ({ value, text: value })) }]);
   assert.match(schemaPricing(model), /\| 180 \| \$0\.09 \|\n\nOther values of `duration` \(`240`\): no fixed price; the charge follows the time the run takes\.$/);
-  assert.equal(toStructuredModelDetail(model).model.pricing, '$0.005 to $0.09 / per request. Other values of `duration` (`240`): no fixed price; the charge follows the time the run takes.');
+  assert.equal(toStructuredModelDetail(model).model.pricing, '$0.005 to $0.09 / per run. Other values of `duration` (`240`): no fixed price; the charge follows the time the run takes.');
   // Search rows carry no settings, so they keep the range alone.
-  assert.equal(toStructuredModel(model).pricing, '$0.005 to $0.09 / per request');
+  assert.equal(toStructuredModel(model).pricing, '$0.005 to $0.09 / per run');
 
   // A row that leaves the key out prices every value of it, unless no run can match that row.
   const typeItem = { id: 'outputType', type: 'select', label: 'Output', optionsLoad: '', options: ['image', 'video'].map(value => ({ value, text: value })) };
   const durationItem = { id: 'duration', type: 'select', label: 'Duration', optionsLoad: '', options: ['5', '10'].map(value => ({ value, text: value })) };
-  const effects = detailModel('acme/effects', [{ inputs: { outputType: 'image' }, price: 0.1, priceMethod: 'cpr' }, { inputs: { outputType: 'video', duration: '5' }, price: 0.5, priceMethod: 'cpr' }], [typeItem, durationItem]);
+  const effects = detailModel('acme/effects', [{ inputs: { outputType: 'image' }, price: 0.1, priceMethod: 'per-run' }, { inputs: { outputType: 'video', duration: '5' }, price: 0.5, priceMethod: 'per-run' }], [typeItem, durationItem]);
   assert.match(schemaPricing(effects), /\| image \| - \| \$0\.1 \|\n\| video \| 5 \| \$0\.5 \|$/);
-  const fallback = detailModel('acme/fallback', [{ inputs: { duration: '5' }, price: 0.5, priceMethod: 'cpr' }, { inputs: {}, price: 0.2, priceMethod: 'cpr' }], [durationItem]);
+  const fallback = detailModel('acme/fallback', [{ inputs: { duration: '5' }, price: 0.5, priceMethod: 'per-run' }, { inputs: {}, price: 0.2, priceMethod: 'per-run' }], [durationItem]);
   assert.doesNotMatch(schemaPricing(fallback), /Other values/);
-  const unmatched = detailModel('acme/unmatched', [{ inputs: { size: '1K' }, price: 0.1, priceMethod: 'cpr' }, { inputs: { duration: '5' }, price: 0.5, priceMethod: 'cpr' }], [durationItem]);
+  const unmatched = detailModel('acme/unmatched', [{ inputs: { size: '1K' }, price: 0.1, priceMethod: 'per-run' }, { inputs: { duration: '5' }, price: 0.5, priceMethod: 'per-run' }], [durationItem]);
   assert.match(schemaPricing(unmatched), /Other values of `duration` \(`10`\)/);
 
   // Count rows, settings without options and options loaded for each account are not checked.
-  const pro = detailModel('black-forest-labs/flux-2-pro', '[{"inputs":{"inputImage":"QUANTITY:0"},"price":0.03,"priceMethod":"cp-pixel","priceExtra":0.015,"priceInput":0},{"inputs":{"inputImage":"QUANTITY:1"},"price":0.03,"priceMethod":"cp-pixel","priceExtra":0.015,"priceInput":0.015}]',
+  const pro = detailModel('black-forest-labs/flux-2-pro', '[{"inputs":{"inputImage":"QUANTITY:0"},"price":0.03,"priceMethod":"per-output-megapixel","priceExtra":0.015,"priceInput":0},{"inputs":{"inputImage":"QUANTITY:1"},"price":0.03,"priceMethod":"per-output-megapixel","priceExtra":0.015,"priceInput":0.015}]',
     [{ id: 'inputImage', type: 'combinefileinput', label: 'Input Image', optionsLoad: '' }]);
-  assert.match(schemaPricing(pro), /^### Pricing \(by image size\)/);
-  const loaded = detailModel('acme/lora', [{ inputs: { selectedModel: '42' }, price: 0.2, priceMethod: 'cpr' }],
+  assert.match(schemaPricing(pro), /^### Pricing \(per output megapixel\)/);
+  const loaded = detailModel('acme/lora', [{ inputs: { selectedModel: '42' }, price: 0.2, priceMethod: 'per-run' }],
     [{ id: 'selectedModel', type: 'select', label: 'Model', optionsLoad: ['LIST:categories=x'], options: [{ value: '7', text: 'Seven' }] }]);
   assert.match(schemaPricing(loaded), /\| 42 \| \$0\.2 \|/);
 });
@@ -641,15 +725,15 @@ test('a model billed by run time shows its rate', () => {
 });
 
 test('a model shows the caller\'s discount when Wiro returns one', () => {
-  const rows = '[{"inputs":{"resolution":"1K"},"price":0.14,"priceMethod":"cpo"},{"inputs":{"resolution":"4K"},"price":0.24,"priceMethod":"cpo"}]';
+  const rows = '[{"inputs":{"resolution":"1K"},"price":0.14,"priceMethod":"per-output-file"},{"inputs":{"resolution":"4K"},"price":0.24,"priceMethod":"per-output-file"}]';
   for (const discount of [20, '20.00']) {
     const model = { ...catalogModel('google/nano-banana-pro', rows), discount };
-    assert.match(formatModelList([model]), /- \*\*Pricing:\*\* \$0\.14 to \$0\.24 \/ per output\n- \*\*Your discount:\*\* 20% off the part of a charge paid from deposits\n/);
+    assert.match(formatModelList([model]), /- \*\*Pricing:\*\* \$0\.14 to \$0\.24 \/ per output file\n- \*\*Your discount:\*\* 20% off the part of a charge paid from deposits\n/);
     assert.match(formatModelSchema(model), /\| 4K \| \$0\.24 \|\n\n\*\*Your discount:\*\* 20% off the part of a charge paid from deposits\. Charges use coupon credit and store revenue first, at the list price\.\n/);
     assert.equal(toStructuredModel(model).discountPercent, 20);
     assert.equal(toStructuredModelDetail(model).model.discountPercent, 20);
     // Prices stay list prices.
-    assert.equal(toStructuredModel(model).pricing, '$0.14 to $0.24 / per output');
+    assert.equal(toStructuredModel(model).pricing, '$0.14 to $0.24 / per output file');
   }
   for (const discount of [null, undefined, 0, -5, 150, '', 'n/a']) {
     const model = { ...catalogModel('google/nano-banana-pro', rows), discount };
@@ -659,9 +743,9 @@ test('a model shows the caller\'s discount when Wiro returns one', () => {
 });
 
 test('estimatedCostUsd is null whenever there is no positive estimate', () => {
-  const kling = catalogModel('klingai/kling-v4', '[{"inputs":{"duration":"5","resolution":"720p"},"price":0.785,"priceMethod":"cpr"},{"inputs":{"duration":"30","resolution":"1080p"},"price":7.05,"priceMethod":"cpr"}]');
+  const kling = catalogModel('klingai/kling-v4', '[{"inputs":{"duration":"5","resolution":"720p"},"price":0.785,"priceMethod":"per-run"},{"inputs":{"duration":"30","resolution":"1080p"},"price":7.05,"priceMethod":"per-run"}]');
   assert.equal(toStructuredModel(kling).estimatedCostUsd, null);
-  assert.equal(toStructuredModel(kling).pricing, '$0.785 to $7.05 / per request');
+  assert.equal(toStructuredModel(kling).pricing, '$0.785 to $7.05 / per run');
   assert.equal(toStructuredModel({ ...catalogModel('acme/model'), approximatelycost: -1 }).estimatedCostUsd, null);
   assert.equal(toStructuredModel({ ...catalogModel('acme/model'), approximatelycost: 'n/a' }).estimatedCostUsd, null);
   assert.equal(toStructuredModel({ ...catalogModel('qwen/qwen3-8-27b'), approximatelycost: 0.01950320415013732 }).estimatedCostUsd, 0.01950320415013732);
@@ -671,7 +755,7 @@ test('get_model_schema leaves out a hidden parameter, such as a file input\'s fo
   // wiro/text-removal after its file input took URLs itself: inputImageUrl is
   // kept for callers that already send it, and the model page hides it.
   const model = {
-    ...catalogModel('wiro/text-removal', '[{"inputs":{},"price":0.04,"priceMethod":"cpr"}]'),
+    ...catalogModel('wiro/text-removal', '[{"inputs":{},"price":0.04,"priceMethod":"per-run"}]'),
     parameters: [
       {
         title: '',

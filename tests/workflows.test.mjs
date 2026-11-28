@@ -592,9 +592,9 @@ test('get_workflow names the steps its estimate leaves out', async () => {
 });
 
 // Estimate lines shaped as Wiro sends them: a duration and a resolution set by
-// Start fields, the images of a step priced by image size, prompt text and audio
-// given at the start, a step priced per video second, and a setting and text that
-// an earlier step fills.
+// Start fields, the images of a step priced per output megapixel, prompt text,
+// audio and video given at the start, steps priced per second of output and of
+// input video, and a setting and text that an earlier step fills.
 test('get_workflow says what its estimate counts only in part', async () => {
   const hidden = estimatedcost => {
     const row = storedRow({ isprotected: 1, ispublic: 1, estimatedcost });
@@ -610,7 +610,9 @@ test('get_workflow says what its estimate counts only in part', async () => {
       estimateLine('start-field', { unit: 'image', rate: 0.015, param: 'inputImage', startfield: 'img', startlabel: 'Image', defaultlength: 1, rangemin: 0.015, rangemax: 0.06 }),
       estimateLine('start-field', { unit: 'character', rate: 0.0001, param: 'prompt', paramlabel: 'Prompt', startfield: 'prompt', startlabel: 'Prompt', defaultlength: 120, amount: 0.012 }),
       estimateLine('start-field', { unit: 'audio-second', rate: 0.0003, param: 'inputAudio', paramlabel: 'Input Audio', startfield: 'audio', startlabel: 'Audio', amount: 0.0003 }),
+      estimateLine('start-field', { unit: 'input-video-second', rate: 0.015, param: 'inputVideo', paramlabel: 'Input Video', startfield: 'clip', startlabel: 'Clip', amount: 0.015 }),
       estimateLine('per-unit', { unit: 'video-second', rate: 0.025, amount: 0.025 }),
+      estimateLine('per-unit', { unit: 'input-video-second', rate: 0.02, amount: 0.02 }),
       estimateLine('earlier-step', { param: 'duration', paramlabel: 'duration', defaultvalue: '5', amount: 0.785, rangemin: 0.785, rangemax: 4.71 }),
       estimateLine('earlier-step', { unit: 'character', rate: 0.0001, defaultlength: 38, amount: 0.0038 }),
     ] }),
@@ -625,7 +627,9 @@ test('get_workflow says what its estimate counts only in part', async () => {
       'Each image in the `img` input adds $0.015 to $0.06 by its size, which is not in this figure.',
       'A step priced at $0.0001 per character of the `prompt` input counts its 120-character default in this figure ($0.012); other text costs more or less.',
       'A step priced at $0.0003 per second of the audio in the `audio` input counts as one second in this figure; it is charged for every second.',
+      'A step priced at $0.015 per second of the video in the `clip` input counts as one second in this figure; it is charged for every second.',
       'A step priced at $0.025 per second of output video counts as one second in this figure; it is charged for every second.',
+      'A step priced at $0.02 per second of input video counts as one second in this figure; it is charged for every second.',
       'A step whose duration setting comes from an earlier step counts at its default (5, $0.785) in this figure; it can cost $0.785 to $4.71.',
       'A step priced at $0.0001 per character of text from an earlier step counts its 38-character default text in this figure ($0.0038); the real text costs more or less.',
     ];

@@ -594,26 +594,30 @@ export function formatModelSchema(model: ToolListItem): string {
   return lines.join('\n');
 }
 
-// The units of the ten price methods Wiro bills by. A row with any other method
-// has no fixed price: its run is charged for the time it takes. A live model's
-// price is its rates (see livePrice), so its unit is never shown.
+// The eleven price methods Wiro bills by, each with the words shown after its
+// price. A row with any other method has no fixed price: its run is charged
+// for the time it takes, and its method is never shown. A live model's price is
+// its rates (see livePrice), so its unit is never shown either.
 const PRICE_METHOD_LABELS: Record<string, string> = {
-  cpr: 'per request',
-  cps: 'per second of run time',
-  cpo: 'per output',
-  cpt: 'per input and output token',
-  'cp-pixel': 'by image size',
-  'cp-audiosecondslength': 'per second of audio in inputAudio',
-  'cp-promptlength': 'per prompt character',
-  'cp-outputVideoLength': 'per video second',
-  'cp-realtimeturn': 'per turn',
-  'cp-readoutput': 'set by the run when it ends',
+  'per-run': 'per run',
+  'per-run-second': 'per second of run time',
+  'per-output-file': 'per output file',
+  'per-total-token': 'per input and output token',
+  'per-output-megapixel': 'per output megapixel',
+  'per-input-character': 'per prompt character',
+  'per-input-audio-second': 'per second of input audio',
+  'per-input-video-second': 'per second of input video',
+  'per-output-video-second': 'per second of output video',
+  'per-realtime-turn': 'per conversation turn',
+  'reported-price': 'set when the run ends',
 };
 
 // What a unit price counts, where its unit alone leaves it open.
 const PRICE_METHOD_RULES: Record<string, string> = {
-  cpt: 'Input and output tokens count together, and generated audio counts as output tokens, so the total is known only when the run ends.',
-  'cp-promptlength': 'Every character of the `prompt` value counts, including the brackets, keys and quotes of a JSON prompt.',
+  'per-total-token': 'Input and output tokens count together, and generated audio counts as output tokens, so the total is known only when the run ends.',
+  'per-input-character': 'Every character of the `prompt` value counts, including the brackets, keys and quotes of a JSON prompt.',
+  'per-input-audio-second': 'Every audio input counts for its length: `inputAudio`, `inputAudioUrl` and each file of `inputAudioUrlMultiple`.',
+  'per-input-video-second': 'Every video input counts for its length: `inputVideo`, `inputVideoUrl` and each file of `inputVideoMultiple` and `inputVideoUrlMultiple`.',
 };
 
 const NO_FIXED_PRICE = 'No fixed price: the charge follows the time the run takes and is set when it ends';
@@ -627,6 +631,8 @@ interface DynamicPriceRow {
   note?: string;
   priceExtra?: number;
   priceInput?: number;
+  // On a price per second of input audio or video: each input counts at most this many seconds.
+  maxSeconds?: number;
 }
 
 function parseDynamicPrice(dynamicprice?: string): DynamicPriceRow[] | null {
@@ -661,9 +667,34 @@ function isBilledMethod(row: DynamicPriceRow): boolean {
   return Object.prototype.hasOwnProperty.call(PRICE_METHOD_LABELS, row.priceMethod);
 }
 
-const isLive = (row: DynamicPriceRow): boolean => row.priceMethod === 'cp-realtimeturn';
-const isMetered = (row: DynamicPriceRow): boolean => row.priceMethod === 'cp-readoutput';
-const isPixel = (row: DynamicPriceRow): boolean => row.priceMethod === 'cp-pixel';
+const isLive = (row: DynamicPriceRow): boolean => row.priceMethod === 'per-realtime-turn';
+const isMetered = (row: DynamicPriceRow): boolean => row.priceMethod === 'reported-price';
+const isPixel = (row: DynamicPriceRow): boolean => row.priceMethod === 'per-output-megapixel';
+const isInputLength = (row: DynamicPriceRow): boolean =>
+  row.priceMethod === 'per-input-audio-second' || row.priceMethod === 'per-input-video-second';
+
+/** The seconds each input of a price per input length counts at most, or null when the row sets no cap. */
+function maxSecondsOf(row: DynamicPriceRow): number | null {
+  const seconds = isInputLength(row) ? Number(row.maxSeconds) : Number.NaN;
+  return Number.isFinite(seconds) && seconds > 0 ? seconds : null;
+}
+
+// A cap that every row priced by input length shares is said once, after the
+// price; caps that differ go with their rows.
+function sharedMaxSeconds(rows: DynamicPriceRow[]): number | null {
+  const caps = [...new Set(rows.filter(isInputLength).map(maxSecondsOf))];
+  return caps.length === 1 ? caps[0] : null;
+}
+
+/** The caps on each input of the rows priced by input length in a sentence, or undefined when none sets one. */
+function maxSecondsRule(rows: DynamicPriceRow[]): string | undefined {
+  const caps = rows.filter(isInputLength).map(maxSecondsOf);
+  const distinct = [...new Set(caps.filter((cap): cap is number => cap !== null))].sort((a, b) => a - b);
+  if (distinct.length === 0) return undefined;
+  const seconds = `${distinct.join(' or ')} seconds`;
+  if (caps.includes(null)) return `With some settings each input counts at most ${seconds}.`;
+  return distinct.length === 1 ? `Each input counts at most ${seconds}.` : `Each input counts at most ${seconds}, depending on the settings.`;
+}
 
 // A live model is charged turn by turn while its session runs, at the rates in
 // its note, so a row price is not what a session costs. One per-turn row makes
@@ -676,7 +707,7 @@ function livePrice(rows: DynamicPriceRow[]): string | null {
     : 'Billed turn by turn during the live session. No fixed price per run.';
 }
 
-// A cp-readoutput run reports what it cost when it ends, from what it used,
+// A reported-price run reports what it cost when it ends, from what it used,
 // such as tokens. The row's note gives the rates, and a price above 0 is a
 // listed estimate.
 function meteredEstimate(row: DynamicPriceRow): number | undefined {
@@ -687,8 +718,8 @@ function meteredEstimate(row: DynamicPriceRow): number | undefined {
 function meteredPrice(row: DynamicPriceRow): string {
   const estimate = meteredEstimate(row);
   const head = estimate === undefined
-    ? 'Set by the run when it ends'
-    : `Set by the run when it ends (listed estimate $${formatPrice(estimate)})`;
+    ? 'Set when the run ends'
+    : `Set when the run ends (listed estimate $${formatPrice(estimate)})`;
   const note = priceNote(row);
   return note ? `${head}: ${note}` : `${head}. The finished task shows the cost.`;
 }
@@ -723,10 +754,11 @@ function quantityOf(value: unknown): number | null {
   return match ? Number(match[1]) : null;
 }
 
-// cp-pixel counts pixels in blocks of 1024 x 1024, and part of a block counts
-// as a whole one. `price` covers the first block of the first output image and
-// `priceExtra` each further block of it. On a row that needs input images
-// (QUANTITY:1 or more), each input image adds `priceInput` per block, up to 4.
+// per-output-megapixel counts pixels in blocks of 1024 x 1024, and part of a
+// block counts as a whole one. `price` covers the first block of the first
+// output image and `priceExtra` each further block of it. On a row that needs
+// input images (QUANTITY:1 or more), each input image adds `priceInput` per
+// block, up to 4.
 const PIXEL_BLOCK = '1024 x 1024';
 const PIXEL_INPUT_BLOCKS_MAX = 4;
 const PIXEL_RULES = `Pixels are counted in blocks of ${PIXEL_BLOCK} (1,048,576 pixels), and part of a block `
@@ -748,9 +780,9 @@ function pixelPrice(rows: DynamicPriceRow[]): string {
 }
 
 /**
- * When a cp-pixel row applies: "No `inputImage`", "With `inputImage`", "1 to 2
- * `inputImage` files". A run uses the row with the highest count at or below
- * the number of files it sends.
+ * When a per-output-megapixel row applies: "No `inputImage`", "With
+ * `inputImage`", "1 to 2 `inputImage` files". A run uses the row with the
+ * highest count at or below the number of files it sends.
  */
 function pixelRowCondition(row: DynamicPriceRow, rows: DynamicPriceRow[]): string {
   const parts = Object.entries(row.inputs ?? {}).map(([key, value]) => {
@@ -863,13 +895,18 @@ function runTimeRate(model: ToolListItem): number {
   return own > 0 ? own : positiveAmount(model.quegroupcps);
 }
 
-/** One row's price in the schema; a plain price names its unit unless the table header does. */
-function rowPriceDetailed(row: DynamicPriceRow, withUnit: boolean): string {
+/**
+ * One row's price in the schema; a plain price names its unit unless the table
+ * header does, and its cap on each input when `withCap`.
+ */
+function rowPriceDetailed(row: DynamicPriceRow, withUnit: boolean, withCap: boolean): string {
   if (!isBilledMethod(row)) return withUnit ? NO_FIXED_PRICE : 'No fixed price, charged for run time';
   if (isMetered(row)) return meteredPrice(row);
   if (isPixel(row)) return pixelRowRates(row);
   const price = `$${formatPrice(row.price)}`;
-  return withUnit ? `${price} / ${PRICE_METHOD_LABELS[row.priceMethod]}` : price;
+  const text = withUnit ? `${price} / ${PRICE_METHOD_LABELS[row.priceMethod]}` : price;
+  const cap = withCap ? maxSecondsOf(row) : null;
+  return cap === null ? text : `${text}, each input at most ${cap} seconds`;
 }
 
 function formatPricingDetailed(model: ToolListItem): string | null {
@@ -909,11 +946,13 @@ function formatDynamicPriceDetailed(rows: DynamicPriceRow[], items: Map<string, 
     const keys = [...new Set(rows.flatMap(row => Object.keys(row.inputs ?? {})))];
     const pixel = rows.every(isPixel);
     const single = !pixel && rows.length === 1 && keys.length === 0;
+    const sharedCap = sharedMaxSeconds(rows);
+    const rowCaps = sharedCap === null;
     const after: string[] = [];
     let lines: string[];
 
     if (pixel) {
-      lines = ['### Pricing (by image size)', PIXEL_RULES];
+      lines = [`### Pricing (${PRICE_METHOD_LABELS['per-output-megapixel']})`, PIXEL_RULES];
       rows.forEach((row, i) => {
         lines.push(`- ${pixelRowCondition(row, rows)}: ${pixelRowRates(row)}.${rowNotes && notes[i] ? ` Note: ${notes[i]}` : ''}`);
       });
@@ -926,7 +965,7 @@ function formatDynamicPriceDetailed(rows: DynamicPriceRow[], items: Map<string, 
       const method = rows.find(isBilledMethod)?.priceMethod ?? '';
       lines = [`### Pricing (${PRICE_METHOD_LABELS[method]})`];
       if (single) {
-        lines.push(rowPriceDetailed(rows[0], true));
+        lines.push(rowPriceDetailed(rows[0], true, rowCaps));
       } else if (keys.length > 0) {
         // A run uses the row with the highest QUANTITY at or below the number of
         // items it sends, so an input's highest QUANTITY row covers any more.
@@ -947,12 +986,12 @@ function formatDynamicPriceDetailed(rows: DynamicPriceRow[], items: Map<string, 
             return count > 0 && count === topQuantity.get(key) ? `qty: ${count} or more` : `qty: ${count}`;
           });
           const noteCell = rowNotes ? ` ${(notes[i] ?? '').replace(/\|/g, '\\|')} |` : '';
-          lines.push(`| ${values.join(' | ')} | ${rowPriceDetailed(row, false)} |${noteCell}`);
+          lines.push(`| ${values.join(' | ')} | ${rowPriceDetailed(row, false, rowCaps)} |${noteCell}`);
         });
         after.push(...unpricedOptionLines(rows, items));
       } else {
         rows.forEach((row, i) => {
-          lines.push(`- ${rowPriceDetailed(row, true)}${rowNotes && notes[i] ? `. Note: ${notes[i]}` : ''}`);
+          lines.push(`- ${rowPriceDetailed(row, true, rowCaps)}${rowNotes && notes[i] ? `. Note: ${notes[i]}` : ''}`);
         });
       }
     }
@@ -960,6 +999,8 @@ function formatDynamicPriceDetailed(rows: DynamicPriceRow[], items: Map<string, 
     // A single price is followed directly by what it counts; a table or a list
     // first gets a blank line, so these do not read as one of its rows.
     after.push(...new Set(rows.map(row => PRICE_METHOD_RULES[row.priceMethod]).filter(Boolean)));
+    const capRule = maxSecondsRule(rows);
+    if (capRule && sharedCap !== null) after.push(capRule);
     if (sharedNote) after.push(`Note: ${sharedNote}`);
     if (after.length > 0) lines.push(...(single ? [] : ['']), ...after);
     return lines.join('\n');
@@ -1022,10 +1063,12 @@ function formatDynamicPrice(rows: DynamicPriceRow[], detailed: boolean, items: M
 
     const line = `${parts.join('; ')}${rows.some(row => !isBilledMethod(row)) ? ', other settings have no fixed price' : ''}`;
     // Without settings (search rows), unpricedOptionLines finds nothing.
+    const capRule = maxSecondsRule(rows);
     const rules = [...new Set([
       ...unpricedOptionLines(rows, items),
       ...(pixel.length > 0 ? [PIXEL_RULES] : []),
       ...unit.map(row => PRICE_METHOD_RULES[row.priceMethod]).filter(Boolean),
+      ...(capRule ? [capRule] : []),
     ])];
     if (!detailed || rules.length === 0) return line;
     return `${line.endsWith('.') ? line : `${line}.`} ${rules.join(' ')}`;

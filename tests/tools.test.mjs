@@ -1264,7 +1264,7 @@ test('get_model_schema answers a price question for a token-billed model with it
         title: 'GPT-5.4 Nano (OpenAI)',
         categories: ['tool', 'partner-llm'],
         parameters: [{ title: 'Inputs', items: [{ id: 'prompt', type: 'textarea', label: 'Prompt', required: true }] }],
-        dynamicprice: [{ inputs: {}, price: 0, priceMethod: 'cp-readoutput', note }],
+        dynamicprice: [{ inputs: {}, price: 0, priceMethod: 'reported-price', note }],
         approximatelycost: 0,
         cps: 0,
       }],
@@ -1277,8 +1277,8 @@ test('get_model_schema answers a price question for a token-billed model with it
 
     const result = await client.callTool({ name: 'get_model_schema', arguments: { model: 'openai/gpt-5-4-nano' } });
     assert.notEqual(result.isError, true);
-    assert.ok(result.content[0].text.includes(`### Pricing\nSet by the run when it ends: ${note}\n`));
-    assert.equal(result.structuredContent.model.pricing, `Set by the run when it ends: ${note}`);
+    assert.ok(result.content[0].text.includes(`### Pricing\nSet when the run ends: ${note}\n`));
+    assert.equal(result.structuredContent.model.pricing, `Set when the run ends: ${note}`);
     assert.equal(result.structuredContent.model.estimatedCostUsd, null);
     assert.deepEqual(result.structuredContent.model.pricingNotes, [note]);
   });
@@ -1300,7 +1300,7 @@ test('the price guidance covers prices set when the run ends and prices that are
     const models = await client.callTool({ name: 'get_playbook', arguments: { topics: ['models'] } });
     const playbook = models.content.map(part => part.text ?? '').join('\n');
     assert.match(playbook, /compare the prices, and check the cheapest ones with `get_model_schema` before you name one: it checks the price against the model's settings and can read "No fixed price"\./);
-    assert.match(playbook, /- A price set by the run when it ends, or billed turn by turn in a live session, gives the rates: estimate from them and say the charge is known after the run\. A price that reads "No fixed price" is charged for the time the run takes: say so before the run\./);
+    assert.match(playbook, /- A price set when the run ends, or billed turn by turn in a live session, gives the rates: estimate from them and say the charge is known after the run\. A price that reads "No fixed price" is charged for the time the run takes: say so before the run\./);
     assert.match(playbook, /A model that shows the user's discount takes it off the part of a charge paid from deposits/);
   });
 });
@@ -1311,7 +1311,7 @@ test('search_models and get_model_schema return the caller\'s discount and the p
     cleanslugproject: 'hunyuan3d-2-1',
     title: 'Hunyuan3D 2.1',
     categories: ['tool', '3d-generation'],
-    dynamicprice: '[{"inputs":{"generate_texture":"true"},"price":0.9,"priceMethod":"cpr","note":"$0.9 for textured mesh"},{"inputs":{"generate_texture":"false"},"price":0.3,"priceMethod":"cpr","note":"$0.30 for untextured white mesh."}]',
+    dynamicprice: '[{"inputs":{"generate_texture":"true"},"price":0.9,"priceMethod":"per-run","note":"$0.9 for textured mesh"},{"inputs":{"generate_texture":"false"},"price":0.3,"priceMethod":"per-run","note":"$0.30 for untextured white mesh."}]',
     approximatelycost: 0,
     cps: 0,
     discount: 20,
@@ -1331,7 +1331,7 @@ test('search_models and get_model_schema return the caller\'s discount and the p
       slug: 'tencent/hunyuan3d-2-1',
       title: 'Hunyuan3D 2.1',
       categories: ['3d-generation'],
-      pricing: '$0.3 to $0.9 / per request',
+      pricing: '$0.3 to $0.9 / per run',
       estimatedCostUsd: null,
       discountPercent: 20,
     });
