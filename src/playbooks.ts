@@ -152,8 +152,8 @@ Example, "a 10 second clip of a city street at night with Kling": \`search_model
 
 ## Prices and limits
 
-- The price is a fixed price per run, a price per unit (per second of video, per prompt character, per token, per output and so on), a price by image size, or a rate per second of run time. A range means it depends on inputs such as resolution or duration: \`get_model_schema\` shows which. Quote the price at the size and count the user wants, or at the schema default, and say which.
-- A price set by the run when it ends, or billed turn by turn in a live session, gives the rates: estimate from them and say the charge is known after the run. A price that reads "No fixed price" is charged for the time the run takes: say so before the run.
+- The price is a fixed price per run, a price per unit (per second of input or output video, per second of input audio, per prompt character, per token, per output file and so on), a price per output megapixel, or a rate per second of run time. A range means it depends on inputs such as resolution or duration: \`get_model_schema\` shows which. Quote the price at the size and count the user wants, or at the schema default, and say which.
+- A price set when the run ends, or billed turn by turn in a live session, gives the rates: estimate from them and say the charge is known after the run. A price that reads "No fixed price" is charged for the time the run takes: say so before the run.
 - Prices are list prices. A model that shows the user's discount takes it off the part of a charge paid from deposits; coupon credit and store revenue pay first, at the list price.
 - Successful tasks are billed. Failed tasks and tasks cancelled while queued are not; a task stopped while running can still be charged.
 - A finished task's result shows its cost: the amount charged, and the list price when the two differ. \`get_task_price\` gives the cost of a task whose result you do not have. Right after a task ends, the result can show only the list price, marked as such: \`get_task_price\` a moment later gives the amount charged.

@@ -337,6 +337,7 @@ export type WorkflowDetail = z.infer<typeof workflowDetailSchema>;
 // What one unit of a per-unit price is, by the unit Wiro names in the estimate.
 const ESTIMATE_UNITS: Record<string, { per: string; unit: string }> = {
   'video-second': { per: 'per second of output video', unit: 'second' },
+  'input-video-second': { per: 'per second of input video', unit: 'second' },
   'audio-second': { per: 'per second of input audio', unit: 'second' },
   'run-second': { per: 'per second of run time', unit: 'second' },
   token: { per: 'per token', unit: 'token' },
@@ -378,8 +379,9 @@ function estimateNotes(details: unknown): string[] {
         if (low && high) notes.add(`Each image in ${input} adds ${low === high ? low : `${low} to ${high}`} by its size, which is not in this figure.`);
       } else if (unit === 'character') {
         if (rate) notes.add(`A step priced at ${rate} per character of ${input} counts its ${toInteger(detail.defaultlength)}-character default in this figure${amount ? ` (${amount})` : ''}; other text costs more or less.`);
-      } else if (unit === 'audio-second') {
-        if (rate) notes.add(`A step priced at ${rate} per second of the audio in ${input} counts as one second in this figure; it is charged for every second.`);
+      } else if (unit === 'audio-second' || unit === 'input-video-second') {
+        const media = unit === 'audio-second' ? 'audio' : 'video';
+        if (rate) notes.add(`A step priced at ${rate} per second of the ${media} in ${input} counts as one second in this figure; it is charged for every second.`);
       } else {
         const options = Array.isArray(detail.options)
           ? detail.options.filter(isPlainObject).map(option => `${quotedSpan(asString(option.value) ?? '')} ${usd(option.price) ?? ''}`.trim())
