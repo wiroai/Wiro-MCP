@@ -1,5 +1,5 @@
 {
-  "madeBy": "get_model_schema of @wiro-ai/wiro-mcp 2.2.0 (be463ac) on these inputs",
+  "madeBy": "get_model_schema of @wiro-ai/wiro-mcp 2.2.0 (64366b5) on these inputs",
   "cases": [
     {
       "name": "per-run rows with a discount (Veo 3.1)",
@@ -275,7 +275,7 @@
       "content": [
         {
           "type": "text",
-          "text": "## kandinskylab/kandinsky-6-0-vsr-2-0\n**Model:** `kandinskylab/kandinsky-6-0-vsr-2-0`\n\n### Pricing (per second of input video)\n| resolution | Price |\n| --- | --- |\n| 720p | $0.015, each input at most 60 seconds |\n| 1080p | $0.025, each input at most 60 seconds |\n| 2160p | $0.1, each input at most 20 seconds |\n\nEvery video input counts for its length: `inputVideo`, `inputVideoUrl` and each file of `inputVideoMultiple` and `inputVideoUrlMultiple`.\n\n### Parameters\n\n- **`inputVideo`** (combinefileinput) **(required)**\n  Input Video\n  Pass an array of URLs directly: `inputVideo: [\"https://...\", \"https://...\"]`. No upload needed.\n  At most 1 file. A run with more is refused.\n- **`resolution`** (select) **(required)** (sample: `1080p`, used only by a workflow step that leaves it out)\n  resolution\n  Options: `720p`, `1080p`, `2160p`\n\n### Usage\n\nUse `run_model` with this model:\n```json\n{ \"model\": \"kandinskylab/kandinsky-6-0-vsr-2-0\", \"params\": { ... } }\n```"
+          "text": "## kandinskylab/kandinsky-6-0-vsr-2-0\n**Model:** `kandinskylab/kandinsky-6-0-vsr-2-0`\n\n### Pricing (per second of input video)\n| resolution | Price |\n| --- | --- |\n| 720p | $0.015, each input at most 60 seconds |\n| 1080p | $0.025, each input at most 60 seconds |\n| 2160p | $0.1, each input at most 20 seconds |\n\nEvery video input counts for its length: `inputVideo`, `inputVideoUrl` and each file of `inputVideoMultiple` and `inputVideoUrlMultiple`.\n\n### Parameters\n\n- **`inputVideo`** (combinefileinput) **(required)**\n  Input Video\n  Pass an array of URLs directly: `inputVideo: [\"https://...\", \"https://...\"]`. No upload needed.\n  At most 1 file. More is refused.\n- **`resolution`** (select) **(required)** (sample: `1080p`, used only by a workflow step that leaves it out)\n  resolution\n  Options: `720p`, `1080p`, `2160p`\n\n### Usage\n\nUse `run_model` with this model:\n```json\n{ \"model\": \"kandinskylab/kandinsky-6-0-vsr-2-0\", \"params\": { ... } }\n```"
         }
       ],
       "structuredContent": {
@@ -383,7 +383,7 @@
       "content": [
         {
           "type": "text",
-          "text": "## acme/image\n**Model:** `acme/image`\n\n### Pricing (per output megapixel)\nPixels are counted in blocks of 1024 x 1024 (1,048,576 pixels), and part of a block counts as a whole one: 1000 x 1050 is 2 blocks. Only the first output image is measured.\n- No `inputImage`: $0.03 for the first block of the output image, plus $0.01 for each further block. Note: First block, then each one.\n- With `inputImage`: $0.03 for the first block of the output image, plus $0.01 for each further block, plus $0.005 per block of each input image, at most 4 blocks ($0.02) per image.\n- Example: a 1440 x 1440 output with no input image is 2 blocks, so $0.04.\n\n### Parameters\n\n- **`inputImage`** (combinefileinput)\n  Images\n  Pass an array of URLs directly: `inputImage: [\"https://...\", \"https://...\"]`. No upload needed.\n  At most 4 files. A run with more is refused.\n\n### Usage\n\nUse `run_model` with this model:\n```json\n{ \"model\": \"acme/image\", \"params\": { ... } }\n```"
+          "text": "## acme/image\n**Model:** `acme/image`\n\n### Pricing (per output megapixel)\nPixels are counted in blocks of 1024 x 1024 (1,048,576 pixels), and part of a block counts as a whole one: 1000 x 1050 is 2 blocks. Only the first output image is measured.\n- No `inputImage`: $0.03 for the first block of the output image, plus $0.01 for each further block. Note: First block, then each one.\n- With `inputImage`: $0.03 for the first block of the output image, plus $0.01 for each further block, plus $0.005 per block of each input image, at most 4 blocks ($0.02) per image.\n- Example: a 1440 x 1440 output with no input image is 2 blocks, so $0.04.\n\n### Parameters\n\n- **`inputImage`** (combinefileinput)\n  Images\n  Pass an array of URLs directly: `inputImage: [\"https://...\", \"https://...\"]`. No upload needed.\n  At most 4 files. More is refused.\n\n### Usage\n\nUse `run_model` with this model:\n```json\n{ \"model\": \"acme/image\", \"params\": { ... } }\n```"
         }
       ],
       "structuredContent": {

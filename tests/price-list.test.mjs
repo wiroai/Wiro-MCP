@@ -59,7 +59,7 @@ function assertModelOutputUnchanged(result, detail) {
   assert.doesNotMatch(JSON.stringify(result.structuredContent), /priceMethod/);
 }
 
-// What 2.2.0 (be463ac) gave for these inputs, made by running its get_model_schema on them.
+// What 2.2.0 (#35's head, 64366b5) gave for these inputs, made by running its get_model_schema on them.
 const GOLDEN = JSON.parse(readFileSync(new URL('./fixtures/get-model-schema-2.2.0.json', import.meta.url), 'utf8'));
 
 test('the text and the structured output are byte for byte what 2.2.0 gave, with the ask and without it', async () => {
