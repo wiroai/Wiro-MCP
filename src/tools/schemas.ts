@@ -298,6 +298,14 @@ export const modelParameterSchema = z.object({
   min: z.number().optional(),
   max: z.number().optional(),
   step: z.number().optional(),
+  maxFiles: z.number().int().positive().optional()
+    .describe('A file field\'s limit: the most files a run takes in it. Left out when the field takes any number.'),
+  maxFilesByOption: z.array(z.object({
+    parameter: z.string(),
+    value: z.string(),
+    maxFiles: z.number().int().positive(),
+  })).optional()
+    .describe('Choices of another field that let this one take more files: while `parameter` is `value`, a run takes up to this maxFiles.'),
   advanced: z.boolean(),
   jsonSchema: z.record(z.string(), z.unknown()).optional(),
 });

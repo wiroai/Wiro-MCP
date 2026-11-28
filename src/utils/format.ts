@@ -497,6 +497,58 @@ export function parameterRange(item: ToolParameterItem): { min?: number; max?: n
   };
 }
 
+// The file fields a run counts, and the selects whose options can raise one's limit (Wiro's run check:
+// a field's own maxinputlength, or the chosen option's `<id>Count` when that is higher).
+const FILE_LIMIT_TYPES = new Set(['fileinput', 'multifileinput', 'multifileinputdrop', 'combinefileinput']);
+const FILE_COUNT_SELECTOR_TYPES = new Set(['select', 'selectwithcover']);
+
+export interface FileLimit {
+  maxFiles?: number;
+  maxFilesByOption?: Array<{ parameter: string; value: string; maxFiles: number }>;
+}
+
+function positiveWhole(value: unknown): number | undefined {
+  if (value === undefined || value === null || value === '') return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : undefined;
+}
+
+/**
+ * How many files a file field takes: maxFiles, its own limit, and maxFilesByOption, the choices of
+ * another field that let it take more. `items` are all of the model's fields. A field with no limit
+ * takes any number and gets neither.
+ */
+export function fileLimit(item: ToolParameterItem, items: ToolParameterItem[]): FileLimit {
+  if (!FILE_LIMIT_TYPES.has(String(item.type))) return {};
+  const maxFiles = positiveWhole(item.maxinputlength);
+  if (maxFiles === undefined) return {};
+  const countKey = `${item.id}Count`;
+  const raises: NonNullable<FileLimit['maxFilesByOption']> = [];
+  for (const other of items) {
+    if (other === item || !FILE_COUNT_SELECTOR_TYPES.has(String(other.type)) || !Array.isArray(other.options)) continue;
+    for (const option of other.options) {
+      if (!option || typeof option !== 'object' || !Object.prototype.hasOwnProperty.call(option, countKey)) continue;
+      const count = positiveWhole((option as Record<string, unknown>)[countKey]);
+      if (count !== undefined && count > maxFiles) {
+        raises.push({ parameter: String(other.id), value: toParameterOption(option).value, maxFiles: count });
+      }
+    }
+  }
+  return raises.length > 0 ? { maxFiles, maxFilesByOption: raises } : { maxFiles };
+}
+
+function fileLimitText(limit: FileLimit): string | null {
+  if (limit.maxFiles === undefined) return null;
+  const files = (count: number) => `${count} ${count === 1 ? 'file' : 'files'}`;
+  const raised = (limit.maxFilesByOption ?? []).map(raise => `${files(raise.maxFiles)} when \`${raise.parameter}\` is \`${raise.value}\``);
+  return `  At most ${files(limit.maxFiles)}${raised.length > 0 ? ` (${raised.join(', ')})` : ''}. A run with more is refused.`;
+}
+
+/** All of a model's fields, the hidden ones too: an option of any of them can raise a file field's limit. */
+export function allParameterItems(groups: ToolListItem['parameters']): ToolParameterItem[] {
+  return (Array.isArray(groups) ? groups : []).flatMap(group => (group && Array.isArray(group.items) ? group.items : []));
+}
+
 export function formatModelList(models: ToolListItem[], header?: string): string {
   if (models.length === 0) return 'No models found.';
 
@@ -544,6 +596,7 @@ export function formatModelSchema(model: ToolListItem): string {
   }
 
   const parameterGroups = shownParameterGroups(model.parameters);
+  const everyItem = allParameterItems(model.parameters);
   if (parameterGroups.length > 0) {
     lines.push('### Parameters');
     lines.push('');
@@ -565,6 +618,8 @@ export function formatModelSchema(model: ToolListItem): string {
         if (param.type === 'fileinput') lines.push(`  Pass a URL directly (e.g. \`${param.id}: "https://..."\`) or use \`${param.id}Url\` for the URL field.`);
         if (param.type === 'multifileinput') lines.push(`  Pass the URLs comma-separated in \`${param.id.replace('Multiple', '')}UrlMultiple\`.`);
         if (param.type === 'combinefileinput') lines.push(`  Pass an array of URLs directly: \`${param.id}: ["https://...", "https://..."]\`. No upload needed.`);
+        const limitLine = fileLimitText(fileLimit(param, everyItem));
+        if (limitLine) lines.push(limitLine);
         if (param.type === 'json' || param.type === 'json-array') lines.push(`  Pass this as a structured JSON value inside the ordinary \`params\` object.`);
 
         if (param.options?.length) {

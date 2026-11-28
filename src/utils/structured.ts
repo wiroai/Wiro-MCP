@@ -9,7 +9,9 @@ import type {
   ToolListItem,
 } from '../types.js';
 import {
+  allParameterItems,
   discountPercent,
+  fileLimit,
   formatPricing,
   listedEstimate,
   parameterFallback,
@@ -298,6 +300,8 @@ export function toStructuredModelDetail(model: ToolListItem): {
         min?: number;
         max?: number;
         step?: number;
+        maxFiles?: number;
+        maxFilesByOption?: Array<{ parameter: string; value: string; maxFiles: number }>;
         advanced: boolean;
         jsonSchema?: Record<string, unknown>;
       }>;
@@ -306,6 +310,7 @@ export function toStructuredModelDetail(model: ToolListItem): {
   nextAction: NextAction;
 } {
   const summary = toStructuredModel(model);
+  const everyItem = allParameterItems(model.parameters);
   // A price question is answered here, so the price is checked against the
   // model's settings and carries the rules that the short search line leaves
   // out, such as how pixels are counted.
@@ -329,6 +334,7 @@ export function toStructuredModelDetail(model: ToolListItem): {
           note: item.note == null ? undefined : String(item.note),
           options: (item.options ?? []).map(toParameterOption),
           ...parameterRange(item),
+          ...fileLimit(item, everyItem),
           advanced: item.advanced === true || String(item.advanced) === 'true',
           jsonSchema: parseJsonObject(item.jsonschema),
         })),
