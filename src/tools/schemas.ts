@@ -279,6 +279,9 @@ export const modelListOutputSchema = {
   nextAction: nextActionSchema.optional(),
 };
 
+// get_model_schema's objects take keys a later version adds (`.loose()`, no additionalProperties: false in the listed
+// schema): an MCP client keeps each tool's output schema from its listing and refuses a result with a key it lacks,
+// so a client that listed one version keeps working on the next one's new fields (2.2.0).
 export const modelParameterSchema = z.object({
   id: z.string(),
   type: z.string(),
@@ -294,7 +297,7 @@ export const modelParameterSchema = z.object({
   options: z.array(z.object({
     label: z.string(),
     value: z.string(),
-  })),
+  }).loose()),
   min: z.number().optional(),
   max: z.number().optional(),
   step: z.number().optional(),
@@ -304,11 +307,11 @@ export const modelParameterSchema = z.object({
     parameter: z.string(),
     value: z.string(),
     maxFiles: z.number().int().positive(),
-  })).optional()
+  }).loose()).optional()
     .describe('Choices of another field that let this one take more files: while `parameter` is `value`, a run takes up to this maxFiles.'),
   advanced: z.boolean(),
   jsonSchema: z.record(z.string(), z.unknown()).optional(),
-});
+}).loose();
 
 export const modelDetailOutputSchema = {
   model: modelSummarySchema.extend({
@@ -317,15 +320,15 @@ export const modelDetailOutputSchema = {
     parameters: z.array(z.object({
       title: z.string(),
       items: z.array(modelParameterSchema),
-    })),
+    }).loose()),
     // Workflow utilities only: the output ports other steps can reference.
     outputs: z.array(z.object({
       id: z.string(),
       label: z.string(),
       type: z.string(),
-    })).optional(),
+    }).loose()).optional(),
     dynamicOutputs: z.boolean().optional(),
-  }),
+  }).loose(),
   nextAction: nextActionSchema,
 };
 

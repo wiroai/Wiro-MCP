@@ -14,10 +14,19 @@ limit gets neither.
 The limit is the field's `maxinputlength`. The Wiro API serves the field under that name from the release that
 renames it; the name was misspelled before. Until that release this version shows no limit, as 2.1.0 does.
 
+MCP clients that connected before the upgrade should reconnect (in Claude Code, `/mcp` and reconnect). A client that
+listed the tools under 2.1.0 refuses the new `maxFiles` until it lists them again.
+
 ### Added
 
 - `get_model_schema`: `maxFiles` and `maxFilesByOption` on `fileinput`, `multifileinput`, `multifileinputdrop` and
   `combinefileinput` fields, and an "At most N files" line under each such field in the text.
+
+### Changed
+
+- `get_model_schema`'s output schema takes keys a later version adds: its objects (the result, the model, a parameter
+  group, item and option) no longer set `additionalProperties: false`. A client that listed 2.2.0 or later keeps
+  working when a later version adds a field.
 
 ## 2.1.0 (2026-11-28)
 
