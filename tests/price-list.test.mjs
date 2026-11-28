@@ -4,14 +4,18 @@ import test from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 
-import { createMcpServer } from '../dist/server.js';
-import { PRICE_LIST_META_KEY } from '../dist/tools/get-model-schema.js';
+import { createMcpServer, PRICE_LIST_META_KEY } from '../dist/server.js';
+import { PRICE_LIST_META_KEY as KEY_FROM_TOOLS } from '../dist/tools/index.js';
 import { formatModelSchema, priceList } from '../dist/utils/format.js';
 import { toStructuredModelDetail } from '../dist/utils/structured.js';
 
 // get_model_schema gives a model's price rows as Wiro bills them in the result's `_meta`, under
-// `ai.wiro/priceList`, for a program that prices each setting itself. Clients keep `_meta` from the
-// model, so the text and the structured output, which assistants read, stay as they were.
+// `ai.wiro/priceList`, to a program that prices each setting itself and asks for them with
+// `_meta: { "ai.wiro/priceList": true }` in the call's params. Some clients show a result's `_meta` to
+// the model, so without the ask there are none, and either way the text and the structured output,
+// which assistants read, stay as they were.
+
+const ASK = { 'ai.wiro/priceList': true };
 
 function model(slug, dynamicprice, items = []) {
   const [cleanslugowner, cleanslugproject] = slug.split('/');
@@ -29,13 +33,17 @@ function model(slug, dynamicprice, items = []) {
 
 const select = (id, values, required = false) => ({ id, type: 'select', label: id, required, options: values.map(value => ({ text: value, value })) });
 
-async function callSchema(detail, options) {
+async function callSchema(detail, options, requestMeta) {
   const server = createMcpServer({ getModelSchema: async () => ({ result: true, errors: [], tool: [detail] }) }, options);
   const client = new Client({ name: 'test-client', version: '1.0.0' });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
   try {
-    return await client.callTool({ name: 'get_model_schema', arguments: { model: `${detail.cleanslugowner}/${detail.cleanslugproject}` } });
+    return await client.callTool({
+      name: 'get_model_schema',
+      arguments: { model: `${detail.cleanslugowner}/${detail.cleanslugproject}` },
+      ...(requestMeta === undefined ? {} : { _meta: requestMeta }),
+    });
   } finally {
     await client.close();
     await server.close();
@@ -54,7 +62,7 @@ function assertModelOutputUnchanged(result, detail) {
 // What 2.2.0 (be463ac) gave for these inputs, made by running its get_model_schema on them.
 const GOLDEN = JSON.parse(readFileSync(new URL('./fixtures/get-model-schema-2.2.0.json', import.meta.url), 'utf8'));
 
-test('the text and the structured output are byte for byte what 2.2.0 gave; only _meta is new', async () => {
+test('the text and the structured output are byte for byte what 2.2.0 gave, with the ask and without it', async () => {
   const withRows = new Set([
     'per-run rows with a discount (Veo 3.1)',
     'per-input-video-second rows with maxSeconds (Kandinsky VSR)',
@@ -63,12 +71,15 @@ test('the text and the structured output are byte for byte what 2.2.0 gave; only
   ]);
   assert.equal(GOLDEN.cases.length, 6);
   for (const { name, detail, options, content, structuredContent } of GOLDEN.cases) {
-    const result = await callSchema(detail, options);
-    assert.notEqual(result.isError, true, name);
-    assert.equal(JSON.stringify(result.content), JSON.stringify(content), name);
-    assert.equal(JSON.stringify(result.structuredContent), JSON.stringify(structuredContent), name);
-    if (withRows.has(name)) assert.deepEqual(Object.keys(result._meta), [PRICE_LIST_META_KEY], name);
-    else assert.equal(result._meta, undefined, name);
+    for (const requestMeta of [undefined, ASK]) {
+      const label = `${name}, ${requestMeta ? 'asked' : 'not asked'}`;
+      const result = await callSchema(detail, options, requestMeta);
+      assert.notEqual(result.isError, true, label);
+      assert.equal(JSON.stringify(result.content), JSON.stringify(content), label);
+      assert.equal(JSON.stringify(result.structuredContent), JSON.stringify(structuredContent), label);
+      if (requestMeta && withRows.has(name)) assert.deepEqual(Object.keys(result._meta), [PRICE_LIST_META_KEY], label);
+      else assert.equal(result._meta, undefined, label);
+    }
   }
 });
 
@@ -97,10 +108,11 @@ function veo(discount = null) {
   };
 }
 
-test('per-run rows come in _meta at list price, and the text and structured output stay as they were', async () => {
+test('asked, per-run rows come in _meta at list price, and the text and structured output stay as they were', async () => {
   assert.equal(PRICE_LIST_META_KEY, 'ai.wiro/priceList');
+  assert.equal(KEY_FROM_TOOLS, PRICE_LIST_META_KEY);
   const detail = veo(20);
-  const result = await callSchema(detail);
+  const result = await callSchema(detail, undefined, ASK);
   assert.deepEqual(result._meta, { 'ai.wiro/priceList': VEO_ROWS });
   assert.deepEqual(result._meta[PRICE_LIST_META_KEY].at(-1), { inputs: { durationSeconds: '8', resolution: '4k' }, price: 4.8, priceMethod: 'per-run' });
   // The discount stays out of the rows: discountPercent carries it, as before.
@@ -119,7 +131,7 @@ test('per-input-video-second rows keep each row\'s maxSeconds', async () => {
       + '{"inputs":{"resolution":"2160p"},"price":0.1,"priceMethod":"per-input-video-second","maxSeconds":"20"}]',
     [{ id: 'inputVideo', type: 'combinefileinput', label: 'Input Video', required: true }, select('resolution', ['720p', '1080p', '2160p'], true)],
   );
-  const result = await callSchema(vsr);
+  const result = await callSchema(vsr, undefined, ASK);
   assert.deepEqual(result._meta[PRICE_LIST_META_KEY], [
     { inputs: { resolution: '720p' }, price: 0.015, priceMethod: 'per-input-video-second', maxSeconds: 60 },
     { inputs: { resolution: '1080p' }, price: 0.025, priceMethod: 'per-input-video-second', maxSeconds: 60 },
@@ -129,21 +141,32 @@ test('per-input-video-second rows keep each row\'s maxSeconds', async () => {
   assertModelOutputUnchanged(result, vsr);
 });
 
-test('a model without price rows gets no _meta', async () => {
+test('a model without price rows gets no _meta, even when asked', async () => {
   for (const dynamicprice of [undefined, null, '', '[]', [], 'not json', '{"price":1}']) {
     const detail = { ...model('acme/run-time', dynamicprice), cps: 0.0005 };
-    const result = await callSchema(detail);
+    const result = await callSchema(detail, undefined, ASK);
     assert.equal(result._meta, undefined, JSON.stringify(dynamicprice));
     assertModelOutputUnchanged(result, detail);
   }
 });
 
-test('a model used as a workflow step gets its price rows in _meta too', async () => {
+test('a model used as a workflow step gets its price rows in _meta too, when asked', async () => {
   const detail = veo();
-  const result = await callSchema(detail, { toolsets: ['workflows'] });
+  const result = await callSchema(detail, { toolsets: ['workflows'] }, ASK);
   assert.notEqual(result.isError, true);
   assert.equal(result.structuredContent.nextAction.tool, 'get_playbook');
   assert.deepEqual(result._meta, { [PRICE_LIST_META_KEY]: VEO_ROWS });
+  assert.equal((await callSchema(detail, { toolsets: ['workflows'] }))._meta, undefined);
+});
+
+test('without the ask, or with anything but true under the key, there are no price rows', async () => {
+  const detail = veo();
+  for (const requestMeta of [undefined, {}, { progressToken: 7 }, { 'ai.wiro/priceList': 'true' }, { 'ai.wiro/priceList': 1 }, { 'ai.wiro/priceList': false }, { priceList: true }]) {
+    const result = await callSchema(detail, undefined, requestMeta);
+    assert.equal(result._meta, undefined, JSON.stringify(requestMeta));
+    assertModelOutputUnchanged(result, detail);
+  }
+  assert.deepEqual((await callSchema(detail, undefined, { progressToken: 7, ...ASK }))._meta, { [PRICE_LIST_META_KEY]: VEO_ROWS });
 });
 
 test('a row\'s note, extra amounts and counts come as Wiro bills them, and an unreadable list is left out', () => {
