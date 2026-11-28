@@ -7,9 +7,10 @@ import { registerTools, type RegisterToolsOptions } from './tools/index.js';
 
 export { WiroClient } from './client.js';
 export { SERVER_INSTRUCTIONS } from './instructions.js';
-export { registerTools, parseToolsets, TOOLSETS } from './tools/index.js';
+export { registerTools, parseToolsets, TOOLSETS, PRICE_LIST_META_KEY } from './tools/index.js';
 export { advertiseJsonSchema2020_12, withJsonSchema2020_12 } from './utils/json-schema-dialect.js';
 export type { RegisterToolsOptions, Toolset, ToolHandler, ToolInfo, ToolWrapper } from './tools/index.js';
+export type { PriceListRow } from './utils/format.js';
 export type {
   Task,
   TaskCustomToolCallSegment,

@@ -62,6 +62,9 @@ import { registerCheckModelAccess } from './check-model-access.js';
 import { registerManageSpendLimit } from './manage-spend-limit.js';
 import { registerManageModelAccess } from './manage-model-access.js';
 
+// The `_meta` key a program sends to get the price rows from get_model_schema, and finds them under.
+export { PRICE_LIST_META_KEY } from './get-model-schema.js';
+
 export const TOOLSETS = ['models', 'workflows', 'agents', 'controls'] as const;
 export type Toolset = typeof TOOLSETS[number];
 

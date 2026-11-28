@@ -7,7 +7,7 @@ import type {
   ToolParameterItem,
   ToolParameterOption,
 } from '../types.js';
-import { isPlainObject } from './api.js';
+import { isPlainObject, toNumber } from './api.js';
 import {
   isToolCallSegment,
   normalizeTaskRawContent,
@@ -944,6 +944,65 @@ export function pricingNotes(model: ToolListItem): string[] {
   if (!live && !fixedPriceApplies(rows, settingItems(model.parameters))) return [];
   const notes = rows.filter(row => live || isBilledMethod(row)).map(row => priceNote(row));
   return [...new Set(notes.filter((note): note is string => note !== undefined))];
+}
+
+/** One row of a model's price list as Wiro bills it: an item of get_model_schema's `_meta` price list. */
+export interface PriceListRow {
+  inputs: Record<string, string | number | boolean>;
+  price: number;
+  priceMethod: string;
+  note?: string;
+  priceExtra?: number;
+  priceInput?: number;
+  maxSeconds?: number;
+}
+
+/**
+ * The model's price rows as Wiro bills them, for a client that prices each
+ * setting itself: in Wiro's order, at list price, since the caller's discount
+ * is `discountPercent`. Undefined when the model has no rows, or when a row
+ * cannot be read the way Wiro bills it, so no client prices from part of the
+ * list; the `pricing` text still gives the price then.
+ */
+export function priceList(model: ToolListItem): PriceListRow[] | undefined {
+  const rows = parseDynamicPrice(model.dynamicprice);
+  if (!rows) return undefined;
+  const list: PriceListRow[] = [];
+  for (const row of rows) {
+    const item = priceListRow(row);
+    if (!item) return undefined;
+    list.push(item);
+  }
+  return list;
+}
+
+function priceListRow(row: DynamicPriceRow): PriceListRow | null {
+  const { price, priceMethod } = row;
+  if (typeof price !== 'number' || !Number.isFinite(price)) return null;
+  if (typeof priceMethod !== 'string' || priceMethod === '') return null;
+  // A row without inputs prices every run.
+  const inputs = row.inputs ?? {};
+  if (!isPlainObject(inputs)) return null;
+  const readable = Object.values(inputs).every(value => typeof value === 'string'
+    || typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value)));
+  if (!readable) return null;
+  // The other amounts may be numbers or their text; an empty one is left out.
+  const extras: Partial<Record<'priceExtra' | 'priceInput' | 'maxSeconds', number>> = {};
+  for (const key of ['priceExtra', 'priceInput', 'maxSeconds'] as const) {
+    const value: unknown = row[key];
+    if (value === undefined || value === null || value === '') continue;
+    const amount = toNumber(value);
+    if (amount === null) return null;
+    extras[key] = amount;
+  }
+  const note = priceNote(row);
+  return {
+    inputs: inputs as PriceListRow['inputs'],
+    price,
+    priceMethod,
+    ...(note ? { note } : {}),
+    ...extras,
+  };
 }
 
 // A model without a price list is billed for its run time: at its own rate,

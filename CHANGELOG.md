@@ -3,6 +3,28 @@
 Notable changes to `@wiro-ai/wiro-mcp`. Releases before 2.0.0 are described on the
 [GitHub Releases](https://github.com/wiroai/Wiro-MCP/releases) page.
 
+## 2.3.0 (unreleased)
+
+The exact price of each setting, for programs that ask for it. `get_model_schema` gives a model's price rows in the
+result's `_meta`, under `ai.wiro/priceList`, when the call asks for them with `_meta: { "ai.wiro/priceList": true }`
+in its params. Each row has `inputs`, `price` and `priceMethod`, plus `note`, `priceExtra`, `priceInput` and
+`maxSeconds` where the row has them. The rows come in Wiro's order and at list price; your discount stays in
+`discountPercent`.
+
+A program that prices the chosen settings itself, such as the Wiro browser extension, can then price them the way
+Wiro bills them. Veo 3.1 at 4K and 8 seconds is $4.80, where the `pricing` sentence says "$1.6 to $4.8 / per run".
+
+The rows come only on that ask. Some clients show a result's `_meta` to the model, and a price list can run to 300
+rows. No assistant's client sends the ask, so no model reads the rows. With the ask and without it, the text and the
+structured output are the same as in 2.2.0. A model without a price list gets no `_meta`.
+
+Clients that connected under 2.2.0 need no reconnect: `_meta` is not part of the tool's output schema.
+
+### Added
+
+- `get_model_schema`: the model's `dynamicprice` rows in the result's `_meta`, under `ai.wiro/priceList`, when the
+  call's `_meta` asks for them. The key is exported as `PRICE_LIST_META_KEY`, and the row type as `PriceListRow`.
+
 ## 2.2.0 (unreleased)
 
 How many files a file field takes. `get_model_schema` now gives each file field's limit: `maxFiles` in its
