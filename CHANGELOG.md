@@ -3,6 +3,40 @@
 Notable changes to `@wiro-ai/wiro-mcp`. Releases before 2.0.0 are described on the
 [GitHub Releases](https://github.com/wiroai/Wiro-MCP/releases) page.
 
+## 2.1.0 (2026-11-28)
+
+Prices read in plain words. Wiro renamed the price methods of a model's `dynamicprice` options in one change, and
+this release reads the new ids: `search_models` and `get_model_schema` print "$0.14 to $0.24 / per output file",
+"$0.025 / per second of output video" or "Set when the run ends" after a price, never a method's code. Models can now
+be priced per second of input video, and `get_model_schema` says how many seconds of each input count.
+
+This release goes out with the Wiro API release that renames the methods. Before that release the API serves the
+old ids and this version shows those models as "No fixed price"; after it, 2.0.0 does. Every install that runs
+`npx @wiro-ai/wiro-mcp@latest` takes it at its next start.
+
+### Changed
+
+| Old id | New id | Words after the price |
+|--------|--------|-----------------------|
+| `cpr` | `per-run` | per run |
+| `cps` | `per-run-second` | per second of run time |
+| `cpo` | `per-output-file` | per output file |
+| `cpt` | `per-total-token` | per input and output token |
+| `cp-pixel` | `per-output-megapixel` | per output megapixel |
+| `cp-promptlength` | `per-input-character` | per prompt character |
+| `cp-audiosecondslength` | `per-input-audio-second` | per second of input audio |
+| (new) | `per-input-video-second` | per second of input video |
+| `cp-outputVideoLength` | `per-output-video-second` | per second of output video |
+| `cp-realtimeturn` | `per-realtime-turn` | per conversation turn |
+| `cp-readoutput` | `reported-price` | set when the run ends |
+
+- A price per second of input audio or video names the inputs it measures. When an option sets `maxSeconds`,
+  `get_model_schema` says so: "Each input counts at most 60 seconds." once when the options share it, or beside each
+  price when they differ.
+- `get_workflow` explains Wiro's estimate lines for a step priced per second of input video, and for a Start video
+  input that feeds one.
+- A row with a method this version does not know, an old id included, reads "No fixed price" and never shows the id.
+
 ## 2.0.0 (2026-11-25)
 
 An agent's outside services are now **Connectors**: one catalog of services an agent can
