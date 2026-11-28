@@ -473,6 +473,9 @@ project uses the team wallet.
 All tools publish typed MCP input and output schemas. Successful calls return
 `structuredContent` for reliable chaining, concise text `content` for clients
 that only render text, and MCP resource links for generated media.
+`get_model_schema` also gives the model's price rows, as Wiro bills them, in the
+result's `_meta` under `ai.wiro/priceList`, for programs that price each setting
+themselves.
 Every tool that takes arguments refuses an argument it does not know and names
 the right one where it can, such as `taskid` for `task_id`. The one exception is
 a call that carries `toolCallId`, a key some clients add on their own: it reads

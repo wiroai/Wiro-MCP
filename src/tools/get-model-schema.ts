@@ -2,11 +2,19 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { WiroClient } from '../client.js';
 import { asString, isPlainObject, toNumber, type ApiEnvelope } from '../utils/api.js';
-import { formatModelSchema } from '../utils/format.js';
+import { formatModelSchema, priceList } from '../utils/format.js';
 import { toStructuredModelDetail } from '../utils/structured.js';
 import { modelDetailOutputSchema, strictInput } from './schemas.js';
 
 const UTILITY_PREFIX = 'workflow-utilities/';
+
+/**
+ * The result's `_meta` key that holds the model's price rows as Wiro bills
+ * them, for a program that prices each setting itself, such as the Wiro
+ * browser extension. Assistants do not read it: clients keep `_meta` from the
+ * model, so a long price list costs them nothing.
+ */
+export const PRICE_LIST_META_KEY = 'ai.wiro/priceList';
 
 interface UtilityDetailResponse extends ApiEnvelope {
   utility?: Array<Record<string, unknown>>;
@@ -175,6 +183,8 @@ export function registerGetModelSchema(
 
         const text = formatModelSchema(modelData);
         const detail = toStructuredModelDetail(modelData);
+        const rows = priceList(modelData);
+        const meta = rows ? { _meta: { [PRICE_LIST_META_KEY]: rows } } : {};
         if (!runModel) {
           return {
             content: [{ type: 'text' as const, text: workflowStepUsage(text, detail.model.slug) }],
@@ -186,12 +196,14 @@ export function registerGetModelSchema(
                 reason: 'Use this model as a workflow step; the playbook shows the step format. Running a model on its own needs the models tool group, which is not loaded.',
               },
             },
+            ...meta,
           };
         }
 
         return {
           content: [{ type: 'text' as const, text }],
           structuredContent: detail,
+          ...meta,
         };
       } catch (error) {
         return {
